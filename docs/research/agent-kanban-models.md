@@ -3,7 +3,7 @@
 - **Ticket**: [#17](https://github.com/youjiaxing/agent-taskboard/issues/17)
 - **Branch**: `research/agent-kanban-models`
 - **Date**: 2026-08-14
-- **Scope**: 高信任开源主源（官方仓库 README / 产品文档 / 源码类型与编排路径）。二手榜单只作发现入口。
+- **Scope**: 高信任开源主源（官方仓库 README / 产品文档 / 源码类型与编排路径）。二手榜单只作发现入口。工作单元结论见 §2–§4.4；**CLI 对接、执行状态、过程展示、人机交互**见 §3.4 与 §4.5。
 - **北极星对齐**: Issue 态势为主、Agent 执行为强配套；工作单位是 Issue Tracker 上的 Issue；Embedded Terminal 跑官方 Agent CLI TUI；v1 不做自动认领 / 自动串行跑 Frontier；个人本地，无账号多租户。
 - **与 [#2](https://github.com/youjiaxing/agent-taskboard/issues/2) 的分工**: IA 票已回答面板划分 / 导航 / 多会话壳（文稿 `research/layout-ia` → `docs/research/layout-ia.md`）。本票只补 **工作单元、派活、与外部 Tracker 的关系、审阅/人闸**。不重做 IA 总表。
 
@@ -20,6 +20,10 @@
 3. **卡片/任务与外部 Issue Tracker** 是什么关系？
 4. **审阅面**（diff / 证据 / 人闸）怎么放？
 5. 哪些模式贴合 Agent Taskboard，哪些应明确拒绝？
+6. 产品怎么对接 Agent CLI（官方 TUI PTY / ACP / 包一层聊天 / hooks / stdin）？跑到一半的第二句 prompt、权限询问怎么送进去？壳不重写 Agent 的话，怎么知道还活着 / 在等人 / 已退出？
+7. 执行状态机挂在哪（卡片 / Session / Run）？列表/板上不点开能看见什么？
+8. 执行过程怎么给看（整份官方 TUI / 摘要转录 / 卡片上的 hook 一行 / 终端+diff 分屏 / 时间线）？
+9. 人怎么介入（启动；中途暂停/注入/行评/批准；结束：人标完成 / 退出码 / 自动 commit / gate）？
 
 ### 1.2 筛选
 
@@ -492,6 +496,47 @@ Backlog Refiner → Todo Orchestrator → Dev Crafter → Review Guard → Done 
 | Cyrus | ✓ 外部 Issue | ✗ 后台跑 CLI | ◐ 写回 Tracker | ✗ 指派即跑 | **工作单元对；编排拒** |
 | Paperclip | ✗ 内部票 | ✗ heartbeat 适配器 | ✗ 自建 Tracker | ✗ 自动认领 | **v1 总反例** |
 
+### 3.4 CLI 对接 × 执行状态 × 过程展示 × 人机交互
+
+本小节只补四轴，不改 §3.1–§3.3 的工作单元结论。状态机若同时有「看板列」和「Run/Session」，表里写的是 **壳看见执行** 的那一层。
+
+#### 对接方式（五种）
+
+| 方式 | 代表 | 第二句 prompt / 权限询问 | 壳如何知道活着 / 等人 / 退出（不重写 Agent） |
+| --- | --- | --- | --- |
+| **A. 官方 CLI TUI 进真实 PTY** | Cline（非 Cline 引擎）、Claude Squad、KanVibe、Emdash TUI 路径 | 人在 TUI 里键入；权限也在官方 TUI。Squad `-y` / Cline 实验性 auto 权限会吞掉询问 | **进程**：pid / PTY exit。**语义忙闲**：须 hooks 或官方协议，不能靠扫终端字 |
+| **B. Headless CLI / stream-json / SDK 包一层聊天** | Claude Code Board、Vibe、Cyrus、Paperclip 本地适配器 | 聊天框或 Tracker 评论再打一枪（Board=`sendMessage`+`--resume`；Cyrus=Linear 评论灌进 session） | 适配器看子进程退出码 + 自研会话状态；等人靠自研 UI 或 Tracker 卡片 |
+| **C. ACP（stdio JSON-RPC）** | OpenHands、Routa、Emdash ACP 路径 | Canvas/会话再发 turn；权限走 ACP `pendingPermission` | 协议里的 generating / permission count / conversation status |
+| **D. 只观察 hooks / 文件** | Claude Code Kanban | 板不送 prompt；人仍在官方 CLI 里打字。等人靠 hook 写 `_waiting.json` | 监视 `~/.claude` jsonl + agent-activity + live-session registry |
+| **E. 心跳 / 列切换拉起进程** | Paperclip heartbeat、Routa 泳道、Cyrus 指派 | 中途不是 TUI，是评论 / Invoke / 再一次 wakeup | run：`queued/running/succeeded/failed/timed_out/cancelled`；与 Issue 列分开 |
+
+#### 12 项目对照
+
+| 项目 | CLI 对接 | 执行状态（挂在哪；板上不点开） | 过程怎么给看 | 人机：开 / 中 / 结 |
+| --- | --- | --- | --- | --- |
+| Claude Code Board | B：`npx claude-code -p --output-format=stream-json`，可 `--resume` / `--continue`；可加 `--dangerously-skip-permissions` | 挂 **Session**：`processing / idle / completed / error / interrupted / crashed`。仪表盘列表一眼看状态 | 自研 Web 聊天 + 过滤 tool_use/thinking；**无**官方 TUI | 开：New Session。中：聊天再发（新一轮进程）。结：标 completed/error；无 diff 完成门 |
+| Routa | C + E：ACP/适配器 session（create / prompt / cancel / reconnect / stream / trace）；看板列切换排队开 session | 挂 **卡片泳道** + **Session** 对象。板上见列；session 可取消/重连 | 会话转录 + Harness traces + 卡片上越积越厚的证据，不是官方 TUI | 开：开 Session 或推列。中：再 prompt / cancel。结：Review/Done 的 Fitness+Gate（可升级人工） |
+| Cline Kanban | A：`node-pty` 跑官方 CLI；WS 传输入/resize/exit。Cline 引擎走 SDK 聊天（B）。hooks：`to_review` / `to_in_progress` / `activity` | 挂 **Task session**：`idle / running / awaiting_review / failed / interrupted`，另有 `reviewReason`（attention/exit/error/interrupted/hook）+ `exitCode`。卡片上 hook 一行（最新消息/工具名）。列（Backlog/…）是板状态，不是进程 | **官方 TUI + worktree diff 分屏**；卡片上 hook 摘要，可扫上百 Agent | 开：play。中：TUI 键入；行评回投。结：人 Commit/PR，或 `autoReview` 自动 commit/PR 后进 Done；进程退出只到 `awaiting_review` |
+| OpenHands | C：Agent Server spawn ACP 子进程；Canvas 聊天。Automation：`dispatch` | 挂 **Conversation**：`STARTING / RUNNING / STOPPED / PAUSED / AWAITING_USER_INPUT / FINISHED / ARCHIVED / ERROR`。会话列表有状态点/徽章。Automation 另有 run 状态 | 聊天 + 自研 terminal/files/**diff-viewer**/browser；**不是**官方 TUI | 开：新 Conversation / 点预置自动化。中：再发 turn。结：FINISHED/STOPPED；无 Issue 完成门 |
+| Vibe Kanban | B 为主（自研聊天）+ 辅助集成终端。规划态有 Approval；可配 `dangerously_skip_permissions` | 挂 **Workspace**：Running / Idle；「Needs Attention」举手。侧栏不点进也能看。Issue 列是规划状态 | 聊天转录 + Changes panel；终端不是主表面 | 开：建 Workspace 即开跑。中：聊天/改消息重发；行评攒一批再 Send。结：人 Create PR；子 Issue 不自动完成父 |
+| Nimbalyst | B/C 混合：Claude Code / Codex **SDK + MCP** 的 Agent Mode。Ghostty 终端是开发配套 | 挂 **Session 阶段列**（backlog…complete）+ 导航徽章：等人 / 在跑 / 未读。Tracker `in-review` 是另一层 | Agent Mode 转录（工具块、红绿 diff）；交互 prompt 持久化。**不是**官方 TUI 主表面 | 开：composer 新 Session。中：答 AskUser / ExitPlanMode / ToolPermission / GitCommitProposal；文件 approve/reject。结：人标 complete；Blitz/Super Loop 偏自动 |
+| Claude Code Kanban | D：不启动 CLI。hooks 装上才有 agent log / 等待。发现靠 chokidar，不轮询 | 挂 Claude **task 文件**（Pending/In Progress/Completed）+ session：琥珀「等人」、agent active/idle。`?filter=active` 廉价探针 | Session log 时间线 + Agent log；**不嵌 TUI** | 开：无（人在官方 CLI 里自己开）。中：板不注入。结：板不关票 |
+| KanVibe | A：官方 CLI 进 **tmux/zellij**，浏览器 xterm + node-pty 挂上。Hooks 推列 | 挂 **任务列**：TODO/PROGRESS/PENDING/REVIEW/DONE。不点开也能看见。PENDING=AskUser 或 Bash 权限（因 Agent 而异） | **整屏官方 TUI**（mux pane）+ 侧栏 chat/PR + Monaco diff | 开：建 branch TODO（自动 worktree+窗）。中：终端键入；编号 dock。结：hook→REVIEW；人标 DONE 则删 branch/worktree/终端 |
+| Paperclip | E+B：heartbeat 拉起 `claude_local` / `codex_local` 等适配器（本机 CLI 进程，**不是**嵌 TUI）。已有 session 则续。超时/取消有 grace 再强杀 | 挂 **Issue 列** 与 **Run** 两套：run=`queued / running / succeeded / failed / timed_out / cancelled`。看板/仪表盘实时推 agent 与 run 状态 | 可读摘要为主，底下才是日志/tool-call；产品明确「不要日志崇拜」 | 开：指派/定时/Invoke。中：评论、@提及、board interaction（下拉/确认）。结：Agent PATCH `done` 或 board；另有静默 run watchdog / 任务树 watchdog |
+| Claude Squad | A：tmux 里官方程序；`↵` attach。`-y` 自动接受提示 | 挂 **instance 列表**。不 attach 也能在 preview tab 瞄一眼 | preview（未 attach 的终端预览）+ **diff tab**；要完整 TUI 必须 attach | 开：`n` / `N`。中：attach 再打字。结：`c` 提交并暂停；`s` 推分支；`D` 杀掉。退出 ≠ 任务完成 |
+| Emdash | **A+C 双路径**：`tui-agents` 用 `PtySpawner`（argv/stdin 送首句；有的 provider 标 `pty-only`）。ACP 路径另算。状态 **只来自 hooks/插件，不扫终端字** | 进程：`starting / running / exited`。Agent：`idle / working / awaiting-input / error / completed`。通知：等人 / 做完。ACP 另用 `isGenerating` + `pendingPermissionCount` | 官方 TUI PTY **或** ACP 聊天 + diff/PR。双主表面 | 开：人建 Task。中：PTY 键入或 ACP turn；权限通知。结：PR/CI/merge。hook 完 ≠ Tracker Issue 关 |
+| Cyrus | B：Claude **Agent SDK** / headless runner（`spawnClaudeCodeProcess`，可扔到容器）；`--continue` 续。**不**给官方 TUI | 无本地板。状态流回 **Tracker 活动**（thought/action）。人在 Linear/GitHub 上看 | Tracker 评论/活动时间线，不是终端 | 开：把 Issue 指派给 Cyrus（自动）。中：在 Issue 上评论，灌进仍在跑的 session；下拉/审批。结：子程序 verification → `gh` PR → 摘要写回 |
+
+#### 壳不重写 Agent 时，什么信号可靠
+
+| 信号 | 能说明什么 | 不能说明什么 | 主源 |
+| --- | --- | --- | --- |
+| PTY/进程 exit + 退出码 | 进程没了；Cline 把 0 标 `reviewReason=exit`，非 0 标 `error` | Issue/卡片完成。#9：退出码 0 ≠ 任务完成 | Cline `session-state-machine.ts`；本仓库 #9 |
+| 官方 hooks（AskUser / PermissionRequest / session.idle / Stop） | 在跑 / 等人 / 这一轮停手 | 验收通过、该关 Issue | KanVibe README；Cline `runtimeHookEvent`；Emdash providers.md（禁止从终端字推断） |
+| ACP `pendingPermission` / `isGenerating` | 权限门、是否在生成 | Tracker 完成 | Emdash `agent-status-transition.ts`；OpenHands ACP_AGENTS |
+| 自研聊天「Idle」 | 适配器认为这一轮结束 | 与官方 TUI 不一致时会撒谎 | Vibe workspace Idle；Claude Code Board `idle` |
+| 只读监视 jsonl/task 文件 | Claude 自己的 todo/session | 不是本产品 Issue Tracker | Claude Code Kanban |
+
 ---
 
 ## 4. 给后续原型 / grilling 的可抄 / 应拒
@@ -565,6 +610,31 @@ Backlog Refiner → Todo Orchestrator → Dev Crafter → Review Guard → Done 
 
 完成信号（CLI 退出码 / hook / 人工标记）只影响 **Run 结束态**，不推进 Issue。
 
+### 4.5 对接 / 状态 / 过程 / 人机（可抄 / 应拒）
+
+对齐北极星：官方 CLI TUI 进 Embedded Terminal；人派活 Run；v1 无自动编排。不改 §4.1–§4.4。
+
+**可抄**
+
+1. **对接 = 真实 PTY 跑官方程序**（Cline `node-pty`、Claude Squad tmux attach、Emdash `PtySpawner`、KanVibe xterm 挂 mux）。第二句 prompt 和权限询问都留在官方 TUI 里，壳不要再做一套输入框。
+2. **进程态与语义忙闲分开**。进程：`starting → running → exited`（Emdash TUI session；本产品 #9 的 `starting → running → ended`）。忙闲：hooks / ACP permission，**禁止**扫终端输出猜「在等人」（Emdash providers.md 写死了这条）。
+3. **列表上只挂 Run 摘要，不挂第二套完成语义**。可抄 Cline 卡片 hook 一行、OpenHands 会话状态点、KanVibe/Vibe 的「等人」标记。列（Frontier / In Run）是 Issue 态势，不是进程态。
+4. **过程主表面 = 整份官方 TUI**；diff 是旁边的审阅面（Cline / Squad / KanVibe）。卡片一行、时间线、转录都是缩略，不能替代 TUI。
+5. **人机三拍**：人点启动；中途进 TUI 键入或停 Run；结束由人关 Issue。行评若做，只作为 **下一次 Run 的指令素材**（Cline/Vibe），仍进官方 TUI。
+6. **观察层可选用 hooks**（Claude Code Kanban / KanVibe / Emdash）：装了才有等人/停手；没装就只剩 pid/退出码。
+
+**应拒**
+
+| 应拒 | 原因 | 反面教材 |
+| --- | --- | --- |
+| stream-json / SDK / ACP 聊天当执行主表面 | 替换官方 TUI；权限门被壳重做一遍 | Claude Code Board、Vibe chat、OpenHands Canvas、Cyrus SDK、Routa session |
+| 用 Tracker 评论当中途 stdin | 人离开 Embedded Terminal，完成信号也缠到 Tracker | Cyrus Linear 评论灌 session；Paperclip @提及 wakeup |
+| 退出码 0 / hook「停手」自动关 Issue 或自动 commit | 与 #9 冲突；完成不可靠 | Cline autoReview；KanVibe hook→REVIEW 若再当成验收；Paperclip Agent PATCH done |
+| 从终端字推断 waiting | 误报；idle 终端也会改 mtime | Emdash 明确禁止；Claude Code Kanban 也因此不用纯 mtime |
+| 板上只给转录/时间线、不给 TUI | 人没法在官方权限 UI 里点允许 | Paperclip 摘要优先；Cyrus 活动流 |
+| yolo / skip-permissions 当默认 | 人闸被关掉 | Squad `-y`；Board/Vibe `dangerously-skip-permissions`；Cline 研究预览的高自主 |
+| 双主表面（PTY 与 ACP 聊天对等） | 用户不知道该在哪回答权限 | Emdash A+C（可作适配器能力，不能当 v1 默认 UX） |
+
 ---
 
 ## 5. 证据索引
@@ -572,17 +642,17 @@ Backlog Refiner → Todo Orchestrator → Dev Crafter → Review Guard → Done 
 | 项目 | 主源 |
 | --- | --- |
 | Claude Code Board | README · `backend/src/types/{session,workitem}.types.ts` · `ProcessManager.ts` |
-| Routa | README · `docs/core-concepts/how-routa-works.md` · `docs/use-routa/kanban.md` · `src/core/kanban/github-issues.ts` · `src/core/github/github-issue-sync.ts` |
-| Cline Kanban | README · `docs/architecture.md` · `src/core/task-board-mutations.ts` · `use-linked-backlog-task-actions.ts` · `use-review-auto-actions.ts` |
-| OpenHands | README · `docs/architecture.md` · `docs/ACP_AGENTS.md` · `OpenHands/automation` README · `src/manifests/automation-interface.ts` |
-| Vibe Kanban | README · `docs/issue-management.mdx` · `docs/workspaces/index.mdx` · `docs/reviewing-code.mdx` · `docs/integrations/github-integration.mdx` · https://www.vibekanban.com/blog/shutdown |
-| Nimbalyst | README · `docs/FEATURE_INVENTORY.md` · `UserDocs/creating-custom-trackers.md` |
+| Routa | README · `docs/core-concepts/how-routa-works.md` · `docs/use-routa/kanban.md` · `docs/use-routa/sessions.md` · `docs/design-docs/execution-modes.md` · `src/core/kanban/github-issues.ts` · `src/core/github/github-issue-sync.ts` |
+| Cline Kanban | README · `docs/architecture.md` · `src/core/api-contract.ts`（`idle/running/awaiting_review/failed/interrupted`、hook ingest） · `src/terminal/session-state-machine.ts` · `src/terminal/pty-session.ts` · `task-board-mutations.ts` · `use-linked-backlog-task-actions.ts` · `use-review-auto-actions.ts` |
+| OpenHands | README · `docs/architecture.md` · `docs/ACP_AGENTS.md` · `OpenHands/automation` README · `src/types/conversation-status.ts` · `src/manifests/automation-interface.ts` |
+| Vibe Kanban | README · `docs/issue-management.mdx` · `docs/workspaces/index.mdx` · `docs/workspaces/sessions.mdx` · `docs/workspaces/chat-interface.mdx`（Approval / skip permissions） · `docs/reviewing-code.mdx` · `docs/integrations/github-integration.mdx` · https://www.vibekanban.com/blog/shutdown |
+| Nimbalyst | README · `docs/FEATURE_INVENTORY.md`（交互 prompt、session 徽章、红绿批准） · `UserDocs/creating-custom-trackers.md` |
 | Claude Code Kanban | README · `docs/session-scanning.md` |
 | KanVibe | README（含 hook 状态机与 DONE 清场） |
-| Paperclip | README · `docs/start/core-concepts.md` · `docs/api/issues.md` · `doc/execution-semantics.md` · `doc/PRODUCT.md` |
-| Claude Squad | README |
-| Emdash | README · `CONTEXT.md` · `updateLinkedIssue.ts` · `issue-combobox-field.tsx` |
-| Cyrus | README · `docs/SELF_HOSTING.md` · `docs/CONFIG_FILE.md` · `docs/GIT_GITHUB.md` |
+| Paperclip | README · `docs/start/core-concepts.md` · `docs/api/issues.md` · `docs/agents-runtime.md`（heartbeat run 状态） · `doc/execution-semantics.md` · `doc/TASK-WATCHDOG.md` · `doc/PRODUCT.md` |
+| Claude Squad | README（tmux attach、preview/diff tab、`-y`、`c`/`s`/`D`） |
+| Emdash | README · `CONTEXT.md` · `agents/integrations/providers.md`（hooks 不推断终端字；pty-only prompt） · `packages/core/src/runtimes/tui-agents/api/schemas.ts` · `tui-agent-status-transition.ts` · `acp/agent-status-transition.ts` · `updateLinkedIssue.ts` |
+| Cyrus | README · `AGENTS.md`（SDK runner、评论灌 session、活动写回） · `docs/SELF_HOSTING.md` · `docs/CONFIG_FILE.md` · `docs/GIT_GITHUB.md` |
 | 发现入口 | https://github.com/andyrewlee/awesome-agent-orchestrators （结论均回各仓主源） |
 | 本仓库已钉 | `CONTEXT.md` · [#9](https://github.com/youjiaxing/agent-taskboard/issues/9) · [#2](https://github.com/youjiaxing/agent-taskboard/issues/2) / `docs/research/layout-ia.md` |
 
@@ -601,5 +671,6 @@ Backlog Refiner → Todo Orchestrator → Dev Crafter → Review Guard → Done 
 - Tracker = **Adapter 读写，不自建第二套库**（拒绝 Vibe/Cline/Routa/Paperclip/Nimbalyst 主路径）
 - 审阅 = **Run 旁 diff + 人批准关 Issue**（Cline/Vibe 的 diff；Nimbalyst 的「只有人能批」）
 - 观察 = hooks/退出码更新 Run，**永不**自动认领或推进 Frontier
+- 对接 / 展示 = **官方 TUI 进 PTY**；列表只给 Run 忙闲；中途提问留在 TUI；结束由人关 Issue（§3.4 / §4.5）
 
-**应避免**：Chat-home、自研聊天替代 TUI、自建票、心跳/指派/依赖自动开跑、列移动当完成、GitHub 镜像双写。
+**应避免**：Chat-home、自研聊天替代 TUI、自建票、心跳/指派/依赖自动开跑、列移动当完成、GitHub 镜像双写、扫终端字当「等人」、退出码当完成。
