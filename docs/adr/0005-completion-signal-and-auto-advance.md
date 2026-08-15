@@ -20,3 +20,4 @@
 - `/to-spec` 按「状态正常 / 自检 / 待确认 / 自动池」写，不必再发明完成协议。
 - Agent Adapter 必须声明能否按次注入 SessionEnd / StopFailure 门铃，以及能否往仍在跑的 PTY 写入一行。
 - [决策：Run 生命周期与 Issue 的绑定方式](https://github.com/youjiaxing/agent-taskboard/issues/9) 的「v1 不自动推进 Issue」收窄为：默认仍不推进；打开自动推进后走本 ADR。
+- Host 冷启动后默认不推进。另有「冷启动后恢复自动推进」（默认关，且仅当自动推进开着才生效），到点后等 N 秒（默认 60）再按本 ADR 推进。见 [Host 常驻、配对与远程 Client](./0006-host-resident-pairing-remote-client.md)。

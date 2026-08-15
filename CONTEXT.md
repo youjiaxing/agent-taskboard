@@ -5,11 +5,11 @@
 ## Language
 
 **Agent Taskboard**:
-本产品的名称：个人使用的本地效率工具。Host 上跑工作区、Issue Tracker 访问和 Agent 执行；桌面应用与浏览器作为 Client 看态势并遥控同一 Host。
+本产品的名称：个人使用的本地效率工具。每台电脑上都可以有一份 Host，跑该机上的 Project、Tracker 访问和 Agent 执行；桌面应用与浏览器作为 Client，可连本机 Host，也可配对连其它电脑上的 Host。
 _Avoid_: Wayboard, Skills Console, 团队协作平台
 
 **Project**:
-用户本机上的一个工作项目绑定：对应本地工作区，并关联一个 Issue Tracker。
+某个 Host 上的一个工作项目绑定：对应该 Host 所在电脑上的本地目录，并关联一个 Issue Tracker。
 _Avoid_: Repository（除非特指 git 仓库本身）, Workspace（易与编辑器工作区混淆）
 
 **Issue Tracker**:
@@ -73,8 +73,8 @@ Issue 仍被认领，但没有活跃 Run，且最近一次绑定 Run 是异常�
 _Avoid_: Failed（那是 Run 结束原因）, Blocked（那是依赖未完成）
 
 **自动推进**:
-可选能力（默认关）：当前 Issue 已关且状态正常、待确认未被否决之后，自动认领下一张 `ready-for-agent` 并开 Run。不是默认无人值守编排器。
-_Avoid_: 编排器, 心跳认领, 依赖完成即开跑
+可选能力（默认关）：当前 Issue 已关且状态正常、待确认未被否决之后，自动认领下一张 `ready-for-agent` 并开 Run。Host 冷启动后默认不推进；另有「冷启动后恢复自动推进」（默认关，且仅当自动推进开着才生效），到点后等 N 秒（默认 60）再按规则推进。不是默认无人值守编排器。
+_Avoid_: 编排器, 心跳认领, 依赖完成即开跑, 启动 Host 就开工
 
 **待确认**:
 自动推进里的一段短等待：当前票已关，并且状态正常（看见 SessionEnd、没有 StopFailure、进程正常退出）之后，倒计时 60 秒内人可以否决。无人否决才领下一张 `ready-for-agent`。grilling / prototype / needs-info / ready-for-human / needs-triage 不进自动池。
@@ -85,13 +85,17 @@ _Avoid_: 完成, Review（那是别的产品的列名）
 _Avoid_: 关票前复查（那是上一版误写成「每次必跑第二条 Run」的说法）, 验收通过（自检仍是模型判断）
 
 **Embedded Terminal**:
-应用内嵌的真实终端（PTY），用于直接运行 Agent 官方 CLI，而不是自研聊天 UI 替代。
+Host 上的真实终端（PTY），用来跑 Agent 官方 CLI，而不是自研聊天 UI 替代。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
 _Avoid_: Console panel（可指日志面板）, Chat UI
 
 **Host**:
-跑 Issue Tracker 访问、工作区、Agent CLI 和 Run 的那台机器。PTY 只存在于 Host 上。
-_Avoid_: Server（易理解成我们提供的云）, 后台（过糊）
+跑 Issue Tracker 访问、Agent CLI 和 Run 的常驻进程。PTY 只存在于 Host 上。它所在的电脑就说「跑 Host 的那台电脑」。
+_Avoid_: Server（易理解成我们提供的云）, 后台（过糊）, 把 Host 说成那台机器
 
 **Client**:
-连上 Host、用来看态势、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。关掉 Client 不等于停掉 Host 上的 Run。
+连上 Host、用来看态势、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。一个 Client 窗口可以同时连本机 Host 和已配对的远程 Host。手机只当 Client，不在手机上起 Host。关掉 Client 不等于停掉 Host 上的 Run。
 _Avoid_: 只把 Client 说成浏览器, 前端（只说技术层）
+
+**配对**:
+Client 获准连上某个 Host 的一次性手续：交换可到达地址和一次性配对码，之后靠长期令牌。不是产品账号。Host 上可以撤销某个 Client。连通走用户自己的 Tailscale / VPN / 局域网。
+_Avoid_: 登录, 账号, 我们的中继
