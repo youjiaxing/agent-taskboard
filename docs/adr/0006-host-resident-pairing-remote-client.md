@@ -18,6 +18,6 @@ Host 是常驻进程，不是那台电脑。关窗口只藏窗口，进程留在
 
 ## Consequences
 
-- 壳选型必须满足：关窗口 ≠ 停 Host、PTY 流转发到远程桌面/浏览器、macOS 与 Windows 同形态。见 [决策：是否坚持 Tauri 2 作为桌面壳](https://github.com/youjiaxing/agent-taskboard/issues/12)。
+- 壳选型见 [Tauri 2 作为桌面壳，Host 住在同一核心进程](./0007-tauri2-desktop-shell.md)：关窗口 ≠ 停 Host、PTY 流转发到远程桌面/浏览器、macOS 与 Windows 同栈同版。
 - 主界面要能面对「一个窗口连多份 Host」；怎么摆交给信息架构原型/定稿。
 - 两份 Host 登记同一仓库时，v1 不加跨 Host 锁。

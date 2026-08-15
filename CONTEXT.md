@@ -85,8 +85,8 @@ _Avoid_: 完成, Review（那是别的产品的列名）
 _Avoid_: 关票前复查（那是上一版误写成「每次必跑第二条 Run」的说法）, 验收通过（自检仍是模型判断）
 
 **Embedded Terminal**:
-Host 上的真实终端（PTY），用来跑 Agent 官方 CLI，而不是自研聊天 UI 替代。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
-_Avoid_: Console panel（可指日志面板）, Chat UI
+Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。不是用户系统里的终端 App，也不是自研聊天 UI。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
+_Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 / Windows Terminal 当产品终端
 
 **Host**:
 跑 Issue Tracker 访问、Agent CLI 和 Run 的常驻进程。PTY 只存在于 Host 上。它所在的电脑就说「跑 Host 的那台电脑」。
