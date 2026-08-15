@@ -39,7 +39,7 @@
 | 会话结束 | `SessionEnd` hook | 官方认为这次会话收摊了 | 人验收通过；工作做完 |
 | 进程没了 | PTY / pid 退出 + 退出码 | 壳里的 CLI 进程不在了 | 同上；Grok 还可能有后台子代理没收完 |
 
-包官方 TUI 的竞品（Cline Kanban、KanVibe、Emdash、Claude Squad）把「进程退出 / Stop」最多推到 **Review / 等人**，**从不**据此关卡或自动开下一张。会自动开下一张的产品，靠的是另一套它们自己拥有的协议（人点 Done、或 Agent `PATCH` 内部票为 `done`），而且 Paperclip 仍专门做了 watchdog，因为 **Agent 会谎报做完**。
+包官方 TUI 的竞品（Cline Kanban、KanVibe、Emdash、Claude Squad）以及 **Claude-Code-Board**（包 stream-json）把「进程退出 / Stop」最多推到 **Review / IDLE / 等人**，**从不**据此关卡或自动开下一张。OpenHands 的 `FINISHED` 名字像做完，源码注释写的是「一轮结束，等人」。Routa 把 ACP `turnComplete` 命名成 `agent_completed`，默认就可以自动推列——这是误判完成的完整反例。会认真自动开下一张的产品，靠的是另一套它们自己拥有的协议（人点 Done、或 Agent `PATCH` 内部票为 `done`），而且 Paperclip 仍专门做了 watchdog，因为 **Agent 会谎报做完**。
 
 ---
 
@@ -185,7 +185,65 @@ Run 活跃（`queued/running/succeeded/failed/timed_out/cancelled`）和 Issue �
 
 他们把完成定义成 **交付物**（PR 在），不是 hook。假阳性变成「测试绿了但活不对」；接口中断则根本走不到 ship。
 
-### 4.7 其它（先前 #17 已覆盖，不重复深挖）
+### 4.7 Claude-Code-Board — 进程退出只回 IDLE，COMPLETED 必须人手点
+
+源码：[`backend/src/types/session.types.ts`](https://github.com/cablate/Claude-Code-Board/blob/master/backend/src/types/session.types.ts)、[`backend/src/services/SessionService.ts`](https://github.com/cablate/Claude-Code-Board/blob/master/backend/src/services/SessionService.ts)、[`backend/src/services/ProcessManager.ts`](https://github.com/cablate/Claude-Code-Board/blob/master/backend/src/services/ProcessManager.ts)、[`UnifiedStreamProcessor.ts`](https://github.com/cablate/Claude-Code-Board/blob/master/backend/src/services/UnifiedStreamProcessor.ts)
+
+对接：`npx claude-code -p --output-format=stream-json`（自研聊天包一层，不是官方 TUI）。
+
+Session 状态：`processing / idle / completed / error / interrupted / crashed`。
+
+结束判定：
+
+- 子进程 `close` → `processExit`。`code === 0` 时 **故意保持 IDLE**。源码注释原文：「不再将 code === 0 的情况设为 COMPLETED；COMPLETED 状态应该只在用户明确结束 session 时才设置」。
+- `code !== 0` → `ERROR`。
+- stream-json 的 `result` 类型 **直接忽略**（注释写「如 vibe-kanban」）。
+- `completeSession()` 只有人手调用，且要求当前已是 IDLE 或 ERROR。
+
+**对 Taskboard**：和 Cline 同档，而且写得更白——exit 0 曾经被他们当成 COMPLETED，后来改掉了。
+
+### 4.8 OpenHands — `FINISHED` 是一轮说完，在等人
+
+源码：Canvas 侧 [`ExecutionStatus`](https://github.com/OpenHands/OpenHands/blob/main/src/types/agent-server/core/base/common.ts)、[`use-agent-state.ts`](https://github.com/OpenHands/OpenHands/blob/main/src/hooks/use-agent-state.ts)；真正改状态在 SDK [`response_dispatch.py`](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-sdk/openhands/sdk/agent/response_dispatch.py)、[`acp_agent.py`](https://github.com/OpenHands/software-agent-sdk/blob/main/openhands-sdk/openhands/sdk/agent/acp_agent.py)。ACP 说明见 [`docs/ACP_AGENTS.md`](https://github.com/OpenHands/OpenHands/blob/main/docs/ACP_AGENTS.md)。
+
+对接：自研 Agent Server，或 ACP 子进程包 Claude/Codex/Gemini（**不是**官方 TUI）。
+
+`ExecutionStatus`：`idle / running / paused / waiting_for_confirmation / finished / error / stuck`。
+
+结束判定：
+
+- 内置 Agent：模型吐出一段纯文本、不再调工具 → `FINISHED`。注释原文：「LLM produced a message response - awaits user input」。
+- ACP 路径：`conn.prompt()` 返回（一轮远程 turn 结束）→ 发 `FinishAction` → `FINISHED`。源码写明这是 **turn 边界**，不是整段 Conversation 验收。
+- 没有用户消息可送 → 也标 `FINISHED`（「No user message found; finishing conversation」）。
+- ACP **idle timeout**（一段时间没有任何 `session_update`）→ `ERROR`，文案承认「也可能已经做完但响应没收到」——他们选择宁可当错误，也不当完成。
+- `STUCK` 单独存在，Canvas 把它画成 error，不当完成。
+- `IDLE` 在 UI 映射成 `AWAITING_USER_INPUT`，不是关 Conversation。
+
+**对 Taskboard**：`FINISHED` 这个词会骗人，语义是「这一轮停手，等人」。接口挂 / 僵死走 `ERROR`/`STUCK`，不自动开下一张。
+
+### 4.9 Routa — ACP `turnComplete` 被命名成 `agent_completed`，默认可自动推列
+
+源码：[`agent-event-bridge.ts`](https://github.com/phodal/routa/blob/main/src/core/acp/agent-event-bridge/agent-event-bridge.ts)、[`http-session-store.ts`](https://github.com/phodal/routa/blob/main/src/core/acp/http-session-store.ts)、[`workflow-orchestrator.ts`](https://github.com/phodal/routa/blob/main/src/core/kanban/workflow-orchestrator.ts)、[`lifecycle-notifier.ts`](https://github.com/phodal/routa/blob/main/src/core/acp/lifecycle-notifier.ts)、[`board-session-supervision.ts`](https://github.com/phodal/routa/blob/main/src/core/kanban/board-session-supervision.ts)、[ADR 0004](https://github.com/phodal/routa/blob/main/docs/adr/0004-kanban-driven-automation.md)。
+
+对接：ACP session（create / prompt / cancel / reconnect），列切换排队开 session。
+
+他们自己把两层分开写了：
+
+- `notifyIdle`：「一轮结束、没活了」
+- `notifyCompleted`：「所有指派的活做完了」
+
+但 ACP 桥把 `session_update.turnComplete` **直接映射成** `agent_completed`（带 `stopReason`）。编排器默认 `completionRequirement: "turn_complete"`；非 `ralph_loop` 模式下，成功事件就当 `completionSatisfied`。`autoAdvanceOnSuccess` 为真时，会自动推下一列 / 开下一张排队卡。
+
+另有：
+
+- 无活动超过 `inactivityTimeoutMinutes`（默认 10）→ `AGENT_TIMEOUT`，可 watchdog 重试
+- ACP `error` → 失败，不推进
+- `ralph_loop` 可把门槛升到「必须有 completion_summary / verification_report」——仍是 Agent 自报
+- 仓库自己的 issue（2026-03-14）写过：编排器等的是 `AGENT_COMPLETED`，但普通 Kanban ACP 会话主要靠 session 状态，两边曾对不齐导致泳道卡住
+
+**对 Taskboard**：这是「把一轮结束当成完成、再自动往下走」的完整反例。他们后来用 10 分钟闲置和可选摘要门槛补洞，说明默认 `turn_complete` 会误判。
+
+### 4.10 其它（先前 #17 已覆盖，不重复深挖）
 
 Routa 列切换 / Fitness Gate、Vibe Workspace Idle、Nimbalyst 人标 complete：完成权都在人或另一套自研会话上，不在官方 TUI 退出码。
 
@@ -252,4 +310,7 @@ Routa 列切换 / Fitness Gate、Vibe Workspace Idle、Nimbalyst 人标 complete
 | https://github.com/generalaction/emdash `tui-agent-status-transition.ts` | idle 不投影；completed → stop |
 | https://github.com/paperclipai/paperclip heartbeat-protocol / TASK-WATCHDOG | PATCH done + 仍不信自报 |
 | https://github.com/cyrusagents/cyrus `skills/verify-and-ship/SKILL.md` | 完成 = 验证 + PR |
+| https://github.com/cablate/Claude-Code-Board `SessionService.ts` | exit 0 → IDLE；COMPLETED 仅人手 |
+| https://github.com/OpenHands/software-agent-sdk `response_dispatch.py` / `acp_agent.py` | FINISHED = 一轮结束等人；idle timeout → ERROR |
+| https://github.com/phodal/routa `agent-event-bridge.ts` / `workflow-orchestrator.ts` | turnComplete → agent_completed；默认可自动推列 |
 | 本仓库 #9 / #10 / #17 | Run≠Issue；执行已停；编排应拒项 |
