@@ -49,7 +49,7 @@ _Avoid_: Taxonomy, Issue Type（不是 GitHub Issue Type）
 _Avoid_: Bot, Assistant, LLM（模型只是 Agent 的配置维度之一）, 把 dsh web 这类浏览器入口先算进 Agent
 
 **Agent Adapter**:
-一份稳定合同的一种实现：探测本机是否装了可执行文件、声明可配置项（如 model、effort）、组装交互 TUI 的启动参数、说明能力（含能否原生创建隔离执行目录）。内核只认合同，不认具体名单；加一家是新模块，不是改启动表单或 Run 生命周期。各家云账号、API key、登录态不是看板的职责，Adapter 不去管、不拿来禁启动。
+一份稳定合同的一种实现：在启动环境里探测本机是否装了可执行文件、声明可配置项（如 model、effort）、组装交互 TUI 的启动参数、说明能力（含能否原生创建隔离执行目录，以及本家已知安装位置）。内核只认合同，不认具体名单；加一家是新模块，不是改启动表单或 Run 生命周期。各家云账号、API key、登录态不是看板的职责，Adapter 不去管、不拿来禁启动。
 _Avoid_: Plugin（可口语化，不要做成插件市场）, Integration（过宽）, 通用 CLI（无合同就开跑）, 把 Agent 登录态当看板功能
 
 **Tracker Adapter**:
@@ -59,6 +59,10 @@ _Avoid_: Plugin, Connector
 **启动配置**:
 某次启动 Run 时，用户在表单上确认过的、该 Agent Adapter 声明的那些值（如 model、effort、权限）。点启动时表单上是什么，这次 Run 就带着什么。按 Project×Agent 记住的那份默认不含隔离执行目录。
 _Avoid_: RunConfig（假统一成三家同一套字段）, 把「用默认」当成用户看得见的值, 把是否隔离当成和 model 一样可记忆的偏好
+
+**启动环境**:
+Host 为探测和某次 Run 准备的那份进程环境：在目标目录用用户默认壳拍到的整份快照，叠上 Host 的 PATH 前缀和已知安装位置，并覆盖必须钉死的键。不是 Host 从图标拉起时自带的那份。
+_Avoid_: 继承终端, Host 环境（那是图标进程自己的）, login env（那是取样方式）, 把用户终端 App 的环境当启动环境
 
 **Run**:
 一次在某个 Project 中启动 Agent CLI 的可观察执行会话。Run 通常绑定一个 Issue，也允许不绑定 Issue；一个 Issue 可按时间关联多次 Run，但同一时刻最多有一个活跃 Run。Run 的生命周期与 Issue 状态彼此独立：Issue 关闭不会终止活跃 Run，Run 结束也不会表示或触发 Issue 完成。默认在 Project 主目录执行；可选使用隔离执行目录。

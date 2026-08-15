@@ -2,7 +2,7 @@
 
 v1 桌面 Client 用 Tauri 2。Host 住在这份桌面应用的 Rust 核心进程里：关窗口只藏窗口，核心进程和托盘还在；设置里「本机不起 Host，只当 Client」是这次启动不跑 PTY / Tracker / 监听，不是再开一个别的程序。macOS 与 Windows 同一套栈、同一版本——可以先在 Mac 上做、再到 Windows 上验，不能做成两套产品。本机窗口和浏览器走同一套 Host 协议（本机就是本机地址）；Tauri 只做窗口、托盘、登录自启、系统通知，不把业务 API 做成 Tauri 专用命令。
 
-Embedded Terminal 是 Host 上我们自己开的 PTY，不打开、不嵌入用户的终端 App。Client 画终端默认用 xterm.js（见 [调研：Tauri 2 在 macOS/Windows 嵌入真实 PTY 的可行性](https://github.com/youjiaxing/agent-taskboard/issues/3)）。用户装了几种终端或几种 shell，不构成换壳理由。启动 Run 时如何继承日常终端的 PATH / 环境，见 [决策：启动 Run 时如何获得用户日常终端里的 PATH 与环境](https://github.com/youjiaxing/agent-taskboard/issues/23)。
+Embedded Terminal 是 Host 上我们自己开的 PTY，不打开、不嵌入用户的终端 App。Client 画终端默认用 xterm.js（见 [调研：Tauri 2 在 macOS/Windows 嵌入真实 PTY 的可行性](https://github.com/youjiaxing/agent-taskboard/issues/3)）。用户装了几种终端或几种 shell，不构成换壳理由。启动 Run 时的启动环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。
 
 只有下面这类能力做不到，才改 Electron 或其它壳：关最后一扇窗口后保不住 Host / Run；无法把 Host 上的 PTY 流转发到远程桌面和浏览器并达到可交互 TUI；登录自启、单实例、托盘里「退出 Host」在任一必交付系统上做不稳。手感、样例多少、包体积、xterm 显示瑕疵都不算换壳理由。
 

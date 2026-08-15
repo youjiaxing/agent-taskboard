@@ -36,4 +36,4 @@
 
 - `/to-spec` 按本合同写 Agent Adapter，不必为三家各编一套内核模型。
 - 启动表单按各 Adapter 的字段声明渲染；第一层字段清单见对应决策票，不在内核写死。
-- 默认选中：已安装列表里按 Grok Build → Codex → Claude Code 挑第一个。找不到可执行文件则不能启动；这不是在管登录。
+- 默认选中：已安装列表里按 Grok Build → Codex → Claude Code 挑第一个。找不到可执行文件则不能启动；这不是在管登录。探测和 spawn 用哪份环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。
