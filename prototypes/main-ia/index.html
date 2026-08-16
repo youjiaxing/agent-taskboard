@@ -421,6 +421,20 @@
       background: #fef3c7;
       border: 1px solid #fcd34d;
     }
+    .recent { border-bottom: 1px solid var(--line); }
+    .recent .item { padding: 4px 10px; }
+    .recent .hd { padding: 4px 10px; }
+    a {
+      color: inherit;
+      font: inherit;
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 2px 8px;
+      background: var(--paper);
+      text-decoration: none;
+    }
+    a:hover { border-color: #a8a29e; }
   </style>
 </head>
 <body>
@@ -447,8 +461,9 @@
       { id: 30, projectId: "shop", title: "修支付超时", section: "in-run", role: "ready-for-agent", claimed: true, blockedBy: [], blocking: [31], stopped: true },
       { id: 31, projectId: "shop", title: "加退款接口", section: "blocked", role: "ready-for-agent", claimed: false, blockedBy: [30], blocking: [] },
       { id: 40, projectId: "notes", title: "整理 ADR 索引", section: "frontier", role: "needs-triage", claimed: false, blockedBy: [], blocking: [] },
-      { id: 12, projectId: "tb", title: "决策：是否坚持 Tauri 2 作为桌面壳", section: "closed", closed: true, role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] },
-      { id: 22, projectId: "tb", title: "决策：审阅面做到哪一层", section: "closed", closed: true, role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] }
+      { id: 12, projectId: "tb", title: "决策：是否坚持 Tauri 2 作为桌面壳", section: "closed", closed: true, closedAgo: "刚关 · 2 分钟前", role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] },
+      { id: 22, projectId: "tb", title: "决策：审阅面做到哪一层", section: "closed", closed: true, closedAgo: "40 分钟前", role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] },
+      { id: 11, projectId: "tb", title: "决策：Tracker Adapter 统一能力面", section: "closed", closed: true, closedAgo: "昨天", role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] }
     ];
     const RUNS = [
       { id: "r1", issueId: 14, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
@@ -510,7 +525,8 @@
       issueLayout: "status",
       termZoom: null,
       showClosed: false,
-      vcPct: 36
+      vcPct: 36,
+      colAxis: "unlock"
     };
 
     const VARIANTS = [
@@ -638,10 +654,41 @@
       return i.section;
     }
     function statusOrder(list) {
-      const order = ["blocked", "frontier", "in-run"];
+      const order = S.colAxis === "later"
+        ? ["frontier", "in-run", "blocked"]
+        : ["blocked", "frontier", "in-run"];
       if (list.some(i => displaySection(i) === "triage")) order.unshift("triage");
       if (S.showClosed) order.push("closed");
       return order;
+    }
+    function trackerHref(i) {
+      const p = project(i.projectId);
+      if (p.tracker === "GitHub") return `https://github.com/youjiaxing/${p.name}/issues/${i.id}`;
+      return null;
+    }
+    function trackerOpen(i) {
+      const href = trackerHref(i);
+      if (href) return `<a href="${esc(href)}" target="_blank" rel="noreferrer">在 GitHub 打开</a>`;
+      return `<span class="tiny">这份 Tracker 没有网页</span>`;
+    }
+    function recentClosed() {
+      return ISSUES.filter(i => i.closed && visibleProjects().some(p => p.id === i.projectId)).slice(0, 3);
+    }
+    function recentStrip() {
+      const items = recentClosed();
+      if (!items.length) return "";
+      return `
+        <div class="recent">
+          <div class="hd">最近完成 <span>刚关的留在这里，不是全部历史</span></div>
+          ${items.map(i => `
+            <div class="item ${S.issueId === i.id ? "sel" : ""}">
+              <div class="t">
+                <button class="ghost" data-act="issue" data-id="${i.id}"><b>#${i.id} ${esc(i.title)}</b></button>
+                <span class="tiny">${esc(i.closedAgo || "已关闭")}</span>
+              </div>
+              <div class="sub">${esc(project(i.projectId).name)} · ${trackerOpen(i)}</div>
+            </div>`).join("")}
+        </div>`;
     }
 
     function setIssue(id) {
@@ -825,7 +872,8 @@
           </div>
           <div class="row">
             ${r ? `<button class="primary" data-act="run" data-id="${r.id}">看这次 Run</button>` : `<button class="primary" data-act="fake-start">开 Run</button>`}
-            ${i.claimed ? `<button data-act="fake-release">释放认领</button>` : `<button data-act="fake-claim">认领</button>`}
+            ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">释放认领</button>` : `<button data-act="fake-claim">认领</button>`}
+            ${trackerOpen(i)}
           </div>
           <p class="tiny">关票不经过这一页，也不靠拖列。人不满意就再开 Run，或到 Tracker 把票重新打开。</p>
         </div>`;
@@ -922,6 +970,8 @@
             <button data-act="issue-layout" data-id="list" class="${S.issueLayout === "list" ? "active" : ""}">列表</button>
             <button data-act="issue-layout" data-id="status" class="${S.issueLayout === "status" ? "active" : ""}">按状态分列</button>
             <button data-act="issue-layout" data-id="project" class="${S.issueLayout === "project" ? "active" : ""}">按 Project 分列</button>
+            <button data-act="col-axis" data-id="unlock" class="${S.colAxis === "unlock" ? "active" : ""}">列序：被挡住在左</button>
+            <button data-act="col-axis" data-id="later" class="${S.colAxis === "later" ? "active" : ""}">列序：被挡住在右</button>
             <button data-act="toggle-closed" class="${S.showClosed ? "active" : ""}">${S.showClosed ? "已关闭开着" : "也看已关闭"}</button>
             <span class="chip">自动推进 关</span>
             <button class="ghost" data-act="fake-pending">演示待确认</button>
@@ -933,8 +983,9 @@
               <div class="pad tiny">点 Project 只过滤本板。不是第二种 Frontier。</div>
             </div>
             <div class="pane">
-              ${S.pendingAdvance ? `<div class="banner">待确认 47s · 只问要不要领下一张，不强迫先打开查看改动 <button data-act="veto">否决</button></div>` : ""}
-              ${S.issueLayout !== "list" ? `<div class="tiny pad">从左到右：还不能干 → 可以干 → 正在干。不能拖列，右边也不是「做完」。</div>` : ""}
+              ${S.pendingAdvance ? `<div class="banner">刚关了 <button data-act="issue" data-id="12">#12</button>。待确认只问要不要领下一张。 <button data-act="issue" data-id="12">看这张</button> ${trackerOpen(issue(12))} <button data-act="veto">否决领下一张</button></div>` : ""}
+              ${recentStrip()}
+              ${S.issueLayout !== "list" ? `<div class="tiny pad">${S.colAxis === "later" ? "从左到右：现在能领 → 正在干 → 更晚才轮到（被挡住）。" : "从左到右：还没解锁 → 可以领 → 正在干。"} 不能拖列。已关闭不靠最右那列找，看上面的「最近完成」。</div>` : ""}
               ${issueBoard(list)}
             </div>
             <div class="pane">${issueDetail()}</div>
@@ -1219,6 +1270,7 @@
         if (act === "issue-layout") { S.issueLayout = id; render(); }
         if (act === "term-zoom") { setTermZoom(id || null); return; }
         if (act === "toggle-closed") { S.showClosed = !S.showClosed; render(); }
+        if (act === "col-axis") { S.colAxis = id; render(); }
       };
       document.getElementById("app").oninput = (e) => {
         if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
