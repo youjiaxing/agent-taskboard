@@ -400,9 +400,16 @@
       flex-direction: column;
       padding-bottom: 72px;
     }
-    .zoom-stage.page { padding: 36px 56px 88px; background: #44403c; }
-    .zoom-stage.display { background: #000; padding: 8px 8px 80px; }
+    .zoom-stage.full { padding-bottom: 0; }
     .zoom-stage .term { flex: 1; }
+    :fullscreen #switcher, :fullscreen #inspector { display: none; }
+    .split { display: grid; min-height: 0; flex: 1; }
+    .splitter {
+      cursor: col-resize;
+      background: var(--line);
+      width: 6px;
+    }
+    .splitter:hover { background: var(--accent); }
     .empty {
       padding: 28px 16px;
       text-align: center;
@@ -439,12 +446,15 @@
       { id: 25, projectId: "tb", title: "grilling：配对出示页的文案", section: "frontier", role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] },
       { id: 30, projectId: "shop", title: "修支付超时", section: "in-run", role: "ready-for-agent", claimed: true, blockedBy: [], blocking: [31], stopped: true },
       { id: 31, projectId: "shop", title: "加退款接口", section: "blocked", role: "ready-for-agent", claimed: false, blockedBy: [30], blocking: [] },
-      { id: 40, projectId: "notes", title: "整理 ADR 索引", section: "frontier", role: "needs-triage", claimed: false, blockedBy: [], blocking: [] }
+      { id: 40, projectId: "notes", title: "整理 ADR 索引", section: "frontier", role: "needs-triage", claimed: false, blockedBy: [], blocking: [] },
+      { id: 12, projectId: "tb", title: "决策：是否坚持 Tauri 2 作为桌面壳", section: "closed", closed: true, role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] },
+      { id: 22, projectId: "tb", title: "决策：审阅面做到哪一层", section: "closed", closed: true, role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] }
     ];
     const RUNS = [
       { id: "r1", issueId: 14, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
       { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true },
-      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false }
+      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false },
+      { id: "r4", issueId: 12, hostId: "local", projectId: "tb", agent: "Grok Build", status: "stopped", isolation: false }
     ];
     const FILES = {
       r1: [
@@ -471,6 +481,11 @@
         { repo: "agent-taskboard", path: "scratch.md", add: 6, del: 0, lines: [
           { n: 1, t: "+ 游离 Run：没有 Issue 定位", k: "add" }
         ]}
+      ],
+      r4: [
+        { repo: "agent-taskboard", path: "docs/adr/0007-tauri2-desktop-shell.md", add: 40, del: 0, lines: [
+          { n: 1, t: "+ 桌面 Client 用 Tauri 2", k: "add" }
+        ]}
       ]
     };
 
@@ -492,8 +507,10 @@
       phone: "home",
       noteDraft: "",
       noteLine: null,
-      issueLayout: "list",
-      termZoom: null
+      issueLayout: "status",
+      termZoom: null,
+      showClosed: false,
+      vcPct: 36
     };
 
     const VARIANTS = [
@@ -511,6 +528,8 @@
       u.searchParams.set("layout", S.issueLayout);
       if (S.termZoom) u.searchParams.set("zoom", S.termZoom);
       else u.searchParams.delete("zoom");
+      if (S.showClosed) u.searchParams.set("closed", "1");
+      else u.searchParams.delete("closed");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -536,7 +555,8 @@
       const layout = p.get("layout");
       if (["list", "status", "project"].includes(layout)) S.issueLayout = layout;
       const zoom = p.get("zoom");
-      if (["panel", "page", "display"].includes(zoom)) S.termZoom = zoom;
+      if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
+      if (p.get("closed") === "1") S.showClosed = true;
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -558,7 +578,7 @@
     }
     function visibleIssues() {
       const ps = new Set(visibleProjects().map(p => p.id));
-      return ISSUES.filter(i => ps.has(i.projectId));
+      return ISSUES.filter(i => ps.has(i.projectId) && (S.showClosed || !i.closed));
     }
     function visibleRuns() {
       const hs = new Set(visibleHosts().map(h => h.id));
@@ -604,11 +624,24 @@
         </span>`;
     }
     function sectionName(sec) {
-      return { frontier: "Frontier", blocked: "被挡住", "in-run": "干活中", triage: "未进 Frontier" }[sec] || sec;
+      return {
+        triage: "未进 Frontier",
+        blocked: "被挡住",
+        frontier: "Frontier",
+        "in-run": "干活中",
+        closed: "已关闭"
+      }[sec] || sec;
     }
     function displaySection(i) {
+      if (i.closed) return "closed";
       if (["needs-triage", "needs-info", "wontfix"].includes(i.role)) return "triage";
       return i.section;
+    }
+    function statusOrder(list) {
+      const order = ["blocked", "frontier", "in-run"];
+      if (list.some(i => displaySection(i) === "triage")) order.unshift("triage");
+      if (S.showClosed) order.push("closed");
+      return order;
     }
 
     function setIssue(id) {
@@ -675,7 +708,8 @@
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
         `Run: ${r ? runLabel(r) + " / " + r.status : "（无）"}`,
         `查看改动: ${S.viewChangesOpen ? "开" : "收起"} · ${S.viewBase === "round" ? "这一轮" : "未提交"}`,
-        `中间: ${S.issueLayout} · 终端放大: ${S.termZoom || "无"}`,
+        `中间: ${S.issueLayout} · 已关闭: ${S.showClosed ? "显示" : "隐藏"}`,
+        `终端放大: ${S.termZoom || "无"} · 改动宽 ${Math.round(S.vcPct)}%`,
         `改动备注待送出: ${S.notes.length}`
       ];
       return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
@@ -708,9 +742,10 @@
     function issueItem(i) {
       const r = issueRun(i);
       const tags = [];
+      if (i.closed) tags.push(`<span class="tag">已关闭</span>`);
       if (i.section === "blocked") tags.push(`<span class="tag block">被挡住</span>`);
       if (r && r.status === "active") tags.push(`<span class="tag run">活跃 Run</span>`);
-      if (r && r.status === "stopped" || i.stopped) tags.push(`<span class="tag stop">执行已停</span>`);
+      if ((r && r.status === "stopped") || i.stopped) tags.push(`<span class="tag stop">${i.closed ? "当时的 Run" : "执行已停"}</span>`);
       if (i.claimed) tags.push(`<span class="tag">已认领</span>`);
       tags.push(`<span class="tag">${esc(i.role)}</span>`);
       return `
@@ -721,8 +756,7 @@
     }
 
     function groupedIssues(list) {
-      const order = ["frontier", "in-run", "blocked", "triage"];
-      return order.map(sec => {
+      return statusOrder(list).map(sec => {
         const items = list.filter(i => displaySection(i) === sec);
         if (!items.length && sec !== "frontier") return "";
         return `<div class="hd">${sectionName(sec)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}`;
@@ -742,7 +776,7 @@
           return `<div class="col"><div class="hd">${esc(p.name)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}</div>`;
         }).join("")}</div>`;
       }
-      const order = ["frontier", "in-run", "blocked", "triage"];
+      const order = statusOrder(list);
       return `<div class="lanes-mid">${order.map(sec => {
         const items = list.filter(i => displaySection(i) === sec);
         if (!items.length && sec !== "frontier") return "";
@@ -760,8 +794,7 @@
           ${runIdentity(r)}
           <span class="grow"></span>
           <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">窗内放大</button>
-          <button data-act="term-zoom" data-id="page" class="${S.termZoom === "page" ? "active" : ""}">网页全屏</button>
-          <button data-act="term-zoom" data-id="display" class="${S.termZoom === "display" ? "active" : ""}">显示器全屏</button>
+          <button data-act="term-zoom" data-id="full" class="${S.termZoom === "full" ? "active" : ""}">全屏</button>
         </div>`;
     }
 
@@ -779,7 +812,7 @@
           <div class="tiny">${esc(host(p.hostId).name)} / ${esc(p.name)} · ${esc(p.tracker)}</div>
           <div class="row">
             <span class="tag">${esc(i.role)}</span>
-            ${i.claimed ? `<span class="tag">已认领 · 不在 Frontier</span>` : `<span class="tag">未认领</span>`}
+            ${i.closed ? `<span class="tag">已关闭 · 不是看板上的「完成列」</span>` : i.claimed ? `<span class="tag">已认领 · 不在 Frontier</span>` : `<span class="tag">未认领</span>`}
             ${r ? `<span class="tag run">${r.status === "active" ? "有活跃 Run" : "最近一次已停"}</span>` : ""}
           </div>
           <div>
@@ -889,6 +922,7 @@
             <button data-act="issue-layout" data-id="list" class="${S.issueLayout === "list" ? "active" : ""}">列表</button>
             <button data-act="issue-layout" data-id="status" class="${S.issueLayout === "status" ? "active" : ""}">按状态分列</button>
             <button data-act="issue-layout" data-id="project" class="${S.issueLayout === "project" ? "active" : ""}">按 Project 分列</button>
+            <button data-act="toggle-closed" class="${S.showClosed ? "active" : ""}">${S.showClosed ? "已关闭开着" : "也看已关闭"}</button>
             <span class="chip">自动推进 关</span>
             <button class="ghost" data-act="fake-pending">演示待确认</button>
           </div>
@@ -900,7 +934,7 @@
             </div>
             <div class="pane">
               ${S.pendingAdvance ? `<div class="banner">待确认 47s · 只问要不要领下一张，不强迫先打开查看改动 <button data-act="veto">否决</button></div>` : ""}
-              ${S.issueLayout !== "list" ? `<div class="tiny pad">分列只是视觉分组，不能拖列，也不表示关票。</div>` : ""}
+              ${S.issueLayout !== "list" ? `<div class="tiny pad">从左到右：还不能干 → 可以干 → 正在干。不能拖列，右边也不是「做完」。</div>` : ""}
               ${issueBoard(list)}
             </div>
             <div class="pane">${issueDetail()}</div>
@@ -908,31 +942,39 @@
           <div class="dock a-bottom">
             ${runTabs(runs)}
             ${termChrome(active)}
-            <div class="cols" style="flex:1;grid-template-columns:${S.viewChangesOpen ? "1.2fr .8fr" : "1fr"}">
-              <div class="term-wrap"><div class="term">${termText(active)}</div></div>
-              ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(active)}</div>` : ""}
-            </div>
+            ${termSplit(active)}
           </div>
           ${S.termZoom ? termZoomStage(active) : ""}
           ${S.pairing ? pairingModal() : ""}
         </div>`;
     }
 
-    function termZoomStage(r) {
-      const label = { panel: "窗内放大 · 板子先藏起来", page: "网页全屏 · 浏览器 Client", display: "显示器全屏 · 桌面 Client" }[S.termZoom];
+    function termSplit(r) {
+      if (!S.viewChangesOpen) {
+        return `<div class="term-wrap"><div class="term">${termText(r)}</div></div>`;
+      }
       return `
-        <div class="zoom-stage ${S.termZoom}">
+        <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px ${S.vcPct}%">
+          <div class="term-wrap"><div class="term">${termText(r)}</div></div>
+          <div class="splitter" data-act="drag-vc" title="拖动改宽度"></div>
+          <div class="pane">${viewChangesPanel(r)}</div>
+        </div>`;
+    }
+
+    function termZoomStage(r) {
+      const label = S.termZoom === "full"
+        ? "全屏 · 就是浏览器那种占满这块屏（桌面上会做成原生全屏）"
+        : "窗内放大 · 板子先藏起来，还在这个窗口里";
+      return `
+        <div class="zoom-stage ${S.termZoom === "full" ? "full" : "panel"}">
           <div class="ident">
             ${runIdentity(r)}
             <span class="tag">${esc(label)}</span>
             <span class="grow"></span>
             <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">查看改动</button>
-            <button class="primary" data-act="term-zoom" data-id="">退出放大</button>
+            <button class="primary" data-act="term-zoom" data-id="">退出</button>
           </div>
-          <div class="cols" style="flex:1;grid-template-columns:${S.viewChangesOpen ? "1.2fr .8fr" : "1fr"}">
-            <div class="term">${termText(r)}</div>
-            ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(r)}</div>` : ""}
-          </div>
+          ${termSplit(r)}
         </div>`;
     }
 
@@ -1175,16 +1217,57 @@
         if (act === "veto") { S.pendingAdvance = false; render(); }
         if (act === "fake-pending") { S.pendingAdvance = true; render(); }
         if (act === "issue-layout") { S.issueLayout = id; render(); }
-        if (act === "term-zoom") { S.termZoom = id || null; render(); }
+        if (act === "term-zoom") { setTermZoom(id || null); return; }
+        if (act === "toggle-closed") { S.showClosed = !S.showClosed; render(); }
       };
       document.getElementById("app").oninput = (e) => {
         if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
       };
+      const splitHandle = document.querySelector("[data-act=drag-vc]");
+      if (splitHandle) {
+        splitHandle.onmousedown = (e) => {
+          e.preventDefault();
+          const split = splitHandle.parentElement;
+          const move = (ev) => {
+            const rect = split.getBoundingClientRect();
+            S.vcPct = Math.min(70, Math.max(18, ((rect.right - ev.clientX) / rect.width) * 100));
+            split.style.gridTemplateColumns = `minmax(160px,1fr) 6px ${S.vcPct}%`;
+          };
+          const up = () => {
+            window.removeEventListener("mousemove", move);
+            window.removeEventListener("mouseup", up);
+          };
+          window.addEventListener("mousemove", move);
+          window.addEventListener("mouseup", up);
+        };
+      }
     }
 
+    function setTermZoom(id) {
+      S.termZoom = id || null;
+      const want = S.termZoom === "full";
+      if (want && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+      if (!want && document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+      render();
+    }
+
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && S.termZoom === "full") {
+        S.termZoom = null;
+        render();
+      }
+    });
     document.addEventListener("keydown", (e) => {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.key === "Escape" && S.termZoom && S.termZoom !== "full") {
+        setTermZoom(null);
+        return;
+      }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         const i = VARIANTS.findIndex(v => v.id === S.variant);
         S.variant = VARIANTS[(i + (e.key === "ArrowRight" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
