@@ -461,6 +461,7 @@
       { id: 30, projectId: "shop", title: "修支付超时", section: "in-run", role: "ready-for-agent", claimed: true, blockedBy: [], blocking: [31], stopped: true },
       { id: 31, projectId: "shop", title: "加退款接口", section: "blocked", role: "ready-for-agent", claimed: false, blockedBy: [30], blocking: [] },
       { id: 40, projectId: "notes", title: "整理 ADR 索引", section: "frontier", role: "needs-triage", claimed: false, blockedBy: [], blocking: [] },
+      { id: 41, projectId: "notes", title: "写完本周回顾", section: "closed", closed: true, closedAgo: "10 分钟前", role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] },
       { id: 12, projectId: "tb", title: "决策：是否坚持 Tauri 2 作为桌面壳", section: "closed", closed: true, closedAgo: "刚关 · 2 分钟前", role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] },
       { id: 22, projectId: "tb", title: "决策：审阅面做到哪一层", section: "closed", closed: true, closedAgo: "40 分钟前", role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] },
       { id: 11, projectId: "tb", title: "决策：Tracker Adapter 统一能力面", section: "closed", closed: true, closedAgo: "昨天", role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] }
@@ -526,7 +527,8 @@
       termZoom: null,
       showClosed: false,
       vcPct: 36,
-      colAxis: "unlock"
+      colAxis: "later",
+      recentWhere: "column"
     };
 
     const VARIANTS = [
@@ -645,7 +647,8 @@
         blocked: "被挡住",
         frontier: "Frontier",
         "in-run": "干活中",
-        closed: "已关闭"
+        closed: "已关闭",
+        recent: "最近完成"
       }[sec] || sec;
     }
     function displaySection(i) {
@@ -666,13 +669,17 @@
       if (p.tracker === "GitHub") return `https://github.com/youjiaxing/${p.name}/issues/${i.id}`;
       return null;
     }
+    function localPath(i) {
+      return `.scratch/notes/issues/${i.id}-${i.title.slice(0, 12)}.md`;
+    }
     function trackerOpen(i) {
       const href = trackerHref(i);
       if (href) return `<a href="${esc(href)}" target="_blank" rel="noreferrer">在 GitHub 打开</a>`;
-      return `<span class="tiny">这份 Tracker 没有网页</span>`;
+      return `<button data-act="open-local" data-id="${i.id}">打开本地文件</button> <button data-act="reveal-local" data-id="${i.id}">在文件夹中显示</button>`;
     }
     function recentClosed() {
-      return ISSUES.filter(i => i.closed && visibleProjects().some(p => p.id === i.projectId)).slice(0, 3);
+      const ps = new Set(visibleProjects().map(p => p.id));
+      return ISSUES.filter(i => i.closed && ps.has(i.projectId) && (!S.projectId || i.projectId === S.projectId)).slice(0, 3);
     }
     function recentStrip() {
       const items = recentClosed();
@@ -824,11 +831,16 @@
         }).join("")}</div>`;
       }
       const order = statusOrder(list);
-      return `<div class="lanes-mid">${order.map(sec => {
+      const cols = order.map(sec => {
         const items = list.filter(i => displaySection(i) === sec);
         if (!items.length && sec !== "frontier") return "";
         return `<div class="col"><div class="hd">${sectionName(sec)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}</div>`;
-      }).join("")}</div>`;
+      });
+      if (S.recentWhere === "column") {
+        const rec = recentClosed();
+        cols.push(`<div class="col"><div class="hd">最近完成 <span>${rec.length}</span></div>${rec.map(issueItem).join("") || `<div class="empty">还没有刚关的</div>`}<div class="tiny pad">只留最近几张，不是全部已关闭。</div></div>`);
+      }
+      return `<div class="lanes-mid">${cols.join("")}</div>`;
     }
 
     function issueBoard(list) {
@@ -970,8 +982,8 @@
             <button data-act="issue-layout" data-id="list" class="${S.issueLayout === "list" ? "active" : ""}">列表</button>
             <button data-act="issue-layout" data-id="status" class="${S.issueLayout === "status" ? "active" : ""}">按状态分列</button>
             <button data-act="issue-layout" data-id="project" class="${S.issueLayout === "project" ? "active" : ""}">按 Project 分列</button>
-            <button data-act="col-axis" data-id="unlock" class="${S.colAxis === "unlock" ? "active" : ""}">列序：被挡住在左</button>
-            <button data-act="col-axis" data-id="later" class="${S.colAxis === "later" ? "active" : ""}">列序：被挡住在右</button>
+            <button data-act="recent-where" data-id="column" class="${S.recentWhere === "column" ? "active" : ""}">最近完成在最右</button>
+            <button data-act="recent-where" data-id="strip" class="${S.recentWhere === "strip" ? "active" : ""}">最近完成在顶上</button>
             <button data-act="toggle-closed" class="${S.showClosed ? "active" : ""}">${S.showClosed ? "已关闭开着" : "也看已关闭"}</button>
             <span class="chip">自动推进 关</span>
             <button class="ghost" data-act="fake-pending">演示待确认</button>
@@ -984,8 +996,8 @@
             </div>
             <div class="pane">
               ${S.pendingAdvance ? `<div class="banner">刚关了 <button data-act="issue" data-id="12">#12</button>。待确认只问要不要领下一张。 <button data-act="issue" data-id="12">看这张</button> ${trackerOpen(issue(12))} <button data-act="veto">否决领下一张</button></div>` : ""}
-              ${recentStrip()}
-              ${S.issueLayout !== "list" ? `<div class="tiny pad">${S.colAxis === "later" ? "从左到右：现在能领 → 正在干 → 更晚才轮到（被挡住）。" : "从左到右：还没解锁 → 可以领 → 正在干。"} 不能拖列。已关闭不靠最右那列找，看上面的「最近完成」。</div>` : ""}
+              ${S.recentWhere === "strip" ? recentStrip() : ""}
+              ${S.issueLayout !== "list" ? `<div class="tiny pad">从左到右：Frontier → 干活中 → 被挡住${S.recentWhere === "column" ? " → 最近完成" : ""}。最近完成只放刚关的几张，不能拖进这一列来关票。</div>` : ""}
               ${issueBoard(list)}
             </div>
             <div class="pane">${issueDetail()}</div>
@@ -1271,6 +1283,15 @@
         if (act === "term-zoom") { setTermZoom(id || null); return; }
         if (act === "toggle-closed") { S.showClosed = !S.showClosed; render(); }
         if (act === "col-axis") { S.colAxis = id; render(); }
+        if (act === "recent-where") { S.recentWhere = id; render(); }
+        if (act === "open-local") {
+          const i = issue(Number(id));
+          alert("原型：用系统默认应用打开\n" + localPath(i));
+        }
+        if (act === "reveal-local") {
+          const i = issue(Number(id));
+          alert("原型：在文件夹中显示\n" + localPath(i));
+        }
       };
       document.getElementById("app").oninput = (e) => {
         if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
