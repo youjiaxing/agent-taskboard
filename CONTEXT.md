@@ -81,12 +81,20 @@ _Avoid_: Failed（那是 Run 结束原因）, Blocked（那是依赖未完成）
 _Avoid_: 编排器, 心跳认领, 依赖完成即开跑, 启动 Host 就开工
 
 **待确认**:
-自动推进里的一段短等待：当前票已关，并且状态正常（看见 SessionEnd、没有 StopFailure、进程正常退出）之后，倒计时 60 秒内人可以否决。无人否决才领下一张 `ready-for-agent`。grilling / prototype / needs-info / ready-for-human / needs-triage 不进自动池。
-_Avoid_: 完成, Review（那是别的产品的列名）
+自动推进里的一段短等待：当前票已关，并且状态正常（看见 SessionEnd、没有 StopFailure、进程正常退出）之后，倒计时 60 秒内人可以否决。无人否决才领下一张 `ready-for-agent`。grilling / prototype / needs-info / ready-for-human / needs-triage 不进自动池。不是验收，也不强迫人先打开查看改动。
+_Avoid_: 完成, Review（那是别的产品的列名）, 把查看改动当验收
 
 **自检**:
-干活的 Run 停了之后，仅当这张 Issue 还没关，或状态不正常（缺 SessionEnd、有 StopFailure、或进程非正常退出）时，才要求同一个 Agent 检查现状：该继续就继续，确认做完再关票。票已关且状态正常则不再开 Run。进程已退则新开 Run 并尽量恢复原会话；进程还在且刚发生 StopFailure 时，往同一条 Run 的官方 TUI 注入一句。自检后仍没关或仍异常则停下，不开下一张。票已关但 hook 异常时只验货、不自动 reopen。
-_Avoid_: 关票前复查（那是上一版误写成「每次必跑第二条 Run」的说法）, 验收通过（自检仍是模型判断）
+干活的 Run 停了之后，仅当这张 Issue 还没关，或状态不正常（缺 SessionEnd、有 StopFailure、或进程非正常退出）时，才要求同一个 Agent 检查现状：该继续就继续，确认做完再关票。票已关且状态正常则不再开 Run。进程已退则新开 Run 并尽量恢复原会话；进程还在且刚发生 StopFailure 时，往同一条 Run 的官方 TUI 注入一句。自检后仍没关或仍异常则停下，不开下一张。票已关但 hook 异常时只打开查看改动、不自动 reopen。
+_Avoid_: 关票前复查（那是上一版误写成「每次必跑第二条 Run」的说法）, 验收通过（自检仍是模型判断）, 验货
+
+**查看改动**:
+针对某次 Run 工作目录的只读对比：现场对本地 git 现算，默认相对启动时记下的 commit，可切到未提交。自动包含目录里有限几层的独立子仓库。不是 Tracker 状态，也不是看板列；和票是否关闭、认领、自动推进无关，做到一半也能看。桌面应用和电脑浏览器要完整能力；手机不要。
+_Avoid_: 审阅面（可口语）, 行评, Review 列, 待审, 验货
+
+**改动备注**:
+人在查看改动里针对某一行写下的一句话，带着哪个仓库、哪个文件、哪一行。只留在看板，不写回 Tracker，也不灌进还在跑的那次。下次开跑并进开场白后，从待送出里清掉。
+_Avoid_: 行评, review comment, 批注
 
 **Embedded Terminal**:
 Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。不是用户系统里的终端 App，也不是自研聊天 UI。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
