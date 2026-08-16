@@ -368,6 +368,41 @@
       color: #fff;
     }
     #inspector pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+    .ident {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: #292524;
+      color: #f5f5f4;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .ident button { background: #44403c; color: #fff; border-color: #57534e; }
+    .ident .who { color: #fdba74; font-weight: 650; }
+    .ident .crumb { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .term-wrap { display: flex; flex-direction: column; min-height: 0; }
+    .term-wrap .term { flex: 1; }
+    .lanes-mid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      min-height: 100%;
+    }
+    .lanes-mid .col { border-right: 1px solid var(--line); min-width: 0; }
+    .lanes-mid .col:last-child { border-right: 0; }
+    .item.linked { box-shadow: inset 3px 0 0 var(--accent); }
+    .zoom-stage {
+      position: fixed;
+      inset: 0;
+      z-index: 18;
+      background: #0c0a09;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 72px;
+    }
+    .zoom-stage.page { padding: 36px 56px 88px; background: #44403c; }
+    .zoom-stage.display { background: #000; padding: 8px 8px 80px; }
+    .zoom-stage .term { flex: 1; }
     .empty {
       padding: 28px 16px;
       text-align: center;
@@ -448,7 +483,7 @@
       projectId: "tb",
       issueId: 14,
       runId: "r1",
-      viewChangesOpen: true,
+      viewChangesOpen: false,
       viewBase: "round",
       fileKey: "prototypes/main-ia/index.html",
       notes: [],
@@ -456,7 +491,9 @@
       pendingAdvance: false,
       phone: "home",
       noteDraft: "",
-      noteLine: null
+      noteLine: null,
+      issueLayout: "list",
+      termZoom: null
     };
 
     const VARIANTS = [
@@ -471,6 +508,9 @@
       u.searchParams.set("variant", S.variant);
       u.searchParams.set("viewport", S.viewport);
       u.searchParams.set("scenario", S.scenario);
+      u.searchParams.set("layout", S.issueLayout);
+      if (S.termZoom) u.searchParams.set("zoom", S.termZoom);
+      else u.searchParams.delete("zoom");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -493,6 +533,10 @@
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "empty", "stopped"].includes(sc)) applyScenario(sc);
+      const layout = p.get("layout");
+      if (["list", "status", "project"].includes(layout)) S.issueLayout = layout;
+      const zoom = p.get("zoom");
+      if (["panel", "page", "display"].includes(zoom)) S.termZoom = zoom;
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -537,8 +581,27 @@
     function issueLabel(i) { return `#${i.id} ${i.title}`; }
     function runLabel(r) {
       const i = r.issueId ? issue(r.issueId) : null;
+      const p = project(r.projectId);
       const who = i ? `#${i.id}` : "游离";
-      return `${who} · ${r.agent}`;
+      return `${who} · ${p.name}`;
+    }
+    function runIdentity(r) {
+      if (!r) return `<span class="muted">没有选中的 Run</span>`;
+      const i = r.issueId ? issue(r.issueId) : null;
+      const p = project(r.projectId);
+      const h = host(r.hostId);
+      const issueBit = i
+        ? `<button data-act="issue" data-id="${i.id}"><span class="who">#${i.id}</span> ${esc(i.title)}</button>`
+        : `<span class="tag free">游离 · 没有 Issue</span>`;
+      return `
+        <span class="crumb">
+          ${esc(h.name)}
+          <span class="muted">/</span>
+          <button data-act="project" data-id="${p.id}">${esc(p.name)}</button>
+          <span class="muted">/</span>
+          ${issueBit}
+          <span class="muted">· ${esc(r.agent)}${r.isolation ? " · 隔离" : ""}</span>
+        </span>`;
     }
     function sectionName(sec) {
       return { frontier: "Frontier", blocked: "被挡住", "in-run": "干活中", triage: "未进 Frontier" }[sec] || sec;
@@ -611,7 +674,8 @@
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
         `Run: ${r ? runLabel(r) + " / " + r.status : "（无）"}`,
-        `查看改动: ${S.viewChangesOpen ? "开" : "关"} · ${S.viewBase === "round" ? "这一轮" : "未提交"}`,
+        `查看改动: ${S.viewChangesOpen ? "开" : "收起"} · ${S.viewBase === "round" ? "这一轮" : "未提交"}`,
+        `中间: ${S.issueLayout} · 终端放大: ${S.termZoom || "无"}`,
         `改动备注待送出: ${S.notes.length}`
       ];
       return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
@@ -650,7 +714,7 @@
       if (i.claimed) tags.push(`<span class="tag">已认领</span>`);
       tags.push(`<span class="tag">${esc(i.role)}</span>`);
       return `
-        <button class="item ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
+        <button class="item ${S.issueId === i.id ? "sel" : ""} ${r && r.id === S.runId ? "linked" : ""}" data-act="issue" data-id="${i.id}">
           <div class="t"><b>#${i.id} ${esc(i.title)}</b></div>
           <div class="sub">${esc(project(i.projectId).name)} · ${tags.join(" ")}</div>
         </button>`;
@@ -660,8 +724,45 @@
       const order = ["frontier", "in-run", "blocked", "triage"];
       return order.map(sec => {
         const items = list.filter(i => displaySection(i) === sec);
+        if (!items.length && sec !== "frontier") return "";
         return `<div class="hd">${sectionName(sec)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}`;
       }).join("");
+    }
+
+    function issueLanes(list) {
+      if (S.issueLayout === "project") {
+        const projs = [];
+        for (const i of list) {
+          if (!projs.includes(i.projectId)) projs.push(i.projectId);
+        }
+        const cols = projs.length ? projs : visibleProjects().filter(p => !S.projectId || p.id === S.projectId).map(p => p.id);
+        return `<div class="lanes-mid">${cols.map(pid => {
+          const items = list.filter(i => i.projectId === pid);
+          const p = project(pid);
+          return `<div class="col"><div class="hd">${esc(p.name)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}</div>`;
+        }).join("")}</div>`;
+      }
+      const order = ["frontier", "in-run", "blocked", "triage"];
+      return `<div class="lanes-mid">${order.map(sec => {
+        const items = list.filter(i => displaySection(i) === sec);
+        if (!items.length && sec !== "frontier") return "";
+        return `<div class="col"><div class="hd">${sectionName(sec)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}</div>`;
+      }).join("")}</div>`;
+    }
+
+    function issueBoard(list) {
+      return S.issueLayout === "list" ? groupedIssues(list) : issueLanes(list);
+    }
+
+    function termChrome(r) {
+      return `
+        <div class="ident">
+          ${runIdentity(r)}
+          <span class="grow"></span>
+          <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">窗内放大</button>
+          <button data-act="term-zoom" data-id="page" class="${S.termZoom === "page" ? "active" : ""}">网页全屏</button>
+          <button data-act="term-zoom" data-id="display" class="${S.termZoom === "display" ? "active" : ""}">显示器全屏</button>
+        </div>`;
     }
 
     function issueDetail() {
@@ -762,6 +863,7 @@
           ${runs.map(r => `
             <button class="${S.runId === r.id ? "sel" : ""}" data-act="run" data-id="${r.id}">
               <span class="dot ${r.status === "active" ? "busy" : "stop"}"></span>${esc(runLabel(r))}
+              <span class="tiny"> · ${esc(r.agent)}</span>
             </button>`).join("")}
           <button data-act="fake-start">+ 不绑 Issue</button>
           <span class="grow"></span>
@@ -775,6 +877,7 @@
         ? host(S.hostId) : hs[0];
       const runs = visibleRuns().filter(r => r.hostId === curHost.id);
       const r = run(S.runId);
+      const active = r && r.hostId === curHost.id ? r : runs[0];
       const list = issuesForCurrent();
       return `
         <div class="desktop">
@@ -782,6 +885,10 @@
             <span class="brand">Agent Taskboard</span>
             ${hostTabs(curHost.id, "host")}
             <span class="grow"></span>
+            <span class="tiny">中间</span>
+            <button data-act="issue-layout" data-id="list" class="${S.issueLayout === "list" ? "active" : ""}">列表</button>
+            <button data-act="issue-layout" data-id="status" class="${S.issueLayout === "status" ? "active" : ""}">按状态分列</button>
+            <button data-act="issue-layout" data-id="project" class="${S.issueLayout === "project" ? "active" : ""}">按 Project 分列</button>
             <span class="chip">自动推进 关</span>
             <button class="ghost" data-act="fake-pending">演示待确认</button>
           </div>
@@ -793,18 +900,39 @@
             </div>
             <div class="pane">
               ${S.pendingAdvance ? `<div class="banner">待确认 47s · 只问要不要领下一张，不强迫先打开查看改动 <button data-act="veto">否决</button></div>` : ""}
-              ${groupedIssues(list)}
+              ${S.issueLayout !== "list" ? `<div class="tiny pad">分列只是视觉分组，不能拖列，也不表示关票。</div>` : ""}
+              ${issueBoard(list)}
             </div>
             <div class="pane">${issueDetail()}</div>
           </div>
           <div class="dock a-bottom">
             ${runTabs(runs)}
+            ${termChrome(active)}
             <div class="cols" style="flex:1;grid-template-columns:${S.viewChangesOpen ? "1.2fr .8fr" : "1fr"}">
-              <div class="term">${termText(r && r.hostId === curHost.id ? r : runs[0])}</div>
-              ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(r && r.hostId === curHost.id ? r : runs[0])}</div>` : ""}
+              <div class="term-wrap"><div class="term">${termText(active)}</div></div>
+              ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(active)}</div>` : ""}
             </div>
           </div>
+          ${S.termZoom ? termZoomStage(active) : ""}
           ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+
+    function termZoomStage(r) {
+      const label = { panel: "窗内放大 · 板子先藏起来", page: "网页全屏 · 浏览器 Client", display: "显示器全屏 · 桌面 Client" }[S.termZoom];
+      return `
+        <div class="zoom-stage ${S.termZoom}">
+          <div class="ident">
+            ${runIdentity(r)}
+            <span class="tag">${esc(label)}</span>
+            <span class="grow"></span>
+            <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">查看改动</button>
+            <button class="primary" data-act="term-zoom" data-id="">退出放大</button>
+          </div>
+          <div class="cols" style="flex:1;grid-template-columns:${S.viewChangesOpen ? "1.2fr .8fr" : "1fr"}">
+            <div class="term">${termText(r)}</div>
+            ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(r)}</div>` : ""}
+          </div>
         </div>`;
     }
 
@@ -1046,6 +1174,8 @@
         }
         if (act === "veto") { S.pendingAdvance = false; render(); }
         if (act === "fake-pending") { S.pendingAdvance = true; render(); }
+        if (act === "issue-layout") { S.issueLayout = id; render(); }
+        if (act === "term-zoom") { S.termZoom = id || null; render(); }
       };
       document.getElementById("app").oninput = (e) => {
         if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
