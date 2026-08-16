@@ -1,0 +1,1069 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>原型 · 主界面信息架构</title>
+  <!--
+    一次性原型，不是产品。
+    三个结构不同的主界面方案，用 ?variant=A|B|C 切换。
+    问题：一个窗口连多份 Host 时，Project / Issue 态势 / Embedded Terminal / 查看改动 怎么摆？
+  -->
+  <style>
+    :root {
+      --ink: #1c1917;
+      --muted: #78716c;
+      --line: #d6d3d1;
+      --paper: #fffdf8;
+      --bg: #ece7de;
+      --accent: #b45309;
+      --run: #15803d;
+      --stop: #b91c1c;
+      --block: #a16207;
+      --chip: #f5f0e6;
+      --sel: #ffedd5;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    button, select {
+      font: inherit;
+      color: inherit;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 2px 8px;
+      cursor: pointer;
+    }
+    button:hover { border-color: #a8a29e; }
+    button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    button.ghost { background: transparent; }
+    button.danger { color: var(--stop); border-color: #fecaca; }
+    button.active { background: var(--sel); border-color: var(--accent); }
+    input, textarea {
+      font: inherit;
+      color: inherit;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 4px 6px;
+      background: #fff;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    #app { height: 100%; }
+    .desktop {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 72px;
+    }
+    .phone-stage {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 24px 96px;
+    }
+    .phone {
+      width: 390px;
+      height: min(780px, calc(100vh - 130px));
+      background: var(--paper);
+      border: 1px solid #a8a29e;
+      border-radius: 24px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 16px 40px rgba(28,25,23,.12);
+    }
+    .phone-bar {
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .phone-body { flex: 1; overflow: auto; }
+    .phone-tabbar {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      border-top: 1px solid var(--line);
+    }
+    .phone-tabbar button {
+      border: 0;
+      border-radius: 0;
+      padding: 10px 4px;
+      background: #fff;
+    }
+    .phone-tabbar button.active { background: var(--sel); }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+      min-height: 40px;
+    }
+    .brand { font-weight: 650; letter-spacing: .02em; }
+    .host-tab, .chip, .sec-h {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: var(--chip);
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #a8a29e; }
+    .dot.on { background: var(--run); }
+    .dot.off { background: #a8a29e; }
+    .dot.busy { background: var(--accent); }
+    .dot.stop { background: var(--stop); }
+
+    .cols { flex: 1; display: grid; min-height: 0; }
+    .pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+    }
+    .pane:last-child { border-right: 0; }
+    .pane h2, .hd {
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      background: #faf7f1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+    }
+    .item {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid #f0ebe3;
+      border-radius: 0;
+      background: transparent;
+      padding: 8px 10px;
+      display: block;
+    }
+    .item:hover { background: #faf7f1; }
+    .item.sel { background: var(--sel); }
+    .item .t { display: flex; justify-content: space-between; gap: 8px; }
+    .item .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 11px; color: var(--muted); }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1; }
+    .pad { padding: 10px; }
+    .stack { display: flex; flex-direction: column; gap: 8px; }
+    .k { color: var(--muted); }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 0 6px;
+      border-radius: 3px;
+      background: #f5f0e6;
+      border: 1px solid var(--line);
+    }
+    .tag.block { background: #fef3c7; border-color: #fcd34d; }
+    .tag.run { background: #dcfce7; border-color: #86efac; }
+    .tag.stop { background: #fee2e2; border-color: #fecaca; }
+    .tag.free { background: #e0e7ff; border-color: #c7d2fe; }
+
+    .term {
+      background: #1c1917;
+      color: #e7e5e4;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 10px 12px;
+      min-height: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .term .dim { color: #a8a29e; }
+    .term .ok { color: #86efac; }
+    .term .bad { color: #fca5a5; }
+    .term .hi { color: #fdba74; }
+
+    .diff { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .diff .add { background: #dcfce7; }
+    .diff .del { background: #fee2e2; }
+    .diff .ln {
+      display: grid;
+      grid-template-columns: 36px 1fr 28px;
+      gap: 8px;
+      padding: 0 8px;
+    }
+    .diff .ln:hover { outline: 1px dashed #d6d3d1; }
+    .note-pill {
+      background: #ffedd5;
+      border: 1px solid #fdba74;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+
+    .dock {
+      border-top: 1px solid var(--line);
+      background: var(--paper);
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--line);
+      background: #faf7f1;
+      overflow-x: auto;
+    }
+    .tabs button {
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+    .tabs button.sel { background: #1c1917; color: #fff; }
+
+    .modal-bg {
+      position: fixed;
+      inset: 0;
+      background: rgba(28,25,23,.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+    .modal {
+      width: min(440px, calc(100vw - 32px));
+      background: var(--paper);
+      border: 1px solid #a8a29e;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .qr {
+      width: 88px;
+      height: 88px;
+      background:
+        linear-gradient(#1c1917 50%, transparent 50%),
+        linear-gradient(90deg, #1c1917 50%, transparent 50%);
+      background-size: 10px 10px;
+    }
+
+    /* A: 三区 + 底栏 */
+    .a-grid {
+      grid-template-columns: 200px minmax(280px, 1.2fr) minmax(260px, .9fr);
+      grid-template-rows: 1fr;
+    }
+    .a-bottom { height: 42vh; }
+
+    /* B: 左 Run + 中态势 + 右执行/改动 */
+    .b-wrap { background: #292524; color: #f5f5f4; }
+    .b-wrap .topbar, .b-wrap .pane, .b-wrap .dock, .b-wrap .hd {
+      background: #1c1917;
+      color: #f5f5f4;
+      border-color: #44403c;
+    }
+    .b-wrap .hd { background: #292524; color: #a8a29e; }
+    .b-wrap .item { border-color: #292524; color: #f5f5f4; }
+    .b-wrap .item:hover { background: #292524; }
+    .b-wrap .item.sel { background: #431407; }
+    .b-wrap .chip, .b-wrap .host-tab, .b-wrap .tag { background: #292524; border-color: #57534e; color: #e7e5e4; }
+    .b-wrap button { background: #292524; border-color: #57534e; color: #f5f5f4; }
+    .b-wrap button.active, .b-wrap button.primary { background: #9a3412; border-color: #9a3412; color: #fff; }
+    .b-wrap .muted, .b-wrap .tiny, .b-wrap .sub, .b-wrap .k { color: #a8a29e; }
+    .b-grid {
+      grid-template-columns: 240px minmax(280px, 1fr) minmax(320px, 1fr);
+    }
+    .b-right { display: grid; grid-template-rows: 1fr 1fr; }
+    .b-right.split-off { grid-template-rows: 1fr 0fr; }
+    .b-right .term { height: 100%; }
+
+    /* C: 按 Host 分带，泳道并列 */
+    .c-bands { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px; padding-bottom: 82px; }
+    .band {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .band.off { opacity: .55; }
+    .lanes { display: flex; gap: 8px; padding: 8px; overflow-x: auto; flex: 1; }
+    .lane {
+      width: 280px;
+      flex: 0 0 280px;
+      border: 1px solid var(--line);
+      background: #fffdf8;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .lane.sel { outline: 2px solid var(--accent); }
+    .lane .term { flex: 1; min-height: 120px; }
+    .front-col { width: 240px; flex: 0 0 240px; border: 1px dashed #d6d3d1; background: #faf7f1; }
+
+    #switcher {
+      position: fixed;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 30;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: #1c1917;
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.25);
+      max-width: calc(100vw - 16px);
+    }
+    #switcher button, #switcher select {
+      background: #292524;
+      color: #fff;
+      border-color: #44403c;
+      border-radius: 999px;
+    }
+    #switcher select { padding: 4px 10px; }
+    #switcher .lab { font-size: 12px; padding: 0 6px; white-space: nowrap; }
+    #inspector {
+      position: fixed;
+      right: 12px;
+      top: 48px;
+      width: 260px;
+      background: #fff;
+      border: 1px solid #a8a29e;
+      font-size: 12px;
+      z-index: 25;
+      box-shadow: 0 8px 20px rgba(0,0,0,.08);
+    }
+    body.phone-vp #inspector { display: none; }
+    #inspector h3 {
+      margin: 0;
+      padding: 6px 8px;
+      font-size: 11px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      background: #1c1917;
+      color: #fff;
+    }
+    #inspector pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+    .empty {
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .banner {
+      margin: 8px 10px;
+      padding: 8px 10px;
+      background: #fef3c7;
+      border: 1px solid #fcd34d;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="switcher"></div>
+  <div id="inspector"></div>
+  <script>
+    // 三个主界面变体，?variant= 切换。A 切换器+三区；B 聚合+左 Run；C Host 分带+泳道。
+    const HOSTS = [
+      { id: "local", name: "本机 · MacBook", kind: "local", online: true },
+      { id: "mini", name: "书房 Mini", kind: "remote", online: true },
+      { id: "office", name: "公司台式机", kind: "remote", online: false }
+    ];
+    const PROJECTS = [
+      { id: "tb", hostId: "local", name: "agent-taskboard", tracker: "GitHub" },
+      { id: "notes", hostId: "local", name: "garden-notes", tracker: "local markdown" },
+      { id: "shop", hostId: "mini", name: "shop-api", tracker: "GitHub" }
+    ];
+    const ISSUES = [
+      { id: 14, projectId: "tb", title: "原型：主界面信息架构低保真方案", section: "in-run", role: "ready-for-agent", claimed: true, blockedBy: [], blocking: [15] },
+      { id: 15, projectId: "tb", title: "决策：主界面信息架构定稿", section: "blocked", role: "ready-for-human", claimed: false, blockedBy: [14], blocking: [] },
+      { id: 24, projectId: "tb", title: "实现：Frontier 查询按 Project 过滤", section: "frontier", role: "ready-for-agent", claimed: false, blockedBy: [], blocking: [] },
+      { id: 25, projectId: "tb", title: "grilling：配对出示页的文案", section: "frontier", role: "ready-for-human", claimed: false, blockedBy: [], blocking: [] },
+      { id: 30, projectId: "shop", title: "修支付超时", section: "in-run", role: "ready-for-agent", claimed: true, blockedBy: [], blocking: [31], stopped: true },
+      { id: 31, projectId: "shop", title: "加退款接口", section: "blocked", role: "ready-for-agent", claimed: false, blockedBy: [30], blocking: [] },
+      { id: 40, projectId: "notes", title: "整理 ADR 索引", section: "frontier", role: "needs-triage", claimed: false, blockedBy: [], blocking: [] }
+    ];
+    const RUNS = [
+      { id: "r1", issueId: 14, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
+      { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true },
+      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false }
+    ];
+    const FILES = {
+      r1: [
+        { repo: "agent-taskboard", path: "prototypes/main-ia/index.html", add: 240, del: 0, lines: [
+          { n: 18, t: "  三个结构不同的主壳", k: "" },
+          { n: 19, t: "+ Host 切换器 vs 聚合", k: "add" },
+          { n: 20, t: "+ 查看改动挂在 Run 旁，不是列", k: "add" }
+        ]},
+        { repo: "agent-taskboard", path: "CONTEXT.md", add: 12, del: 3, lines: [
+          { n: 91, t: "- 查看改动：独立能力", k: "" },
+          { n: 92, t: "- 改动备注：只留看板", k: "add" }
+        ]},
+        { repo: "docs/research (子仓库)", path: "layout-ia.md", add: 4, del: 0, lines: [
+          { n: 4, t: "+ 原型应对齐本节选项 1–3", k: "add" }
+        ]}
+      ],
+      r2: [
+        { repo: "shop-api", path: "src/pay.rs", add: 18, del: 7, lines: [
+          { n: 80, t: "- timeout(3)", k: "del" },
+          { n: 81, t: "+ timeout(15)", k: "add" }
+        ]}
+      ],
+      r3: [
+        { repo: "agent-taskboard", path: "scratch.md", add: 6, del: 0, lines: [
+          { n: 1, t: "+ 游离 Run：没有 Issue 定位", k: "add" }
+        ]}
+      ]
+    };
+
+    const S = {
+      variant: "A",
+      viewport: "desktop",
+      scenario: "daily",
+      hostId: "local",
+      hostFilter: "all",
+      projectId: "tb",
+      issueId: 14,
+      runId: "r1",
+      viewChangesOpen: true,
+      viewBase: "round",
+      fileKey: "prototypes/main-ia/index.html",
+      notes: [],
+      pairing: false,
+      pendingAdvance: false,
+      phone: "home",
+      noteDraft: "",
+      noteLine: null
+    };
+
+    const VARIANTS = [
+      { id: "A", name: "Host 切换 · 三区壳" },
+      { id: "B", name: "Host 聚合 · 左 Run" },
+      { id: "C", name: "Host 分带 · 泳道" }
+    ];
+
+    function qs() { return new URLSearchParams(location.search); }
+    function writeQS() {
+      const u = new URL(location.href);
+      u.searchParams.set("variant", S.variant);
+      u.searchParams.set("viewport", S.viewport);
+      u.searchParams.set("scenario", S.scenario);
+      history.replaceState({}, "", u);
+    }
+    function applyScenario(sc) {
+      S.scenario = sc;
+      if (sc === "single") {
+        S.hostId = "local"; S.projectId = "tb"; S.hostFilter = "local";
+        S.issueId = 14; S.runId = "r1";
+      } else if (sc === "stopped") {
+        S.hostId = "mini"; S.projectId = "shop"; S.issueId = 30;
+        S.runId = "r2"; S.hostFilter = "mini";
+      } else if (sc === "daily") {
+        S.hostId = "local"; S.projectId = "tb"; S.issueId = 14;
+        S.runId = "r1"; S.hostFilter = "all";
+      }
+    }
+    function loadQS() {
+      const p = qs();
+      S.variant = (p.get("variant") || "A").toUpperCase();
+      if (!VARIANTS.some(v => v.id === S.variant)) S.variant = "A";
+      S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
+      const sc = p.get("scenario");
+      if (["daily", "single", "empty", "stopped"].includes(sc)) applyScenario(sc);
+    }
+
+    function host(id) { return HOSTS.find(h => h.id === id); }
+    function project(id) { return PROJECTS.find(p => p.id === id); }
+    function issue(id) { return ISSUES.find(i => i.id === id); }
+    function run(id) { return RUNS.find(r => r.id === id); }
+    function issueRun(iss) { return RUNS.find(r => r.issueId === iss.id); }
+
+    function visibleHosts() {
+      if (S.scenario === "empty") return [];
+      if (S.scenario === "single") return HOSTS.filter(h => h.id === "local");
+      return HOSTS;
+    }
+    function visibleProjects() {
+      const hs = new Set(visibleHosts().map(h => h.id));
+      let list = PROJECTS.filter(p => hs.has(p.hostId));
+      if (S.scenario === "single") list = list.filter(p => p.id === "tb");
+      return list;
+    }
+    function visibleIssues() {
+      const ps = new Set(visibleProjects().map(p => p.id));
+      return ISSUES.filter(i => ps.has(i.projectId));
+    }
+    function visibleRuns() {
+      const hs = new Set(visibleHosts().map(h => h.id));
+      return RUNS.filter(r => hs.has(r.hostId));
+    }
+    function issuesForCurrent() {
+      let list = visibleIssues();
+      if (S.variant === "A" && S.projectId) list = list.filter(i => i.projectId === S.projectId);
+      if (S.variant === "B" && S.hostFilter !== "all") {
+        const ps = new Set(visibleProjects().filter(p => p.hostId === S.hostFilter).map(p => p.id));
+        list = list.filter(i => ps.has(i.projectId));
+      }
+      if (S.variant === "B" && S.projectId) list = list.filter(i => i.projectId === S.projectId);
+      return list;
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function issueLabel(i) { return `#${i.id} ${i.title}`; }
+    function runLabel(r) {
+      const i = r.issueId ? issue(r.issueId) : null;
+      const who = i ? `#${i.id}` : "游离";
+      return `${who} · ${r.agent}`;
+    }
+    function sectionName(sec) {
+      return { frontier: "Frontier", blocked: "被挡住", "in-run": "干活中", triage: "未进 Frontier" }[sec] || sec;
+    }
+    function displaySection(i) {
+      if (["needs-triage", "needs-info", "wontfix"].includes(i.role)) return "triage";
+      return i.section;
+    }
+
+    function setIssue(id) {
+      const i = issue(id);
+      if (!i) return;
+      S.issueId = id;
+      S.projectId = i.projectId;
+      S.hostId = project(i.projectId).hostId;
+      const r = issueRun(i);
+      if (r) {
+        S.runId = r.id;
+      }
+      S.phone = "issue";
+      render();
+    }
+    function setRun(id) {
+      const r = run(id);
+      if (!r) return;
+      S.runId = id;
+      S.hostId = r.hostId;
+      S.projectId = r.projectId;
+      if (r.issueId) S.issueId = r.issueId;
+      const files = FILES[id] || [];
+      S.fileKey = files[0] ? files[0].path : null;
+      S.phone = "run";
+      render();
+    }
+
+    function render() {
+      writeQS();
+      document.body.classList.toggle("phone-vp", S.viewport === "phone");
+      document.getElementById("app").innerHTML =
+        S.viewport === "phone" ? renderPhone() : renderDesktop();
+      document.getElementById("switcher").innerHTML = renderSwitcher();
+      document.getElementById("inspector").innerHTML = renderInspector();
+      bind();
+    }
+
+    function renderSwitcher() {
+      const cur = VARIANTS.find(v => v.id === S.variant);
+      return `
+        <button data-act="prev" title="上一个方案">←</button>
+        <div class="lab">${cur.id} — ${esc(cur.name)}</div>
+        <button data-act="next" title="下一个方案">→</button>
+        <button data-act="vp" class="${S.viewport === "desktop" ? "active" : ""}">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
+        <select data-act="scenario">
+          <option value="daily" ${S.scenario === "daily" ? "selected" : ""}>日常：两台 Host</option>
+          <option value="single" ${S.scenario === "single" ? "selected" : ""}>单 Host 单 Project</option>
+          <option value="empty" ${S.scenario === "empty" ? "selected" : ""}>空：还没配对</option>
+          <option value="stopped" ${S.scenario === "stopped" ? "selected" : ""}>执行已停</option>
+        </select>
+      `;
+    }
+
+    function renderInspector() {
+      const h = host(S.hostId);
+      const p = project(S.projectId);
+      const i = issue(S.issueId);
+      const r = run(S.runId);
+      const lines = [
+        `方案 ${S.variant} · ${S.viewport} · ${S.scenario}`,
+        `Host: ${h ? h.name : "（无）"}`,
+        `Project: ${p ? p.name : "（无）"}`,
+        `Issue: ${i ? issueLabel(i) : "（无）"}`,
+        `Run: ${r ? runLabel(r) + " / " + r.status : "（无）"}`,
+        `查看改动: ${S.viewChangesOpen ? "开" : "关"} · ${S.viewBase === "round" ? "这一轮" : "未提交"}`,
+        `改动备注待送出: ${S.notes.length}`
+      ];
+      return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
+    }
+
+    function renderDesktop() {
+      if (S.scenario === "empty") return emptyPairing("desktop");
+      if (S.variant === "A") return renderA();
+      if (S.variant === "B") return renderB();
+      return renderC();
+    }
+
+    function hostTabs(activeId, onPrefix) {
+      return visibleHosts().map(h => `
+        <button class="host-tab ${h.id === activeId ? "active" : ""}" data-act="${onPrefix}" data-id="${h.id}">
+          <span class="dot ${h.online ? "on" : "off"}"></span>${esc(h.name)}${h.kind === "local" ? "" : ""}
+        </button>
+      `).join("") + `<button class="ghost" data-act="pair">+ 配对</button>`;
+    }
+
+    function projectList(hostId) {
+      return visibleProjects().filter(p => !hostId || p.hostId === hostId).map(p => `
+        <button class="item ${S.projectId === p.id ? "sel" : ""}" data-act="project" data-id="${p.id}">
+          <div class="t"><b>${esc(p.name)}</b><span class="tag">${esc(p.tracker)}</span></div>
+          <div class="sub">${esc(host(p.hostId).name)}</div>
+        </button>
+      `).join("");
+    }
+
+    function issueItem(i) {
+      const r = issueRun(i);
+      const tags = [];
+      if (i.section === "blocked") tags.push(`<span class="tag block">被挡住</span>`);
+      if (r && r.status === "active") tags.push(`<span class="tag run">活跃 Run</span>`);
+      if (r && r.status === "stopped" || i.stopped) tags.push(`<span class="tag stop">执行已停</span>`);
+      if (i.claimed) tags.push(`<span class="tag">已认领</span>`);
+      tags.push(`<span class="tag">${esc(i.role)}</span>`);
+      return `
+        <button class="item ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
+          <div class="t"><b>#${i.id} ${esc(i.title)}</b></div>
+          <div class="sub">${esc(project(i.projectId).name)} · ${tags.join(" ")}</div>
+        </button>`;
+    }
+
+    function groupedIssues(list) {
+      const order = ["frontier", "in-run", "blocked", "triage"];
+      return order.map(sec => {
+        const items = list.filter(i => displaySection(i) === sec);
+        return `<div class="hd">${sectionName(sec)} <span>${items.length}</span></div>${items.map(issueItem).join("") || `<div class="empty">没有</div>`}`;
+      }).join("");
+    }
+
+    function issueDetail() {
+      const i = issue(S.issueId);
+      if (!i) return `<div class="empty">点一张 Issue</div>`;
+      const p = project(i.projectId);
+      const r = issueRun(i);
+      const blockers = i.blockedBy.map(issue);
+      const blocks = i.blocking.map(issue);
+      return `
+        <div class="hd">Issue</div>
+        <div class="pad stack">
+          <div><b>${esc(issueLabel(i))}</b></div>
+          <div class="tiny">${esc(host(p.hostId).name)} / ${esc(p.name)} · ${esc(p.tracker)}</div>
+          <div class="row">
+            <span class="tag">${esc(i.role)}</span>
+            ${i.claimed ? `<span class="tag">已认领 · 不在 Frontier</span>` : `<span class="tag">未认领</span>`}
+            ${r ? `<span class="tag run">${r.status === "active" ? "有活跃 Run" : "最近一次已停"}</span>` : ""}
+          </div>
+          <div>
+            <div class="tiny">挡住它的 Dependency</div>
+            ${blockers.length ? blockers.map(b => `<button data-act="issue" data-id="${b.id}">#${b.id} ${esc(b.title)}</button>`).join(" ") : `<span class="muted">无，可进 Frontier</span>`}
+          </div>
+          <div>
+            <div class="tiny">它挡住的</div>
+            ${blocks.length ? blocks.map(b => `<button data-act="issue" data-id="${b.id}">#${b.id} ${esc(b.title)}</button>`).join(" ") : `<span class="muted">无</span>`}
+          </div>
+          <div class="row">
+            ${r ? `<button class="primary" data-act="run" data-id="${r.id}">看这次 Run</button>` : `<button class="primary" data-act="fake-start">开 Run</button>`}
+            ${i.claimed ? `<button data-act="fake-release">释放认领</button>` : `<button data-act="fake-claim">认领</button>`}
+          </div>
+          <p class="tiny">关票不经过这一页，也不靠拖列。人不满意就再开 Run，或到 Tracker 把票重新打开。</p>
+        </div>`;
+    }
+
+    function termText(r) {
+      if (!r) return `<span class="dim">没有选中的 Run。终端只画 Host 上那份 PTY。</span>`;
+      const i = r.issueId ? issue(r.issueId) : null;
+      const iso = r.isolation ? "隔离执行目录" : "Project 主目录";
+      if (r.status === "stopped") {
+        return `<span class="dim">${r.agent}  ${project(r.projectId).name}  ${i ? "#"+i.id : "游离"}</span>
+<span class="bad">× 执行已停</span>  <span class="dim">认领还在，不在 Frontier。优先恢复原生会话。</span>
+<span class="dim">目录 ${iso}</span>
+
+<button data-act="fake-continue">继续</button>  <button data-act="fake-release">释放认领</button>`;
+      }
+      return `<span class="dim">${r.agent}  ${project(r.projectId).name}  ${i ? "#"+i.id+" "+i.title : "游离 Run"}</span>
+<span class="ok">● 活跃</span>  <span class="dim">${iso} · PTY 在 ${host(r.hostId).name}</span>
+
+<span class="hi">› 官方交互 TUI 画在这里（假的）</span>
+  干活中也能打开旁边的查看改动
+  ${i ? "绑的是 "+issueLabel(i) : "没有 Issue 定位，开场白只带改动备注"}`;
+    }
+
+    function viewChangesPanel(r) {
+      if (!r) return `<div class="empty">先点一次 Run</div>`;
+      const files = FILES[r.id] || [];
+      const file = files.find(f => f.path === S.fileKey) || files[0];
+      const notesHere = S.notes.filter(n => n.runId === r.id);
+      return `
+        <div class="hd">
+          查看改动
+          <span class="row">
+            <button data-act="base" data-id="round" class="${S.viewBase === "round" ? "active" : ""}">这一轮</button>
+            <button data-act="base" data-id="unstaged" class="${S.viewBase === "unstaged" ? "active" : ""}">未提交</button>
+            <button class="ghost" data-act="toggle-vc">收起</button>
+          </span>
+        </div>
+        <div class="pad stack">
+          <div class="tiny">挂在这次 Run 旁 · 不是看板列 · 票开着关了都能看 · ${esc(host(r.hostId).name)}</div>
+          ${files.map(f => `
+            <button class="item ${file && file.path === f.path ? "sel" : ""}" data-act="file" data-id="${esc(f.path)}">
+              <div class="t"><b>${esc(f.path)}</b><span class="tiny">+${f.add} −${f.del}</span></div>
+              <div class="sub">${esc(f.repo)}</div>
+            </button>`).join("")}
+          ${file ? `
+            <div class="diff">
+              ${file.lines.map(ln => `
+                <div class="ln ${ln.k}">
+                  <span class="muted">${ln.n}</span>
+                  <span>${esc(ln.t)}</span>
+                  <button data-act="note-line" data-id="${ln.n}" title="改动备注">注</button>
+                </div>`).join("")}
+            </div>` : `<div class="empty">这个目录里没有 git，只说明原因。</div>`}
+          ${S.noteLine ? `
+            <div class="stack">
+              <div class="tiny">改动备注 · ${esc(file.repo)} · ${esc(file.path)}:${S.noteLine} · 只留看板，不写回 Tracker</div>
+              <textarea data-act="note-draft" rows="2" placeholder="给下次开跑的开场白写一句">${esc(S.noteDraft)}</textarea>
+              <button class="primary" data-act="save-note">留下</button>
+            </div>` : ""}
+          ${notesHere.map((n, idx) => `<div class="note-pill">${esc(n.file)}:${n.line} — ${esc(n.text)} <button data-act="del-note" data-id="${idx}">×</button></div>`).join("")}
+        </div>`;
+    }
+
+    function runTabs(runs) {
+      return `
+        <div class="tabs">
+          ${runs.map(r => `
+            <button class="${S.runId === r.id ? "sel" : ""}" data-act="run" data-id="${r.id}">
+              <span class="dot ${r.status === "active" ? "busy" : "stop"}"></span>${esc(runLabel(r))}
+            </button>`).join("")}
+          <button data-act="fake-start">+ 不绑 Issue</button>
+          <span class="grow"></span>
+          <button class="${S.viewChangesOpen ? "active" : ""}" data-act="toggle-vc">查看改动</button>
+        </div>`;
+    }
+
+    function renderA() {
+      const hs = visibleHosts();
+      const curHost = host(S.hostId) && visibleHosts().some(h => h.id === S.hostId)
+        ? host(S.hostId) : hs[0];
+      const runs = visibleRuns().filter(r => r.hostId === curHost.id);
+      const r = run(S.runId);
+      const list = issuesForCurrent();
+      return `
+        <div class="desktop">
+          <div class="topbar">
+            <span class="brand">Agent Taskboard</span>
+            ${hostTabs(curHost.id, "host")}
+            <span class="grow"></span>
+            <span class="chip">自动推进 关</span>
+            <button class="ghost" data-act="fake-pending">演示待确认</button>
+          </div>
+          <div class="cols a-grid">
+            <div class="pane">
+              <div class="hd">这个 Host 上的 Project</div>
+              ${projectList(curHost.id)}
+              <div class="pad tiny">点 Project 只过滤本板。不是第二种 Frontier。</div>
+            </div>
+            <div class="pane">
+              ${S.pendingAdvance ? `<div class="banner">待确认 47s · 只问要不要领下一张，不强迫先打开查看改动 <button data-act="veto">否决</button></div>` : ""}
+              ${groupedIssues(list)}
+            </div>
+            <div class="pane">${issueDetail()}</div>
+          </div>
+          <div class="dock a-bottom">
+            ${runTabs(runs)}
+            <div class="cols" style="flex:1;grid-template-columns:${S.viewChangesOpen ? "1.2fr .8fr" : "1fr"}">
+              <div class="term">${termText(r && r.hostId === curHost.id ? r : runs[0])}</div>
+              ${S.viewChangesOpen ? `<div class="pane">${viewChangesPanel(r && r.hostId === curHost.id ? r : runs[0])}</div>` : ""}
+            </div>
+          </div>
+          ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+
+    function renderB() {
+      const runs = visibleRuns().filter(r => S.hostFilter === "all" || r.hostId === S.hostFilter);
+      const r = run(S.runId);
+      const grouped = {};
+      for (const rr of runs) {
+        grouped[rr.hostId] = grouped[rr.hostId] || [];
+        grouped[rr.hostId].push(rr);
+      }
+      const list = issuesForCurrent();
+      return `
+        <div class="desktop b-wrap">
+          <div class="topbar">
+            <span class="brand">全部已连 Host</span>
+            <button class="host-tab ${S.hostFilter === "all" ? "active" : ""}" data-act="host-filter" data-id="all">全部</button>
+            ${visibleHosts().map(h => `
+              <button class="host-tab ${S.hostFilter === h.id ? "active" : ""}" data-act="host-filter" data-id="${h.id}">
+                <span class="dot ${h.online ? "on" : "off"}"></span>${esc(h.name)}
+              </button>`).join("")}
+            <button class="ghost" data-act="pair">+ 配对</button>
+            <span class="grow"></span>
+            <span class="chip">聚合一张 Frontier · 两台 Host 各管各的 Run</span>
+          </div>
+          <div class="cols b-grid">
+            <div class="pane">
+              <div class="hd">Run（按 Host 分组）</div>
+              ${Object.keys(grouped).map(hid => `
+                <div class="hd">${esc(host(hid).name)}</div>
+                ${grouped[hid].map(rr => `
+                  <button class="item ${S.runId === rr.id ? "sel" : ""}" data-act="run" data-id="${rr.id}">
+                    <div class="t"><b>${esc(runLabel(rr))}</b><span class="dot ${rr.status === "active" ? "busy" : "stop"}"></span></div>
+                    <div class="sub">${esc(project(rr.projectId).name)}${rr.isolation ? " · 隔离" : ""}</div>
+                  </button>`).join("")}
+              `).join("") || `<div class="empty">没有 Run</div>`}
+              <div class="hd">Project</div>
+              ${projectList(S.hostFilter === "all" ? null : S.hostFilter)}
+            </div>
+            <div class="pane">
+              <div class="hd">跨 Host 的 Issue 切片 <span class="tiny">仍按 Project 算 Frontier</span></div>
+              ${groupedIssues(list)}
+              <div style="border-top:1px solid #44403c">${issueDetail()}</div>
+            </div>
+            <div class="pane b-right ${S.viewChangesOpen ? "" : "split-off"}">
+              <div style="display:flex;flex-direction:column;min-height:0">
+                <div class="hd">Embedded Terminal <button data-act="toggle-vc">${S.viewChangesOpen ? "改动开着" : "查看改动"}</button></div>
+                <div class="term" style="flex:1">${termText(r)}</div>
+              </div>
+              ${S.viewChangesOpen ? `<div class="pane" style="border-top:1px solid #44403c">${viewChangesPanel(r)}</div>` : ""}
+            </div>
+          </div>
+          ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+
+    function renderC() {
+      return `
+        <div class="desktop">
+          <div class="topbar">
+            <span class="brand">一台 Host 一条带</span>
+            <span class="muted">空间并列多 Run；全局 Frontier 被拆开了</span>
+            <span class="grow"></span>
+            <button data-act="pair">+ 配对</button>
+          </div>
+          <div class="c-bands" style="padding-bottom:10px">
+            ${visibleHosts().map(h => {
+              const runs = visibleRuns().filter(r => r.hostId === h.id);
+              const projs = visibleProjects().filter(p => p.hostId === h.id);
+              const onBand = visibleIssues().filter(i => projs.some(p => p.id === i.projectId));
+              const fronts = onBand.filter(i => displaySection(i) === "frontier");
+              const triage = onBand.filter(i => displaySection(i) === "triage");
+              return `
+                <section class="band ${h.online ? "" : "off"}">
+                  <div class="hd">
+                    <span><span class="dot ${h.online ? "on" : "off"}"></span> ${esc(h.name)} · ${projs.map(p => p.name).join("、") || "还没有 Project"}</span>
+                    <span class="tiny">${h.online ? "PTY 在这边" : "连不上 · 只看上次缓存（本原型不画缓存）"}</span>
+                  </div>
+                  <div class="lanes">
+                    ${runs.map(r => `
+                      <div class="lane ${S.runId === r.id ? "sel" : ""}">
+                        <button class="item sel" data-act="run" data-id="${r.id}">
+                          <div class="t"><b>${esc(runLabel(r))}</b><span class="tag ${r.status === "stopped" ? "stop" : "run"}">${r.status === "stopped" ? "已停" : "活跃"}</span></div>
+                          <div class="sub">${r.issueId ? esc(issue(r.issueId).title) : "游离 · 没有 Issue"}</div>
+                        </button>
+                        <div class="term">${termText(r)}</div>
+                        <div class="pad row">
+                          <button data-act="run" data-id="${r.id}">看这条</button>
+                          <button data-act="toggle-vc">查看改动</button>
+                        </div>
+                      </div>`).join("")}
+                    <div class="front-col">
+                      <div class="hd">这条带上的 Frontier</div>
+                      ${fronts.map(issueItem).join("") || `<div class="empty">没有可领的</div>`}
+                      ${triage.length ? `<div class="hd">未进 Frontier</div>${triage.map(issueItem).join("")}` : ""}
+                    </div>
+                  </div>
+                </section>`;
+            }).join("")}
+          </div>
+          ${S.viewChangesOpen ? `<div class="dock" style="height:34vh;overflow:auto">${viewChangesPanel(run(S.runId))}</div>` : ""}
+          ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+
+    function pairingModal() {
+      return `
+        <div class="modal-bg" data-act="close-pair">
+          <div class="modal" onclick="event.stopPropagation()">
+            <b>配对</b>
+            <div class="tiny">不是登录。Host 出示「可到达地址 + 一次性码」，之后靠长期令牌。连通走你自己的 Tailscale / VPN / 局域网。</div>
+            <div class="row">
+              <div class="qr"></div>
+              <div class="stack">
+                <div><span class="k">地址</span> <span class="mono">http://100.86.12.4:7420</span></div>
+                <div><span class="k">一次性码</span> <span class="mono">7K2M-QP9C</span></div>
+              </div>
+            </div>
+            <div class="row">
+              <button class="primary" data-act="fake-paired">假装已扫</button>
+              <button data-act="close-pair">取消</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function emptyPairing(kind) {
+      const inner = `
+        <div class="empty stack" style="max-width:420px;margin:10vh auto">
+          <div class="brand">这个窗口还没连上任何 Host</div>
+          <p class="muted">本机桌面应用默认会拉起本机 Host。也可以只当 Client，去配对书房那台。</p>
+          <button class="primary" data-act="pair">配对一个 Host</button>
+        </div>
+        ${S.pairing ? pairingModal() : ""}`;
+      return kind === "desktop" ? `<div class="desktop">${inner}</div>` : inner;
+    }
+
+    function renderPhone() {
+      if (S.scenario === "empty") {
+        return `<div class="phone-stage"><div class="phone">${emptyPairing("phone")}</div></div>`;
+      }
+      const body = S.phone === "issue" ? phoneIssue() : S.phone === "run" ? phoneRun() : phoneHome();
+      return `
+        <div class="phone-stage">
+          <div class="phone">
+            <div class="phone-bar">
+              ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<span class="brand">Client</span>`}
+              <span class="grow"></span>
+              <span class="tiny">手机不当完整工作台</span>
+            </div>
+            <div class="phone-body">${body}</div>
+            <div class="phone-tabbar">
+              <button class="${S.phone === "home" ? "active" : ""}" data-act="phone" data-id="home">态势</button>
+              <button class="${S.phone === "run" ? "active" : ""}" data-act="phone" data-id="run">Run</button>
+              <button data-act="pair">配对</button>
+            </div>
+          </div>
+          ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+
+    function phoneHome() {
+      const list = visibleIssues();
+      return `
+        <div class="pad tiny">一个窗口仍可挂多份 Host。手机只看态势、开停、注入一行。</div>
+        ${visibleHosts().map(h => `
+          <div class="hd">${esc(h.name)}</div>
+          ${list.filter(i => project(i.projectId).hostId === h.id).map(issueItem).join("")}
+        `).join("")}`;
+    }
+    function phoneIssue() {
+      return issueDetail() + `<div class="pad tiny">完整查看改动请到桌面或电脑浏览器。这里不画 diff。</div>`;
+    }
+    function phoneRun() {
+      const r = run(S.runId) || visibleRuns()[0];
+      return `
+        <div class="hd">最近输出（只读）</div>
+        <div class="term" style="min-height:220px">${termText(r)}</div>
+        <div class="pad stack">
+          <input placeholder="注入一行，回车进 TUI" />
+          <div class="tiny">可以打开活终端当逃生口，但不按官方 TUI 验收。</div>
+          <div class="banner">查看改动：请到电脑上看。手机不做完整对比。</div>
+        </div>`;
+    }
+
+    function bind() {
+      document.getElementById("switcher").onclick = (e) => {
+        const b = e.target.closest("[data-act]");
+        if (!b) return;
+        if (b.dataset.act === "prev" || b.dataset.act === "next") {
+          const i = VARIANTS.findIndex(v => v.id === S.variant);
+          S.variant = VARIANTS[(i + (b.dataset.act === "next" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+          render();
+        }
+        if (b.dataset.act === "vp") {
+          S.viewport = S.viewport === "desktop" ? "phone" : "desktop";
+          render();
+        }
+      };
+      document.getElementById("switcher").onchange = (e) => {
+        if (e.target.dataset.act === "scenario") {
+          applyScenario(e.target.value);
+          render();
+        }
+      };
+      document.getElementById("app").onclick = (e) => {
+        const b = e.target.closest("[data-act]");
+        if (!b) return;
+        const act = b.dataset.act;
+        const id = b.dataset.id;
+        if (act === "host") { S.hostId = id; const first = visibleProjects().find(p => p.hostId === id); if (first) S.projectId = first.id; render(); }
+        if (act === "host-filter") { S.hostFilter = id; S.projectId = null; render(); }
+        if (act === "project") { S.projectId = id; S.hostId = project(id).hostId; render(); }
+        if (act === "issue") setIssue(Number(id));
+        if (act === "run") setRun(id);
+        if (act === "toggle-vc") { S.viewChangesOpen = !S.viewChangesOpen; render(); }
+        if (act === "base") { S.viewBase = id; render(); }
+        if (act === "file") { S.fileKey = id; S.noteLine = null; render(); }
+        if (act === "note-line") { S.noteLine = Number(id); render(); }
+        if (act === "save-note") {
+          const r = run(S.runId);
+          const files = FILES[r.id] || [];
+          const file = files.find(f => f.path === S.fileKey) || files[0];
+          if (file && S.noteLine && S.noteDraft.trim()) {
+            S.notes.push({ runId: r.id, repo: file.repo, file: file.path, line: S.noteLine, text: S.noteDraft.trim() });
+            S.noteDraft = "";
+            S.noteLine = null;
+          }
+          render();
+        }
+        if (act === "del-note") { S.notes.splice(Number(id), 1); render(); }
+        if (act === "pair") { S.pairing = true; render(); }
+        if (act === "close-pair") { S.pairing = false; render(); }
+        if (act === "fake-paired") { S.pairing = false; S.scenario = "daily"; render(); }
+        if (act === "phone") { S.phone = id; render(); }
+        if (act === "fake-start") { S.pendingAdvance = false; alert("原型：这里只表示「开 Run」入口在 Issue / 游离两处，不真的起进程。"); }
+        if (act === "fake-claim" || act === "fake-release" || act === "fake-continue") {
+          alert("原型：认领 / 释放 / 继续 会打到 Tracker 和 Host，这里只占位。");
+        }
+        if (act === "veto") { S.pendingAdvance = false; render(); }
+        if (act === "fake-pending") { S.pendingAdvance = true; render(); }
+      };
+      document.getElementById("app").oninput = (e) => {
+        if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
+      };
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const i = VARIANTS.findIndex(v => v.id === S.variant);
+        S.variant = VARIANTS[(i + (e.key === "ArrowRight" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+        render();
+      }
+    });
+
+    loadQS();
+    render();
+  </script>
+</body>
+</html>
