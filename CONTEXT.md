@@ -96,6 +96,10 @@ _Avoid_: 审阅面（可口语）, 行评, Review 列, 待审, 验货
 人在查看改动里针对某一行写下的一句话，带着哪个仓库、哪个文件、哪一行。只留在看板，不写回 Tracker，也不灌进还在跑的那次。下次开跑并进开场白后，从待送出里清掉。
 _Avoid_: 行评, review comment, 批注
 
+**最近完成**:
+主界面最右一列：只展示最近关闭的 N 张 Issue。N 默认 5，人可以改。用来找回刚关、还想再看的票。不是全部已关闭，也不是看板 Done 列；不能拖进这一列来关票。
+_Avoid_: Done 列, 已关闭列, 完成列, 待审
+
 **Embedded Terminal**:
 Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。不是用户系统里的终端 App，也不是自研聊天 UI。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
 _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 / Windows Terminal 当产品终端
