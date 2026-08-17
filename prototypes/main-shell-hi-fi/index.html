@@ -6,9 +6,9 @@
   <title>原型 · 默认主壳高保真观感</title>
   <!--
     一次性原型，不是产品。
-    三个观感完全不同的默认主壳，结构已钉死不得改。
-    ?variant=A|B|C
-    问题：v1 每天盯着的那一屏，用哪套皮肤（或拆开拼）？
+    主视觉已收成暖纸；主题是可替换清单，v1 只要 light / dark 各一套。
+    ?theme=warm-light|warm-dark
+    问题：夜间那套是暖纸夜间，还是另一套性格？主题记在哪？
   -->
   <style>
     :root {
@@ -42,9 +42,8 @@
     }
     .mono { font-family: var(--mono); }
 
-    /* ── A 暖纸工作台 ── */
-    .skin-a {
-      --bg: #cfc4b0;
+    /* 暖纸：同一套骨架。浅 / 深只换 token，加主题 = 再加一份 token。 */
+    .theme-warm-light {
       --desk: #cfc4b0;
       --paper: #fff8ee;
       --paper-2: #f4ead8;
@@ -64,144 +63,87 @@
       --field: #fff;
       --term: #241c16;
       --term-fg: #f0e6d6;
-      --r: 8px;
+      --ident: #3a2c22;
+      --card-sel: #fff1de;
+      --glow: rgba(255,255,255,.7);
       --shadow: 0 18px 40px rgba(60, 40, 16, .18);
+      --desk-glow: #e6dcc8;
+    }
+    .theme-warm-dark {
+      --desk: #16110d;
+      --paper: #241c16;
+      --paper-2: #1c1612;
+      --ink: #f0e6d6;
+      --on-ink: #241c16;
+      --muted: #a89884;
+      --line: #3d3228;
+      --line-strong: #5c4c3c;
+      --accent: #e8955a;
+      --accent-ink: #ffd4b0;
+      --sel: #3d2a1c;
+      --run: #6ecf8a;
+      --stop: #f07167;
+      --block: #e0a04a;
+      --chip: #332920;
+      --btn: #2a221c;
+      --field: #16110d;
+      --term: #120e0b;
+      --term-fg: #f0e6d6;
+      --ident: #120e0b;
+      --card-sel: #3a281c;
+      --glow: rgba(255,220,180,.06);
+      --shadow: 0 18px 40px rgba(0, 0, 0, .45);
+      --desk-glow: #2a2018;
+    }
+    .theme-warm {
+      --r: 8px;
       --win-r: 12px;
       font-family: var(--sans);
       color: var(--ink);
       background:
-        radial-gradient(1200px 500px at 50% -10%, #e6dcc8, transparent 55%),
+        radial-gradient(1200px 500px at 50% -10%, var(--desk-glow), transparent 55%),
         var(--desk);
     }
-    .skin-a .brand { font-family: var(--serif); font-weight: 600; letter-spacing: .01em; }
-    .skin-a .issue-card {
+    .theme-warm .brand { font-family: var(--serif); font-weight: 600; letter-spacing: .01em; }
+    .theme-warm .issue-card {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 10px;
-      box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 6px 14px rgba(80,50,10,.05);
+      box-shadow: 0 1px 0 var(--glow) inset, 0 6px 14px rgba(80,50,10,.05);
       padding: 10px 11px;
       margin: 8px;
       text-align: left;
       display: block;
       width: calc(100% - 16px);
     }
-    .skin-a .issue-card:hover { transform: translateY(-1px); }
-    .skin-a .issue-card.sel { outline: 2px solid var(--accent); background: #fff1de; }
-    .skin-a .col-hd { font-family: var(--serif); text-transform: none; letter-spacing: 0; }
-    .skin-a .dock { height: 34vh; }
-    .skin-a .ident { background: #3a2c22; }
-
-    /* ── B 夜班操作台 ── */
-    .skin-b {
-      --bg: #07090b;
-      --desk: #07090b;
-      --paper: #0e1216;
-      --paper-2: #141a20;
-      --ink: #d5dee6;
-      --on-ink: #06110c;
-      --muted: #7d8b97;
-      --line: #1c252d;
-      --line-strong: #31404c;
-      --accent: #3dffa6;
-      --accent-ink: #3dffa6;
-      --sel: #123528;
-      --run: #3dffa6;
-      --stop: #ff5d6c;
-      --block: #ffc14d;
-      --chip: #141a20;
-      --btn: #141a20;
-      --field: #0b0f13;
-      --term: #050709;
-      --term-fg: #c8f5dd;
-      --r: 2px;
-      --shadow: none;
-      --win-r: 0;
-      font-family: var(--mono);
-      color: var(--ink);
-      background: var(--desk);
-    }
-    .skin-b button, .skin-b select, .skin-b input, .skin-b textarea { border-radius: 2px; }
-    .skin-b .brand { font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; }
-    .skin-b .issue-card {
+    .theme-warm .issue-card:hover { transform: translateY(-1px); }
+    .theme-warm .issue-card.sel { outline: 2px solid var(--accent); background: var(--card-sel); }
+    .theme-warm .col-hd { font-family: var(--serif); }
+    .theme-warm .dock { height: 34vh; }
+    .theme-warm .ident { background: var(--ident); }
+    .theme-warm .traffic i:nth-child(1) { background: #ec6a5e; }
+    .theme-warm .traffic i:nth-child(2) { background: #f5bf4f; }
+    .theme-warm .traffic i:nth-child(3) { background: #61c554; }
+    .theme-pick {
       width: 100%;
       text-align: left;
-      border: 0;
-      border-bottom: 1px solid var(--line);
-      border-radius: 0;
-      background: transparent;
-      padding: 6px 8px;
-      display: grid;
-      grid-template-columns: 14px 46px 1fr;
-      gap: 8px;
+      display: flex;
+      justify-content: space-between;
       align-items: center;
-    }
-    .skin-b .issue-card > span:last-child {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .skin-b .issue-card:hover { background: #12181e; }
-    .skin-b .issue-card.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
-    .skin-b .issue-card .sub { display: none; }
-    .skin-b .dock { height: 36vh; }
-    .skin-b .ident { background: #050709; border-bottom: 1px solid #1c252d; }
-    .skin-b .win { border: 0; box-shadow: none; border-radius: 0; }
-    .skin-b .traffic { display: none; }
-    .skin-b .os-chrome { background: #0b0f13; border-color: #1c252d; }
-    .skin-b .col { background: #0b0f13; }
-    .skin-b .pane, .skin-b .topbar, .skin-b .dock { background: var(--paper); }
-
-    /* ── C 冷静编辑器 ── */
-    .skin-c {
-      --bg: #dfe4ea;
-      --desk: #dfe4ea;
-      --paper: #ffffff;
-      --paper-2: #f4f6f8;
-      --ink: #1a2330;
-      --on-ink: #fff;
-      --muted: #6b7380;
-      --line: #d8dee6;
-      --line-strong: #b7c0cb;
-      --accent: #3b6cff;
-      --accent-ink: #1e3fa8;
-      --sel: #e8eeff;
-      --run: #0f9f6e;
-      --stop: #e11d48;
-      --block: #d97706;
-      --chip: #f4f6f8;
-      --btn: #fff;
-      --field: #fff;
-      --term: #111827;
-      --term-fg: #e5e7eb;
-      --r: 6px;
-      --shadow: 0 16px 40px rgba(24, 32, 48, .12);
-      --win-r: 10px;
-      font-family: var(--sans);
-      color: var(--ink);
-      background: linear-gradient(#e7ebf0, #d5dae2);
-    }
-    .skin-c .brand { font-weight: 650; letter-spacing: -.02em; }
-    .skin-c .issue-card {
-      width: 100%;
-      margin: 0;
-      text-align: left;
-      background: transparent;
-      border: 0;
-      border-bottom: 1px solid var(--line);
-      border-radius: 0;
-      border-left: 3px solid var(--lane);
+      gap: 8px;
       padding: 8px 10px;
-      display: block;
     }
-    .skin-c .issue-card:hover { background: #f8faff; }
-    .skin-c .issue-card.sel { background: var(--sel); }
-    .skin-c .issue-card .sub { display: none; }
-    .skin-c .dock { height: 28vh; }
-    .skin-c .ident { background: #111827; }
-    .skin-c .col { background: #fff; }
-    .skin-c .lanes { background: #fff; }
-    .skin-c .topbar { min-height: 36px; padding: 4px 10px; }
-    .skin-c .block { background: #fff; border-radius: 8px; }
+    .theme-pick > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+    .theme-pick .swatch {
+      width: 28px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid var(--line-strong);
+      flex: 0 0 auto;
+    }
+    .theme-pick .swatch.light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
+    .theme-pick .swatch.dark { background: linear-gradient(135deg, #3d3228, #16110d); }
+    .theme-pick.future { opacity: .5; cursor: default; }
 
     body {
       font: 13px/1.4 var(--sans);
@@ -213,7 +155,7 @@
       height: 100%;
       padding: 14px 14px 78px;
     }
-    .skin-b .stage { padding: 0 0 64px; }
+    
     .win {
       height: 100%;
       display: flex;
@@ -235,10 +177,6 @@
     }
     .traffic { display: flex; gap: 6px; }
     .traffic i { width: 10px; height: 10px; border-radius: 50%; display: block; }
-    .skin-a .traffic i:nth-child(1) { background: #ec6a5e; }
-    .skin-a .traffic i:nth-child(2) { background: #f5bf4f; }
-    .skin-a .traffic i:nth-child(3) { background: #61c554; }
-    .skin-c .traffic i { background: #c5ccd6; }
     .win-title { font-size: 12px; color: var(--muted); }
     .topbar {
       display: flex;
@@ -259,8 +197,6 @@
       padding: 3px 10px;
       font-size: 12px;
     }
-    .skin-b .host-tab, .skin-b .chip { border-radius: 2px; }
-    .skin-c .host-tab { border-radius: 6px; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #a8a29e; flex: 0 0 auto; }
     .dot.on { background: var(--run); }
     .dot.off { background: #8a8f96; }
@@ -358,7 +294,7 @@
     .term .ok { color: #86efac; }
     .term .bad { color: #fca5a5; }
     .term .hi { color: #fdba74; }
-    .skin-b .term .ok, .skin-b .term .hi { color: var(--accent); }
+    
     .diff { font: 12px/1.5 var(--mono); }
     .diff .add { background: color-mix(in srgb, var(--run) 16%, transparent); }
     .diff .del { background: color-mix(in srgb, var(--stop) 16%, transparent); }
@@ -393,8 +329,7 @@
     }
     .ident button { background: #3f3f46; color: #fff; border-color: #52525b; }
     .ident .who { color: #fdba74; font-weight: 650; }
-    .skin-b .ident .who { color: var(--accent); }
-    .skin-c .ident .who { color: #93c5fd; }
+    .theme-warm .ident .who { color: #fdba74; }
     .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
     .split { display: grid; min-height: 0; flex: 1; }
     .splitter { cursor: col-resize; background: var(--line); width: 6px; }
@@ -449,7 +384,7 @@
       max-height: calc(100vh - 120px);
       overflow: auto;
     }
-    .skin-b .sheet { top: 36px; right: 8px; border-radius: 2px; }
+    
     .phone-stage {
       height: 100%;
       display: flex;
@@ -539,7 +474,7 @@
     :fullscreen #switcher, :fullscreen #inspector { display: none; }
   </style>
 </head>
-<body class="skin-a">
+<body class="theme-warm theme-warm-light">
   <div id="app"></div>
   <div id="switcher"></div>
   <div id="inspector"></div>
@@ -629,7 +564,7 @@
     };
 
     const S = {
-      variant: "A",
+      theme: "warm-light",
       viewport: "desktop",
       scenario: "daily",
       lang: "zh",
@@ -656,10 +591,9 @@
       frontierWhy: "blocked"
     };
 
-    const VARIANTS = [
-      { id: "A", name: "暖纸工作台" },
-      { id: "B", name: "夜班操作台" },
-      { id: "C", name: "冷静编辑器" }
+    const THEMES = [
+      { id: "warm-light", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
+      { id: "warm-dark", name: "暖纸夜间", nameEn: "Warm paper night", appearance: "dark" }
     ];
 
     const T = {
@@ -726,7 +660,13 @@
         free: "游离 · 没有 Issue",
         collapse: "收起",
         thisRound: "这一轮",
-        unstaged: "未提交"
+        unstaged: "未提交",
+        theme: "主题",
+        themeHelp: "主题是一份可替换清单。v1 只要浅色、深色各一套；再加一套只加 token，不改骨架。",
+        themeWarm: "暖纸",
+        themeWarmDark: "暖纸夜间",
+        themeFuture: "以后可以再加",
+        themeFutureHelp: "占位。不是第三套要验收的皮肤。"
       },
       en: {
         projects: "Projects on this Host",
@@ -791,7 +731,13 @@
         free: "Loose · no Issue",
         collapse: "Collapse",
         thisRound: "This round",
-        unstaged: "Uncommitted"
+        unstaged: "Uncommitted",
+        theme: "Theme",
+        themeHelp: "Themes are a replaceable list. v1 ships one light and one dark. Another theme is another token pack, not a new shell.",
+        themeWarm: "Warm paper",
+        themeWarmDark: "Warm paper night",
+        themeFuture: "More later",
+        themeFutureHelp: "Placeholder. Not a third skin to accept."
       }
     };
     function t(k) { return T[S.lang][k]; }
@@ -799,7 +745,8 @@
     function qs() { return new URLSearchParams(location.search); }
     function writeQS() {
       const u = new URL(location.href);
-      u.searchParams.set("variant", S.variant);
+      u.searchParams.set("theme", S.theme);
+      u.searchParams.delete("variant");
       u.searchParams.set("viewport", S.viewport);
       u.searchParams.set("scenario", S.scenario);
       u.searchParams.set("lang", S.lang);
@@ -832,8 +779,9 @@
     }
     function loadQS() {
       const p = qs();
-      S.variant = (p.get("variant") || "A").toUpperCase();
-      if (!VARIANTS.some(v => v.id === S.variant)) S.variant = "A";
+      const legacy = { A: "warm-light", B: "warm-dark", C: "warm-light" };
+      const rawTheme = p.get("theme") || legacy[(p.get("variant") || "").toUpperCase()] || "warm-light";
+      S.theme = THEMES.some(v => v.id === rawTheme) ? rawTheme : "warm-light";
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
@@ -841,6 +789,7 @@
       const zoom = p.get("zoom");
       if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
       if (p.get("vc") === "1") S.viewChangesOpen = true;
+      if (p.get("set") === "1") S.settingsOpen = true;
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -953,7 +902,7 @@
 
     function render() {
       writeQS();
-      document.body.className = `skin-${S.variant.toLowerCase()}${S.viewport === "phone" ? " phone-vp" : ""}`;
+      document.body.className = `theme-warm theme-${S.theme}${S.viewport === "phone" ? " phone-vp" : ""}`;
       document.getElementById("app").innerHTML =
         S.viewport === "phone" ? renderPhone() : renderDesktop();
       document.getElementById("switcher").innerHTML = renderSwitcher();
@@ -963,11 +912,11 @@
     }
 
     function renderSwitcher() {
-      const cur = VARIANTS.find(v => v.id === S.variant);
+      const cur = THEMES.find(v => v.id === S.theme);
       return `
-        <button data-act="prev" title="上一个方案">←</button>
-        <div class="lab">${cur.id} — ${esc(cur.name)}</div>
-        <button data-act="next" title="下一个方案">→</button>
+        <button data-act="prev" title="上一个主题">←</button>
+        <div class="lab">${esc(S.lang === "en" ? cur.nameEn : cur.name)} · ${cur.appearance}</div>
+        <button data-act="next" title="下一个主题">→</button>
         <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
         <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
         <select data-act="scenario">
@@ -985,7 +934,7 @@
       const i = issue(S.issueId);
       const r = run(S.runId);
       const lines = [
-        `方案 ${S.variant} · ${S.viewport} · ${S.scenario}`,
+        `主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
@@ -1010,7 +959,7 @@
               <div class="traffic"><i></i><i></i><i></i></div>
               <div class="win-title">Agent Taskboard${h ? " — " + esc(hostName(h)) : ""}</div>
               <span class="grow"></span>
-              <span class="tiny">${S.variant === "A" ? "纸面工作台" : S.variant === "B" ? "SESSION / OPS" : "Workspace"}</span>
+              <span class="tiny">${S.theme === "warm-dark" ? t("themeWarmDark") : t("themeWarm")}</span>
             </div>
             <div class="topbar">
               <span class="brand">Agent Taskboard</span>
@@ -1069,15 +1018,6 @@
       if (r && r.status === "active") tags.push(`<span class="tag run">Run</span>`);
       if ((r && r.status === "stopped") || i.stopped) tags.push(`<span class="tag stop">${t("stopped")}</span>`);
       if (ended) tags.push(`<span class="tag">${t("ended")}</span>`);
-      const mark = i.closed ? "·" : sectionOf(i) === "blocked" ? "×" : (r && r.status === "active") ? "●" : "○";
-      if (S.variant === "B") {
-        return `
-          <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
-            <span>${mark}</span>
-            <span class="mono">#${i.id}</span>
-            <span>${esc(shortTitle(i.title, 18))}</span>
-          </button>`;
-      }
       return `
         <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
           <div class="t"><b class="mono">#${i.id}</b><span class="tiny">${esc(i.closedAgo || "")}</span></div>
@@ -1347,6 +1287,17 @@
           <div class="hd">${t("settings")}<button class="ghost" data-act="settings">×</button></div>
           <div class="pad stack">
             <div class="tiny">这里只标入口。不必做成完整设置页。</div>
+            <b>${t("theme")}</b>
+            <div class="tiny">${t("themeHelp")}</div>
+            ${THEMES.map(th => `
+              <button class="theme-pick ${S.theme === th.id ? "active" : ""}" data-act="theme" data-id="${th.id}">
+                <span><span class="swatch ${th.appearance}"></span> ${esc(S.lang === "en" ? th.nameEn : th.name)}</span>
+                <span class="tiny">${th.appearance}</span>
+              </button>`).join("")}
+            <button class="theme-pick future" type="button" disabled>
+              <span>${t("themeFuture")}</span>
+              <span class="tiny">${t("themeFutureHelp")}</span>
+            </button>
             <b>${t("recentN")}</b>
             <div class="row">
               <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
@@ -1432,8 +1383,8 @@
         const b = e.target.closest("[data-act]");
         if (!b) return;
         if (b.dataset.act === "prev" || b.dataset.act === "next") {
-          const i = VARIANTS.findIndex(v => v.id === S.variant);
-          S.variant = VARIANTS[(i + (b.dataset.act === "next" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+          const i = THEMES.findIndex(v => v.id === S.theme);
+          S.theme = THEMES[(i + (b.dataset.act === "next" ? 1 : THEMES.length - 1)) % THEMES.length].id;
           render();
         }
         if (b.dataset.act === "vp") {
@@ -1494,6 +1445,7 @@
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "all-runs") { S.allRunsOpen = !S.allRunsOpen; S.settingsOpen = false; render(); }
         if (act === "lang") { S.lang = S.lang === "zh" ? "en" : "zh"; render(); }
+        if (act === "theme") { S.theme = id; render(); }
         if (act === "child-filter") { S.childFilter = Number(id); render(); }
         if (act === "clear-filter") { S.childFilter = null; render(); }
         if (act === "term-zoom") { setTermZoom(id || null); return; }
@@ -1568,8 +1520,8 @@
         return;
       }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        const i = VARIANTS.findIndex(v => v.id === S.variant);
-        S.variant = VARIANTS[(i + (e.key === "ArrowRight" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+        const i = THEMES.findIndex(v => v.id === S.theme);
+        S.theme = THEMES[(i + (e.key === "ArrowRight" ? 1 : THEMES.length - 1)) % THEMES.length].id;
         render();
       }
     });
