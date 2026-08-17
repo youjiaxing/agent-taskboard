@@ -6,8 +6,8 @@
   <title>原型 · 主界面依赖图</title>
   <!--
     一次性原型，不是产品。
-    已钉主壳共用：四列顶栏切依赖图；详情定向邻域；点节点只换详情；默认画全部未关闭。
-    A/B/C 只对照 Q6：补已关闭上下文时，是只加点、加点+父子线，还是两个切换。
+    已钉：四列顶栏切图；详情定向邻域；点节点只换详情；未关闭全上图；补已关闭只加点不连父子。
+    A/B/C 对照「节点多了怎么看清」。
   -->
   <style>
     :root {
@@ -162,6 +162,19 @@
       min-height: 140px;
       display: flex;
       flex-direction: column;
+    }
+    .dock.slim { height: auto; min-height: 0; }
+    .dock.slim .tabs, .dock.slim .term { display: none; }
+    .graph-with-rail {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 168px 1fr;
+    }
+    .iso-rail {
+      border-right: 1px solid var(--line);
+      overflow: auto;
+      background: #faf7f1;
     }
     .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: #faf7f1; overflow-x: auto; }
     .tabs .grp {
@@ -470,9 +483,9 @@
     };
 
     const VARIANTS = [
-      { id: "A", name: "只加点" },
-      { id: "B", name: "加点 + 父子线" },
-      { id: "C", name: "两个切换" }
+      { id: "A", name: "可读 + 拖缩放" },
+      { id: "B", name: "图开时收底栏" },
+      { id: "C", name: "孤立点改名单" }
     ];
 
     function qs() { return new URLSearchParams(location.search); }
@@ -706,8 +719,8 @@
         `方案 ${S.variant} · ${S.viewport} · ${S.scenario}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
         `中间: ${S.midMode === "graph" ? "依赖图" : "四列"}`,
-        `Q6: ${S.variant === "A" ? "只加点" : S.variant === "B" ? "加点+父子线" : "两个切换"}`,
-        `补上下文: ${S.variant === "C" ? `挡住${S.showClosedDep ? "开" : "关"} 父子${S.showClosedFamily ? "开" : "关"}` : (S.showCtx ? "开" : "关")}`,
+        `收纳: ${S.variant === "A" ? "可读+拖" : S.variant === "B" ? "收底栏" : "孤立名单"}`,
+        `补已关闭: ${S.showCtx ? "开" : "关"}`,
         `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
         `上次: ${S.lastAct}`
       ];
@@ -854,22 +867,18 @@
         </div>`;
     }
 
-    function extraClosedIds(wantDep, wantFam) {
+    function extraClosedIds() {
       const extra = new Set();
       const open = projectIssues().filter(i => !i.closed);
       for (const i of open) {
-        if (wantDep) {
-          for (const n of [...i.blockedBy, ...i.blocking]) {
-            const o = issue(n);
-            if (o && o.closed && inScenario(o) && o.projectId === S.projectId) extra.add(o.id);
-          }
+        for (const n of [...i.blockedBy, ...i.blocking]) {
+          const o = issue(n);
+          if (o && o.closed && inScenario(o) && o.projectId === S.projectId) extra.add(o.id);
         }
-        if (wantFam) {
-          const p = parentOf(i);
-          if (p && p.closed && inScenario(p) && p.projectId === S.projectId) extra.add(p.id);
-          for (const c of childrenOf(i.id)) {
-            if (c.closed) extra.add(c.id);
-          }
+        const p = parentOf(i);
+        if (p && p.closed && inScenario(p) && p.projectId === S.projectId) extra.add(p.id);
+        for (const c of childrenOf(i.id)) {
+          if (c.closed) extra.add(c.id);
         }
       }
       return extra;
@@ -877,34 +886,42 @@
 
     function graphIds() {
       const open = projectIssues().filter(i => !i.closed).map(i => i.id);
-      let extra = new Set();
-      if (S.variant === "A" && S.showCtx) extra = extraClosedIds(true, true);
-      if (S.variant === "B" && S.showCtx) extra = extraClosedIds(true, true);
-      if (S.variant === "C") extra = extraClosedIds(S.showClosedDep, S.showClosedFamily);
+      const extra = S.showCtx ? extraClosedIds() : new Set();
       return [...new Set([...open, ...extra])];
     }
 
-    function renderSvg() {
+    function isolatedIds(ids) {
+      const idSet = new Set(ids);
+      return ids.filter(id => {
+        const i = issue(id);
+        return ![...i.blockedBy, ...i.blocking].some(n => idSet.has(n));
+      });
+    }
+
+    function canvasIds() {
       const ids = graphIds();
-      if (!ids.length) return `<div class="empty">这个范围里没有可画的 Issue。</div>`;
+      if (S.variant !== "C") return ids;
+      const iso = new Set(isolatedIds(ids));
+      return ids.filter(id => !iso.has(id));
+    }
+
+    function renderSvg() {
+      const ids = canvasIds();
+      if (!ids.length) return `<div class="empty">这个范围里没有挡住边。孤立点在左边名单。</div>`;
       const { pos, width, height } = layoutDag(ids);
       if (!S.cam.user) {
-        const vw = 800, vh = 400;
-        const k = Math.min(1, (vw - 48) / Math.max(width, 1), (vh - 48) / Math.max(height, 1));
-        S.cam.k = k;
-        S.cam.x = (vw - width * k) / 2;
-        S.cam.y = (vh - height * k) / 2;
+        const focus = pos[S.issueId] || Object.values(pos)[0];
+        S.cam.k = 1;
+        if (focus) {
+          S.cam.x = 300 - (focus.x + focus.w / 2);
+          S.cam.y = 160 - (focus.y + focus.h / 2);
+        }
       }
       const depEdges = [];
-      const parentEdges = [];
-      const idSet = new Set(ids);
       for (const id of ids) {
         const iss = issue(id);
         for (const b of iss.blockedBy) {
           if (pos[b] && pos[id]) depEdges.push({ from: b, to: id, closed: !!(issue(b).closed || iss.closed) });
-        }
-        if (S.variant === "B" && S.showCtx && iss.parentId && idSet.has(iss.parentId) && pos[iss.parentId]) {
-          parentEdges.push({ from: iss.parentId, to: id });
         }
       }
       const k = S.cam.k, x = S.cam.x, y = S.cam.y;
@@ -937,13 +954,6 @@
         const dash = e.closed ? "5 4" : "none";
         return `<path d="M${x1} ${y1} C${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" fill="none" stroke="${col}" stroke-width="1.6" stroke-dasharray="${dash}" marker-end="${e.closed ? "url(#arr-off)" : "url(#arr)"}" />`;
       };
-      const parentPath = (e) => {
-        const a = pos[e.from], b = pos[e.to];
-        const x1 = a.x + a.w / 2, y1 = a.y + a.h;
-        const x2 = b.x + b.w / 2, y2 = b.y;
-        const mid = (y1 + y2) / 2;
-        return `<path d="M${x1} ${y1} C${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}" fill="none" stroke="#1d4ed8" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#arr-par)" />`;
-      };
       return `
         <svg viewBox="0 0 800 420" data-act="svg-root" data-w="${width}" data-h="${height}">
           <defs>
@@ -953,13 +963,9 @@
             <marker id="arr-off" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
               <path d="M0,0 L8,4 L0,8 z" fill="#a8a29e" />
             </marker>
-            <marker id="arr-par" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 z" fill="#1d4ed8" />
-            </marker>
           </defs>
           <g transform="translate(${x} ${y}) scale(${k})">
-            <rect x="-200" y="-200" width="${width + 400}" height="${height + 400}" fill="transparent" data-act="svg-bg" />
-            ${parentEdges.map(parentPath).join("")}
+            <rect x="-400" y="-400" width="${width + 800}" height="${height + 800}" fill="transparent" data-act="svg-bg" />
             ${depEdges.map(depPath).join("")}
             ${ids.map(node).join("")}
           </g>
@@ -968,32 +974,36 @@
 
     function graphToolbar() {
       const i = issue(S.issueId);
-      const count = graphIds().length;
-      const extras = graphIds().filter(id => issue(id).closed);
-      const q6 = S.variant === "A"
-        ? `<button data-act="toggle-ctx" class="${S.showCtx ? "active" : ""}">${S.showCtx ? "已关闭上下文开着" : "也显示已关闭的上下文"}</button>`
-        : S.variant === "B"
-          ? `<button data-act="toggle-ctx" class="${S.showCtx ? "active" : ""}">${S.showCtx ? "已关闭+父子线开着" : "也显示已关闭的上下文"}</button>`
-          : `<button data-act="toggle-closed-dep" class="${S.showClosedDep ? "active" : ""}">${S.showClosedDep ? "已关闭挡住开着" : "补已关闭的挡住邻居"}</button>
-             <button data-act="toggle-closed-fam" class="${S.showClosedFamily ? "active" : ""}">${S.showClosedFamily ? "已关闭父子开着" : "补已关闭的父 / 子"}</button>`;
-      const legend = S.variant === "B" && S.showCtx
-        ? "琥珀横线 = 挡住 · 蓝虚线竖线 = 父子（本方案才画）"
-        : "只画挡住横线 · 父子不连线";
+      const all = graphIds();
+      const extras = all.filter(id => issue(id).closed);
+      const iso = isolatedIds(all);
       return `
         ${midBar()}
         <div class="graph-toolbar">
-          <span class="chip">${count} 个点 · 已关闭 ${extras.length} · 当前 #${i ? i.id : "?"}</span>
-          ${q6}
-          <span class="legend">${legend}</span>
+          <span class="chip">${all.length} 个点 · 孤立 ${iso.length} · 已关闭 ${extras.length} · 当前 #${i ? i.id : "?"}</span>
+          <button data-act="toggle-ctx" class="${S.showCtx ? "active" : ""}">${S.showCtx ? "已关闭上下文开着" : "也显示已关闭的上下文"}</button>
+          <button data-act="reset-cam">回到当前票</button>
+          <span class="legend">拖动画布 · 滚轮缩放 · 节点不缩小到看不清</span>
+        </div>`;
+    }
+
+    function isoRail() {
+      const iso = isolatedIds(graphIds()).map(issue);
+      return `
+        <div class="iso-rail">
+          <div class="hd">无挡住 <span>${iso.length}</span></div>
+          <div class="tiny pad">这些票在四列里也能看到。画布只留有挡住边的。</div>
+          ${iso.map(issueItem).join("") || `<div class="empty">没有孤立点</div>`}
         </div>`;
     }
 
     function graphPane() {
+      const canvas = `<div class="graph-canvas">${renderSvg()}</div>`;
       return `
         <div class="graph-sheet">
           ${graphToolbar()}
-          <div class="tiny pad">默认：这个 Project 全部未关闭（含孤立点）。点节点只换详情。看 Q6：打开上面的切换，再对照 A/B/C。对照票：#70 的已关闭挡住 #71；#1 的已关闭子票 #12 / #14 / #15。</div>
-          <div class="graph-canvas">${renderSvg()}</div>
+          <div class="tiny pad">${S.variant === "A" ? "底栏还在，中间较矮：靠拖和缩放看。" : S.variant === "B" ? "图开着时底栏收到一条，中间加高。" : "孤立点改到左边名单，画布只画有挡住边的。"}</div>
+          ${S.variant === "C" ? `<div class="graph-with-rail">${isoRail()}${canvas}</div>` : canvas}
         </div>`;
     }
 
@@ -1019,7 +1029,7 @@
             </div>
             <div class="pane">${issueDetail()}</div>
           </div>
-          <div class="dock">
+          <div class="dock ${S.variant !== "A" && S.midMode === "graph" ? "slim" : ""}">
             ${runTabs()}
             <div class="ident">
               ${r ? `${esc(host(r.hostId).name)} / <button data-act="project" data-id="${r.projectId}">${esc(project(r.projectId).name)}</button> / <span class="who">#${r.issueId}</span> · ${esc(r.agent)}` : `<span class="muted">没有选中的 Run</span>`}
@@ -1148,6 +1158,11 @@
           S.showCtx = !S.showCtx;
           S.cam.user = false;
           S.lastAct = S.showCtx ? "打开已关闭上下文" : "关上已关闭上下文";
+          render();
+        }
+        if (act === "reset-cam") {
+          S.cam.user = false;
+          S.lastAct = "回到当前票大小";
           render();
         }
         if (act === "toggle-closed-dep") {
