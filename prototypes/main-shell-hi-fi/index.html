@@ -6,9 +6,9 @@
   <title>原型 · 默认主壳高保真观感</title>
   <!--
     一次性原型，不是产品。
-    主视觉：暖纸。主题可换；v1 暖纸 + 暖纸夜间。
-    设置里是完整清单；顶栏有浅/深快切。
-    ?theme=warm-light|warm-dark
+    骨架同一套纸面书桌。主题是清单：暖纸 / 暖纸夜间 / 素纸 / 素纸夜间。
+    设置里选具体主题；顶栏浅/深只切当前这一家。
+    ?theme=warm-light|warm-dark|plain-light|plain-dark
   -->
   <style>
     :root {
@@ -42,8 +42,64 @@
     }
     .mono { font-family: var(--mono); }
 
-    /* 暖纸：同一套骨架。浅 / 深只换 token，加主题 = 再加一份 token。 */
+    /* 同一套骨架。加主题 = 再加一份 token。 */
     .theme-warm-light {
+      --desk: #cfc4b0;
+      --paper: #fff8ee;
+      --paper-2: #f4ead8;
+      --card: #fffdf8;
+      --ink: #2a2218;
+      --on-ink: #fff8ee;
+      --muted: #7a6d5c;
+      --line: #e2d3bb;
+      --line-strong: #c4b191;
+      --accent: #c45c26;
+      --accent-ink: #7a2e0c;
+      --sel: #f3d3b4;
+      --run: #2f7d4a;
+      --stop: #b42318;
+      --block: #b45309;
+      --chip: #f3ead8;
+      --btn: #fff8ee;
+      --field: #fff;
+      --term: #241c16;
+      --term-fg: #f0e6d6;
+      --ident: #3a2c22;
+      --who: #fdba74;
+      --card-sel: #fff1de;
+      --glow: rgba(255,255,255,.7);
+      --shadow: 0 18px 40px rgba(60, 40, 16, .18);
+      --desk-glow: #e6dcc8;
+    }
+    .theme-warm-dark {
+      --desk: #0c0907;
+      --paper: #1c1612;
+      --paper-2: #15110e;
+      --card: #2c231c;
+      --ink: #f6ecde;
+      --on-ink: #1c1612;
+      --muted: #bba78e;
+      --line: #4a3b2e;
+      --line-strong: #6d5744;
+      --accent: #f0a066;
+      --accent-ink: #ffe0c2;
+      --sel: #4a3220;
+      --run: #7ad49a;
+      --stop: #f38b82;
+      --block: #e8b05a;
+      --chip: #2c231c;
+      --btn: #2c231c;
+      --field: #100c09;
+      --term: #0d0a08;
+      --term-fg: #f6ecde;
+      --ident: #0d0a08;
+      --who: #fdba74;
+      --card-sel: #433024;
+      --glow: rgba(255,220,180,.08);
+      --shadow: 0 20px 48px rgba(0, 0, 0, .55);
+      --desk-glow: #261c14;
+    }
+    .theme-plain-light {
       --desk: #d5d3ce;
       --paper: #fffcf8;
       --paper-2: #f3f2ee;
@@ -65,12 +121,13 @@
       --term: #1a1a19;
       --term-fg: #eceae6;
       --ident: #1a1a19;
+      --who: #f0a399;
       --card-sel: #fff1ee;
       --glow: rgba(255,255,255,.8);
       --shadow: 0 18px 40px rgba(28, 27, 25, .12);
       --desk-glow: #eceae6;
     }
-    .theme-warm-dark {
+    .theme-plain-dark {
       --desk: #0e0e0d;
       --paper: #181817;
       --paper-2: #121211;
@@ -92,6 +149,7 @@
       --term: #0b0b0a;
       --term-fg: #f4f2ee;
       --ident: #0b0b0a;
+      --who: #f0a399;
       --card-sel: #3d2623;
       --glow: rgba(255,255,255,.05);
       --shadow: 0 20px 48px rgba(0, 0, 0, .55);
@@ -143,8 +201,10 @@
       border: 1px solid var(--line-strong);
       flex: 0 0 auto;
     }
-    .theme-pick .swatch.light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
-    .theme-pick .swatch.dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
+    .theme-pick .swatch.warm-light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
+    .theme-pick .swatch.warm-dark { background: linear-gradient(135deg, #3d3228, #16110d); }
+    .theme-pick .swatch.plain-light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
+    .theme-pick .swatch.plain-dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
     .theme-pick.future { opacity: .5; cursor: default; }
     .theme-toggle {
       display: inline-flex;
@@ -348,8 +408,8 @@
       flex-wrap: wrap;
     }
     .ident button { background: #3f3f46; color: #fff; border-color: #52525b; }
-    .ident .who { color: #f0a399; font-weight: 650; }
-    .theme-warm .ident .who { color: #f0a399; }
+    .ident .who { color: var(--who, #fdba74); font-weight: 650; }
+    .theme-warm .ident .who { color: var(--who, #fdba74); }
     .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
     .split { display: grid; min-height: 0; flex: 1; }
     .splitter { cursor: col-resize; background: var(--line); width: 6px; }
@@ -612,8 +672,10 @@
     };
 
     const THEMES = [
-      { id: "warm-light", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
-      { id: "warm-dark", name: "暖纸夜间", nameEn: "Warm paper night", appearance: "dark" }
+      { id: "warm-light", family: "warm", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
+      { id: "warm-dark", family: "warm", name: "暖纸夜间", nameEn: "Warm paper night", appearance: "dark" },
+      { id: "plain-light", family: "plain", name: "素纸", nameEn: "Plain paper", appearance: "light" },
+      { id: "plain-dark", family: "plain", name: "素纸夜间", nameEn: "Plain paper night", appearance: "dark" }
     ];
 
     const T = {
@@ -682,15 +744,15 @@
         thisRound: "这一轮",
         unstaged: "未提交",
         theme: "主题",
-        themeHelp: "主题是一份可替换清单。v1 只要浅色、深色各一套；再加一套只加 token，不改骨架。",
+        themeHelp: "主题是一份可替换清单。再加一套只加 token，不改骨架。",
         themeWarm: "暖纸",
         themeWarmDark: "暖纸夜间",
         themeFuture: "以后可以再加",
         themeFutureHelp: "占位。不是第三套要验收的皮肤。",
         themeLight: "浅",
         themeDark: "深",
-        themeQuick: "快速切换浅 / 深。完整名单在设置里。",
-        themeHelpExtra: "完整名单在这里。顶栏那一组可以立刻切浅 / 深。"
+        themeQuick: "只切当前这一家的浅 / 深。换一家去设置。",
+        themeHelpExtra: "暖纸是最初那套。素纸是米白 + 朱砂。顶栏浅 / 深只切当前这一家。"
       },
       en: {
         projects: "Projects on this Host",
@@ -757,18 +819,24 @@
         thisRound: "This round",
         unstaged: "Uncommitted",
         theme: "Theme",
-        themeHelp: "Themes are a replaceable list. v1 ships one light and one dark. Another theme is another token pack, not a new shell.",
+        themeHelp: "Themes are a replaceable list. Another theme is another token pack, not a new shell.",
         themeWarm: "Warm paper",
         themeWarmDark: "Warm paper night",
         themeFuture: "More later",
         themeFutureHelp: "Placeholder. Not a third skin to accept.",
         themeLight: "Light",
         themeDark: "Dark",
-        themeQuick: "Flip light / dark. The full list is in Settings.",
-        themeHelpExtra: "The full list lives here. The top-bar pair flips light / dark."
+        themeQuick: "Flips light / dark in the current family. Pick a family in Settings.",
+        themeHelpExtra: "Warm paper is the first set. Plain paper is ivory + cinnabar. The top-bar pair only flips the current family."
       }
     };
     function t(k) { return T[S.lang][k]; }
+    function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[0]; }
+    function themeMate(appearance) {
+      const cur = themeOf(S.theme);
+      const mate = THEMES.find(th => th.family === cur.family && th.appearance === appearance);
+      return mate ? mate.id : cur.id;
+    }
 
     function qs() { return new URLSearchParams(location.search); }
     function writeQS() {
@@ -987,7 +1055,7 @@
               <div class="traffic"><i></i><i></i><i></i></div>
               <div class="win-title">Agent Taskboard${h ? " — " + esc(hostName(h)) : ""}</div>
               <span class="grow"></span>
-              <span class="tiny">${S.theme === "warm-dark" ? t("themeWarmDark") : t("themeWarm")}</span>
+              <span class="tiny">${esc(S.lang === "en" ? themeOf(S.theme).nameEn : themeOf(S.theme).name)}</span>
             </div>
             <div class="topbar">
               <span class="brand">Agent Taskboard</span>
@@ -1313,10 +1381,11 @@
     }
 
     function themeToggle() {
+      const cur = themeOf(S.theme);
       return `
         <div class="theme-toggle" title="${t("themeQuick")}">
-          <button data-act="theme" data-id="warm-light" class="${S.theme === "warm-light" ? "active" : ""}">${t("themeLight")}</button>
-          <button data-act="theme" data-id="warm-dark" class="${S.theme === "warm-dark" ? "active" : ""}">${t("themeDark")}</button>
+          <button data-act="theme" data-id="${themeMate("light")}" class="${cur.appearance === "light" ? "active" : ""}">${t("themeLight")}</button>
+          <button data-act="theme" data-id="${themeMate("dark")}" class="${cur.appearance === "dark" ? "active" : ""}">${t("themeDark")}</button>
         </div>`;
     }
 
@@ -1330,7 +1399,7 @@
             <div class="tiny">${t("themeHelp")} ${t("themeHelpExtra")}</div>
             ${THEMES.map(th => `
               <button class="theme-pick ${S.theme === th.id ? "active" : ""}" data-act="theme" data-id="${th.id}">
-                <span><span class="swatch ${th.appearance}"></span> ${esc(S.lang === "en" ? th.nameEn : th.name)}</span>
+                <span><span class="swatch ${th.id}"></span> ${esc(S.lang === "en" ? th.nameEn : th.name)}</span>
                 <span class="tiny">${th.appearance}</span>
               </button>`).join("")}
             <button class="theme-pick future" type="button" disabled>
