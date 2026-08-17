@@ -806,6 +806,11 @@
       const last = themeOf(S.lastLight);
       return last.appearance === "light" ? last.id : "plain-light";
     }
+    function systemTheme() {
+      return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "plain-dark"
+        : "warm-light";
+    }
     function setTheme(id) {
       const next = THEMES.some(th => th.id === id) ? id : "warm-light";
       S.theme = next;
@@ -850,8 +855,9 @@
     function loadQS() {
       const p = qs();
       const legacy = { A: "warm-light", B: "plain-dark", C: "plain-light", "warm-dark": "plain-dark" };
-      const rawTheme = p.get("theme") || legacy[(p.get("variant") || "").toUpperCase()] || "warm-light";
-      setTheme(legacy[rawTheme] || rawTheme);
+      const raw = p.get("theme") || legacy[(p.get("variant") || "").toUpperCase()] || "";
+      if (raw) setTheme(legacy[raw] || raw);
+      else setTheme(systemTheme());
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
@@ -1005,6 +1011,7 @@
       const r = run(S.runId);
       const lines = [
         `主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
+        `首次按系统：浅→暖纸 / 深→素纸夜间`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
