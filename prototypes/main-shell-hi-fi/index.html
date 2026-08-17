@@ -6,9 +6,9 @@
   <title>原型 · 默认主壳高保真观感</title>
   <!--
     一次性原型，不是产品。
-    骨架同一套纸面书桌。主题是清单：暖纸 / 暖纸夜间 / 素纸 / 素纸夜间。
-    设置里选具体主题；顶栏浅/深只切当前这一家。
-    ?theme=warm-light|warm-dark|plain-light|plain-dark
+    骨架同一套纸面书桌。清单：暖纸（仅白天）/ 素纸 / 素纸夜间。
+    没有暖纸夜间。顶栏深色一律切到素纸夜间；浅色回到上次用的浅色。
+    ?theme=warm-light|plain-light|plain-dark
   -->
   <style>
     :root {
@@ -70,34 +70,6 @@
       --glow: rgba(255,255,255,.7);
       --shadow: 0 18px 40px rgba(60, 40, 16, .18);
       --desk-glow: #e6dcc8;
-    }
-    .theme-warm-dark {
-      --desk: #0c0907;
-      --paper: #1c1612;
-      --paper-2: #15110e;
-      --card: #2c231c;
-      --ink: #f6ecde;
-      --on-ink: #1c1612;
-      --muted: #bba78e;
-      --line: #4a3b2e;
-      --line-strong: #6d5744;
-      --accent: #f0a066;
-      --accent-ink: #ffe0c2;
-      --sel: #4a3220;
-      --run: #7ad49a;
-      --stop: #f38b82;
-      --block: #e8b05a;
-      --chip: #2c231c;
-      --btn: #2c231c;
-      --field: #100c09;
-      --term: #0d0a08;
-      --term-fg: #f6ecde;
-      --ident: #0d0a08;
-      --who: #fdba74;
-      --card-sel: #433024;
-      --glow: rgba(255,220,180,.08);
-      --shadow: 0 20px 48px rgba(0, 0, 0, .55);
-      --desk-glow: #261c14;
     }
     .theme-plain-light {
       --desk: #d5d3ce;
@@ -202,7 +174,6 @@
       flex: 0 0 auto;
     }
     .theme-pick .swatch.warm-light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
-    .theme-pick .swatch.warm-dark { background: linear-gradient(135deg, #3d3228, #16110d); }
     .theme-pick .swatch.plain-light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
     .theme-pick .swatch.plain-dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
     .theme-pick.future { opacity: .5; cursor: default; }
@@ -645,6 +616,7 @@
 
     const S = {
       theme: "warm-light",
+      lastLight: "warm-light",
       viewport: "desktop",
       scenario: "daily",
       lang: "zh",
@@ -672,10 +644,9 @@
     };
 
     const THEMES = [
-      { id: "warm-light", family: "warm", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
-      { id: "warm-dark", family: "warm", name: "暖纸夜间", nameEn: "Warm paper night", appearance: "dark" },
-      { id: "plain-light", family: "plain", name: "素纸", nameEn: "Plain paper", appearance: "light" },
-      { id: "plain-dark", family: "plain", name: "素纸夜间", nameEn: "Plain paper night", appearance: "dark" }
+      { id: "warm-light", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
+      { id: "plain-light", name: "素纸", nameEn: "Plain paper", appearance: "light" },
+      { id: "plain-dark", name: "素纸夜间", nameEn: "Plain paper night", appearance: "dark" }
     ];
 
     const T = {
@@ -746,13 +717,12 @@
         theme: "主题",
         themeHelp: "主题是一份可替换清单。再加一套只加 token，不改骨架。",
         themeWarm: "暖纸",
-        themeWarmDark: "暖纸夜间",
         themeFuture: "以后可以再加",
         themeFutureHelp: "占位。不是第三套要验收的皮肤。",
         themeLight: "浅",
         themeDark: "深",
-        themeQuick: "只切当前这一家的浅 / 深。换一家去设置。",
-        themeHelpExtra: "暖纸是最初那套。素纸是米白 + 朱砂。顶栏浅 / 深只切当前这一家。"
+        themeQuick: "深色切到素纸夜间。浅色回到上次用的浅色（暖纸或素纸）。",
+        themeHelpExtra: "暖纸只有白天那一版。深色只用素纸夜间。顶栏深色切到素纸夜间，浅色回到上次用的浅色。"
       },
       en: {
         projects: "Projects on this Host",
@@ -821,21 +791,25 @@
         theme: "Theme",
         themeHelp: "Themes are a replaceable list. Another theme is another token pack, not a new shell.",
         themeWarm: "Warm paper",
-        themeWarmDark: "Warm paper night",
         themeFuture: "More later",
         themeFutureHelp: "Placeholder. Not a third skin to accept.",
         themeLight: "Light",
         themeDark: "Dark",
-        themeQuick: "Flips light / dark in the current family. Pick a family in Settings.",
-        themeHelpExtra: "Warm paper is the first set. Plain paper is ivory + cinnabar. The top-bar pair only flips the current family."
+        themeQuick: "Dark goes to plain-paper night. Light returns to the last light theme.",
+        themeHelpExtra: "Warm paper is daytime only. Dark is plain-paper night. The top bar goes dark to that set, and light back to the last light theme."
       }
     };
     function t(k) { return T[S.lang][k]; }
     function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[0]; }
     function themeMate(appearance) {
-      const cur = themeOf(S.theme);
-      const mate = THEMES.find(th => th.family === cur.family && th.appearance === appearance);
-      return mate ? mate.id : cur.id;
+      if (appearance === "dark") return "plain-dark";
+      const last = themeOf(S.lastLight);
+      return last.appearance === "light" ? last.id : "plain-light";
+    }
+    function setTheme(id) {
+      const next = THEMES.some(th => th.id === id) ? id : "warm-light";
+      S.theme = next;
+      if (themeOf(next).appearance === "light") S.lastLight = next;
     }
 
     function qs() { return new URLSearchParams(location.search); }
@@ -875,9 +849,9 @@
     }
     function loadQS() {
       const p = qs();
-      const legacy = { A: "warm-light", B: "warm-dark", C: "warm-light" };
+      const legacy = { A: "warm-light", B: "plain-dark", C: "plain-light", "warm-dark": "plain-dark" };
       const rawTheme = p.get("theme") || legacy[(p.get("variant") || "").toUpperCase()] || "warm-light";
-      S.theme = THEMES.some(v => v.id === rawTheme) ? rawTheme : "warm-light";
+      setTheme(legacy[rawTheme] || rawTheme);
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
@@ -1496,7 +1470,7 @@
         if (!b) return;
         if (b.dataset.act === "prev" || b.dataset.act === "next") {
           const i = THEMES.findIndex(v => v.id === S.theme);
-          S.theme = THEMES[(i + (b.dataset.act === "next" ? 1 : THEMES.length - 1)) % THEMES.length].id;
+          setTheme(THEMES[(i + (b.dataset.act === "next" ? 1 : THEMES.length - 1)) % THEMES.length].id);
           render();
         }
         if (b.dataset.act === "vp") {
@@ -1557,7 +1531,7 @@
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "all-runs") { S.allRunsOpen = !S.allRunsOpen; S.settingsOpen = false; render(); }
         if (act === "lang") { S.lang = S.lang === "zh" ? "en" : "zh"; render(); }
-        if (act === "theme") { S.theme = id; render(); }
+        if (act === "theme") { setTheme(id); render(); }
         if (act === "child-filter") { S.childFilter = Number(id); render(); }
         if (act === "clear-filter") { S.childFilter = null; render(); }
         if (act === "term-zoom") { setTermZoom(id || null); return; }
@@ -1633,7 +1607,7 @@
       }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
         const i = THEMES.findIndex(v => v.id === S.theme);
-        S.theme = THEMES[(i + (e.key === "ArrowRight" ? 1 : THEMES.length - 1)) % THEMES.length].id;
+        setTheme(THEMES[(i + (e.key === "ArrowRight" ? 1 : THEMES.length - 1)) % THEMES.length].id);
         render();
       }
     });
