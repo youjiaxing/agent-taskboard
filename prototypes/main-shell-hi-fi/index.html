@@ -44,58 +44,58 @@
 
     /* 暖纸：同一套骨架。浅 / 深只换 token，加主题 = 再加一份 token。 */
     .theme-warm-light {
-      --desk: #cfc4b0;
-      --paper: #fff8ee;
-      --paper-2: #f4ead8;
-      --card: #fffdf8;
-      --ink: #2a2218;
-      --on-ink: #fff8ee;
-      --muted: #7a6d5c;
-      --line: #e2d3bb;
-      --line-strong: #c4b191;
-      --accent: #c45c26;
-      --accent-ink: #7a2e0c;
-      --sel: #f3d3b4;
+      --desk: #d5d3ce;
+      --paper: #fffcf8;
+      --paper-2: #f3f2ee;
+      --card: #ffffff;
+      --ink: #1c1b19;
+      --on-ink: #fffcf8;
+      --muted: #6f6d68;
+      --line: #e3e1db;
+      --line-strong: #c6c3bb;
+      --accent: #c23b2e;
+      --accent-ink: #8a1f16;
+      --sel: #fde8e4;
       --run: #2f7d4a;
       --stop: #b42318;
       --block: #b45309;
-      --chip: #f3ead8;
-      --btn: #fff8ee;
+      --chip: #f3f2ee;
+      --btn: #fffcf8;
       --field: #fff;
-      --term: #241c16;
-      --term-fg: #f0e6d6;
-      --ident: #3a2c22;
-      --card-sel: #fff1de;
-      --glow: rgba(255,255,255,.7);
-      --shadow: 0 18px 40px rgba(60, 40, 16, .18);
-      --desk-glow: #e6dcc8;
+      --term: #1a1a19;
+      --term-fg: #eceae6;
+      --ident: #1a1a19;
+      --card-sel: #fff1ee;
+      --glow: rgba(255,255,255,.8);
+      --shadow: 0 18px 40px rgba(28, 27, 25, .12);
+      --desk-glow: #eceae6;
     }
     .theme-warm-dark {
-      --desk: #0c0907;
-      --paper: #1c1612;
-      --paper-2: #15110e;
-      --card: #2c231c;
-      --ink: #f6ecde;
-      --on-ink: #1c1612;
-      --muted: #bba78e;
-      --line: #4a3b2e;
-      --line-strong: #6d5744;
-      --accent: #f0a066;
-      --accent-ink: #ffe0c2;
-      --sel: #4a3220;
+      --desk: #0e0e0d;
+      --paper: #181817;
+      --paper-2: #121211;
+      --card: #232321;
+      --ink: #f4f2ee;
+      --on-ink: #181817;
+      --muted: #a3a19b;
+      --line: #33322f;
+      --line-strong: #4d4c48;
+      --accent: #e86a5c;
+      --accent-ink: #ffd4ce;
+      --sel: #3a221f;
       --run: #7ad49a;
       --stop: #f38b82;
-      --block: #e8b05a;
-      --chip: #2c231c;
-      --btn: #2c231c;
-      --field: #100c09;
-      --term: #0d0a08;
-      --term-fg: #f6ecde;
-      --ident: #0d0a08;
-      --card-sel: #433024;
-      --glow: rgba(255,220,180,.08);
+      --block: #e0b15a;
+      --chip: #232321;
+      --btn: #232321;
+      --field: #10100f;
+      --term: #0b0b0a;
+      --term-fg: #f4f2ee;
+      --ident: #0b0b0a;
+      --card-sel: #3d2623;
+      --glow: rgba(255,255,255,.05);
       --shadow: 0 20px 48px rgba(0, 0, 0, .55);
-      --desk-glow: #261c14;
+      --desk-glow: #1c1c1b;
     }
     .theme-warm {
       --r: 8px;
@@ -111,7 +111,7 @@
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 10px;
-      box-shadow: 0 1px 0 var(--glow) inset, 0 6px 14px rgba(80,50,10,.05);
+      box-shadow: 0 1px 0 var(--glow) inset, 0 6px 14px rgba(28,27,25,.06);
       padding: 10px 11px;
       margin: 8px;
       text-align: left;
@@ -143,8 +143,8 @@
       border: 1px solid var(--line-strong);
       flex: 0 0 auto;
     }
-    .theme-pick .swatch.light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
-    .theme-pick .swatch.dark { background: linear-gradient(135deg, #3d3228, #16110d); }
+    .theme-pick .swatch.light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
+    .theme-pick .swatch.dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
     .theme-pick.future { opacity: .5; cursor: default; }
     .theme-toggle {
       display: inline-flex;
@@ -313,7 +313,7 @@
     .term .dim { opacity: .55; }
     .term .ok { color: #86efac; }
     .term .bad { color: #fca5a5; }
-    .term .hi { color: #fdba74; }
+    .term .hi { color: #f0a399; }
     
     .diff { font: 12px/1.5 var(--mono); }
     .diff .add { background: color-mix(in srgb, var(--run) 16%, transparent); }
@@ -348,8 +348,8 @@
       flex-wrap: wrap;
     }
     .ident button { background: #3f3f46; color: #fff; border-color: #52525b; }
-    .ident .who { color: #fdba74; font-weight: 650; }
-    .theme-warm .ident .who { color: #fdba74; }
+    .ident .who { color: #f0a399; font-weight: 650; }
+    .theme-warm .ident .who { color: #f0a399; }
     .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
     .split { display: grid; min-height: 0; flex: 1; }
     .splitter { cursor: col-resize; background: var(--line); width: 6px; }
