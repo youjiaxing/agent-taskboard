@@ -6,9 +6,9 @@
   <title>原型 · 默认主壳高保真观感</title>
   <!--
     一次性原型，不是产品。
-    主视觉已收成暖纸；主题是可替换清单，v1 只要 light / dark 各一套。
+    主视觉：暖纸。主题可换；v1 暖纸 + 暖纸夜间。
+    设置里是完整清单；顶栏有浅/深快切。
     ?theme=warm-light|warm-dark
-    问题：夜间那套是暖纸夜间，还是另一套性格？主题记在哪？
   -->
   <style>
     :root {
@@ -47,6 +47,7 @@
       --desk: #cfc4b0;
       --paper: #fff8ee;
       --paper-2: #f4ead8;
+      --card: #fffdf8;
       --ink: #2a2218;
       --on-ink: #fff8ee;
       --muted: #7a6d5c;
@@ -70,30 +71,31 @@
       --desk-glow: #e6dcc8;
     }
     .theme-warm-dark {
-      --desk: #16110d;
-      --paper: #241c16;
-      --paper-2: #1c1612;
-      --ink: #f0e6d6;
-      --on-ink: #241c16;
-      --muted: #a89884;
-      --line: #3d3228;
-      --line-strong: #5c4c3c;
-      --accent: #e8955a;
-      --accent-ink: #ffd4b0;
-      --sel: #3d2a1c;
-      --run: #6ecf8a;
-      --stop: #f07167;
-      --block: #e0a04a;
-      --chip: #332920;
-      --btn: #2a221c;
-      --field: #16110d;
-      --term: #120e0b;
-      --term-fg: #f0e6d6;
-      --ident: #120e0b;
-      --card-sel: #3a281c;
-      --glow: rgba(255,220,180,.06);
-      --shadow: 0 18px 40px rgba(0, 0, 0, .45);
-      --desk-glow: #2a2018;
+      --desk: #0c0907;
+      --paper: #1c1612;
+      --paper-2: #15110e;
+      --card: #2c231c;
+      --ink: #f6ecde;
+      --on-ink: #1c1612;
+      --muted: #bba78e;
+      --line: #4a3b2e;
+      --line-strong: #6d5744;
+      --accent: #f0a066;
+      --accent-ink: #ffe0c2;
+      --sel: #4a3220;
+      --run: #7ad49a;
+      --stop: #f38b82;
+      --block: #e8b05a;
+      --chip: #2c231c;
+      --btn: #2c231c;
+      --field: #100c09;
+      --term: #0d0a08;
+      --term-fg: #f6ecde;
+      --ident: #0d0a08;
+      --card-sel: #433024;
+      --glow: rgba(255,220,180,.08);
+      --shadow: 0 20px 48px rgba(0, 0, 0, .55);
+      --desk-glow: #261c14;
     }
     .theme-warm {
       --r: 8px;
@@ -106,7 +108,7 @@
     }
     .theme-warm .brand { font-family: var(--serif); font-weight: 600; letter-spacing: .01em; }
     .theme-warm .issue-card {
-      background: var(--paper);
+      background: var(--card);
       border: 1px solid var(--line);
       border-radius: 10px;
       box-shadow: 0 1px 0 var(--glow) inset, 0 6px 14px rgba(80,50,10,.05);
@@ -144,6 +146,24 @@
     .theme-pick .swatch.light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
     .theme-pick .swatch.dark { background: linear-gradient(135deg, #3d3228, #16110d); }
     .theme-pick.future { opacity: .5; cursor: default; }
+    .theme-toggle {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--chip);
+    }
+    .theme-toggle button {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 3px 10px;
+    }
+    .theme-toggle button.active {
+      background: var(--ink);
+      color: var(--on-ink);
+      border-color: var(--ink);
+    }
 
     body {
       font: 13px/1.4 var(--sans);
@@ -666,7 +686,11 @@
         themeWarm: "暖纸",
         themeWarmDark: "暖纸夜间",
         themeFuture: "以后可以再加",
-        themeFutureHelp: "占位。不是第三套要验收的皮肤。"
+        themeFutureHelp: "占位。不是第三套要验收的皮肤。",
+        themeLight: "浅",
+        themeDark: "深",
+        themeQuick: "快速切换浅 / 深。完整名单在设置里。",
+        themeHelpExtra: "完整名单在这里。顶栏那一组可以立刻切浅 / 深。"
       },
       en: {
         projects: "Projects on this Host",
@@ -737,7 +761,11 @@
         themeWarm: "Warm paper",
         themeWarmDark: "Warm paper night",
         themeFuture: "More later",
-        themeFutureHelp: "Placeholder. Not a third skin to accept."
+        themeFutureHelp: "Placeholder. Not a third skin to accept.",
+        themeLight: "Light",
+        themeDark: "Dark",
+        themeQuick: "Flip light / dark. The full list is in Settings.",
+        themeHelpExtra: "The full list lives here. The top-bar pair flips light / dark."
       }
     };
     function t(k) { return T[S.lang][k]; }
@@ -970,6 +998,7 @@
               <button class="ghost" data-act="pair">+ ${t("pair")}</button>
               <span class="grow"></span>
               <span class="chip">${t("autoOff")}</span>
+              ${themeToggle()}
               <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
               <button data-act="settings" class="${S.settingsOpen ? "active" : ""}" title="设置入口在这里">⚙ ${t("settings")}</button>
             </div>
@@ -1252,6 +1281,8 @@
             <div class="os-chrome">
               <div class="traffic"><i></i><i></i><i></i></div>
               <div class="win-title">Agent Taskboard</div>
+              <span class="grow"></span>
+              ${themeToggle()}
             </div>
             <div class="empty-strong stack">
               <div class="brand" style="font-size:22px">${t("unpairedTitle")}</div>
@@ -1281,6 +1312,14 @@
         </div>`;
     }
 
+    function themeToggle() {
+      return `
+        <div class="theme-toggle" title="${t("themeQuick")}">
+          <button data-act="theme" data-id="warm-light" class="${S.theme === "warm-light" ? "active" : ""}">${t("themeLight")}</button>
+          <button data-act="theme" data-id="warm-dark" class="${S.theme === "warm-dark" ? "active" : ""}">${t("themeDark")}</button>
+        </div>`;
+    }
+
     function settingsSheet() {
       return `
         <div class="sheet">
@@ -1288,7 +1327,7 @@
           <div class="pad stack">
             <div class="tiny">这里只标入口。不必做成完整设置页。</div>
             <b>${t("theme")}</b>
-            <div class="tiny">${t("themeHelp")}</div>
+            <div class="tiny">${t("themeHelp")} ${t("themeHelpExtra")}</div>
             ${THEMES.map(th => `
               <button class="theme-pick ${S.theme === th.id ? "active" : ""}" data-act="theme" data-id="${th.id}">
                 <span><span class="swatch ${th.appearance}"></span> ${esc(S.lang === "en" ? th.nameEn : th.name)}</span>
@@ -1330,7 +1369,7 @@
     function renderPhone() {
       if (S.scenario === "unpaired") {
         return `<div class="phone-stage"><div class="phone">
-          <div class="phone-bar"><b>Client</b></div>
+          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${themeToggle()}</div>
           <div class="phone-body pad stack">
             <b>${t("unpairedTitle")}</b>
             <div class="muted">${t("unpairedBody")}</div>
@@ -1343,7 +1382,11 @@
         <div class="phone-stage">
           <div class="phone">
             <div class="phone-bar">
-              ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
+              <div class="row">
+                ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
+                <span class="grow"></span>
+                ${themeToggle()}
+              </div>
               <div class="tiny">${t("phoneNote")}</div>
             </div>
             <div class="phone-body">${body}</div>
