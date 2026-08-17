@@ -1,0 +1,1581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>原型 · 默认主壳高保真观感</title>
+  <!--
+    一次性原型，不是产品。
+    三个观感完全不同的默认主壳，结构已钉死不得改。
+    ?variant=A|B|C
+    问题：v1 每天盯着的那一屏，用哪套皮肤（或拆开拼）？
+  -->
+  <style>
+    :root {
+      --sans: "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+      --serif: "Iowan Old Style", "Songti SC", "Noto Serif SC", Palatino, serif;
+      --mono: "SF Mono", Menlo, "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    button, select, input, textarea {
+      font: inherit;
+      color: inherit;
+      background: var(--btn);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--line-strong); }
+    button.primary { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+    button.ghost { background: transparent; }
+    button.active { background: var(--sel); border-color: var(--accent); color: var(--accent-ink); }
+    input, textarea { background: var(--field); cursor: text; }
+    a.ext {
+      color: inherit;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 2px 8px;
+      background: var(--btn);
+    }
+    .mono { font-family: var(--mono); }
+
+    /* ── A 暖纸工作台 ── */
+    .skin-a {
+      --bg: #cfc4b0;
+      --desk: #cfc4b0;
+      --paper: #fff8ee;
+      --paper-2: #f4ead8;
+      --ink: #2a2218;
+      --on-ink: #fff8ee;
+      --muted: #7a6d5c;
+      --line: #e2d3bb;
+      --line-strong: #c4b191;
+      --accent: #c45c26;
+      --accent-ink: #7a2e0c;
+      --sel: #f3d3b4;
+      --run: #2f7d4a;
+      --stop: #b42318;
+      --block: #b45309;
+      --chip: #f3ead8;
+      --btn: #fff8ee;
+      --field: #fff;
+      --term: #241c16;
+      --term-fg: #f0e6d6;
+      --r: 8px;
+      --shadow: 0 18px 40px rgba(60, 40, 16, .18);
+      --win-r: 12px;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 50% -10%, #e6dcc8, transparent 55%),
+        var(--desk);
+    }
+    .skin-a .brand { font-family: var(--serif); font-weight: 600; letter-spacing: .01em; }
+    .skin-a .issue-card {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 6px 14px rgba(80,50,10,.05);
+      padding: 10px 11px;
+      margin: 8px;
+      text-align: left;
+      display: block;
+      width: calc(100% - 16px);
+    }
+    .skin-a .issue-card:hover { transform: translateY(-1px); }
+    .skin-a .issue-card.sel { outline: 2px solid var(--accent); background: #fff1de; }
+    .skin-a .col-hd { font-family: var(--serif); text-transform: none; letter-spacing: 0; }
+    .skin-a .dock { height: 34vh; }
+    .skin-a .ident { background: #3a2c22; }
+
+    /* ── B 夜班操作台 ── */
+    .skin-b {
+      --bg: #07090b;
+      --desk: #07090b;
+      --paper: #0e1216;
+      --paper-2: #141a20;
+      --ink: #d5dee6;
+      --on-ink: #06110c;
+      --muted: #7d8b97;
+      --line: #1c252d;
+      --line-strong: #31404c;
+      --accent: #3dffa6;
+      --accent-ink: #3dffa6;
+      --sel: #123528;
+      --run: #3dffa6;
+      --stop: #ff5d6c;
+      --block: #ffc14d;
+      --chip: #141a20;
+      --btn: #141a20;
+      --field: #0b0f13;
+      --term: #050709;
+      --term-fg: #c8f5dd;
+      --r: 2px;
+      --shadow: none;
+      --win-r: 0;
+      font-family: var(--mono);
+      color: var(--ink);
+      background: var(--desk);
+    }
+    .skin-b button, .skin-b select, .skin-b input, .skin-b textarea { border-radius: 2px; }
+    .skin-b .brand { font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 11px; }
+    .skin-b .issue-card {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      padding: 6px 8px;
+      display: grid;
+      grid-template-columns: 14px 46px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+    .skin-b .issue-card > span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .skin-b .issue-card:hover { background: #12181e; }
+    .skin-b .issue-card.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+    .skin-b .issue-card .sub { display: none; }
+    .skin-b .dock { height: 36vh; }
+    .skin-b .ident { background: #050709; border-bottom: 1px solid #1c252d; }
+    .skin-b .win { border: 0; box-shadow: none; border-radius: 0; }
+    .skin-b .traffic { display: none; }
+    .skin-b .os-chrome { background: #0b0f13; border-color: #1c252d; }
+    .skin-b .col { background: #0b0f13; }
+    .skin-b .pane, .skin-b .topbar, .skin-b .dock { background: var(--paper); }
+
+    /* ── C 冷静编辑器 ── */
+    .skin-c {
+      --bg: #dfe4ea;
+      --desk: #dfe4ea;
+      --paper: #ffffff;
+      --paper-2: #f4f6f8;
+      --ink: #1a2330;
+      --on-ink: #fff;
+      --muted: #6b7380;
+      --line: #d8dee6;
+      --line-strong: #b7c0cb;
+      --accent: #3b6cff;
+      --accent-ink: #1e3fa8;
+      --sel: #e8eeff;
+      --run: #0f9f6e;
+      --stop: #e11d48;
+      --block: #d97706;
+      --chip: #f4f6f8;
+      --btn: #fff;
+      --field: #fff;
+      --term: #111827;
+      --term-fg: #e5e7eb;
+      --r: 6px;
+      --shadow: 0 16px 40px rgba(24, 32, 48, .12);
+      --win-r: 10px;
+      font-family: var(--sans);
+      color: var(--ink);
+      background: linear-gradient(#e7ebf0, #d5dae2);
+    }
+    .skin-c .brand { font-weight: 650; letter-spacing: -.02em; }
+    .skin-c .issue-card {
+      width: 100%;
+      margin: 0;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      border-left: 3px solid var(--lane);
+      padding: 8px 10px;
+      display: block;
+    }
+    .skin-c .issue-card:hover { background: #f8faff; }
+    .skin-c .issue-card.sel { background: var(--sel); }
+    .skin-c .issue-card .sub { display: none; }
+    .skin-c .dock { height: 28vh; }
+    .skin-c .ident { background: #111827; }
+    .skin-c .col { background: #fff; }
+    .skin-c .lanes { background: #fff; }
+    .skin-c .topbar { min-height: 36px; padding: 4px 10px; }
+    .skin-c .block { background: #fff; border-radius: 8px; }
+
+    body {
+      font: 13px/1.4 var(--sans);
+      color: var(--ink);
+      overflow: hidden;
+    }
+    #app { height: 100%; }
+    .stage {
+      height: 100%;
+      padding: 14px 14px 78px;
+    }
+    .skin-b .stage { padding: 0 0 64px; }
+    .win {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--win-r);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .os-chrome {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 10px;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--line);
+      min-height: 34px;
+    }
+    .traffic { display: flex; gap: 6px; }
+    .traffic i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+    .skin-a .traffic i:nth-child(1) { background: #ec6a5e; }
+    .skin-a .traffic i:nth-child(2) { background: #f5bf4f; }
+    .skin-a .traffic i:nth-child(3) { background: #61c554; }
+    .skin-c .traffic i { background: #c5ccd6; }
+    .win-title { font-size: 12px; color: var(--muted); }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+      min-height: 42px;
+    }
+    .host-tab, .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: var(--chip);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 12px;
+    }
+    .skin-b .host-tab, .skin-b .chip { border-radius: 2px; }
+    .skin-c .host-tab { border-radius: 6px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #a8a29e; flex: 0 0 auto; }
+    .dot.on { background: var(--run); }
+    .dot.off { background: #8a8f96; }
+    .dot.busy { background: var(--accent); }
+    .dot.stop { background: var(--stop); }
+    .cols {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 196px minmax(340px, 1.3fr) minmax(280px, .95fr);
+      min-height: 0;
+    }
+    .win.single .cols { grid-template-columns: 148px minmax(340px, 1.3fr) minmax(280px, .95fr); }
+    .pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+    }
+    .pane:last-child { border-right: 0; }
+    .hd, .col-hd {
+      margin: 0;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0;
+      text-transform: none;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      background: var(--paper-2);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .item {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      padding: 8px 10px;
+      display: block;
+    }
+    .item:hover { background: var(--paper-2); }
+    .item.sel { background: var(--sel); }
+    .item .t, .issue-card .t { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .item .t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .item .sub, .issue-card .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 11px; color: var(--muted); }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1; }
+    .pad { padding: 10px; }
+    .stack { display: flex; flex-direction: column; gap: 8px; }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 0 6px;
+      border-radius: 3px;
+      background: var(--chip);
+      border: 1px solid var(--line);
+    }
+    .tag.block { color: var(--block); border-color: color-mix(in srgb, var(--block) 40%, var(--line)); }
+    .tag.run { color: var(--run); }
+    .tag.stop { color: var(--stop); }
+    .lanes {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      min-height: 100%;
+    }
+    .col { border-right: 1px solid var(--line); min-width: 0; background: var(--paper-2); }
+    .col:last-child { border-right: 0; }
+    .col.blocked { --lane: var(--block); }
+    .col.frontier { --lane: var(--accent); }
+    .col.in-run { --lane: var(--run); }
+    .col.recent { --lane: #8a8f96; }
+    .empty { padding: 22px 12px; text-align: center; color: var(--muted); }
+    .empty-strong { max-width: 420px; margin: 8vh auto; text-align: left; }
+    .term {
+      background: var(--term);
+      color: var(--term-fg);
+      font: 12px/1.5 var(--mono);
+      padding: 10px 12px;
+      min-height: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      flex: 1;
+    }
+    .term .dim { opacity: .55; }
+    .term .ok { color: #86efac; }
+    .term .bad { color: #fca5a5; }
+    .term .hi { color: #fdba74; }
+    .skin-b .term .ok, .skin-b .term .hi { color: var(--accent); }
+    .diff { font: 12px/1.5 var(--mono); }
+    .diff .add { background: color-mix(in srgb, var(--run) 16%, transparent); }
+    .diff .del { background: color-mix(in srgb, var(--stop) 16%, transparent); }
+    .diff .ln { display: grid; grid-template-columns: 36px 1fr 28px; gap: 8px; padding: 1px 8px; }
+    .note-pill {
+      background: var(--sel);
+      border: 1px solid var(--accent);
+      border-radius: var(--r);
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+    .dock {
+      border-top: 1px solid var(--line);
+      background: var(--paper);
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+    }
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: var(--paper-2); overflow-x: auto; }
+    .tabs .grp { display: flex; align-items: stretch; border-right: 1px solid var(--line); }
+    .tabs .gname { padding: 6px 8px; font-size: 11px; color: var(--muted); align-self: center; white-space: nowrap; }
+    .tabs button { border: 0; border-right: 1px solid var(--line); border-radius: 0; background: transparent; padding: 6px 10px; white-space: nowrap; }
+    .tabs button.sel { background: var(--ink); color: var(--on-ink); }
+    .ident {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      color: #f5f5f4;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .ident button { background: #3f3f46; color: #fff; border-color: #52525b; }
+    .ident .who { color: #fdba74; font-weight: 650; }
+    .skin-b .ident .who { color: var(--accent); }
+    .skin-c .ident .who { color: #93c5fd; }
+    .term-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+    .split { display: grid; min-height: 0; flex: 1; }
+    .splitter { cursor: col-resize; background: var(--line); width: 6px; }
+    .splitter:hover { background: var(--accent); }
+    .block {
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      padding: 8px;
+      border-radius: var(--r);
+    }
+    .block h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+    .name-btn { text-align: left; }
+    .zoom-stage {
+      position: fixed;
+      inset: 0;
+      z-index: 18;
+      background: #0c0a09;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 72px;
+    }
+    .zoom-stage.full { padding-bottom: 0; }
+    .modal-bg {
+      position: fixed;
+      inset: 0;
+      background: rgba(20, 16, 12, .4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 22;
+    }
+    .modal {
+      width: min(440px, calc(100vw - 32px));
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--r);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .sheet {
+      position: fixed;
+      top: 44px;
+      right: 16px;
+      width: min(320px, calc(100vw - 24px));
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: var(--r);
+      box-shadow: var(--shadow);
+      z-index: 21;
+      max-height: calc(100vh - 120px);
+      overflow: auto;
+    }
+    .skin-b .sheet { top: 36px; right: 8px; border-radius: 2px; }
+    .phone-stage {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 24px 96px;
+    }
+    .phone {
+      width: 390px;
+      height: min(780px, calc(100vh - 130px));
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 24px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow);
+    }
+    .phone-bar { padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+    .phone-body { flex: 1; overflow: auto; }
+    .phone-tabbar { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--line); }
+    .phone-tabbar button { border: 0; border-radius: 0; padding: 10px 4px; background: var(--paper); }
+    .phone-tabbar button.active { background: var(--sel); }
+    .banner {
+      margin: 8px 10px;
+      padding: 8px 10px;
+      background: color-mix(in srgb, var(--block) 18%, var(--paper));
+      border: 1px solid color-mix(in srgb, var(--block) 40%, var(--line));
+      border-radius: var(--r);
+    }
+    .cta {
+      margin: 24px 16px;
+      padding: 20px;
+      background: var(--paper);
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--r);
+    }
+    #switcher {
+      position: fixed;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 40;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: #1c1917;
+      color: #fff;
+      border-radius: 999px;
+      padding: 6px 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.25);
+      max-width: calc(100vw - 16px);
+    }
+    #switcher button, #switcher select {
+      background: #292524;
+      color: #fff;
+      border-color: #44403c;
+      border-radius: 999px;
+    }
+    #switcher select { padding: 4px 10px; }
+    #switcher .lab { font-size: 12px; padding: 0 6px; white-space: nowrap; }
+    #inspector {
+      display: none;
+      position: fixed;
+      left: 12px;
+      bottom: 70px;
+      width: 270px;
+      background: #fff;
+      color: #1c1917;
+      border: 1px solid #a8a29e;
+      font-size: 12px;
+      z-index: 25;
+      box-shadow: 0 8px 20px rgba(0,0,0,.08);
+      font-family: var(--sans);
+    }
+    body.phone-vp #inspector { display: none; }
+    #inspector h3 {
+      margin: 0;
+      padding: 6px 8px;
+      font-size: 11px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      background: #1c1917;
+      color: #fff;
+    }
+    #inspector pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+    :fullscreen #switcher, :fullscreen #inspector { display: none; }
+  </style>
+</head>
+<body class="skin-a">
+  <div id="app"></div>
+  <div id="switcher"></div>
+  <div id="inspector"></div>
+  <script>
+    // 三套观感，结构同一套已钉主壳。A 暖纸 / B 夜班 / C 冷静编辑器。
+    const HOSTS = [
+      { id: "local", name: "本机 · MacBook", nameEn: "This Mac", online: true },
+      { id: "mini", name: "书房 Mini", nameEn: "Study Mini", online: true },
+      { id: "office", name: "公司台式机", nameEn: "Office PC", online: false }
+    ];
+    const PROJECTS = [
+      { id: "tb", hostId: "local", name: "agent-taskboard", tracker: "GitHub" },
+      { id: "notes", hostId: "local", name: "garden-notes", tracker: "local markdown" },
+      { id: "shop", hostId: "mini", name: "shop-api", tracker: "GitHub" }
+    ];
+    const RAW = [
+      { id: 1, projectId: "tb", title: "Map: Agent Taskboard v1 规格与关键决策", role: "ready-for-human", claimed: true, parentId: null, blockedBy: [] },
+      { id: 50, projectId: "tb", title: "实现：详情挡住名单", role: "ready-for-agent", claimed: true, parentId: 1, blockedBy: [] },
+      { id: 501, projectId: "tb", title: "子票：挡住它的列表", role: "ready-for-agent", claimed: false, parentId: 50, blockedBy: [] },
+      { id: 502, projectId: "tb", title: "子票：它挡住的列表", role: "ready-for-agent", claimed: false, parentId: 50, blockedBy: [] },
+      { id: 51, projectId: "tb", title: "实现：依赖图", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [50, 53] },
+      { id: 53, projectId: "tb", title: "调研：图画法", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [] },
+      { id: 52, projectId: "tb", title: "实现：空状态三种", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [50] },
+      { id: 60, projectId: "tb", title: "决策：v1 收不收图", role: "ready-for-human", claimed: false, parentId: 1, blockedBy: [51, 52] },
+      { id: 81, projectId: "tb", title: "决策：通知范围", role: "ready-for-human", claimed: false, parentId: 1, blockedBy: [] },
+      { id: 80, projectId: "tb", title: "实现：通知", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [81] },
+      { id: 90, projectId: "tb", title: "实现：设置页", role: "ready-for-agent", claimed: true, parentId: 1, blockedBy: [] },
+      { id: 24, projectId: "tb", title: "实现：Frontier 查询按 Project 过滤", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [] },
+      { id: 12, projectId: "tb", title: "决策：是否坚持 Tauri 2 作为桌面壳", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "2 分钟前", closedRank: 1 },
+      { id: 15, projectId: "tb", title: "决策：主界面信息架构定稿", role: "ready-for-human", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "今天", closedRank: 2 },
+      { id: 22, projectId: "tb", title: "决策：审阅面做到哪一层", role: "ready-for-human", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "40 分钟前", closedRank: 3 },
+      { id: 14, projectId: "tb", title: "原型：主界面信息架构低保真方案", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "昨天", closedRank: 4 },
+      { id: 11, projectId: "tb", title: "决策：Tracker Adapter 统一能力面", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "昨天", closedRank: 5 },
+      { id: 8, projectId: "tb", title: "决策：本机凭据与远端鉴权策略", role: "ready-for-agent", claimed: false, parentId: 1, blockedBy: [], closed: true, closedAgo: "更早", closedRank: 6 },
+      { id: 40, projectId: "notes", title: "整理 ADR 索引", role: "needs-triage", claimed: false, parentId: null, blockedBy: [] },
+      { id: 41, projectId: "notes", title: "写完本周回顾", role: "ready-for-human", claimed: false, parentId: null, blockedBy: [], closed: true, closedAgo: "10 分钟前", closedRank: 1 },
+      { id: 30, projectId: "shop", title: "修支付超时", role: "ready-for-agent", claimed: true, parentId: null, blockedBy: [], stopped: true },
+      { id: 31, projectId: "shop", title: "加退款接口", role: "ready-for-agent", claimed: false, parentId: null, blockedBy: [30] }
+    ];
+    const ISSUES = RAW.map(i => ({ ...i, blocking: [] }));
+    for (const i of ISSUES) {
+      for (const b of i.blockedBy) {
+        const src = ISSUES.find(x => x.id === b);
+        if (src) src.blocking.push(i.id);
+      }
+    }
+    const RUNS = [
+      { id: "r1", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
+      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false },
+      { id: "r5", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "active", isolation: true },
+      { id: "r4", issueId: 12, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
+      { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true }
+    ];
+    const FILES = {
+      r1: [
+        { repo: "agent-taskboard", path: "src/ui/IssueDetail.tsx", add: 48, del: 6, lines: [
+          { n: 112, t: "-  related: [...parent, ...blockers]", k: "del" },
+          { n: 113, t: "+  family: { parent, children }", k: "add" },
+          { n: 114, t: "+  deps: { blockedBy, blocking }", k: "add" }
+        ]},
+        { repo: "agent-taskboard", path: "CONTEXT.md", add: 4, del: 0, lines: [
+          { n: 91, t: "  查看改动：独立能力", k: "" },
+          { n: 92, t: "+ 改动备注：只留看板", k: "add" }
+        ]}
+      ],
+      r2: [
+        { repo: "shop-api", path: "src/pay.rs", add: 18, del: 7, lines: [
+          { n: 80, t: "- timeout(3)", k: "del" },
+          { n: 81, t: "+ timeout(15)", k: "add" }
+        ]}
+      ],
+      r3: [
+        { repo: "agent-taskboard", path: "scratch.md", add: 6, del: 0, lines: [
+          { n: 1, t: "+ 游离 Run：没有 Issue 定位", k: "add" }
+        ]}
+      ],
+      r4: [
+        { repo: "agent-taskboard", path: "docs/adr/0007-tauri2-desktop-shell.md", add: 40, del: 0, lines: [
+          { n: 1, t: "+ 桌面 Client 用 Tauri 2", k: "add" }
+        ]}
+      ],
+      r5: [
+        { repo: "agent-taskboard", path: "src/settings.rs", add: 12, del: 1, lines: [
+          { n: 8, t: "+ recent_n: 5", k: "add" }
+        ]}
+      ]
+    };
+
+    const S = {
+      variant: "A",
+      viewport: "desktop",
+      scenario: "daily",
+      lang: "zh",
+      hostId: "local",
+      projectId: "tb",
+      issueId: 50,
+      runId: "r1",
+      lastRunId: "r3",
+      viewChangesOpen: false,
+      viewBase: "round",
+      fileKey: "src/ui/IssueDetail.tsx",
+      notes: [],
+      noteDraft: "",
+      noteLine: null,
+      termZoom: null,
+      vcPct: 38,
+      recentN: 5,
+      settingsOpen: false,
+      inspect: false,
+      pairing: false,
+      allRunsOpen: false,
+      childFilter: null,
+      phone: "home",
+      frontierWhy: "blocked"
+    };
+
+    const VARIANTS = [
+      { id: "A", name: "暖纸工作台" },
+      { id: "B", name: "夜班操作台" },
+      { id: "C", name: "冷静编辑器" }
+    ];
+
+    const T = {
+      zh: {
+        projects: "这个 Host 上的 Project",
+        register: "登记一个 Project",
+        registerAgain: "再登记一个",
+        boardHint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。",
+        childHint: "只看这些直接子票。仍是看板视图，不是树。",
+        clearFilter: "清除过滤",
+        blocked: "阻塞中",
+        frontier: "Frontier",
+        inRun: "进行中",
+        recent: "最近完成",
+        noItems: "没有",
+        noFrontierBlocked: "没有可领的票。剩下的都还被挡住。",
+        noFrontierClaimed: "没有可领的票。未关的都已被认领。",
+        noFrontierEmpty: "没有可领的票。这个 Project 里没有未关的票。",
+        noRecent: "还没有刚关的",
+        recentNote: "只留最近几张，不是全部已关闭。",
+        autoOff: "自动推进 关",
+        settings: "设置",
+        pair: "配对",
+        allRuns: "全部 Run",
+        viewChanges: "查看改动",
+        zoom: "窗内放大",
+        full: "全屏",
+        lang: "中文",
+        issue: "Issue",
+        family: "属于 / 子票",
+        deps: "挡住它的 / 它挡住的",
+        parent: "父",
+        kids: "直接子票",
+        noParent: "没有父，仍是一等 Issue",
+        noKids: "没有子票",
+        onlyKids: "只看这些子票",
+        blockedBy: "挡住它的",
+        blocking: "它挡住的",
+        noneBlock: "无，可进 Frontier",
+        none: "无",
+        start: "开 Run",
+        seeRun: "看这次 Run",
+        claim: "认领",
+        release: "释放认领",
+        continue: "继续",
+        gh: "在 GitHub 打开",
+        openLocal: "打开本地文件",
+        reveal: "在文件夹中显示",
+        claimed: "已认领",
+        unclaimed: "未认领",
+        closed: "已关闭",
+        unpairedTitle: "这个窗口还没连上 Host",
+        unpairedBody: "本机桌面应用打开时会先拉起本机 Host。也可以只当 Client，去配对另一台。",
+        pairNow: "配对一个 Host",
+        noProjectTitle: "这台 Host 上还没有 Project",
+        noProjectBody: "先登记一个本地目录，并选好 Issue Tracker。",
+        recentN: "最近完成列张数",
+        recentNHelp: "默认 5。只影响最右那一列。不能拖进这一列来关票。",
+        phoneNote: "手机只看态势和开停。查看改动请到电脑。",
+        pickIssue: "点一张 Issue",
+        filterProject: "点 Project 只过滤本板。",
+        ended: "已结束",
+        stopped: "执行已停",
+        free: "游离 · 没有 Issue",
+        collapse: "收起",
+        thisRound: "这一轮",
+        unstaged: "未提交"
+      },
+      en: {
+        projects: "Projects on this Host",
+        register: "Add a Project",
+        registerAgain: "Add another",
+        boardHint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.",
+        childHint: "Direct children only. Still a board, not a tree.",
+        clearFilter: "Clear filter",
+        blocked: "Blocked",
+        frontier: "Frontier",
+        inRun: "In progress",
+        recent: "Recently closed",
+        noItems: "None",
+        noFrontierBlocked: "Nothing to claim. The rest are still blocked.",
+        noFrontierClaimed: "Nothing to claim. Open issues are already claimed.",
+        noFrontierEmpty: "Nothing to claim. This Project has no open issues.",
+        noRecent: "None just closed",
+        recentNote: "Only the last few, not all closed issues.",
+        autoOff: "Auto-advance off",
+        settings: "Settings",
+        pair: "Pair",
+        allRuns: "All Runs",
+        viewChanges: "View changes",
+        zoom: "Expand",
+        full: "Fullscreen",
+        lang: "EN",
+        issue: "Issue",
+        family: "Parent / children",
+        deps: "Blocked by / blocking",
+        parent: "Parent",
+        kids: "Direct children",
+        noParent: "No parent. Still a first-class Issue.",
+        noKids: "No children",
+        onlyKids: "Only these children",
+        blockedBy: "Blocked by",
+        blocking: "Blocking",
+        noneBlock: "None — can enter Frontier",
+        none: "None",
+        start: "Start Run",
+        seeRun: "Open this Run",
+        claim: "Claim",
+        release: "Release claim",
+        continue: "Continue",
+        gh: "Open on GitHub",
+        openLocal: "Open local file",
+        reveal: "Reveal in folder",
+        claimed: "Claimed",
+        unclaimed: "Unclaimed",
+        closed: "Closed",
+        unpairedTitle: "This window is not connected to a Host",
+        unpairedBody: "The desktop app starts the local Host first. You can also pair another machine.",
+        pairNow: "Pair a Host",
+        noProjectTitle: "No Project on this Host yet",
+        noProjectBody: "Register a local folder and pick an Issue Tracker.",
+        recentN: "Recently-closed count",
+        recentNHelp: "Default 5. Only the rightmost column. Dragging here does not close.",
+        phoneNote: "Phone is status + start/stop. View changes on a computer.",
+        pickIssue: "Pick an Issue",
+        filterProject: "A Project only filters this board.",
+        ended: "Ended",
+        stopped: "Run stopped",
+        free: "Loose · no Issue",
+        collapse: "Collapse",
+        thisRound: "This round",
+        unstaged: "Uncommitted"
+      }
+    };
+    function t(k) { return T[S.lang][k]; }
+
+    function qs() { return new URLSearchParams(location.search); }
+    function writeQS() {
+      const u = new URL(location.href);
+      u.searchParams.set("variant", S.variant);
+      u.searchParams.set("viewport", S.viewport);
+      u.searchParams.set("scenario", S.scenario);
+      u.searchParams.set("lang", S.lang);
+      if (S.termZoom) u.searchParams.set("zoom", S.termZoom);
+      else u.searchParams.delete("zoom");
+      if (S.viewChangesOpen) u.searchParams.set("vc", "1");
+      else u.searchParams.delete("vc");
+      history.replaceState({}, "", u);
+    }
+    function applyScenario(sc) {
+      S.scenario = sc;
+      S.childFilter = null;
+      S.settingsOpen = false;
+      S.allRunsOpen = false;
+      S.pairing = false;
+      if (sc === "single") {
+        S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
+      } else if (sc === "stopped") {
+        S.hostId = "mini"; S.projectId = "shop"; S.issueId = 30; S.runId = "r2";
+      } else if (sc === "noproject") {
+        S.hostId = "local"; S.projectId = null; S.issueId = null; S.runId = null;
+      } else if (sc === "emptyfront") {
+        S.hostId = "mini"; S.projectId = "shop"; S.issueId = 31; S.runId = "r2";
+        S.frontierWhy = "blocked";
+      } else if (sc === "unpaired") {
+        S.hostId = null; S.projectId = null; S.issueId = null; S.runId = null;
+      } else {
+        S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
+      }
+    }
+    function loadQS() {
+      const p = qs();
+      S.variant = (p.get("variant") || "A").toUpperCase();
+      if (!VARIANTS.some(v => v.id === S.variant)) S.variant = "A";
+      S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
+      const sc = p.get("scenario");
+      if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
+      if (p.get("lang") === "en") S.lang = "en";
+      const zoom = p.get("zoom");
+      if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
+      if (p.get("vc") === "1") S.viewChangesOpen = true;
+    }
+
+    function host(id) { return HOSTS.find(h => h.id === id); }
+    function project(id) { return PROJECTS.find(p => p.id === id); }
+    function issue(id) { return ISSUES.find(i => i.id === Number(id)); }
+    function run(id) { return RUNS.find(r => r.id === id); }
+    function issueRun(iss) { return RUNS.find(r => r.issueId === iss.id && r.status !== "ended"); }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function shortTitle(text, n) {
+      let t0 = String(text).replace(/^[^：:]*[：:]/, "");
+      t0 = t0.replace(/^Map:\s*/, "");
+      return t0.length > n ? t0.slice(0, n - 1) + "…" : t0;
+    }
+    function hostName(h) { return S.lang === "en" ? h.nameEn : h.name; }
+    function issueLabel(i) { return `#${i.id} ${i.title}`; }
+    function parentOf(i) { return i.parentId ? issue(i.parentId) : null; }
+    function childrenOf(id) { return ISSUES.filter(x => x.parentId === id); }
+    function isTriage(i) { return ["needs-triage", "needs-info", "wontfix"].includes(i.role); }
+    function openBlockers(i) { return i.blockedBy.map(issue).filter(x => x && !x.closed); }
+    function sectionOf(i) {
+      if (i.closed) return "closed";
+      const r = issueRun(i);
+      if (i.claimed || (r && (r.status === "active" || r.status === "stopped"))) return "in-run";
+      if (openBlockers(i).length) return "blocked";
+      if (isTriage(i)) return "triage";
+      return "frontier";
+    }
+    function visibleHosts() {
+      if (S.scenario === "unpaired") return [];
+      if (S.scenario === "single" || S.scenario === "noproject") return HOSTS.filter(h => h.id === "local");
+      return HOSTS;
+    }
+    function visibleProjects() {
+      if (S.scenario === "noproject" || S.scenario === "unpaired") return [];
+      const hs = new Set(visibleHosts().map(h => h.id));
+      let list = PROJECTS.filter(p => hs.has(p.hostId));
+      if (S.scenario === "single") list = list.filter(p => p.id === "tb");
+      return list;
+    }
+    function projectIssues() {
+      return ISSUES.filter(i => i.projectId === S.projectId);
+    }
+    function boardIssues() {
+      let list = projectIssues().filter(i => !i.closed && !isTriage(i));
+      if (S.childFilter) {
+        const kids = new Set(childrenOf(S.childFilter).map(k => k.id));
+        list = list.filter(i => kids.has(i.id));
+      }
+      return list;
+    }
+    function recentClosed() {
+      return projectIssues()
+        .filter(i => i.closed)
+        .sort((a, b) => (a.closedRank || 99) - (b.closedRank || 99))
+        .slice(0, S.recentN);
+    }
+    function dockRuns() {
+      if (!S.hostId) return [];
+      const pids = new Set(visibleProjects().map(p => p.id));
+      return RUNS.filter(r => {
+        if (r.hostId !== S.hostId) return false;
+        if (!pids.has(r.projectId)) return false;
+        if (r.status === "active" || r.status === "stopped") return true;
+        return r.status === "ended" && S.runId === r.id;
+      });
+    }
+    function allHostRuns() {
+      const pids = new Set(visibleProjects().map(p => p.id));
+      return RUNS.filter(r => r.hostId === S.hostId && pids.has(r.projectId));
+    }
+
+    function trackerOpen(i) {
+      const p = project(i.projectId);
+      if (p.tracker === "GitHub") {
+        return `<a class="ext" href="https://github.com/youjiaxing/${p.name}/issues/${i.id}" target="_blank" rel="noreferrer">${t("gh")}</a>`;
+      }
+      return `<button data-act="open-local" data-id="${i.id}">${t("openLocal")}</button>
+              <button data-act="reveal-local" data-id="${i.id}">${t("reveal")}</button>`;
+    }
+    function localPath(i) {
+      return `.scratch/notes/issues/${i.id}-${i.title.slice(0, 12)}.md`;
+    }
+
+    function setIssue(id) {
+      const i = issue(id);
+      if (!i) return;
+      S.issueId = id;
+      S.projectId = i.projectId;
+      S.hostId = project(i.projectId).hostId;
+      const r = RUNS.find(x => x.issueId === i.id);
+      if (r) setRun(r.id, true);
+      S.phone = "issue";
+      render();
+    }
+    function setRun(id, quiet) {
+      const r = run(id);
+      if (!r) return;
+      if (S.runId && S.runId !== id) S.lastRunId = S.runId;
+      S.runId = id;
+      S.hostId = r.hostId;
+      S.projectId = r.projectId;
+      if (r.issueId) S.issueId = r.issueId;
+      const files = FILES[id] || [];
+      S.fileKey = files[0] ? files[0].path : null;
+      S.phone = "run";
+      if (!quiet) render();
+    }
+
+    function render() {
+      writeQS();
+      document.body.className = `skin-${S.variant.toLowerCase()}${S.viewport === "phone" ? " phone-vp" : ""}`;
+      document.getElementById("app").innerHTML =
+        S.viewport === "phone" ? renderPhone() : renderDesktop();
+      document.getElementById("switcher").innerHTML = renderSwitcher();
+      document.getElementById("inspector").style.display = S.inspect && S.viewport !== "phone" ? "block" : "none";
+      document.getElementById("inspector").innerHTML = S.inspect ? renderInspector() : "";
+      bind();
+    }
+
+    function renderSwitcher() {
+      const cur = VARIANTS.find(v => v.id === S.variant);
+      return `
+        <button data-act="prev" title="上一个方案">←</button>
+        <div class="lab">${cur.id} — ${esc(cur.name)}</div>
+        <button data-act="next" title="下一个方案">→</button>
+        <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
+        <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
+        <select data-act="scenario">
+          <option value="daily" ${S.scenario === "daily" ? "selected" : ""}>日常：两台 Host</option>
+          <option value="single" ${S.scenario === "single" ? "selected" : ""}>只有一个 Project</option>
+          <option value="unpaired" ${S.scenario === "unpaired" ? "selected" : ""}>还没连上 Host</option>
+          <option value="noproject" ${S.scenario === "noproject" ? "selected" : ""}>连上了但没有 Project</option>
+          <option value="emptyfront" ${S.scenario === "emptyfront" ? "selected" : ""}>Frontier 为空</option>
+          <option value="stopped" ${S.scenario === "stopped" ? "selected" : ""}>执行已停</option>
+        </select>`;
+    }
+    function renderInspector() {
+      const h = host(S.hostId);
+      const p = project(S.projectId);
+      const i = issue(S.issueId);
+      const r = run(S.runId);
+      const lines = [
+        `方案 ${S.variant} · ${S.viewport} · ${S.scenario}`,
+        `Host: ${h ? h.name : "（无）"}`,
+        `Project: ${p ? p.name : "（无）"}`,
+        `Issue: ${i ? issueLabel(i) : "（无）"}`,
+        `Run: ${r ? r.id + " / " + r.status : "（无）"}`,
+        `查看改动: ${S.viewChangesOpen ? "开" : "收起"}`,
+        `最近完成 N=${S.recentN}`,
+        `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
+        `终端放大: ${S.termZoom || "无"}`
+      ];
+      return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
+    }
+
+    function renderDesktop() {
+      if (S.scenario === "unpaired") return emptyUnpaired();
+      const h = host(S.hostId) || visibleHosts()[0];
+      const r = run(S.runId);
+      const single = S.scenario === "single";
+      return `
+        <div class="stage">
+          <div class="win ${single ? "single" : ""}">
+            <div class="os-chrome">
+              <div class="traffic"><i></i><i></i><i></i></div>
+              <div class="win-title">Agent Taskboard${h ? " — " + esc(hostName(h)) : ""}</div>
+              <span class="grow"></span>
+              <span class="tiny">${S.variant === "A" ? "纸面工作台" : S.variant === "B" ? "SESSION / OPS" : "Workspace"}</span>
+            </div>
+            <div class="topbar">
+              <span class="brand">Agent Taskboard</span>
+              ${visibleHosts().map(hh => `
+                <button class="host-tab ${hh.id === S.hostId ? "active" : ""}" data-act="host" data-id="${hh.id}">
+                  <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
+                </button>`).join("")}
+              <button class="ghost" data-act="pair">+ ${t("pair")}</button>
+              <span class="grow"></span>
+              <span class="chip">${t("autoOff")}</span>
+              <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
+              <button data-act="settings" class="${S.settingsOpen ? "active" : ""}" title="设置入口在这里">⚙ ${t("settings")}</button>
+            </div>
+            <div class="cols">
+              <div class="pane">
+                <div class="hd">${t("projects")}</div>
+                ${projectList()}
+                <div class="pad">
+                  <button data-act="register">${visibleProjects().length ? t("registerAgain") : t("register")}</button>
+                  <div class="tiny" style="margin-top:8px">${t("filterProject")}</div>
+                </div>
+              </div>
+              <div class="pane">${S.scenario === "noproject" ? noProjectMid() : board()}</div>
+              <div class="pane">${issueDetail()}</div>
+            </div>
+            <div class="dock">
+              ${runTabs()}
+              ${termChrome(r)}
+              ${termSplit(r)}
+            </div>
+          </div>
+        </div>
+        ${S.termZoom ? termZoomStage(r) : ""}
+        ${S.pairing ? pairingModal() : ""}
+        ${S.settingsOpen ? settingsSheet() : ""}
+        ${S.allRunsOpen ? allRunsSheet() : ""}`;
+    }
+
+    function projectList() {
+      const list = visibleProjects().filter(p => !S.hostId || p.hostId === S.hostId);
+      if (!list.length) {
+        return `<div class="empty">${t("noProjectTitle")}</div>`;
+      }
+      return list.map(p => `
+        <button class="item ${S.projectId === p.id ? "sel" : ""}" data-act="project" data-id="${p.id}">
+          <div class="t"><b>${esc(p.name)}</b><span class="tag">${esc(p.tracker)}</span></div>
+        </button>`).join("");
+    }
+
+    function issueCard(i, col) {
+      const r = issueRun(i);
+      const ended = RUNS.find(x => x.issueId === i.id && x.status === "ended" && S.runId === x.id);
+      const tags = [];
+      if (i.closed) tags.push(`<span class="tag">${t("closed")}</span>`);
+      if (sectionOf(i) === "blocked") tags.push(`<span class="tag block">${t("blocked")}</span>`);
+      if (r && r.status === "active") tags.push(`<span class="tag run">Run</span>`);
+      if ((r && r.status === "stopped") || i.stopped) tags.push(`<span class="tag stop">${t("stopped")}</span>`);
+      if (ended) tags.push(`<span class="tag">${t("ended")}</span>`);
+      const mark = i.closed ? "·" : sectionOf(i) === "blocked" ? "×" : (r && r.status === "active") ? "●" : "○";
+      if (S.variant === "B") {
+        return `
+          <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
+            <span>${mark}</span>
+            <span class="mono">#${i.id}</span>
+            <span>${esc(shortTitle(i.title, 18))}</span>
+          </button>`;
+      }
+      return `
+        <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
+          <div class="t"><b class="mono">#${i.id}</b><span class="tiny">${esc(i.closedAgo || "")}</span></div>
+          <div>${esc(shortTitle(i.title, 28))}</div>
+          <div class="sub">${tags.join(" ")}</div>
+        </button>`;
+    }
+
+    function frontierEmptyText() {
+      if (S.scenario === "emptyfront") return t("noFrontierBlocked");
+      const list = boardIssues();
+      const open = projectIssues().filter(i => !i.closed && !isTriage(i));
+      if (!open.length) return t("noFrontierEmpty");
+      if (open.every(i => i.claimed || issueRun(i))) return t("noFrontierClaimed");
+      if (open.every(i => openBlockers(i).length || i.claimed || issueRun(i))) return t("noFrontierBlocked");
+      return t("noItems");
+    }
+
+    function board() {
+      const list = boardIssues();
+      const rec = recentClosed();
+      const cols = [
+        ["blocked", t("blocked"), list.filter(i => sectionOf(i) === "blocked")],
+        ["frontier", t("frontier"), list.filter(i => sectionOf(i) === "frontier")],
+        ["in-run", t("inRun"), list.filter(i => sectionOf(i) === "in-run")]
+      ];
+      const hint = S.childFilter ? t("childHint") : t("boardHint");
+      return `
+        <div class="tiny pad">${esc(hint)}
+          ${S.childFilter ? `<button data-act="clear-filter">${t("clearFilter")}</button>` : ""}
+        </div>
+        <div class="lanes">
+          ${cols.map(([key, name, items]) => `
+            <div class="col ${key}">
+              <div class="col-hd">${name} <span>${items.length}</span></div>
+              ${items.map(i => issueCard(i, key)).join("") || `<div class="empty">${key === "frontier" ? frontierEmptyText() : t("noItems")}</div>`}
+            </div>`).join("")}
+          <div class="col recent">
+            <div class="col-hd">${t("recent")} <span>${rec.length}/${S.recentN}</span></div>
+            ${rec.map(i => issueCard(i, "recent")).join("") || `<div class="empty">${t("noRecent")}</div>`}
+            <div class="tiny pad">${t("recentNote")}</div>
+          </div>
+        </div>`;
+    }
+
+    function noProjectMid() {
+      return `
+        <div class="cta stack">
+          <b>${t("noProjectTitle")}</b>
+          <div class="muted">${t("noProjectBody")}</div>
+          <div><button class="primary" data-act="register">${t("register")}</button></div>
+        </div>`;
+    }
+
+    function nameBtn(i) {
+      if (!i) return "";
+      const extra = i.closed ? " · " + t("closed") : sectionOf(i) === "blocked" ? " · " + t("blocked") : "";
+      return `<button class="name-btn" data-act="issue" data-id="${i.id}">#${i.id} ${esc(shortTitle(i.title, 18))}${extra}</button>`;
+    }
+
+    function issueDetail() {
+      const i = issue(S.issueId);
+      if (!i) return `<div class="empty">${t("pickIssue")}</div>`;
+      const p = project(i.projectId);
+      const par = parentOf(i);
+      const kids = childrenOf(i.id);
+      const blockers = i.blockedBy.map(issue).filter(Boolean);
+      const blocks = i.blocking.map(issue).filter(Boolean);
+      const r = issueRun(i) || RUNS.find(x => x.issueId === i.id && S.runId === x.id);
+      return `
+        <div class="hd">${t("issue")}</div>
+        <div class="pad stack">
+          <div><b>${esc(issueLabel(i))}</b></div>
+          <div class="tiny">${esc(hostName(host(p.hostId)))} / ${esc(p.name)} · ${esc(p.tracker)}</div>
+          <div class="row">
+            <span class="tag">${esc(i.role)}</span>
+            ${i.closed ? `<span class="tag">${t("closed")}</span>` : i.claimed ? `<span class="tag">${t("claimed")}</span>` : `<span class="tag">${t("unclaimed")}</span>`}
+          </div>
+          <div class="row">
+            ${r ? `<button class="primary" data-act="run" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
+            ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
+            ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
+            ${trackerOpen(i)}
+          </div>
+          <div class="block">
+            <h4>${t("family")}</h4>
+            <div class="tiny">${t("parent")}</div>
+            ${par ? nameBtn(par) : `<span class="muted">${t("noParent")}</span>`}
+            <div class="tiny" style="margin-top:6px">${t("kids")}</div>
+            ${kids.length ? kids.map(nameBtn).join(" ") : `<span class="muted">${t("noKids")}</span>`}
+            ${kids.length ? `<div class="row" style="margin-top:6px"><button data-act="child-filter" data-id="${i.id}">${t("onlyKids")}</button></div>` : ""}
+          </div>
+          <div class="block">
+            <h4>${t("deps")}</h4>
+            <div class="tiny">${t("blockedBy")}</div>
+            ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">${t("noneBlock")}</span>`}
+            <div class="tiny" style="margin-top:6px">${t("blocking")}</div>
+            ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">${t("none")}</span>`}
+          </div>
+        </div>`;
+    }
+
+    function runTabs() {
+      const groups = {};
+      for (const r of dockRuns()) (groups[r.projectId] ||= []).push(r);
+      return `
+        <div class="tabs">
+          ${Object.keys(groups).map(pid => `
+            <div class="grp">
+              <div class="gname">${esc(project(pid).name)}</div>
+              ${groups[pid].map(r => {
+                const i = r.issueId ? issue(r.issueId) : null;
+                const label = i ? `#${i.id} ${shortTitle(i.title, 10)}` : "#— 游离";
+                return `<button class="${S.runId === r.id ? "sel" : ""}" data-act="run" data-id="${r.id}">
+                  <span class="dot ${r.status === "active" ? "busy" : r.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
+                </button>`;
+              }).join("")}
+            </div>`).join("") || `<div class="gname muted pad">${S.hostId ? "这条 Host 上没有要打交道的 Run" : ""}</div>`}
+          <span class="grow"></span>
+          <button data-act="all-runs">${t("allRuns")}</button>
+        </div>`;
+    }
+
+    function runIdentity(r) {
+      if (!r) return `<span class="muted">—</span>`;
+      const i = r.issueId ? issue(r.issueId) : null;
+      const p = project(r.projectId);
+      const h = host(r.hostId);
+      const issueBit = i
+        ? `<button data-act="issue" data-id="${i.id}"><span class="who">#${i.id}</span> ${esc(shortTitle(i.title, 20))}</button>`
+        : `<span class="tag">${t("free")}</span>`;
+      return `${esc(hostName(h))} <span class="muted">/</span>
+        <button data-act="project" data-id="${p.id}">${esc(p.name)}</button>
+        <span class="muted">/</span> ${issueBit}
+        <span class="muted">· ${esc(r.agent)}${r.isolation ? " · 隔离" : ""}</span>`;
+    }
+
+    function termChrome(r) {
+      return `
+        <div class="ident">
+          ${runIdentity(r)}
+          <span class="grow"></span>
+          <button data-act="swap-run" title="最近切过的 Run">上一条</button>
+          <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">${t("viewChanges")}</button>
+          <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">${t("zoom")}</button>
+          <button data-act="term-zoom" data-id="full" class="${S.termZoom === "full" ? "active" : ""}">${t("full")}</button>
+        </div>`;
+    }
+
+    function termText(r) {
+      if (!r) return `<span class="dim">没有选中的 Run。终端只画 Host 上那份 PTY。</span>`;
+      const i = r.issueId ? issue(r.issueId) : null;
+      if (r.status === "stopped") {
+        return `<span class="dim">${r.agent}  ${project(r.projectId).name}  ${i ? "#"+i.id : "游离"}</span>
+<span class="bad">× ${t("stopped")}</span>  <span class="dim">认领还在。优先恢复原生会话。</span>
+
+<button data-act="fake-continue">${t("continue")}</button>  <button data-act="fake-release">${t("release")}</button>`;
+      }
+      if (r.status === "ended") {
+        return `<span class="dim">${r.agent}  ${i ? "#"+i.id : ""}</span>
+<span class="dim">这条已经结束。留在条上只是因为你正在看改动。</span>`;
+      }
+      return `<span class="dim">${r.agent} · ${project(r.projectId).name} · ${i ? "#"+i.id+" "+shortTitle(i.title, 24) : t("free")}</span>
+<span class="ok">● 活跃</span>  <span class="dim">${r.isolation ? "隔离执行目录" : "Project 主目录"} · PTY 在 ${hostName(host(r.hostId))}</span>
+
+<span class="hi">› 官方交互 TUI（假的）</span>
+  把父子和挡住拆开，点名字只换详情。
+  干活中也能打开旁边的查看改动。`;
+    }
+
+    function viewChangesPanel(r) {
+      if (!r) return `<div class="empty">先点一次 Run</div>`;
+      const files = FILES[r.id] || [];
+      const file = files.find(f => f.path === S.fileKey) || files[0];
+      const notesHere = S.notes.filter(n => n.runId === r.id);
+      return `
+        <div class="hd">
+          ${t("viewChanges")}
+          <span class="row">
+            <button data-act="base" data-id="round" class="${S.viewBase === "round" ? "active" : ""}">${t("thisRound")}</button>
+            <button data-act="base" data-id="unstaged" class="${S.viewBase === "unstaged" ? "active" : ""}">${t("unstaged")}</button>
+            <button class="ghost" data-act="toggle-vc">${t("collapse")}</button>
+          </span>
+        </div>
+        <div class="pad stack">
+          ${files.map(f => `
+            <button class="item ${file && file.path === f.path ? "sel" : ""}" data-act="file" data-id="${esc(f.path)}">
+              <div class="t"><b>${esc(f.path)}</b><span class="tiny">+${f.add} −${f.del}</span></div>
+              <div class="sub">${esc(f.repo)}</div>
+            </button>`).join("")}
+          ${file ? `
+            <div class="diff">
+              ${file.lines.map(ln => `
+                <div class="ln ${ln.k}">
+                  <span class="muted">${ln.n}</span>
+                  <span>${esc(ln.t)}</span>
+                  <button data-act="note-line" data-id="${ln.n}">注</button>
+                </div>`).join("")}
+            </div>` : `<div class="empty">这个目录里没有 git。</div>`}
+          ${S.noteLine ? `
+            <div class="stack">
+              <div class="tiny">${esc(file.repo)} · ${esc(file.path)}:${S.noteLine}</div>
+              <textarea data-act="note-draft" rows="2">${esc(S.noteDraft)}</textarea>
+              <button class="primary" data-act="save-note">留下</button>
+            </div>` : ""}
+          ${notesHere.map((n, idx) => `<div class="note-pill">${esc(n.file)}:${n.line} — ${esc(n.text)} <button data-act="del-note" data-id="${idx}">×</button></div>`).join("")}
+        </div>`;
+    }
+
+    function termSplit(r) {
+      if (!S.viewChangesOpen) return `<div class="term-wrap"><div class="term">${termText(r)}</div></div>`;
+      return `
+        <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px ${S.vcPct}%">
+          <div class="term-wrap"><div class="term">${termText(r)}</div></div>
+          <div class="splitter" data-act="drag-vc"></div>
+          <div class="pane">${viewChangesPanel(r)}</div>
+        </div>`;
+    }
+
+    function termZoomStage(r) {
+      return `
+        <div class="zoom-stage ${S.termZoom === "full" ? "full" : ""}">
+          ${termChrome(r)}
+          ${termSplit(r)}
+        </div>`;
+    }
+
+    function emptyUnpaired() {
+      return `
+        <div class="stage">
+          <div class="win">
+            <div class="os-chrome">
+              <div class="traffic"><i></i><i></i><i></i></div>
+              <div class="win-title">Agent Taskboard</div>
+            </div>
+            <div class="empty-strong stack">
+              <div class="brand" style="font-size:22px">${t("unpairedTitle")}</div>
+              <p class="muted">${t("unpairedBody")}</p>
+              <div><button class="primary" data-act="pair">${t("pairNow")}</button></div>
+            </div>
+          </div>
+        </div>
+        ${S.pairing ? pairingModal() : ""}`;
+    }
+
+    function pairingModal() {
+      return `
+        <div class="modal-bg" data-act="close-pair">
+          <div class="modal" onclick="event.stopPropagation()">
+            <b>${t("pair")}</b>
+            <div class="tiny">不是登录。Host 出示地址 + 一次性码。</div>
+            <div class="stack">
+              <div class="mono">http://100.86.12.4:7420</div>
+              <div class="mono">7K2M-QP9C</div>
+            </div>
+            <div class="row">
+              <button class="primary" data-act="fake-paired">假装已扫</button>
+              <button data-act="close-pair">取消</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function settingsSheet() {
+      return `
+        <div class="sheet">
+          <div class="hd">${t("settings")}<button class="ghost" data-act="settings">×</button></div>
+          <div class="pad stack">
+            <div class="tiny">这里只标入口。不必做成完整设置页。</div>
+            <b>${t("recentN")}</b>
+            <div class="row">
+              <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
+              <span class="mono" data-role="n-val">${S.recentN}</span>
+            </div>
+            <div class="tiny">${t("recentNHelp")}</div>
+          </div>
+        </div>`;
+    }
+
+    function allRunsSheet() {
+      const groups = {};
+      for (const r of allHostRuns()) (groups[r.projectId] ||= []).push(r);
+      return `
+        <div class="sheet">
+          <div class="hd">${t("allRuns")}<button class="ghost" data-act="all-runs">×</button></div>
+          ${Object.keys(groups).map(pid => `
+            <div class="hd">${esc(project(pid).name)}</div>
+            ${groups[pid].map(r => {
+              const i = r.issueId ? issue(r.issueId) : null;
+              return `<button class="item ${S.runId === r.id ? "sel" : ""}" data-act="run" data-id="${r.id}">
+                <div class="t"><b>${i ? "#"+i.id+" "+shortTitle(i.title, 16) : t("free")}</b><span class="tag">${r.status}</span></div>
+                <div class="sub">${esc(r.agent)}</div>
+              </button>`;
+            }).join("")}
+          `).join("")}
+        </div>`;
+    }
+
+    function renderPhone() {
+      if (S.scenario === "unpaired") {
+        return `<div class="phone-stage"><div class="phone">
+          <div class="phone-bar"><b>Client</b></div>
+          <div class="phone-body pad stack">
+            <b>${t("unpairedTitle")}</b>
+            <div class="muted">${t("unpairedBody")}</div>
+            <button class="primary" data-act="pair">${t("pairNow")}</button>
+          </div>
+        </div>${S.pairing ? pairingModal() : ""}</div>`;
+      }
+      const body = S.phone === "issue" ? phoneIssue() : S.phone === "run" ? phoneRun() : phoneHome();
+      return `
+        <div class="phone-stage">
+          <div class="phone">
+            <div class="phone-bar">
+              ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
+              <div class="tiny">${t("phoneNote")}</div>
+            </div>
+            <div class="phone-body">${body}</div>
+            <div class="phone-tabbar">
+              <button class="${S.phone === "home" ? "active" : ""}" data-act="phone" data-id="home">态势</button>
+              <button class="${S.phone === "run" ? "active" : ""}" data-act="phone" data-id="run">Run</button>
+              <button data-act="pair">${t("pair")}</button>
+            </div>
+          </div>
+          ${S.pairing ? pairingModal() : ""}
+        </div>`;
+    }
+    function phoneHome() {
+      const list = S.projectId ? boardIssues().concat(recentClosed()) : [];
+      return `
+        <div class="pad tiny">${visibleHosts().map(h => hostName(h)).join(" · ")}</div>
+        ${visibleProjects().map(p => `
+          <button class="item ${S.projectId === p.id ? "sel" : ""}" data-act="project" data-id="${p.id}">${esc(p.name)}</button>
+        `).join("")}
+        <div class="hd">${t("frontier")}</div>
+        ${list.map(i => issueCard(i)).join("") || `<div class="empty">${t("noItems")}</div>`}`;
+    }
+    function phoneIssue() {
+      return issueDetail() + `<div class="banner">${t("phoneNote")}</div>`;
+    }
+    function phoneRun() {
+      const r = run(S.runId) || dockRuns()[0];
+      return `
+        <div class="hd">Run</div>
+        <div class="term" style="min-height:220px">${termText(r)}</div>
+        <div class="banner">${t("phoneNote")}</div>`;
+    }
+
+    function bind() {
+      const sw = document.getElementById("switcher");
+      sw.onclick = (e) => {
+        const b = e.target.closest("[data-act]");
+        if (!b) return;
+        if (b.dataset.act === "prev" || b.dataset.act === "next") {
+          const i = VARIANTS.findIndex(v => v.id === S.variant);
+          S.variant = VARIANTS[(i + (b.dataset.act === "next" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+          render();
+        }
+        if (b.dataset.act === "vp") {
+          S.viewport = S.viewport === "desktop" ? "phone" : "desktop";
+          render();
+        }
+        if (b.dataset.act === "inspect") {
+          S.inspect = !S.inspect;
+          render();
+        }
+      };
+      sw.onchange = (e) => {
+        if (e.target.dataset.act === "scenario") {
+          applyScenario(e.target.value);
+          render();
+        }
+      };
+
+      const app = document.getElementById("app");
+      app.onclick = (e) => {
+        const b = e.target.closest("[data-act]");
+        if (!b) return;
+        const act = b.dataset.act;
+        const id = b.dataset.id;
+        if (act === "host") {
+          S.hostId = id;
+          const first = visibleProjects().find(p => p.hostId === id);
+          S.projectId = first ? first.id : null;
+          const firstIssue = ISSUES.find(i => i.projectId === S.projectId && !i.closed);
+          if (firstIssue) S.issueId = firstIssue.id;
+          const firstRun = RUNS.find(r => r.hostId === id && r.status !== "ended");
+          if (firstRun) S.runId = firstRun.id;
+          render();
+        }
+        if (act === "project") { S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; render(); }
+        if (act === "issue") setIssue(Number(id));
+        if (act === "run") { S.allRunsOpen = false; setRun(id); }
+        if (act === "toggle-vc") { S.viewChangesOpen = !S.viewChangesOpen; render(); }
+        if (act === "base") { S.viewBase = id; render(); }
+        if (act === "file") { S.fileKey = id; S.noteLine = null; render(); }
+        if (act === "note-line") { S.noteLine = Number(id); render(); }
+        if (act === "save-note") {
+          const r = run(S.runId);
+          const files = FILES[r.id] || [];
+          const file = files.find(f => f.path === S.fileKey) || files[0];
+          if (file && S.noteLine && S.noteDraft.trim()) {
+            S.notes.push({ runId: r.id, repo: file.repo, file: file.path, line: S.noteLine, text: S.noteDraft.trim() });
+            S.noteDraft = "";
+            S.noteLine = null;
+          }
+          render();
+        }
+        if (act === "del-note") { S.notes.splice(Number(id), 1); render(); }
+        if (act === "pair") { S.pairing = true; render(); }
+        if (act === "close-pair") { S.pairing = false; render(); }
+        if (act === "fake-paired") { S.pairing = false; S.scenario = "daily"; applyScenario("daily"); render(); }
+        if (act === "phone") { S.phone = id; render(); }
+        if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
+        if (act === "all-runs") { S.allRunsOpen = !S.allRunsOpen; S.settingsOpen = false; render(); }
+        if (act === "lang") { S.lang = S.lang === "zh" ? "en" : "zh"; render(); }
+        if (act === "child-filter") { S.childFilter = Number(id); render(); }
+        if (act === "clear-filter") { S.childFilter = null; render(); }
+        if (act === "term-zoom") { setTermZoom(id || null); return; }
+        if (act === "swap-run") {
+          if (S.lastRunId) setRun(S.lastRunId);
+          return;
+        }
+        if (act === "register") { alert("原型：登记入口在这里。不真的加 Project。"); }
+        if (act === "fake-start" || act === "fake-claim" || act === "fake-release" || act === "fake-continue") {
+          alert("原型：只占位，不打到 Tracker / Host。");
+        }
+        if (act === "open-local") alert("原型：打开\n" + localPath(issue(Number(id))));
+        if (act === "reveal-local") alert("原型：显示\n" + localPath(issue(Number(id))));
+      };
+      app.oninput = (e) => {
+        if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
+        if (e.target.dataset.act === "set-n") {
+          S.recentN = Number(e.target.value);
+          const label = app.querySelector("[data-role=n-val]");
+          if (label) label.textContent = String(S.recentN);
+        }
+      };
+      app.onchange = (e) => {
+        if (e.target.dataset.act === "set-n") {
+          S.recentN = Number(e.target.value);
+          render();
+        }
+      };
+      const splitHandle = document.querySelector("[data-act=drag-vc]");
+      if (splitHandle) {
+        splitHandle.onmousedown = (e) => {
+          e.preventDefault();
+          const split = splitHandle.parentElement;
+          const move = (ev) => {
+            const rect = split.getBoundingClientRect();
+            S.vcPct = Math.min(70, Math.max(18, ((rect.right - ev.clientX) / rect.width) * 100));
+            split.style.gridTemplateColumns = `minmax(160px,1fr) 6px ${S.vcPct}%`;
+          };
+          const up = () => {
+            window.removeEventListener("mousemove", move);
+            window.removeEventListener("mouseup", up);
+          };
+          window.addEventListener("mousemove", move);
+          window.addEventListener("mouseup", up);
+        };
+      }
+    }
+
+    function setTermZoom(id) {
+      S.termZoom = id || null;
+      const want = S.termZoom === "full";
+      if (want && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+      if (!want && document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+      render();
+    }
+
+    document.addEventListener("fullscreenchange", () => {
+      if (!document.fullscreenElement && S.termZoom === "full") {
+        S.termZoom = null;
+        render();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      const el = e.target;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.key === "Escape" && S.termZoom && S.termZoom !== "full") {
+        setTermZoom(null);
+        return;
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        const i = VARIANTS.findIndex(v => v.id === S.variant);
+        S.variant = VARIANTS[(i + (e.key === "ArrowRight" ? 1 : VARIANTS.length - 1)) % VARIANTS.length].id;
+        render();
+      }
+    });
+
+    loadQS();
+    render();
+  </script>
+</body>
+</html>
