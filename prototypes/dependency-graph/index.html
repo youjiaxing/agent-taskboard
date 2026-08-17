@@ -195,6 +195,7 @@
       color: #f5f5f4;
       font-size: 12px;
     }
+    .ident button { background: #44403c; color: #fff; border-color: #57534e; }
     .ident .who { color: #fdba74; font-weight: 650; }
     #switcher {
       position: fixed;
@@ -283,8 +284,8 @@
     .legend { font-size: 11px; color: var(--muted); }
     .flow {
       display: grid;
-      grid-template-columns: 1fr 18px 1fr;
-      gap: 0;
+      grid-template-columns: 1fr 16px minmax(110px, .9fr) 16px 1fr;
+      gap: 4px;
       align-items: start;
     }
     .flow .arrow {
@@ -299,7 +300,6 @@
       border: 2px solid var(--accent);
       background: var(--sel);
       padding: 8px;
-      margin: 8px 0;
     }
     .phone-stage {
       height: 100%;
@@ -459,7 +459,7 @@
       childFilter: null,
       chainFilter: null,
       midMode: "board",
-      cam: { x: 24, y: 24, k: 1 },
+      cam: { x: 24, y: 24, k: 1, user: false },
       lastAct: "打开原型"
     };
 
@@ -475,6 +475,10 @@
       u.searchParams.set("variant", S.variant);
       u.searchParams.set("viewport", S.viewport);
       u.searchParams.set("scenario", S.scenario);
+      if (S.graphOpen) u.searchParams.set("graph", "1");
+      else u.searchParams.delete("graph");
+      if (S.midMode === "graph") u.searchParams.set("mid", "graph");
+      else u.searchParams.delete("mid");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -485,7 +489,7 @@
       S.hops = 1;
       S.hideClosed = false;
       S.onlyConnected = sc === "large";
-      S.cam = { x: 24, y: 24, k: sc === "large" ? 0.7 : 1 };
+      S.cam = { x: 24, y: 24, k: sc === "large" ? 0.7 : 1, user: false };
       if (sc === "large") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 280; S.runId = "r3"; S.midMode = S.variant === "B" ? "graph" : "board";
       } else if (sc === "lonely") {
@@ -503,6 +507,8 @@
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "large", "lonely", "shop"].includes(sc)) applyScenario(sc);
+      if (p.get("graph") === "1") S.graphOpen = true;
+      if (p.get("mid") === "graph") S.midMode = "graph";
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -797,44 +803,52 @@
           </div>
           <div class="block">
             <h4>挡住它的 / 它挡住的 · 日常主路径</h4>
-            <div class="tiny">挡住它的</div>
-            ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">无，可进 Frontier</span>`}
-            <div class="tiny" style="margin-top:6px">它挡住的</div>
-            ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">无</span>`}
-            <div class="tiny" style="margin-top:8px">点名字只换详情，不改四列。</div>
-            <div class="row" style="margin-top:6px">${graphEntry}</div>
+            ${S.variant === "C" ? renderFlow(i, blockers, blocks) : `
+              <div class="tiny">挡住它的</div>
+              ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">无，可进 Frontier</span>`}
+              <div class="tiny" style="margin-top:6px">它挡住的</div>
+              ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">无</span>`}
+              <div class="tiny" style="margin-top:8px">点名字只换详情，不改四列。</div>
+              <div class="row" style="margin-top:6px">${graphEntry}</div>`}
           </div>
-          ${S.variant === "C" ? renderFlow(i) : ""}
         </div>`;
     }
 
-    function renderFlow(i) {
-      const up = i.blockedBy.map(issue).filter(Boolean).filter(x => !S.hideClosed || !x.closed);
-      const down = i.blocking.map(issue).filter(Boolean).filter(x => !S.hideClosed || !x.closed);
-      const cap = 6;
-      const show = (arr) => {
+    function renderFlow(i, blockers, blocks) {
+      const up = blockers.filter(x => !S.hideClosed || !x.closed);
+      const down = blocks.filter(x => !S.hideClosed || !x.closed);
+      const cap = 5;
+      const show = (arr, empty) => {
         const head = arr.slice(0, cap);
         const more = arr.length - head.length;
         return `
-          ${head.map(x => `<div style="margin-bottom:4px">${nameBtn(x)}</div>`).join("") || `<div class="muted">无</div>`}
+          ${head.map(x => `<div style="margin-bottom:4px">${nameBtn(x)}</div>`).join("") || `<div class="muted">${empty}</div>`}
           ${more > 0 ? `<div class="tiny">还有 ${more} 张</div>` : ""}`;
       };
-      const closedUp = i.blockedBy.map(issue).filter(x => x && x.closed).length;
-      const closedDown = i.blocking.map(issue).filter(x => x && x.closed).length;
+      const closedN = blockers.filter(x => x.closed).length + blocks.filter(x => x.closed).length;
       return `
-        <div class="block">
-          <h4>定向邻域 · 仍不是归属树</h4>
-          <div class="row">
-            <button data-act="toggle-closed" class="${S.hideClosed ? "active" : ""}">${S.hideClosed ? "已关收着" : "已关摊开"}</button>
-            <button data-act="chain-filter">只看这条挡住链</button>
+        <div class="tiny">不是图画，是左挡住 · 中当前 · 右被它挡住。点名字只换详情。</div>
+        <div class="row" style="margin:6px 0">
+          <button data-act="toggle-closed" class="${S.hideClosed ? "active" : ""}">${S.hideClosed ? "已关收着" : "已关摊开"}</button>
+          <button data-act="chain-filter">只看这条挡住链</button>
+        </div>
+        <div class="tiny" style="margin-bottom:6px">已关 ${closedN} 张${S.hideClosed ? "已收起" : "摊开着"}。</div>
+        <div class="flow">
+          <div>
+            <div class="tiny">挡住它的</div>
+            ${show(up, "无，可进 Frontier")}
           </div>
-          <div class="tiny" style="margin:6px 0">左边挡住它 · 右边它挡住。已关 ${closedUp + closedDown} 张${S.hideClosed ? "已收起" : ""}。</div>
-          <div class="flow">
-            <div>${show(up)}</div>
-            <div class="arrow">→</div>
-            <div>${show(down)}</div>
+          <div class="arrow">→</div>
+          <div class="here">
+            <div class="tiny">当前</div>
+            <b>#${i.id}</b>
+            <div>${esc(shortTitle(i.title, 16))}</div>
           </div>
-          <div class="here"><b>当前 #${i.id}</b> ${esc(shortTitle(i.title, 24))}</div>
+          <div class="arrow">→</div>
+          <div>
+            <div class="tiny">它挡住的</div>
+            ${show(down, "无")}
+          </div>
         </div>`;
     }
 
@@ -857,6 +871,11 @@
       const ids = graphIds();
       if (!ids.length) return `<div class="empty">这个范围里没有可画的 Issue。</div>`;
       const { pos, width, height } = layoutDag(ids);
+      const focus = pos[S.issueId];
+      if (focus && !S.cam.user) {
+        S.cam.x = 380 - (focus.x + focus.w / 2) * S.cam.k;
+        S.cam.y = 180 - (focus.y + focus.h / 2) * S.cam.k;
+      }
       const edges = [];
       for (const id of ids) {
         const iss = issue(id);
@@ -1083,6 +1102,7 @@
           const i = issue(id);
           if (!i) return;
           S.issueId = i.id;
+          S.cam.user = false;
           if (S.variant === "A") {
             S.lastAct = `图节点 #${i.id} · 只换详情，四列不动`;
           } else {
@@ -1101,16 +1121,17 @@
           render();
         }
         if (act === "noop") return;
-        if (act === "open-graph") { S.graphOpen = true; S.lastAct = "从详情打开邻域浮层"; render(); }
+        if (act === "open-graph") { S.graphOpen = true; S.cam.user = false; S.lastAct = "从详情打开邻域浮层"; render(); }
         if (act === "close-graph") { S.graphOpen = false; S.lastAct = "关上浮层，四列还在"; render(); }
         if (act === "mid-mode") {
           S.midMode = id;
+          S.cam.user = false;
           S.lastAct = id === "graph" ? "中间切到整板图" : "中间回到四列";
           render();
         }
-        if (act === "hops") { S.hops = Number(id); S.lastAct = `邻域 ${S.hops} 层`; render(); }
-        if (act === "toggle-closed") { S.hideClosed = !S.hideClosed; S.lastAct = S.hideClosed ? "藏起已关" : "画出已关"; render(); }
-        if (act === "toggle-connected") { S.onlyConnected = !S.onlyConnected; S.lastAct = S.onlyConnected ? "只看相连" : "全 Project"; render(); }
+        if (act === "hops") { S.hops = Number(id); S.cam.user = false; S.lastAct = `邻域 ${S.hops} 层`; render(); }
+        if (act === "toggle-closed") { S.hideClosed = !S.hideClosed; S.cam.user = false; S.lastAct = S.hideClosed ? "藏起已关" : "画出已关"; render(); }
+        if (act === "toggle-connected") { S.onlyConnected = !S.onlyConnected; S.cam.user = false; S.lastAct = S.onlyConnected ? "只看相连" : "全 Project"; render(); }
         if (act === "child-filter") {
           S.childFilter = Number(id);
           S.chainFilter = null;
@@ -1146,6 +1167,7 @@
           if (!drag) return;
           S.cam.x = drag.cx + (e.clientX - drag.x);
           S.cam.y = drag.cy + (e.clientY - drag.y);
+          S.cam.user = true;
           const g = svg.querySelector("g");
           if (g) g.setAttribute("transform", `translate(${S.cam.x} ${S.cam.y}) scale(${S.cam.k})`);
         });
