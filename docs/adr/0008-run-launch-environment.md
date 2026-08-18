@@ -28,4 +28,4 @@ macOS 用 `$SHELL`，登录 + 交互（`.zprofile` + `.zshrc` 一类），设超
 - `/to-spec` 按「启动环境 ≠ Host 环境」写探测和 spawn：同一套规则，目标目录随有没有 Project / 是否隔离而变。
 - 完成信号仍看 Agent 进程退出：PTY 里没有长期活着的用户壳。
 - 实现时取样必须能从带噪声的壳输出里抽出环境，并给超时；具体 TTL / 超时秒数不在本 ADR 钉死。
-- 设置与数据存放位置仍未钉；PATH 前缀作为 Host 设置项，落点跟那条走。
+- PATH 前缀是 Host 数据，落在 `appLocalDataDir` 的 `host/` 树，见 [设置与数据存放位置](./0012-settings-and-data-location.md)。
