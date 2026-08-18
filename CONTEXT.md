@@ -74,11 +74,15 @@ _Avoid_: Worktree（实现机制，说明里要写明，不当领域词）, Work
 
 **执行已停**:
 Issue 仍被认领，但没有活跃 Run，且最近一次绑定 Run 是异常结束、被停止或 Host 崩溃后捡回。仍算出局于 Frontier（认领还在），必须能继续（优先恢复原生会话）或释放认领。
-_Avoid_: Failed（那是 Run 结束原因）, Blocked（那是依赖未完成）
+_Avoid_: Failed（那是 Run 结束原因）, Blocked（那是依赖未完成）, 等待操作（那时 Run 仍活跃）
 
 **自动推进**:
 可选能力（默认关）：当前 Issue 已关且状态正常、待确认未被否决之后，自动认领下一张 `ready-for-agent` 并开 Run。Host 冷启动后默认不推进；另有「冷启动后恢复自动推进」（默认关，且仅当自动推进开着才生效），到点后等 N 秒（默认 60）再按规则推进。不是默认无人值守编排器。
 _Avoid_: 编排器, 心跳认领, 依赖完成即开跑, 启动 Host 就开工
+
+**等待操作**:
+Run 仍活跃，但 Agent 因权限确认、提问或选项选择而等待用户操作。不是「执行已停」，也不是被 Dependency 阻塞。
+_Avoid_: 在等人, 等待输入（易误解为只等文字）, 需人工介入（像异常升级）, Blocked
 
 **待确认**:
 自动推进里的一段短等待：当前票已关，并且状态正常（看见 SessionEnd、没有 StopFailure、进程正常退出）之后，倒计时 60 秒内人可以否决。无人否决才领下一张 `ready-for-agent`。grilling / prototype / needs-info / ready-for-human / needs-triage 不进自动池。不是验收，也不强迫人先打开查看改动。
