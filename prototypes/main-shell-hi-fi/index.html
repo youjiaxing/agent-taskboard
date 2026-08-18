@@ -3,12 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>原型 · 默认主壳高保真观感</title>
+  <link rel="icon" href="data:," />
+  <title>原型 · 三方向对照</title>
   <!--
     一次性原型，不是产品。
-    骨架同一套纸面书桌。清单：暖纸（仅白天）/ 素纸 / 素纸夜间。
-    没有暖纸夜间。顶栏深色一律切到素纸夜间；浅色回到上次用的浅色。
-    ?theme=warm-light|plain-light|plain-dark
+    三个方向：
+      codex-map  Codex 原貌映射（动了结构）：左侧原生栏、大片白主区、底部悬浮操作面。
+                Issue 仍是工作单元；Host/Project、四列、Issue 详情、官方 CLI Embedded
+                Terminal 都可达；不搬会话或聊天主表面。
+      codex      Codex 气质（结构未改 #15）：只借截图气质。
+      paper      纸面精修（结构未改 #15）：保留现状。
+    ?direction=codex-map|codex|paper
   -->
   <style>
     :root {
@@ -42,7 +47,7 @@
     }
     .mono { font-family: var(--mono); }
 
-    /* 同一套骨架。加主题 = 再加一份 token。 */
+    /* 两个方向复用原型已有的浅色 token；这不是主题清单决策。 */
     .theme-warm-light {
       --desk: #cfc4b0;
       --paper: #fff8ee;
@@ -99,34 +104,6 @@
       --shadow: 0 18px 40px rgba(28, 27, 25, .12);
       --desk-glow: #eceae6;
     }
-    .theme-plain-dark {
-      --desk: #0e0e0d;
-      --paper: #181817;
-      --paper-2: #121211;
-      --card: #232321;
-      --ink: #f4f2ee;
-      --on-ink: #181817;
-      --muted: #a3a19b;
-      --line: #33322f;
-      --line-strong: #4d4c48;
-      --accent: #e86a5c;
-      --accent-ink: #ffd4ce;
-      --sel: #3a221f;
-      --run: #7ad49a;
-      --stop: #f38b82;
-      --block: #e0b15a;
-      --chip: #232321;
-      --btn: #232321;
-      --field: #10100f;
-      --term: #0b0b0a;
-      --term-fg: #f4f2ee;
-      --ident: #0b0b0a;
-      --who: #f0a399;
-      --card-sel: #3d2623;
-      --glow: rgba(255,255,255,.05);
-      --shadow: 0 20px 48px rgba(0, 0, 0, .55);
-      --desk-glow: #1c1c1b;
-    }
     .theme-warm {
       --r: 8px;
       --win-r: 12px;
@@ -156,7 +133,7 @@
     .theme-warm .traffic i:nth-child(1) { background: #ec6a5e; }
     .theme-warm .traffic i:nth-child(2) { background: #f5bf4f; }
     .theme-warm .traffic i:nth-child(3) { background: #61c554; }
-    .theme-pick {
+    .direction-pick {
       width: 100%;
       text-align: left;
       display: flex;
@@ -165,36 +142,7 @@
       gap: 8px;
       padding: 8px 10px;
     }
-    .theme-pick > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
-    .theme-pick .swatch {
-      width: 28px;
-      height: 18px;
-      border-radius: 4px;
-      border: 1px solid var(--line-strong);
-      flex: 0 0 auto;
-    }
-    .theme-pick .swatch.warm-light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
-    .theme-pick .swatch.plain-light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
-    .theme-pick .swatch.plain-dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
-    .theme-pick.future { opacity: .5; cursor: default; }
-    .theme-toggle {
-      display: inline-flex;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      overflow: hidden;
-      background: var(--chip);
-    }
-    .theme-toggle button {
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      padding: 3px 10px;
-    }
-    .theme-toggle button.active {
-      background: var(--ink);
-      color: var(--on-ink);
-      border-color: var(--ink);
-    }
+    .direction-pick > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
 
     body {
       font: 13px/1.4 var(--sans);
@@ -523,6 +471,479 @@
     }
     #inspector pre { margin: 0; padding: 8px; white-space: pre-wrap; }
     :fullscreen #switcher, :fullscreen #inspector { display: none; }
+
+    .direction-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--chip);
+    }
+    .direction-toggle button {
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      padding: 4px 9px;
+      white-space: nowrap;
+    }
+    .direction-toggle button.active {
+      background: var(--card);
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .09);
+    }
+    .direction-note { color: var(--muted); font-size: 11px; }
+    .structure-note {
+      padding: 3px 8px;
+      border: 1px solid #57534e;
+      border-radius: 999px;
+      color: #d6d3d1;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    /* Codex 气质：结构未改 #15，只借截图气质——淡线、留白、安静控件。 */
+    .shell-codex {
+      --desk: #f2f2f1;
+      --paper: #ffffff;
+      --paper-2: #f7f7f8;
+      --card: #ffffff;
+      --ink: #20201f;
+      --on-ink: #ffffff;
+      --muted: #70706d;
+      --line: #eaeae8;
+      --line-strong: #d9d9d6;
+      --accent: #252524;
+      --accent-ink: #20201f;
+      --sel: #ececea;
+      --chip: #f1f1f0;
+      --btn: #fafaf9;
+      --field: #ffffff;
+      --term: #171716;
+      --ident: #222221;
+      --card-sel: #efefed;
+      --shadow: none;
+      --r: 8px;
+      --win-r: 0;
+      background: var(--desk);
+    }
+    .shell-codex .stage { padding: 0 0 70px; background: var(--desk); }
+    .shell-codex .win { border: 0; border-radius: 0; box-shadow: none; }
+    .shell-codex .os-chrome {
+      min-height: 42px;
+      padding: 8px 14px;
+      background: #f2f2f1;
+    }
+    .shell-codex .traffic i { background: #c6c6c2 !important; }
+    .shell-codex .win-title { color: #656563; }
+    .shell-codex .topbar { min-height: 50px; padding: 8px 14px; background: #ffffff; }
+    .shell-codex .brand { font-family: var(--sans); font-weight: 680; letter-spacing: -.02em; }
+    .shell-codex .host-tab,
+    .shell-codex .chip { border-color: transparent; border-radius: 7px; }
+    .shell-codex .host-tab.active { border-color: var(--line-strong); background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+    .shell-codex .cols { grid-template-columns: 206px minmax(420px, 1.45fr) minmax(292px, .9fr); }
+    .shell-codex .win.single .cols { grid-template-columns: 174px minmax(420px, 1.45fr) minmax(292px, .9fr); }
+    .shell-codex .cols > .pane:first-child { background: #f7f7f8; }
+    .shell-codex .hd,
+    .shell-codex .col-hd {
+      min-height: 36px;
+      padding: 9px 11px;
+      background: color-mix(in srgb, var(--paper-2) 72%, transparent);
+      font-family: var(--sans);
+      font-weight: 590;
+      color: #6f6f6c;
+    }
+    .shell-codex .lanes { gap: 1px; background: var(--line); }
+    .shell-codex .col { border-right: 0; background: #fafaf9; }
+    .shell-codex .issue-card {
+      width: calc(100% - 12px);
+      margin: 5px 6px;
+      padding: 10px 11px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      box-shadow: none;
+    }
+    .shell-codex .issue-card:hover { transform: none; border-color: var(--line); background: #fff; }
+    .shell-codex .issue-card.sel { outline: 0; border-color: #c9c9c5; background: var(--card-sel); }
+    .shell-codex .item.sel { box-shadow: 3px 0 0 #292928 inset; }
+    .shell-codex .dock { height: 31vh; background: #ffffff; }
+    .shell-codex .tabs { min-height: 34px; }
+    .shell-codex .tabs button.sel { background: #dededb; color: #20201f; box-shadow: 0 -2px 0 #242423 inset; }
+    .shell-codex .block { background: #f8f8f7; border-radius: 8px; }
+    .shell-codex .sheet { border-radius: 10px; box-shadow: 0 18px 52px rgba(0,0,0,.18); }
+
+    /* 纸面精修：保留桌面与纸卡，只收敛阴影、颜色和装饰。 */
+    .shell-paper {
+      --desk: #d6cec0;
+      --paper: #fffaf2;
+      --paper-2: #f5ede1;
+      --card: #fffdf9;
+      --line: #e4d7c5;
+      --line-strong: #cdbba2;
+      --accent: #b84d24;
+      --sel: #f5ddc7;
+      --card-sel: #fff0df;
+      --shadow: 0 22px 52px rgba(67, 45, 21, .16);
+      background: radial-gradient(1000px 480px at 50% -12%, #eee7da, transparent 62%), var(--desk);
+    }
+    .shell-paper .stage { padding: 18px 18px 82px; }
+    .shell-paper .win { border-radius: 14px; }
+    .shell-paper .os-chrome { min-height: 36px; padding: 8px 12px; }
+    .shell-paper .topbar { min-height: 46px; padding: 7px 12px; }
+    .shell-paper .brand { font-family: var(--serif); font-size: 14px; }
+    .shell-paper .cols { grid-template-columns: 188px minmax(380px, 1.34fr) minmax(286px, .92fr); }
+    .shell-paper .win.single .cols { grid-template-columns: 156px minmax(380px, 1.34fr) minmax(286px, .92fr); }
+    .shell-paper .lanes { gap: 8px; padding: 8px; background: var(--paper-2); }
+    .shell-paper .col { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: color-mix(in srgb, var(--paper) 68%, transparent); }
+    .shell-paper .col-hd { font-family: var(--serif); background: color-mix(in srgb, var(--paper) 75%, var(--paper-2)); }
+    .shell-paper .issue-card { margin: 7px; width: calc(100% - 14px); box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 3px 9px rgba(67,45,21,.06); }
+    .shell-paper .dock { height: 34vh; }
+
+    /* Codex 原貌映射：借截图骨架——左侧原生栏、大片白主区、底部悬浮操作面。结构动了，Issue 仍是工作单元。 */
+    .shell-codex-map {
+      --desk: #ffffff;
+      --paper: #ffffff;
+      --paper-2: #f7f7f8;
+      --card: #ffffff;
+      --ink: #1f1f1e;
+      --on-ink: #ffffff;
+      --muted: #6f6e6b;
+      --line: #eceae8;
+      --line-strong: #d9d8d5;
+      --accent: #1f1f1e;
+      --accent-ink: #1f1f1e;
+      --sel: #eceae8;
+      --chip: #f1f1f0;
+      --btn: #fafaf9;
+      --field: #ffffff;
+      --term: #171716;
+      --term-fg: #e8e8e5;
+      --ident: #222221;
+      --card-sel: #f0f0ee;
+      --shadow: none;
+      --r: 8px;
+      --win-r: 0;
+      background: #fff;
+    }
+    .shell-codex-map .map-stage {
+      display: flex;
+      height: 100%;
+      padding: 0;
+      background: #fff;
+      position: relative;
+    }
+    /* 左侧原生栏（贯穿全高，280px，#f7f7f8） */
+    .shell-codex-map .map-side {
+      flex: 0 0 280px;
+      width: 280px;
+      background: #f7f7f8;
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px 10px 16px;
+      overflow-y: auto;
+    }
+    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 10px; }
+    .shell-codex-map .ms-top .traffic i { width: 11px; height: 11px; }
+    .shell-codex-map .ms-back { display: inline-flex; gap: 2px; margin-left: 2px; }
+    .shell-codex-map .ms-back button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      padding: 4px 7px;
+      border-radius: 7px;
+    }
+    .shell-codex-map .ms-back button:hover { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .ms-brand {
+      font-family: var(--sans);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+      padding: 0 6px;
+    }
+    .shell-codex-map .ms-actions { display: flex; gap: 6px; padding: 0 2px; }
+    .shell-codex-map .ms-search {
+      flex: 1;
+      border: 1px solid transparent;
+      background: #eae9e7;
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: var(--ink);
+    }
+    .shell-codex-map .ms-search::placeholder { color: #a3a29e; }
+    .shell-codex-map .ms-search:focus { border-color: var(--line-strong); background: #fff; outline: 0; }
+    .shell-codex-map .ms-bell {
+      border: 0;
+      background: transparent;
+      font-size: 14px;
+      padding: 3px 8px;
+      border-radius: 8px;
+    }
+    .shell-codex-map .ms-bell:hover { background: var(--sel); }
+    .shell-codex-map .ms-nav { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+    .shell-codex-map .ms-nav button {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .shell-codex-map .ms-nav button:hover { background: var(--sel); }
+    .shell-codex-map .ms-nav button.active { background: var(--sel); font-weight: 600; }
+    .shell-codex-map .ms-nav .ic { width: 15px; text-align: center; color: var(--muted); font-size: 12px; }
+    .shell-codex-map .ms-groups {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .shell-codex-map .ms-group-name {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 10px 4px;
+      letter-spacing: .02em;
+    }
+    .shell-codex-map .ms-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      border-radius: 10px;
+      padding: 7px 10px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .shell-codex-map .ms-item:hover { background: var(--sel); }
+    .shell-codex-map .ms-item.active { background: var(--sel); font-weight: 600; }
+    .shell-codex-map .ms-foot { font-size: 11px; color: var(--muted); padding: 0 8px; }
+    /* 主区：大片白 + 中央看板 */
+    .shell-codex-map .map-main {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+    }
+    .shell-codex-map .map-board {
+      flex: 1;
+      overflow: auto;
+      padding: 48px 40px 520px;
+    }
+    .shell-codex-map .map-board > .tiny.pad {
+      max-width: 1160px;
+      margin: 0 auto 12px;
+      padding: 0 4px;
+      color: var(--muted);
+    }
+    .shell-codex-map .map-board .lanes {
+      max-width: 1160px;
+      margin: 0 auto;
+      min-height: auto;
+      grid-template-columns: repeat(4, minmax(170px, 1fr));
+      gap: 14px;
+      background: transparent;
+    }
+    .shell-codex-map .map-board .lanes .col {
+      border: 0;
+      background: #f7f7f8;
+      border-radius: 12px;
+      padding: 12px 10px 8px;
+      min-height: 320px;
+    }
+    .shell-codex-map .map-board .lanes .col-hd {
+      position: static;
+      border: 0;
+      background: transparent;
+      padding: 2px 4px 10px;
+      font-family: var(--sans);
+      font-weight: 590;
+      color: #7c7b78;
+    }
+    .shell-codex-map .map-board .lanes .col-hd span { color: #a6a5a1; font-weight: 500; }
+    .shell-codex-map .map-board .lanes .empty { padding: 20px 6px; font-size: 12px; }
+    .shell-codex-map .map-board .lanes .issue-card {
+      width: 100%;
+      margin: 0 0 8px;
+      padding: 10px 11px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: none;
+    }
+    .shell-codex-map .map-board .lanes .issue-card:hover { transform: none; border-color: var(--line-strong); }
+    .shell-codex-map .map-board .lanes .issue-card.sel {
+      outline: 0;
+      border-color: #b9b8b4;
+      background: #fff;
+      box-shadow: 0 0 0 1px #b9b8b4 inset;
+    }
+    /* Issue 详情：主区右缘滑出面板 */
+    .shell-codex-map .map-detail {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      bottom: 448px;
+      width: min(372px, calc(100% - 40px));
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(15, 15, 14, .06);
+      overflow: auto;
+      z-index: 6;
+      animation: map-detail-in .16s ease;
+    }
+    @keyframes map-detail-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+    .shell-codex-map .map-detail-x {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      z-index: 2;
+    }
+    .shell-codex-map .map-detail-x button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 15px;
+      padding: 2px 8px;
+      border-radius: 6px;
+    }
+    .shell-codex-map .map-detail-x button:hover { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .map-detail .hd {
+      position: static;
+      background: transparent;
+      border-bottom: 1px solid var(--line);
+      min-height: 40px;
+      color: var(--muted);
+    }
+    .shell-codex-map .map-detail .block {
+      background: #fafaf9;
+      border-color: var(--line);
+      border-radius: 10px;
+    }
+    /* 底部中央悬浮操作面：元信息条 + 白色大圆角面 */
+    .shell-codex-map .map-dock {
+      position: absolute;
+      left: 50%;
+      bottom: 64px;
+      transform: translateX(-50%);
+      width: min(810px, calc(100% - 64px));
+      z-index: 8;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .shell-codex-map .dock-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 0 8px;
+    }
+    .shell-codex-map .dock-meta .who { color: var(--ink); font-weight: 600; }
+    .shell-codex-map .dock-surface {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 12px 32px rgba(15, 15, 14, .08);
+      display: flex;
+      flex-direction: column;
+      height: 320px;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .shell-codex-map .dock-surface .tabs {
+      flex: 0 0 auto;
+      min-height: 40px;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+    }
+    .shell-codex-map .dock-surface .tabs .gname { color: var(--muted); }
+    .shell-codex-map .dock-surface .tabs button { padding: 7px 12px; }
+    .shell-codex-map .dock-surface .tabs button.sel {
+      background: var(--sel);
+      color: var(--ink);
+      box-shadow: none;
+    }
+    .shell-codex-map .dock-surface .ident {
+      background: transparent;
+      color: var(--ink);
+      border-bottom: 1px solid var(--line);
+      padding: 7px 12px;
+      flex: 0 0 auto;
+    }
+    .shell-codex-map .dock-surface .ident button {
+      background: transparent;
+      border-color: transparent;
+      color: var(--ink);
+    }
+    .shell-codex-map .dock-surface .ident button:hover { background: var(--sel); }
+    .shell-codex-map .dock-surface .ident .who { color: var(--ink); font-weight: 650; }
+    .shell-codex-map .dock-surface .term-wrap { flex: 1; min-height: 0; }
+    .shell-codex-map .dock-surface .split { flex: 1; min-height: 0; }
+    .shell-codex-map .dock-surface .pane { background: #fafaf9; }
+    .shell-codex-map .dock-surface .pane .hd { background: transparent; }
+    /* 空状态：主区中央 */
+    .shell-codex-map .map-empty-strong {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+      max-width: 460px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+    .shell-codex-map .map-empty-strong .brand {
+      font-family: var(--sans);
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    @media (max-width: 1100px) {
+      .shell-codex-map .map-side { flex-basis: 240px; width: 240px; }
+      .shell-codex-map .map-dock { width: min(810px, calc(100% - 32px)); }
+    }
+    @media (max-width: 900px) {
+      .shell-codex-map .map-board .lanes { grid-template-columns: repeat(2, minmax(170px, 1fr)); }
+    }
+
+    @media (max-width: 900px) {
+      .shell-codex .cols,
+      .shell-paper .cols,
+      .shell-codex .win.single .cols,
+      .shell-paper .win.single .cols { grid-template-columns: 150px minmax(480px, 1fr) 270px; }
+      .direction-note { display: none; }
+    }
+    @media (max-width: 680px) {
+      #switcher { gap: 3px; padding: 5px; }
+      #switcher .lab,
+      #switcher .structure-note,
+      #switcher select,
+      #switcher [data-act="inspect"],
+      #switcher [data-act="prev"],
+      #switcher [data-act="next"] { display: none; }
+      #switcher .direction-toggle { flex: 0 0 auto; }
+      #switcher .direction-toggle button { padding: 4px 7px; }
+      .phone-stage { padding: 12px 12px 80px; }
+      .phone { width: 100%; height: calc(100vh - 96px); }
+    }
   </style>
 </head>
 <body class="theme-warm theme-warm-light">
@@ -530,7 +951,7 @@
   <div id="switcher"></div>
   <div id="inspector"></div>
   <script>
-    // 三套观感，结构同一套已钉主壳。A 暖纸 / B 夜班 / C 冷静编辑器。
+    // 两个观感方向，共用 Issue #15 已钉主壳。
     const HOSTS = [
       { id: "local", name: "本机 · MacBook", nameEn: "This Mac", online: true },
       { id: "mini", name: "书房 Mini", nameEn: "Study Mini", online: true },
@@ -615,8 +1036,8 @@
     };
 
     const S = {
-      theme: "warm-light",
-      lastLight: "warm-light",
+      direction: "codex",
+      theme: "plain-light",
       viewport: "desktop",
       scenario: "daily",
       lang: "zh",
@@ -639,14 +1060,34 @@
       pairing: false,
       allRunsOpen: false,
       childFilter: null,
+      mapDetailOpen: false,
       phone: "home",
       frontierWhy: "blocked"
     };
 
-    const THEMES = [
-      { id: "warm-light", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
-      { id: "plain-light", name: "素纸", nameEn: "Plain paper", appearance: "light" },
-      { id: "plain-dark", name: "素纸夜间", nameEn: "Plain paper night", appearance: "dark" }
+    const DIRECTIONS = [
+      {
+        id: "codex-map",
+        name: "Codex 原貌映射",
+        nameEn: "Codex layout map",
+        note: "动了结构：左侧原生栏、大片白主区、底部悬浮操作面。Issue 仍是工作单元。",
+        noteEn: "Structure moved: native left rail, white main area, floating bottom surface. Issues stay the work unit.",
+        structureMoved: true
+      },
+      {
+        id: "codex",
+        name: "Codex 气质",
+        nameEn: "Codex mood",
+        note: "结构未改：只借截图气质——淡线、留白、安静控件。",
+        noteEn: "Structure unchanged: only the mood — faint lines, whitespace, quiet controls."
+      },
+      {
+        id: "paper",
+        name: "纸面精修",
+        nameEn: "Refined paper",
+        note: "结构未改：保留桌面与纸卡，收敛颜色、阴影和装饰。",
+        noteEn: "Structure unchanged: keep the desk and paper cards, quieter color and depth."
+      }
     ];
 
     const T = {
@@ -714,15 +1155,17 @@
         collapse: "收起",
         thisRound: "这一轮",
         unstaged: "未提交",
-        theme: "主题",
-        themeHelp: "主题是一份可替换清单。再加一套只加 token，不改骨架。",
-        themeWarm: "暖纸",
-        themeFuture: "以后可以再加",
-        themeFutureHelp: "占位。不是第三套要验收的皮肤。",
-        themeLight: "浅",
-        themeDark: "深",
-        themeQuick: "深色切到素纸夜间。浅色回到上次用的浅色（暖纸或素纸）。",
-        themeHelpExtra: "暖纸只有白天那一版。深色只用素纸夜间。顶栏深色切到素纸夜间，浅色回到上次用的浅色。"
+        direction: "观感方向",
+        directionHelp: "三版对照：原貌映射动了结构；气质与纸面共用已钉主壳 #15。",
+        prototypeThemeNote: "本原型临时把 #25 主题清单降级为三版对照；提出者选定前不改词表和 ADR 0011。",
+        structureSame: "结构未改",
+        structureMoved: "结构已动 · 对照原貌",
+        mapBoard: "看板",
+        mapFoot: "借 Codex 原貌骨架 · Issue 仍是工作单元",
+        officialCli: "官方 CLI · Embedded Terminal",
+        codexBorrowed: "Codex 气质取了：中性色层、紧凑行高、低装饰控件、侧面板式查看改动。",
+        codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元，底栏仍是官方 CLI 的 Embedded Terminal。",
+        officialRef: "查看 Codex 官方介绍"
       },
       en: {
         projects: "Projects on this Host",
@@ -788,39 +1231,37 @@
         collapse: "Collapse",
         thisRound: "This round",
         unstaged: "Uncommitted",
-        theme: "Theme",
-        themeHelp: "Themes are a replaceable list. Another theme is another token pack, not a new shell.",
-        themeWarm: "Warm paper",
-        themeFuture: "More later",
-        themeFutureHelp: "Placeholder. Not a third skin to accept.",
-        themeLight: "Light",
-        themeDark: "Dark",
-        themeQuick: "Dark goes to plain-paper night. Light returns to the last light theme.",
-        themeHelpExtra: "Warm paper is daytime only. Dark is plain-paper night. The top bar goes dark to that set, and light back to the last light theme."
+        direction: "Visual direction",
+        directionHelp: "Three directions: the layout map moves structure; mood and paper keep the agreed shell #15.",
+        prototypeThemeNote: "This prototype temporarily demotes the #25 theme list to compare three directions; vocabulary and ADR 0011 stay unchanged until a direction is chosen.",
+        structureSame: "Structure unchanged",
+        structureMoved: "Structure moved",
+        mapBoard: "Board",
+        mapFoot: "Codex layout skeleton · Issues stay the work unit",
+        officialCli: "Official CLI · Embedded Terminal",
+        codexBorrowed: "Borrowed from Codex: neutral layers, compact rows, quiet controls, and a side panel for changes.",
+        codexBoundary: "Not borrowed: thread lists, chat composer, or a conversation-first surface. Issues remain the work unit and the bottom dock remains the official CLI Embedded Terminal.",
+        officialRef: "Open the official Codex introduction"
       }
     };
     function t(k) { return T[S.lang][k]; }
-    function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[0]; }
-    function themeMate(appearance) {
-      if (appearance === "dark") return "plain-dark";
-      const last = themeOf(S.lastLight);
-      return last.appearance === "light" ? last.id : "plain-light";
+    function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
+    function setDirection(id) {
+      const next = directionOf(id);
+      if (next.id === "codex-map" && S.direction !== "codex-map") S.mapDetailOpen = false;
+      S.direction = next.id;
+      S.theme = next.id === "paper" ? "warm-light" : "plain-light";
     }
-    function systemTheme() {
-      return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "plain-dark"
-        : "warm-light";
-    }
-    function setTheme(id) {
-      const next = THEMES.some(th => th.id === id) ? id : "warm-light";
-      S.theme = next;
-      if (themeOf(next).appearance === "light") S.lastLight = next;
+    function stepDirection(step) {
+      const index = DIRECTIONS.findIndex(direction => direction.id === S.direction);
+      setDirection(DIRECTIONS[(index + step + DIRECTIONS.length) % DIRECTIONS.length].id);
     }
 
     function qs() { return new URLSearchParams(location.search); }
     function writeQS() {
       const u = new URL(location.href);
-      u.searchParams.set("theme", S.theme);
+      u.searchParams.set("direction", S.direction);
+      u.searchParams.delete("theme");
       u.searchParams.delete("variant");
       u.searchParams.set("viewport", S.viewport);
       u.searchParams.set("scenario", S.scenario);
@@ -837,6 +1278,7 @@
       S.settingsOpen = false;
       S.allRunsOpen = false;
       S.pairing = false;
+      S.mapDetailOpen = false;
       if (sc === "single") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
       } else if (sc === "stopped") {
@@ -854,10 +1296,17 @@
     }
     function loadQS() {
       const p = qs();
-      const legacy = { A: "warm-light", B: "plain-dark", C: "plain-light", "warm-dark": "plain-dark" };
-      const raw = p.get("theme") || legacy[(p.get("variant") || "").toUpperCase()] || "";
-      if (raw) setTheme(legacy[raw] || raw);
-      else setTheme(systemTheme());
+      const legacyDirection = {
+        A: "paper",
+        B: "codex",
+        C: "codex",
+        "warm-light": "paper",
+        "plain-light": "codex",
+        "plain-dark": "codex",
+        "warm-dark": "codex"
+      };
+      const raw = p.get("direction") || p.get("theme") || (p.get("variant") || "").toUpperCase();
+      setDirection(legacyDirection[raw] || raw || "codex");
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
@@ -955,6 +1404,7 @@
       const i = issue(id);
       if (!i) return;
       S.issueId = id;
+      if (S.direction === "codex-map") S.mapDetailOpen = true;
       S.projectId = i.projectId;
       S.hostId = project(i.projectId).hostId;
       const r = RUNS.find(x => x.issueId === i.id);
@@ -978,7 +1428,7 @@
 
     function render() {
       writeQS();
-      document.body.className = `theme-warm theme-${S.theme}${S.viewport === "phone" ? " phone-vp" : ""}`;
+      document.body.className = `theme-warm theme-${S.theme} shell-${S.direction}${S.viewport === "phone" ? " phone-vp" : ""}`;
       document.getElementById("app").innerHTML =
         S.viewport === "phone" ? renderPhone() : renderDesktop();
       document.getElementById("switcher").innerHTML = renderSwitcher();
@@ -988,11 +1438,13 @@
     }
 
     function renderSwitcher() {
-      const cur = THEMES.find(v => v.id === S.theme);
+      const cur = directionOf(S.direction);
       return `
-        <button data-act="prev" title="上一个主题">←</button>
-        <div class="lab">${esc(S.lang === "en" ? cur.nameEn : cur.name)} · ${cur.appearance}</div>
-        <button data-act="next" title="下一个主题">→</button>
+        <button data-act="prev" title="上一个观感方向">←</button>
+        ${directionToggle()}
+        <div class="lab">${esc(S.lang === "en" ? cur.noteEn : cur.note)}</div>
+        <span class="structure-note">${cur.structureMoved ? t("structureMoved") : t("structureSame")}</span>
+        <button data-act="next" title="下一个观感方向">→</button>
         <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
         <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
         <select data-act="scenario">
@@ -1010,8 +1462,8 @@
       const i = issue(S.issueId);
       const r = run(S.runId);
       const lines = [
-        `主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
-        `首次按系统：浅→暖纸 / 深→素纸夜间`,
+        `观感 ${S.direction} · ${S.viewport} · ${S.scenario}`,
+        `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15"}`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
@@ -1025,6 +1477,7 @@
     }
 
     function renderDesktop() {
+      if (S.direction === "codex-map") return renderMap();
       if (S.scenario === "unpaired") return emptyUnpaired();
       const h = host(S.hostId) || visibleHosts()[0];
       const r = run(S.runId);
@@ -1036,7 +1489,7 @@
               <div class="traffic"><i></i><i></i><i></i></div>
               <div class="win-title">Agent Taskboard${h ? " — " + esc(hostName(h)) : ""}</div>
               <span class="grow"></span>
-              <span class="tiny">${esc(S.lang === "en" ? themeOf(S.theme).nameEn : themeOf(S.theme).name)}</span>
+              <span class="direction-note">${esc(S.lang === "en" ? directionOf(S.direction).noteEn : directionOf(S.direction).note)}</span>
             </div>
             <div class="topbar">
               <span class="brand">Agent Taskboard</span>
@@ -1047,7 +1500,7 @@
               <button class="ghost" data-act="pair">+ ${t("pair")}</button>
               <span class="grow"></span>
               <span class="chip">${t("autoOff")}</span>
-              ${themeToggle()}
+              ${directionToggle()}
               <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
               <button data-act="settings" class="${S.settingsOpen ? "active" : ""}" title="设置入口在这里">⚙ ${t("settings")}</button>
             </div>
@@ -1074,6 +1527,105 @@
         ${S.pairing ? pairingModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
+    }
+
+    /* Codex 原貌映射：左侧原生栏 + 大片白主区 + 底部悬浮操作面。 */
+    function renderMap() {
+      const r = run(S.runId);
+      const empty = S.scenario === "unpaired" ? "unpaired" : S.scenario === "noproject" ? "noproject" : null;
+      return `
+        <div class="stage map-stage">
+          ${mapSidebar()}
+          <main class="map-main">
+            ${empty ? mapEmpty(empty) : `
+              <section class="map-board">
+                ${board()}
+              </section>
+              ${S.issueId && S.mapDetailOpen ? mapDetail() : ""}
+              ${mapDock(r)}
+            `}
+          </main>
+        </div>
+        ${S.termZoom ? termZoomStage(r) : ""}
+        ${S.pairing ? pairingModal() : ""}
+        ${S.settingsOpen ? settingsSheet() : ""}
+        ${S.allRunsOpen ? allRunsSheet() : ""}`;
+    }
+
+    function mapSidebar() {
+      const hs = visibleHosts();
+      return `
+        <aside class="map-side">
+          <div class="ms-top">
+            <div class="traffic"><i></i><i></i><i></i></div>
+            <span class="ms-back">
+              <button title="原型：前进/后退占位" data-act="map-nav-back">←</button>
+              <button title="原型：前进/后退占位" data-act="map-nav-fwd">→</button>
+            </span>
+          </div>
+          <div class="ms-brand">Codex</div>
+          <div class="ms-actions">
+            <input class="ms-search" placeholder="${esc(S.lang === "en" ? "Search" : "搜索")}" />
+            <button class="ms-bell" title="通知（原型占位）" data-act="map-notify">🔔</button>
+          </div>
+          <nav class="ms-nav">
+            <button class="active" data-act="map-nav" data-id="board"><span class="ic">▦</span>${esc(t("mapBoard"))}</button>
+            <button data-act="map-nav" data-id="runs"><span class="ic">◉</span>${esc(t("allRuns"))}</button>
+            <button data-act="map-nav" data-id="settings"><span class="ic">⚙</span>${esc(t("settings"))}</button>
+          </nav>
+          <div class="ms-groups">
+            ${hs.map(hh => `
+              <div class="ms-group">
+                <div class="ms-group-name">${esc(hostName(hh))}</div>
+                ${visibleProjects().filter(pp => pp.hostId === hh.id).map(pp => `
+                  <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>
+                `).join("")}
+              </div>`).join("")}
+          </div>
+          <span class="grow"></span>
+          <div class="ms-foot">Agent Taskboard · ${esc(t("mapFoot"))}</div>
+        </aside>`;
+    }
+
+    function mapEmpty(kind) {
+      const body = kind === "unpaired" ? `
+          <div class="brand" style="font-size:22px">${t("unpairedTitle")}</div>
+          <p class="muted">${t("unpairedBody")}</p>
+          <div><button class="primary" data-act="pair">${t("pairNow")}</button></div>` : `
+          <div class="brand" style="font-size:22px">${t("noProjectTitle")}</div>
+          <p class="muted">${t("noProjectBody")}</p>
+          <div><button class="primary" data-act="register">${t("register")}</button></div>`;
+      return `<div class="map-empty-strong">${body}</div>`;
+    }
+
+    function mapDetail() {
+      return `
+        <aside class="map-detail">
+          <div class="map-detail-x"><button data-act="map-close-detail" title="收起详情">×</button></div>
+          ${issueDetail()}
+        </aside>`;
+    }
+
+    function mapDock(r) {
+      const p = r ? project(r.projectId) : null;
+      const h = r ? host(r.hostId) : null;
+      return `
+        <section class="map-dock">
+          <div class="dock-meta">
+            <span class="who">${esc(p ? p.name : S.projectId ? project(S.projectId).name : "—")}</span>
+            <span class="muted">·</span>
+            <span>${esc(h ? hostName(h) : "")}</span>
+            <span class="muted">·</span>
+            <span>main</span>
+            <span class="grow"></span>
+            <span class="tiny">${esc(t("officialCli"))}</span>
+          </div>
+          <div class="dock-surface">
+            ${runTabs()}
+            ${termChrome(r)}
+            ${termSplit(r)}
+          </div>
+        </section>`;
     }
 
     function projectList() {
@@ -1331,7 +1883,7 @@
               <div class="traffic"><i></i><i></i><i></i></div>
               <div class="win-title">Agent Taskboard</div>
               <span class="grow"></span>
-              ${themeToggle()}
+              ${directionToggle()}
             </div>
             <div class="empty-strong stack">
               <div class="brand" style="font-size:22px">${t("unpairedTitle")}</div>
@@ -1361,12 +1913,12 @@
         </div>`;
     }
 
-    function themeToggle() {
-      const cur = themeOf(S.theme);
+    function directionToggle() {
       return `
-        <div class="theme-toggle" title="${t("themeQuick")}">
-          <button data-act="theme" data-id="${themeMate("light")}" class="${cur.appearance === "light" ? "active" : ""}">${t("themeLight")}</button>
-          <button data-act="theme" data-id="${themeMate("dark")}" class="${cur.appearance === "dark" ? "active" : ""}">${t("themeDark")}</button>
+        <div class="direction-toggle" title="${t("directionHelp")}">
+          ${DIRECTIONS.map(direction => `
+            <button data-act="direction" data-id="${direction.id}" class="${S.direction === direction.id ? "active" : ""}">${esc(S.lang === "en" ? direction.nameEn : direction.name)}</button>
+          `).join("")}
         </div>`;
     }
 
@@ -1376,17 +1928,21 @@
           <div class="hd">${t("settings")}<button class="ghost" data-act="settings">×</button></div>
           <div class="pad stack">
             <div class="tiny">这里只标入口。不必做成完整设置页。</div>
-            <b>${t("theme")}</b>
-            <div class="tiny">${t("themeHelp")} ${t("themeHelpExtra")}</div>
-            ${THEMES.map(th => `
-              <button class="theme-pick ${S.theme === th.id ? "active" : ""}" data-act="theme" data-id="${th.id}">
-                <span><span class="swatch ${th.id}"></span> ${esc(S.lang === "en" ? th.nameEn : th.name)}</span>
-                <span class="tiny">${th.appearance}</span>
-              </button>`).join("")}
-            <button class="theme-pick future" type="button" disabled>
-              <span>${t("themeFuture")}</span>
-              <span class="tiny">${t("themeFutureHelp")}</span>
-            </button>
+            <b>${t("direction")}</b>
+            <div class="tiny">${t("directionHelp")}</div>
+            <div class="banner tiny">${t("prototypeThemeNote")}</div>
+            ${DIRECTIONS.map(direction => `
+              <button class="direction-pick ${S.direction === direction.id ? "active" : ""}" data-act="direction" data-id="${direction.id}">
+                <span>${esc(S.lang === "en" ? direction.nameEn : direction.name)}</span>
+                <span class="tiny">${direction.structureMoved ? t("structureMoved") : t("structureSame")}</span>
+              </button>
+              <div class="tiny">${esc(S.lang === "en" ? direction.noteEn : direction.note)}</div>
+            `).join("")}
+            <div class="block tiny stack">
+              <div>${t("codexBorrowed")}</div>
+              <div>${t("codexBoundary")}</div>
+              <a class="ext" href="https://openai.com/index/introducing-the-codex-app/" target="_blank" rel="noreferrer">${t("officialRef")}</a>
+            </div>
             <b>${t("recentN")}</b>
             <div class="row">
               <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
@@ -1419,7 +1975,7 @@
     function renderPhone() {
       if (S.scenario === "unpaired") {
         return `<div class="phone-stage"><div class="phone">
-          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${themeToggle()}</div>
+          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${directionToggle()}</div>
           <div class="phone-body pad stack">
             <b>${t("unpairedTitle")}</b>
             <div class="muted">${t("unpairedBody")}</div>
@@ -1435,7 +1991,7 @@
               <div class="row">
                 ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
                 <span class="grow"></span>
-                ${themeToggle()}
+                ${directionToggle()}
               </div>
               <div class="tiny">${t("phoneNote")}</div>
             </div>
@@ -1476,8 +2032,11 @@
         const b = e.target.closest("[data-act]");
         if (!b) return;
         if (b.dataset.act === "prev" || b.dataset.act === "next") {
-          const i = THEMES.findIndex(v => v.id === S.theme);
-          setTheme(THEMES[(i + (b.dataset.act === "next" ? 1 : THEMES.length - 1)) % THEMES.length].id);
+          stepDirection(b.dataset.act === "next" ? 1 : -1);
+          render();
+        }
+        if (b.dataset.act === "direction") {
+          setDirection(b.dataset.id);
           render();
         }
         if (b.dataset.act === "vp") {
@@ -1504,6 +2063,7 @@
         const id = b.dataset.id;
         if (act === "host") {
           S.hostId = id;
+          S.mapDetailOpen = false;
           const first = visibleProjects().find(p => p.hostId === id);
           S.projectId = first ? first.id : null;
           const firstIssue = ISSUES.find(i => i.projectId === S.projectId && !i.closed);
@@ -1512,7 +2072,12 @@
           if (firstRun) S.runId = firstRun.id;
           render();
         }
-        if (act === "project") { S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; render(); }
+        if (act === "project") {
+          S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; S.mapDetailOpen = false;
+          const cur = issue(S.issueId);
+          if (!cur || cur.projectId !== id) S.issueId = null;
+          render();
+        }
         if (act === "issue") setIssue(Number(id));
         if (act === "run") { S.allRunsOpen = false; setRun(id); }
         if (act === "toggle-vc") { S.viewChangesOpen = !S.viewChangesOpen; render(); }
@@ -1538,7 +2103,17 @@
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "all-runs") { S.allRunsOpen = !S.allRunsOpen; S.settingsOpen = false; render(); }
         if (act === "lang") { S.lang = S.lang === "zh" ? "en" : "zh"; render(); }
-        if (act === "theme") { setTheme(id); render(); }
+        if (act === "direction") { setDirection(id); render(); }
+        if (act === "map-nav") {
+          if (id === "settings") { S.settingsOpen = true; S.allRunsOpen = false; }
+          else if (id === "runs") { S.allRunsOpen = true; S.settingsOpen = false; }
+          else { S.settingsOpen = false; S.allRunsOpen = false; }
+          render();
+        }
+        if (act === "map-close-detail") { S.mapDetailOpen = false; render(); }
+        if (act === "map-notify" || act === "map-nav-back" || act === "map-nav-fwd") {
+          alert("原型：入口占位。");
+        }
         if (act === "child-filter") { S.childFilter = Number(id); render(); }
         if (act === "clear-filter") { S.childFilter = null; render(); }
         if (act === "term-zoom") { setTermZoom(id || null); return; }
@@ -1613,8 +2188,7 @@
         return;
       }
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        const i = THEMES.findIndex(v => v.id === S.theme);
-        setTheme(THEMES[(i + (e.key === "ArrowRight" ? 1 : THEMES.length - 1)) % THEMES.length].id);
+        stepDirection(e.key === "ArrowRight" ? 1 : -1);
         render();
       }
     });
