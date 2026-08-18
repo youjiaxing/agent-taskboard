@@ -27,4 +27,4 @@ Embedded Terminal 是 Host 上我们自己开的 PTY，不打开、不嵌入用�
 - `/to-spec` 按「Rust 核心进程 = Host，WebView 窗口 = Client」写桌面形态；远程桌面和浏览器是同一套 Host 协议的另外两个 Client。
 - 画终端默认 xterm.js，不写进词表。换画布不是换壳。
 - Windows 因 ConPTY 实际底线是 Windows 10 1809+；产品声明最低系统，过旧给明确错误。
-- 打包分发与自动更新仍未钉，见 map 的 Not yet specified。
+- 打包分发与自动更新见 [GitHub 发未签名安装包，更新须确认，本机页固定 10529](./0013-packaging-and-auto-update.md)。

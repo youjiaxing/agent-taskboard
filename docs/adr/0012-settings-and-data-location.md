@@ -8,7 +8,7 @@
 
 一份 Host = 这台电脑、这个系统用户的这一份。v1 不做备份/导出按钮。搬家 ≈ 复制 `appLocalDataDir` 下的 `host/`（以及要用的 `desktop-client/`）；Project 本机路径对不上要手改。日志和缓存不必一起搬。
 
-浏览器 Client：语言/主题/远程配对令牌记在该站点的持久存储。清站点数据或访问地址变了 = 重新配对，或粘贴事先复制的连接信息。本机浏览器打开 Host **自己端出来的**稳定回环页（规范为 `http://127.0.0.1:<固定端口>/`）免配对，和本机窗口一样；必须校验来源是这个源。用 Tailscale / 局域网地址打开，或本机上其它网站去打 Host，一律要长期令牌。具体端口归打包票，本 ADR 只钉「入口地址稳定、只认这一种本机 URL」。
+浏览器 Client：语言/主题/远程配对令牌记在该站点的持久存储。清站点数据或访问地址变了 = 重新配对，或粘贴事先复制的连接信息。本机浏览器打开 Host **自己端出来的**稳定回环页（规范为 `http://127.0.0.1:10529/`，见 [打包分发与自动更新](./0013-packaging-and-auto-update.md)）免配对，和本机窗口一样；必须校验来源是这个源。用 Tailscale / 局域网地址打开，或本机上其它网站去打 Host，一律要长期令牌。
 
 这钉住了 [决策：设置与数据存放位置](https://github.com/youjiaxing/agent-taskboard/issues/27)。
 
@@ -33,4 +33,4 @@
 - `/to-spec` 按「`appLocalDataDir` 下 `host/` + `desktop-client/`，日志 `appLogDir`，缓存 `appCacheDir`」写目录职责。秘密与普通设置分文件，JSON，不用钥匙串。
 - Tracker 凭据顺序见改写后的 [0001](./0001-local-credentials-remote-auth.md)：专用覆盖（应用 env，其次文件里显式 PAT）→ `gh`/`glab` → 通用 env。
 - [界面语言](./0010-interface-language.md) 与 [主题](./0011-shell-theme.md) 落在 Client 设置；PATH 前缀落在 Host 数据，见 [0008](./0008-run-launch-environment.md)。
-- 打包票必须给出稳定回环端口；Tracker 刷新票若要持久缓存，文件放 `appCacheDir`。
+- 本机回环端口为 `10529`，见 [0013](./0013-packaging-and-auto-update.md)。Tracker 刷新票若要持久缓存，文件放 `appCacheDir`。
