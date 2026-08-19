@@ -33,6 +33,7 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "看板", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "总览", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
   await expect(page.locator(".map-side [data-act=\"focus-run\"][data-id=\"r1\"]")).toBeVisible();
   await expect(page.locator(".map-side").getByRole("button", { name: "所有 Run", exact: true })).toHaveCount(0);
@@ -125,6 +126,30 @@ test("点 Issue 时底栏跟 Run：有则切换，无则给出开 Run", async ({
   await page.locator('[data-act="issue"][data-id="90"]').first().click();
   await expect(page.locator(".dock .term")).toBeVisible();
   await expect(page.locator(".dock")).toContainText("#90");
+});
+
+test("总览按终端状态分组，可按 Project 过滤", async ({ page }) => {
+  await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
+  await page.getByRole("button", { name: "总览", exact: true }).first().click();
+  await expect(page).toHaveURL(/mid=overview/);
+  await expect(page.locator(".ov")).toBeVisible();
+  await expect(page.locator(".ov-group-hd").filter({ hasText: "在等人" })).toBeVisible();
+  await expect(page.locator(".ov-group-hd").filter({ hasText: "进行中" })).toBeVisible();
+  await expect(page.locator(".ov-group-hd").filter({ hasText: "执行已停" })).toBeVisible();
+  await expect(page.locator(".ov-tile")).toHaveCount(4);
+  await expect(page.locator(".dock")).toHaveCount(0);
+
+  await page.locator('[data-act="ov-run"][data-id="r5"]').click();
+  await expect(page.locator(".issue-title")).toHaveText("#90 实现：设置页");
+
+  await page.locator('[data-act="ov-proj"][data-id="notes"]').click();
+  await expect(page.getByText("这个过滤下没有 Run", { exact: true })).toBeVisible();
+  await page.locator('[data-act="ov-proj"][data-id="all"]').click();
+  await expect(page.locator(".ov-tile")).toHaveCount(4);
+
+  await page.getByRole("button", { name: "显示已结束", exact: true }).click();
+  await expect(page.locator(".ov-group-hd").filter({ hasText: "已结束" })).toBeVisible();
+  await expect(page.locator(".ov-tile")).toHaveCount(5);
 });
 
 test("占满右侧只放大现有终端，不复制一份", async ({ page }) => {
