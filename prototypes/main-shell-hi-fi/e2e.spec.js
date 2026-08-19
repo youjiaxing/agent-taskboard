@@ -61,7 +61,8 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
   await expect(page).toHaveURL(/mid=graph/);
   await expect(page.locator(".graph-canvas")).toBeVisible();
-  await expect(page.locator(".dock.slim")).toBeVisible();
+  await expect(page.locator(".dock")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "展开终端", exact: true })).toBeVisible();
   await page.locator('[data-act="graph-node"][data-id="51"]').click();
   await expect(page.getByText("#51 实现：依赖图", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "看板", exact: true }).first().click();
@@ -89,6 +90,24 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page).toHaveURL(urlWithDirection(page, "paper"));
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(urlWithDirection(page, "codex-map"));
+});
+
+test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
+  await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
+  const lanesBefore = await page.locator(".lanes").first().boundingBox();
+  await page.getByRole("button", { name: "收起左侧", exact: true }).click();
+  await expect(page.locator(".map-side")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "展开左侧", exact: true })).toBeVisible();
+  const lanesAfter = await page.locator(".lanes").first().boundingBox();
+  expect(lanesAfter.x).toBeLessThan(lanesBefore.x - 80);
+
+  await page.getByRole("button", { name: "收起终端", exact: true }).click();
+  await expect(page.locator(".dock")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "展开终端", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "收起 Issue", exact: true }).click();
+  await expect(page.locator(".map-detail-col")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "展开 Issue", exact: true })).toBeVisible();
 });
 
 test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page }) => {
