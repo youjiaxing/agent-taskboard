@@ -591,23 +591,27 @@
       border: 1px solid #ececea;
     }
     .reveal-chip {
-      position: absolute;
       z-index: 6;
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 5px 11px;
+      padding: 4px 10px;
       border-radius: 999px;
       border: 1px solid #e8e8e5;
       background: #fff;
-      box-shadow: 0 6px 20px rgba(20,20,16,.10);
       font-size: 12px;
       color: var(--ink);
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .reveal-chip:hover { background: #f7f7f5; border-color: #d8d8d4; }
-    .reveal-chip.left { top: 48px; left: 10px; }
-    .reveal-chip.right { top: 48px; right: 10px; }
-    .reveal-chip.bottom { bottom: 12px; left: 50%; transform: translateX(-50%); }
+    .reveal-chip.float {
+      position: absolute;
+      box-shadow: 0 6px 20px rgba(20,20,16,.10);
+    }
+    .reveal-chip.float.left { top: 8px; left: 10px; }
+    .reveal-chip.float.right { top: 8px; right: 10px; }
+    .reveal-chip.float.bottom { bottom: 12px; left: 50%; transform: translateX(-50%); }
     .issue-kicker .fold-hit { color: #9a9a96; }
     .graph-sheet {
       flex: 1;
@@ -1871,9 +1875,10 @@ v1 桌面壳是否坚持 Tauri 2？
     function dockFoldHit() {
       return foldHit("toggle-dock", dockFolded() ? t("unfoldDock") : t("foldDock"), dockFolded() ? "⌃" : "⌄", "edge-h");
     }
-    function revealChip(act, label, place) {
+    function revealChip(act, label, place, mode) {
       const glyph = place === "left" ? "›" : place === "right" ? "‹" : "⌃";
-      return `<button type="button" class="reveal-chip ${place}" data-act="${act}" aria-label="${esc(label)}">${glyph} ${esc(label)}</button>`;
+      const cls = mode === "float" ? `reveal-chip float ${place}` : `reveal-chip ${place}`;
+      return `<button type="button" class="${cls}" data-act="${act}" aria-label="${esc(label)}">${glyph} ${esc(label)}</button>`;
     }
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
     function setDirection(id) {
@@ -2067,7 +2072,7 @@ v1 桌面壳是否坚持 Tauri 2？
       if (!live) return idleDock(issue(S.issueId));
       if (S.direction === "codex-map" && S.termZoom === "right") return "";
       const showTerm = !dockFolded();
-      if (!showTerm) return revealChip("toggle-dock", t("unfoldDock"), "bottom");
+      if (!showTerm) return revealChip("toggle-dock", t("unfoldDock"), "bottom", "float");
       return `
         <div class="dock">
           ${dockFoldHit()}
@@ -2454,12 +2459,12 @@ v1 桌面壳是否坚持 Tauri 2？
           <div class="map-frame">
             ${S.sideFolded ? "" : mapSidebar()}
             <div class="map-workspace">
-              ${S.sideFolded ? revealChip("toggle-side", t("unfoldSide"), "left") : ""}
+              ${empty && S.sideFolded ? revealChip("toggle-side", t("unfoldSide"), "left", "float") : ""}
               ${empty ? mapEmpty(empty) : `
                 <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""} ${!hideDetail && S.issueWide ? "issue-wide" : ""} ${!hideDetail && !S.issueWide && S.midMode === "run" ? "run-read" : ""}">
                   <div class="map-mid">${mid}</div>
                   ${termOnRight ? `<aside class="map-term-col">${termChrome(live)}${termSplit(live)}</aside>` : ""}
-                  ${hideDetail ? revealChip("toggle-detail", t("unfoldDetail"), "right") : `<aside class="map-detail-col">${issueDetail()}</aside>`}
+                  ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
                 </div>
                 ${bottomDock(live)}
               `}
@@ -2535,8 +2540,10 @@ v1 桌面壳是否坚持 Tauri 2？
       const h = host(S.hostId);
       const p = project(S.projectId);
       const cur = S.midMode === "run" && S.ovReturn ? overviewCursor() : null;
+      const hideDetail = S.detailFolded || S.termZoom === "right";
       return `
         <div class="mid-bar">
+          ${S.sideFolded ? revealChip("toggle-side", t("unfoldSide"), "left") : ""}
           ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
@@ -2549,6 +2556,7 @@ v1 桌面壳是否坚持 Tauri 2？
           ` : `<span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>`}
           <span class="grow"></span>
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
+          ${hideDetail && S.viewport !== "phone" ? revealChip("toggle-detail", t("unfoldDetail"), "right") : ""}
         </div>`;
     }
 

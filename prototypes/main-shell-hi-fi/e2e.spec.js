@@ -95,11 +95,24 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
 test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
   const lanesBefore = await page.locator(".lanes").first().boundingBox();
+  const foldLeft = await page.getByRole("button", { name: "收起左侧", exact: true }).boundingBox();
   await page.getByRole("button", { name: "收起左侧", exact: true }).click();
   await expect(page.locator(".map-side")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "展开左侧", exact: true })).toBeVisible();
+  const unfoldLeft = page.getByRole("button", { name: "展开左侧", exact: true });
+  await expect(unfoldLeft).toBeVisible();
+  await expect(page.locator(".mid-bar").getByRole("button", { name: "展开左侧", exact: true })).toBeVisible();
   const lanesAfter = await page.locator(".lanes").first().boundingBox();
   expect(lanesAfter.x).toBeLessThan(lanesBefore.x - 80);
+  const boardTab = await page.getByRole("button", { name: "看板", exact: true }).first().boundingBox();
+  const unfoldBox = await unfoldLeft.boundingBox();
+  expect(Math.abs(unfoldBox.y - boardTab.y)).toBeLessThan(8);
+  expect(Math.abs(unfoldBox.y - foldLeft.y)).toBeLessThan(12);
+
+  await page.getByRole("button", { name: "总览", exact: true }).first().click();
+  const unfoldOnOverview = await page.getByRole("button", { name: "展开左侧", exact: true }).boundingBox();
+  const allProjects = await page.getByRole("button", { name: "全部 Project", exact: true }).boundingBox();
+  expect(unfoldOnOverview.y + unfoldOnOverview.height).toBeLessThan(allProjects.y + 2);
+  await page.getByRole("button", { name: "看板", exact: true }).first().click();
 
   await page.getByRole("button", { name: "收起终端", exact: true }).click();
   await expect(page.locator(".dock")).toHaveCount(0);
@@ -107,7 +120,10 @@ test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
 
   await page.getByRole("button", { name: "收起 Issue", exact: true }).click();
   await expect(page.locator(".map-detail-col")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "展开 Issue", exact: true })).toBeVisible();
+  await expect(page.locator(".mid-bar").getByRole("button", { name: "展开 Issue", exact: true })).toBeVisible();
+  const unfoldIssue = await page.getByRole("button", { name: "展开 Issue", exact: true }).boundingBox();
+  const boardTab2 = await page.getByRole("button", { name: "看板", exact: true }).first().boundingBox();
+  expect(Math.abs(unfoldIssue.y - boardTab2.y)).toBeLessThan(8);
 });
 
 test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page }) => {
