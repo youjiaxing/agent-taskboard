@@ -124,6 +124,13 @@ test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
   const unfoldIssue = await page.getByRole("button", { name: "展开 Issue", exact: true }).boundingBox();
   const boardTab2 = await page.getByRole("button", { name: "看板", exact: true }).first().boundingBox();
   expect(Math.abs(unfoldIssue.y - boardTab2.y)).toBeLessThan(8);
+
+  await expect(page.locator(".map-chrome-trail [data-act=\"settings\"]")).toBeVisible();
+  await page.locator(".map-chrome-trail [data-act=\"settings\"]").click();
+  await expect(page.getByText("界面语言", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "素纸夜间", exact: true }).click();
+  await expect(page).toHaveURL(/skin=plain-dark/);
+  await page.locator('[data-act="settings"]').last().click();
 });
 
 test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page }) => {
@@ -269,8 +276,13 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await page.locator('[data-act="issue"][data-id="30"]').first().click();
     await expect(page.getByText("认领还在。优先恢复原生会话。", { exact: false })).toBeVisible();
 
-    // 设置面板列出三个方向
+    // 设置面板：语言、主题清单、三版对照
     await page.locator('[data-act="settings"]').first().click();
+    await expect(page.getByText("界面语言", { exact: true })).toBeVisible();
+    await expect(page.getByText("主题", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "暖纸", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "素纸", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "素纸夜间", exact: true })).toBeVisible();
     await expect(page.getByText("观感方向", { exact: true })).toBeVisible();
     await expect(page.getByText(/没有取：线程列表、聊天输入框和会话主表面/)).toBeVisible();
     await expect(page.getByText("Codex 原貌映射", { exact: true }).last()).toBeVisible();

@@ -14,7 +14,7 @@
                 「打开终端」把 Embedded Terminal 抬到中间；「放回底栏」恢复。
       codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
       paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
-    ?direction=codex-map|codex|paper  &mid=board|graph|run  &iw=1
+    ?direction=codex-map|codex|paper  &mid=board|graph|run  &iw=1  &skin=warm-light|plain-light|plain-dark  &set=1
   -->
   <style>
     :root {
@@ -105,6 +105,34 @@
       --shadow: 0 18px 40px rgba(28, 27, 25, .12);
       --desk-glow: #eceae6;
     }
+    .theme-plain-dark {
+      --desk: #0e0e0d;
+      --paper: #181817;
+      --paper-2: #121211;
+      --card: #232321;
+      --ink: #f4f2ee;
+      --on-ink: #181817;
+      --muted: #a3a19b;
+      --line: #33322f;
+      --line-strong: #4d4c48;
+      --accent: #e86a5c;
+      --accent-ink: #ffd4ce;
+      --sel: #3a221f;
+      --run: #7ad49a;
+      --stop: #f38b82;
+      --block: #e0b15a;
+      --chip: #232321;
+      --btn: #232321;
+      --field: #10100f;
+      --term: #0b0b0a;
+      --term-fg: #f4f2ee;
+      --ident: #0b0b0a;
+      --who: #f0a399;
+      --card-sel: #3d2623;
+      --glow: rgba(255,255,255,.05);
+      --shadow: 0 20px 48px rgba(0, 0, 0, .55);
+      --desk-glow: #1c1c1b;
+    }
     .theme-warm {
       --r: 8px;
       --win-r: 12px;
@@ -134,7 +162,7 @@
     .theme-warm .traffic i:nth-child(1) { background: #ec6a5e; }
     .theme-warm .traffic i:nth-child(2) { background: #f5bf4f; }
     .theme-warm .traffic i:nth-child(3) { background: #61c554; }
-    .direction-pick {
+    .direction-pick, .theme-pick {
       width: 100%;
       text-align: left;
       display: flex;
@@ -143,7 +171,19 @@
       gap: 8px;
       padding: 8px 10px;
     }
-    .direction-pick > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+    .direction-pick > span:first-child,
+    .theme-pick > span:first-child { display: inline-flex; align-items: center; gap: 8px; }
+    .theme-pick .swatch {
+      width: 28px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid var(--line-strong);
+      flex: 0 0 auto;
+    }
+    .theme-pick .swatch.warm-light { background: linear-gradient(135deg, #fff8ee, #cfc4b0); }
+    .theme-pick .swatch.plain-light { background: linear-gradient(135deg, #fffcf8, #d5d3ce); }
+    .theme-pick .swatch.plain-dark { background: linear-gradient(135deg, #232321, #0e0e0d); }
+    .settings-modal { width: min(460px, calc(100vw - 32px)); max-height: min(82vh, 720px); overflow: auto; }
 
     body {
       font: 13px/1.4 var(--sans);
@@ -736,7 +776,7 @@
     .shell-codex .sheet { border-radius: 10px; box-shadow: 0 18px 52px rgba(0,0,0,.18); }
 
     /* 纸面精修：保留桌面与纸卡，只收敛阴影、颜色和装饰。 */
-    .shell-paper {
+    .shell-paper:not(.theme-plain-dark) {
       --desk: #d6cec0;
       --paper: #fffaf2;
       --paper-2: #f5ede1;
@@ -748,6 +788,9 @@
       --card-sel: #fff0df;
       --shadow: 0 22px 52px rgba(67, 45, 21, .16);
       background: radial-gradient(1000px 480px at 50% -12%, #eee7da, transparent 62%), var(--desk);
+    }
+    .shell-paper.theme-plain-dark {
+      background: radial-gradient(1000px 480px at 50% -12%, #1c1c1b, transparent 62%), var(--desk);
     }
     .shell-paper .stage { padding: 18px 18px 82px; }
     .shell-paper .win { border-radius: 14px; }
@@ -788,21 +831,57 @@
       --r: 10px;
       --win-r: 0;
       --side-w: 248px;
-      background: #fff;
+      background: var(--paper);
     }
-    .shell-codex-map .stage { padding: 0 0 70px; background: #fff; }
+    .shell-codex-map.theme-warm-light {
+      --desk: #cfc4b0;
+      --paper: #fff8ee;
+      --paper-2: #f4ead8;
+      --card: #fffdf8;
+      --ink: #2a2218;
+      --on-ink: #fff8ee;
+      --muted: #7a6d5c;
+      --line: #e2d3bb;
+      --line-strong: #c4b191;
+      --accent: #c45c26;
+      --accent-ink: #7a2e0c;
+      --sel: #f3d3b4;
+      --chip: #f3ead8;
+      --btn: #fff8ee;
+      --field: #fff;
+      --card-sel: #fff1de;
+    }
+    .shell-codex-map.theme-plain-dark {
+      --desk: #0e0e0d;
+      --paper: #181817;
+      --paper-2: #121211;
+      --card: #232321;
+      --ink: #f4f2ee;
+      --on-ink: #181817;
+      --muted: #a3a19b;
+      --line: #33322f;
+      --line-strong: #4d4c48;
+      --accent: #e86a5c;
+      --accent-ink: #ffd4ce;
+      --sel: #3a221f;
+      --chip: #232321;
+      --btn: #232321;
+      --field: #10100f;
+      --card-sel: #3d2623;
+    }
+    .shell-codex-map .stage { padding: 0 0 70px; background: var(--paper); }
     .shell-codex-map .map-frame {
       height: 100%;
       display: flex;
       flex-direction: column;
-      background: #fff;
+      background: var(--paper);
     }
     .shell-codex-map .map-chrome {
       flex: 0 0 auto;
       display: flex;
       align-items: stretch;
       min-height: 38px;
-      background: #fff;
+      background: var(--paper);
     }
     .shell-codex-map .map-chrome-lead {
       flex: 0 0 var(--side-w);
@@ -811,15 +890,15 @@
       align-items: center;
       gap: 8px;
       padding: 0 10px;
-      background: #f5f5f4;
+      background: var(--paper-2);
     }
     .shell-codex-map .map-frame.side-folded .map-chrome-lead {
       flex: 0 0 auto;
       width: auto;
-      background: #fff;
+      background: var(--paper);
     }
     .shell-codex-map .map-frame.side-folded .map-chrome {
-      border-bottom: 1px solid #f0f0ee;
+      border-bottom: 1px solid var(--line);
     }
     .shell-codex-map .map-chrome-lead .traffic i { width: 12px; height: 12px; }
     .shell-codex-map .side-toggle {
@@ -850,9 +929,34 @@
       flex: 1;
       min-width: 0;
       flex-wrap: nowrap;
-      border-bottom: 1px solid #f0f0ee;
+      border-bottom: 1px solid var(--line);
     }
     .shell-codex-map .map-frame.side-folded .map-chrome-main .mid-bar { border-bottom: 0; }
+    .shell-codex-map .map-chrome-trail {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 0 8px;
+    }
+    .shell-codex-map .map-chrome-trail button {
+      border: 0;
+      background: transparent;
+      height: 28px;
+      min-width: 28px;
+      padding: 0 8px;
+      border-radius: 6px;
+      color: #6f6f6c;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .shell-codex-map .map-chrome-trail button:hover,
+    .shell-codex-map .map-chrome-trail button.active {
+      background: var(--sel);
+      color: var(--ink);
+      border-color: transparent;
+    }
     .shell-codex-map .map-body {
       flex: 1;
       min-height: 0;
@@ -861,7 +965,7 @@
     .shell-codex-map .map-side {
       flex: 0 0 var(--side-w);
       width: var(--side-w);
-      background: #f5f5f4;
+      background: var(--paper-2);
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -933,7 +1037,7 @@
       color: var(--ink);
     }
     .shell-codex-map .ms-item:hover { background: var(--sel); }
-    .shell-codex-map .ms-item.active { background: #e4e4e2; font-weight: 600; }
+    .shell-codex-map .ms-item.active { background: var(--sel); font-weight: 600; }
     .shell-codex-map .ms-nested {
       display: block;
       width: calc(100% - 18px);
@@ -974,7 +1078,7 @@
       min-height: 0;
       display: flex;
       flex-direction: column;
-      background: #fff;
+      background: var(--paper);
       position: relative;
     }
     .shell-codex-map .map-cols {
@@ -1050,7 +1154,7 @@
       overflow: hidden;
       border-radius: 10px;
       border: 1px solid var(--line);
-      background: #fff;
+      background: var(--paper);
       min-width: 0;
     }
     .ov-tile:hover { border-color: var(--line-strong); }
@@ -1104,11 +1208,11 @@
       overflow: auto;
       gap: 10px;
       padding: 10px 12px 12px;
-      background: #fff;
+      background: var(--paper);
     }
     .shell-codex-map .map-mid .lanes .col {
       border: 0;
-      background: #f7f7f6;
+      background: var(--paper-2);
       border-radius: 12px;
       overflow: auto;
     }
@@ -1127,14 +1231,14 @@
       padding: 10px 11px;
       border: 1px solid transparent;
       border-radius: 10px;
-      background: #fff;
+      background: var(--paper);
       box-shadow: none;
     }
     .shell-codex-map .map-mid .issue-card:hover { transform: none; border-color: var(--line); }
     .shell-codex-map .map-mid .issue-card.sel {
       outline: 0;
       border-color: #c8c8c4;
-      background: #fff;
+      background: var(--paper);
     }
     .shell-codex-map .map-detail-col {
       min-width: 0;
@@ -1142,8 +1246,8 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      border-left: 1px solid #f0f0ee;
-      background: #fff;
+      border-left: 1px solid var(--line);
+      background: var(--paper);
     }
     .issue-doc {
       flex: 1 1 auto;
@@ -1156,8 +1260,8 @@
     .issue-hd {
       flex: 0 0 auto;
       padding: 10px 14px 8px;
-      border-bottom: 1px solid #f0f0ee;
-      background: #fff;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
     }
     .issue-kicker {
       display: flex;
@@ -1220,8 +1324,8 @@
       flex: 0 1 auto;
       max-height: 38%;
       overflow: auto;
-      border-top: 1px solid #f0f0ee;
-      background: #fafaf9;
+      border-top: 1px solid var(--line);
+      background: var(--paper-2);
     }
     .phone-body .issue-doc { height: auto; }
     .phone-body .issue-body { overflow: visible; flex: none; }
@@ -1241,8 +1345,8 @@
     .issue-rels details[open] summary { color: var(--ink); }
     .issue-rels .pad { padding-top: 0; }
     .shell-codex-map .map-detail-col .block {
-      background: #fff;
-      border-color: #efefed;
+      background: var(--paper);
+      border-color: var(--line);
       border-radius: 10px;
     }
     .shell-codex-map .dock {
@@ -1254,8 +1358,8 @@
       bottom: auto;
       transform: none;
       width: auto;
-      background: #fff;
-      border-top: 1px solid #ececea;
+      background: var(--paper);
+      border-top: 1px solid var(--line);
       z-index: 2;
     }
     .shell-codex-map .dock.slim {
@@ -1264,7 +1368,7 @@
       min-height: 0;
       border-top: 1px solid #ececea;
     }
-    .shell-codex-map .dock .tabs { background: #fafafa; }
+    .shell-codex-map .dock .tabs { background: var(--paper-2); }
     .shell-codex-map .dock .tabs button.sel { background: #e8e8e6; color: var(--ink); box-shadow: none; }
     .shell-codex-map .dock .ident { background: #171716; }
     .shell-codex-map .dock.slim .ident {
@@ -1295,8 +1399,8 @@
       font-weight: 500;
       letter-spacing: -.03em;
     }
-    .shell-codex-map .mid-bar { border-bottom-color: #f0f0ee; }
-    .shell-codex-map .graph-canvas { background: #fcfcfb; }
+    .shell-codex-map .mid-bar { border-bottom-color: var(--line); }
+    .shell-codex-map .graph-canvas { background: var(--paper); }
 
     @media (max-width: 1100px) {
       .shell-codex-map { --side-w: 220px; }
@@ -1588,6 +1692,7 @@ v1 桌面壳是否坚持 Tauri 2？
     const S = {
       direction: "codex",
       theme: "plain-light",
+      lastLight: "plain-light",
       viewport: "desktop",
       scenario: "daily",
       lang: "zh",
@@ -1654,6 +1759,12 @@ v1 桌面壳是否坚持 Tauri 2？
         note: "结构未改：保留桌面与纸卡。看板 | 依赖图仍在。",
         noteEn: "Structure unchanged: keep the desk and paper cards. Board | graph remain."
       }
+    ];
+
+    const THEMES = [
+      { id: "warm-light", name: "暖纸", nameEn: "Warm paper", appearance: "light" },
+      { id: "plain-light", name: "素纸", nameEn: "Plain paper", appearance: "light" },
+      { id: "plain-dark", name: "素纸夜间", nameEn: "Plain paper night", appearance: "dark" }
     ];
 
     const T = {
@@ -1764,7 +1875,7 @@ v1 桌面壳是否坚持 Tauri 2？
         unstaged: "未提交",
         direction: "观感方向",
         directionHelp: "三版对照：原貌映射动了壳；气质与纸面共用已钉主壳 #15/#26。",
-        prototypeThemeNote: "本原型临时把 #25 主题清单降级为三版对照；提出者选定前不改词表和 ADR 0011。",
+        prototypeThemeNote: "设置里仍是 ADR 0011 的三套主题。底下三版对照是壳，不是主题清单。选定前不改词表。",
         structureSame: "结构未改",
         structureMoved: "结构已动 · 对照原貌",
         mapBoard: "看板",
@@ -1791,7 +1902,16 @@ v1 桌面壳是否坚持 Tauri 2？
         you: "你",
         codexBorrowed: "Codex 气质取了：中性色层、紧凑行高、低装饰控件、左侧原生栏。",
         codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元；中间仍是看板 | 依赖图；底栏仍是官方 CLI 的 Embedded Terminal，不再悬浮遮挡看板。",
-        officialRef: "查看 Codex 官方介绍"
+        officialRef: "查看 Codex 官方介绍",
+        uiLang: "界面语言",
+        langZh: "简体中文",
+        langEn: "English",
+        theme: "主题",
+        themeQuick: "深色一律到素纸夜间。浅色回到上次用的浅色。",
+        themeHelp: "没有「跟随系统」。值是一份具体主题，记在这个 Client 上。",
+        appearanceLight: "浅",
+        appearanceDark: "深",
+        autoAdvanceHelp: "本原型不接真开关。"
       },
       en: {
         projects: "Projects on this Host",
@@ -1900,7 +2020,7 @@ v1 桌面壳是否坚持 Tauri 2？
         unstaged: "Uncommitted",
         direction: "Visual direction",
         directionHelp: "Three directions: the layout map moves chrome; mood and paper keep the agreed shell #15/#26.",
-        prototypeThemeNote: "This prototype temporarily demotes the #25 theme list to compare three directions; vocabulary and ADR 0011 stay unchanged until a direction is chosen.",
+        prototypeThemeNote: "Settings still use the ADR 0011 theme list. The three directions compare chrome, not the theme list. Vocabulary stays until a direction is chosen.",
         structureSame: "Structure unchanged",
         structureMoved: "Structure moved",
         mapBoard: "Board",
@@ -1927,7 +2047,16 @@ v1 桌面壳是否坚持 Tauri 2？
         you: "You",
         codexBorrowed: "Borrowed from Codex: neutral layers, compact rows, quiet controls, and a native left rail.",
         codexBoundary: "Not borrowed: thread lists, chat composer, or a conversation-first surface. Issues remain the work unit; the middle stays Board | graph; the dock remains the official CLI Embedded Terminal and no longer overlays the board.",
-        officialRef: "Open the official Codex introduction"
+        officialRef: "Open the official Codex introduction",
+        uiLang: "Interface language",
+        langZh: "简体中文",
+        langEn: "English",
+        theme: "Theme",
+        themeQuick: "Dark always goes to plain-night. Light returns to the last light theme.",
+        themeHelp: "No Follow system. The value is one concrete theme, stored on this Client.",
+        appearanceLight: "Light",
+        appearanceDark: "Dark",
+        autoAdvanceHelp: "This prototype does not wire the real switch."
       }
     };
     function t(k) { return T[S.lang][k]; }
@@ -1952,12 +2081,36 @@ v1 桌面壳是否坚持 Tauri 2？
       </button>`;
     }
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
+    function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[1]; }
+    function setTheme(id) {
+      const th = themeOf(id);
+      S.theme = th.id;
+      if (th.appearance === "light") S.lastLight = th.id;
+    }
+    function toggleAppearance() {
+      if (themeOf(S.theme).appearance === "dark") setTheme(S.lastLight || "plain-light");
+      else {
+        S.lastLight = S.theme;
+        setTheme("plain-dark");
+      }
+    }
+    function appearanceBtn() {
+      const dark = themeOf(S.theme).appearance === "dark";
+      const label = dark ? t("appearanceLight") : t("appearanceDark");
+      return `<button type="button" data-act="appearance" title="${esc(t("themeQuick"))}" aria-label="${esc(label)}">${esc(label)}</button>`;
+    }
+    function settingsBtn(iconOnly) {
+      const label = t("settings");
+      return `<button type="button" class="${S.settingsOpen ? "active" : ""}" data-act="settings" title="${esc(label)}" aria-label="${esc(label)}">${iconOnly ? icn("gear") : "⚙ " + esc(label)}</button>`;
+    }
     function setDirection(id) {
       const next = directionOf(id);
       if (next.id === "codex-map" && S.direction !== "codex-map") S.mapDetailOpen = false;
       if (next.id !== "codex-map" && S.midMode === "run") S.midMode = "board";
       S.direction = next.id;
-      S.theme = next.id === "paper" ? "warm-light" : "plain-light";
+      if (themeOf(S.theme).appearance !== "dark") {
+        setTheme(next.id === "paper" ? "warm-light" : "plain-light");
+      }
     }
     function dockFolded() {
       return !!(S.dockFolded[S.midMode] ?? (S.midMode === "graph"));
@@ -1983,6 +2136,8 @@ v1 桌面壳是否坚持 Tauri 2？
       u.searchParams.set("direction", S.direction);
       u.searchParams.delete("theme");
       u.searchParams.delete("variant");
+      if (S.theme !== "plain-light") u.searchParams.set("skin", S.theme);
+      else u.searchParams.delete("skin");
       u.searchParams.set("viewport", S.viewport);
       u.searchParams.set("scenario", S.scenario);
       u.searchParams.set("lang", S.lang);
@@ -2042,6 +2197,8 @@ v1 桌面壳是否坚持 Tauri 2？
       };
       const raw = p.get("direction") || p.get("theme") || (p.get("variant") || "").toUpperCase();
       setDirection(legacyDirection[raw] || raw || "codex");
+      const skin = p.get("skin");
+      if (["warm-light", "plain-light", "plain-dark"].includes(skin)) setTheme(skin);
       S.viewport = p.get("viewport") === "phone" ? "phone" : "desktop";
       const sc = p.get("scenario");
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
@@ -2414,6 +2571,7 @@ v1 桌面壳是否坚持 Tauri 2？
 
     function render() {
       writeQS();
+      document.documentElement.lang = S.lang === "en" ? "en" : "zh-CN";
       document.body.className = `theme-warm theme-${S.theme} shell-${S.direction}${S.viewport === "phone" ? " phone-vp" : ""}`;
       document.getElementById("app").innerHTML =
         S.viewport === "phone" ? renderPhone() : renderDesktop();
@@ -2448,7 +2606,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const i = issue(S.issueId);
       const r = run(S.runId);
       const lines = [
-        `观感 ${S.direction} · ${S.viewport} · ${S.scenario}`,
+        `观感 ${S.direction} · 主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
         `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15/#26"}`,
         `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "Run 终端" : S.midMode === "overview" ? "总览" : "看板"}`,
         `终端: ${S.termTheme}`,
@@ -2490,10 +2648,9 @@ v1 桌面壳是否坚持 Tauri 2？
                 </button>`).join("")}
               <button class="ghost" data-act="pair">+ ${t("pair")}</button>
               <span class="grow"></span>
-              <span class="chip">${t("autoOff")}</span>
               ${directionToggle()}
-              <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
-              <button data-act="settings" class="${S.settingsOpen ? "active" : ""}" title="设置入口在这里">⚙ ${t("settings")}</button>
+              ${appearanceBtn()}
+              ${settingsBtn()}
             </div>
             <div class="cols ${S.issueWide ? "issue-wide" : ""}">
               <div class="pane">
@@ -2534,6 +2691,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${sideToggle()}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
+              <div class="map-chrome-trail">${appearanceBtn()}${settingsBtn(true)}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -2590,11 +2748,6 @@ v1 桌面壳是否坚持 Tauri 2？
             </div>
           </div>
           <span class="grow"></span>
-          <div class="ms-foot">
-            <span class="chip">${esc(t("autoOff"))}</span>
-            <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
-            <button data-act="settings" class="${S.settingsOpen ? "active" : ""}">${esc(t("settings"))}</button>
-          </div>
         </aside>`;
     }
 
@@ -3142,10 +3295,38 @@ v1 桌面壳是否坚持 Tauri 2？
 
     function settingsSheet() {
       return `
-        <div class="sheet">
-          <div class="hd">${t("settings")}<button class="ghost" data-act="settings">×</button></div>
-          <div class="pad stack">
-            <div class="tiny">这里只标入口。不必做成完整设置页。</div>
+        <div class="modal-bg">
+          <div class="modal settings-modal">
+            <div class="row"><b>${t("settings")}</b><span class="grow"></span><button class="ghost" data-act="settings">×</button></div>
+            <b>${t("uiLang")}</b>
+            <div class="row">
+              <button data-act="lang" data-id="zh" class="${S.lang === "zh" ? "active" : ""}">${t("langZh")}</button>
+              <button data-act="lang" data-id="en" class="${S.lang === "en" ? "active" : ""}">${t("langEn")}</button>
+            </div>
+            <b>${t("theme")}</b>
+            <div class="tiny">${t("themeHelp")}</div>
+            <div class="tiny">${t("themeQuick")}</div>
+            ${THEMES.map(th => {
+              const name = S.lang === "en" ? th.nameEn : th.name;
+              return `
+              <button class="theme-pick ${S.theme === th.id ? "active" : ""}" data-act="theme" data-id="${th.id}" aria-label="${esc(name)}">
+                <span><span class="swatch ${th.id}"></span>${esc(name)}</span>
+                <span class="tiny">${th.appearance === "dark" ? t("appearanceDark") : t("appearanceLight")}</span>
+              </button>`;
+            }).join("")}
+            <b>${t("recentN")}</b>
+            <div class="row">
+              <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
+              <span class="mono" data-role="n-val">${S.recentN}</span>
+            </div>
+            <div class="tiny">${t("recentNHelp")}</div>
+            <b>${S.lang === "en" ? "Terminal" : "终端"}</b>
+            <div class="row">
+              <button data-act="term-theme" class="${S.termTheme === "dark" ? "active" : ""}">${t("termDark")}</button>
+              <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
+            </div>
+            <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
+            <div class="tiny">${esc(t("autoOff"))} · ${esc(t("autoAdvanceHelp"))}</div>
             <b>${t("direction")}</b>
             <div class="tiny">${t("directionHelp")}</div>
             <div class="banner tiny">${t("prototypeThemeNote")}</div>
@@ -3161,18 +3342,6 @@ v1 桌面壳是否坚持 Tauri 2？
               <div>${t("codexBoundary")}</div>
               <a class="ext" href="https://openai.com/index/introducing-the-codex-app/" target="_blank" rel="noreferrer">${t("officialRef")}</a>
             </div>
-            <b>${S.lang === "en" ? "Terminal" : "终端"}</b>
-            <div class="row">
-              <button data-act="term-theme" class="${S.termTheme === "dark" ? "active" : ""}">${t("termDark")}</button>
-              <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
-            </div>
-            <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
-            <b>${t("recentN")}</b>
-            <div class="row">
-              <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
-              <span class="mono" data-role="n-val">${S.recentN}</span>
-            </div>
-            <div class="tiny">${t("recentNHelp")}</div>
           </div>
         </div>`;
     }
@@ -3199,13 +3368,13 @@ v1 桌面壳是否坚持 Tauri 2？
     function renderPhone() {
       if (S.scenario === "unpaired") {
         return `<div class="phone-stage"><div class="phone">
-          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${directionToggle()}</div>
+          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${appearanceBtn()}${settingsBtn()}${directionToggle()}</div>
           <div class="phone-body pad stack">
             <b>${t("unpairedTitle")}</b>
             <div class="muted">${t("unpairedBody")}</div>
             <button class="primary" data-act="pair">${t("pairNow")}</button>
           </div>
-        </div>${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}</div>`;
+        </div>${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}${S.settingsOpen ? settingsSheet() : ""}</div>`;
       }
       const body = S.phone === "issue" ? phoneIssue() : S.phone === "run" ? phoneRun() : phoneHome();
       return `
@@ -3215,6 +3384,8 @@ v1 桌面壳是否坚持 Tauri 2？
               <div class="row">
                 ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
                 <span class="grow"></span>
+                ${appearanceBtn()}
+                ${settingsBtn()}
                 ${directionToggle()}
               </div>
               <div class="tiny">${t("phoneNote")}</div>
@@ -3227,6 +3398,7 @@ v1 桌面壳是否坚持 Tauri 2？
             </div>
           </div>
           ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
+          ${S.settingsOpen ? settingsSheet() : ""}
         </div>`;
     }
     function phoneHome() {
@@ -3381,6 +3553,8 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (act === "phone") { S.phone = id; render(); }
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
+        if (act === "theme") { setTheme(id); render(); }
+        if (act === "appearance") { toggleAppearance(); render(); }
         if (act === "all-runs") {
           S.allRunsOpen = false;
           S.settingsOpen = false;
@@ -3388,7 +3562,10 @@ v1 桌面壳是否坚持 Tauri 2？
           setMidMode("overview");
           render();
         }
-        if (act === "lang") { S.lang = S.lang === "zh" ? "en" : "zh"; render(); }
+        if (act === "lang") {
+          S.lang = id === "en" || id === "zh" ? id : (S.lang === "zh" ? "en" : "zh");
+          render();
+        }
         if (act === "direction") { setDirection(id); render(); }
         if (act === "map-nav") {
           if (id === "settings") { S.settingsOpen = true; S.allRunsOpen = false; }
