@@ -1126,6 +1126,7 @@
       settingsOpen: false,
       inspect: false,
       pairing: false,
+      stopAsk: false,
       allRunsOpen: false,
       childFilter: null,
       mapDetailOpen: false,
@@ -1242,6 +1243,12 @@
         filterProject: "点 Project 只过滤本板。",
         ended: "已结束",
         stopped: "执行已停",
+        stopRun: "停止",
+        stopAsk: "停止这次 Run？",
+        stopSoft: "正常停止",
+        stopHard: "强制停止",
+        stopHint: "先请求正常终止，超时再强制。收起终端、折面板或关窗口都不会停进程。官方 TUI 里 Ctrl+C 仍可用。",
+        stopNeedRun: "先点一次还在跑的 Run",
         free: "游离 · 没有 Issue",
         collapse: "收起",
         thisRound: "这一轮",
@@ -1349,6 +1356,12 @@
         filterProject: "A Project only filters this board.",
         ended: "Ended",
         stopped: "Run stopped",
+        stopRun: "Stop",
+        stopAsk: "Stop this Run?",
+        stopSoft: "Stop gently",
+        stopHard: "Force stop",
+        stopHint: "Ask it to exit first, then force. Folding the terminal or closing the window does not stop the process. Ctrl+C in the official TUI still works.",
+        stopNeedRun: "Pick a live Run first",
         free: "Loose · no Issue",
         collapse: "Collapse",
         thisRound: "This round",
@@ -1434,6 +1447,7 @@
       S.settingsOpen = false;
       S.allRunsOpen = false;
       S.pairing = false;
+      S.stopAsk = false;
       S.mapDetailOpen = false;
       S.mapSearchOpen = false;
       S.mapHostOpen = false;
@@ -1784,7 +1798,7 @@
           </div>
         </div>
         ${S.termZoom ? termZoomStage(r) : ""}
-        ${S.pairing ? pairingModal() : ""}
+        ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
     }
@@ -1813,7 +1827,7 @@
           </div>
         </div>
         ${S.termZoom ? termZoomStage(r) : ""}
-        ${S.pairing ? pairingModal() : ""}
+        ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
     }
@@ -2165,6 +2179,7 @@
           ${runIdentity(r)}
           <span class="grow"></span>
           <button data-act="swap-run" title="最近切过的 Run">上一条</button>
+          ${r && r.status === "active" ? `<button data-act="ask-stop">${t("stopRun")}</button>` : ""}
           ${S.midMode === "run" ? "" : `<button data-act="toggle-dock">${dockFolded() ? t("unfoldDock") : t("foldDock")}</button>`}
           <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">${t("viewChanges")}</button>
           <button data-act="term-theme">${S.termTheme === "light" ? t("termDark") : t("termLight")}</button>
@@ -2269,7 +2284,25 @@
             </div>
           </div>
         </div>
-        ${S.pairing ? pairingModal() : ""}`;
+        ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}`;
+    }
+
+    function stopModal() {
+      const r = run(S.runId);
+      const i = r && r.issueId ? issue(r.issueId) : null;
+      return `
+        <div class="modal-bg" data-act="close-stop">
+          <div class="modal" onclick="event.stopPropagation()">
+            <b>${t("stopAsk")}</b>
+            <div class="tiny">${r ? esc(r.agent) + (i ? " · #" + i.id + " " + shortTitle(i.title, 18) : "") : t("stopNeedRun")}</div>
+            <div class="tiny">${t("stopHint")}</div>
+            <div class="row">
+              <button class="primary" data-act="stop-soft">${t("stopSoft")}</button>
+              <button data-act="stop-hard">${t("stopHard")}</button>
+              <button data-act="close-stop">取消</button>
+            </div>
+          </div>
+        </div>`;
     }
 
     function pairingModal() {
@@ -2364,7 +2397,7 @@
             <div class="muted">${t("unpairedBody")}</div>
             <button class="primary" data-act="pair">${t("pairNow")}</button>
           </div>
-        </div>${S.pairing ? pairingModal() : ""}</div>`;
+        </div>${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}</div>`;
       }
       const body = S.phone === "issue" ? phoneIssue() : S.phone === "run" ? phoneRun() : phoneHome();
       return `
@@ -2385,7 +2418,7 @@
               <button data-act="pair">${t("pair")}</button>
             </div>
           </div>
-          ${S.pairing ? pairingModal() : ""}
+          ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         </div>`;
     }
     function phoneHome() {
@@ -2405,6 +2438,7 @@
       const r = run(S.runId) || dockRuns()[0];
       return `
         <div class="hd">Run</div>
+        ${r && r.status === "active" ? `<div class="pad"><button data-act="ask-stop">${t("stopRun")}</button></div>` : ""}
         <div class="term" style="min-height:220px">${termText(r)}</div>
         <div class="banner">${t("phoneNote")}</div>`;
     }
@@ -2512,6 +2546,21 @@
         if (act === "pair") { S.pairing = true; render(); }
         if (act === "close-pair") { S.pairing = false; render(); }
         if (act === "fake-paired") { S.pairing = false; S.scenario = "daily"; applyScenario("daily"); render(); }
+        if (act === "ask-stop") {
+          if (run(S.runId) && run(S.runId).status === "active") S.stopAsk = true;
+          render();
+        }
+        if (act === "close-stop") { S.stopAsk = false; render(); }
+        if (act === "stop-soft" || act === "stop-hard") {
+          const r = run(S.runId);
+          if (r && r.status === "active") {
+            r.status = "stopped";
+            const i = r.issueId ? issue(r.issueId) : null;
+            if (i) i.stopped = true;
+          }
+          S.stopAsk = false;
+          render();
+        }
         if (act === "phone") { S.phone = id; render(); }
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "all-runs") { S.allRunsOpen = !S.allRunsOpen; S.settingsOpen = false; render(); }

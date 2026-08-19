@@ -37,6 +37,7 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.getByRole("button", { name: "查看更多最近完成", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "占满右侧", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "浅色终端", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止", exact: true }).first()).toBeVisible();
   await expect(page.getByText("查看改动", { exact: true }).first()).toBeVisible();
 
   // 左侧进行中的 Run：点进中间这次 Run，右侧仍是 Issue
