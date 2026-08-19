@@ -81,6 +81,26 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page).toHaveURL(urlWithDirection(page, "codex-map"));
 });
 
+test("占满右侧只放大现有终端，不复制一份", async ({ page }) => {
+  await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
+  await page.locator('.map-side [data-act="focus-run"][data-id="r1"]').click();
+  await expect(page.locator(".run-stage")).toBeVisible();
+  await expect(page.locator(".term")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "占满右侧", exact: true }).first().click();
+  await expect(page).toHaveURL(/zoom=right/);
+  await expect(page.locator(".zoom-stage")).toHaveCount(0);
+  await expect(page.locator(".term")).toHaveCount(1);
+  await expect(page.locator(".map-detail-col")).toHaveCount(0);
+  await expect(page.locator(".run-stage")).toBeVisible();
+
+  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await expect(page.locator(".zoom-stage")).toHaveCount(0);
+  await expect(page.locator(".term")).toHaveCount(1);
+  await expect(page.locator(".map-term-col")).toBeVisible();
+  await expect(page.locator(".lanes")).toBeVisible();
+});
+
 test("输入焦点时键盘 ←/→ 不切换方向", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
 

@@ -859,6 +859,17 @@
       grid-template-columns: minmax(0, 1fr) minmax(272px, 318px);
     }
     .shell-codex-map .map-cols.no-detail { grid-template-columns: minmax(0, 1fr); }
+    .shell-codex-map .map-cols.with-term-col {
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 46%);
+    }
+    .shell-codex-map .map-term-col {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid #ececea;
+      background: var(--term);
+    }
     .shell-codex-map .run-stage {
       flex: 1;
       min-height: 0;
@@ -1488,7 +1499,7 @@
       if (["daily", "single", "unpaired", "noproject", "emptyfront", "stopped"].includes(sc)) applyScenario(sc);
       if (p.get("lang") === "en") S.lang = "en";
       const zoom = p.get("zoom");
-      if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
+      if (["panel", "full", "right"].includes(zoom)) S.termZoom = zoom;
       if (p.get("vc") === "1") S.viewChangesOpen = true;
       if (p.get("set") === "1") S.settingsOpen = true;
       if (p.get("mid") === "graph" || p.get("mid") === "run") {
@@ -1797,7 +1808,7 @@
             </div>
           </div>
         </div>
-        ${S.termZoom ? termZoomStage(r) : ""}
+        ${S.termZoom && !(S.direction === "codex-map" && S.termZoom === "right") ? termZoomStage(r) : ""}
         ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
@@ -1807,26 +1818,32 @@
     function renderMap() {
       const r = run(S.runId);
       const empty = S.scenario === "unpaired" ? "unpaired" : !S.projectId ? "noproject" : null;
+      const fillRight = S.termZoom === "right";
+      const hideDetail = S.detailFolded || fillRight;
+      const termOnRight = fillRight && S.midMode !== "run";
+      const hideDockTerm = S.midMode === "run" || fillRight;
+      const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(r) : board();
       return `
         <div class="stage">
           <div class="map-frame ${S.sideFolded ? "side-slim" : ""}">
             ${mapSidebar()}
             <div class="map-workspace">
               ${empty ? mapEmpty(empty) : `
-                <div class="map-cols ${S.detailFolded || S.termZoom === "right" ? "no-detail" : ""}">
-                  <div class="map-mid">${S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(r) : board()}</div>
-                  ${S.detailFolded || S.termZoom === "right" ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
+                <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""}">
+                  <div class="map-mid">${mid}</div>
+                  ${termOnRight ? `<aside class="map-term-col">${termChrome(r)}${termSplit(r)}</aside>` : ""}
+                  ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
                 </div>
-                <div class="dock ${dockFolded() || S.midMode === "run" ? "slim" : ""}">
+                <div class="dock ${dockFolded() || hideDockTerm ? "slim" : ""}">
                   ${runTabs()}
-                  ${S.midMode === "run" ? "" : termChrome(r)}
-                  ${S.midMode === "run" ? "" : termSplit(r)}
+                  ${hideDockTerm ? "" : termChrome(r)}
+                  ${hideDockTerm ? "" : termSplit(r)}
                 </div>
               `}
             </div>
           </div>
         </div>
-        ${S.termZoom ? termZoomStage(r) : ""}
+        ${S.termZoom && S.termZoom !== "right" ? termZoomStage(r) : ""}
         ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
