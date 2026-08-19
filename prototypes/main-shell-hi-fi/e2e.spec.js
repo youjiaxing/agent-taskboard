@@ -33,6 +33,7 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "看板视图", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
   await expect(page.locator(".map-side [data-act=\"focus-run\"][data-id=\"r1\"]")).toBeVisible();
   await expect(page.locator(".map-side").getByRole("button", { name: "全部 Run", exact: true })).toHaveCount(0);
   await expect(page.locator(".dock").getByRole("button", { name: "全部 Run", exact: true })).toBeVisible();
@@ -42,12 +43,17 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.getByRole("button", { name: "停止", exact: true }).first()).toBeVisible();
   await expect(page.getByText("查看改动", { exact: true }).first()).toBeVisible();
 
-  // 左侧进行中的 Run：点进中间这次 Run，右侧仍是 Issue
-  await page.locator('.map-side [data-act="focus-run"][data-id="r1"]').click();
+  // 看这次 Run：中间抬起这一份终端，底栏让开，右侧仍是 Issue。顶栏没有第三块「这次 Run」按钮。
+  await page.getByRole("button", { name: "看这次 Run", exact: true }).click();
   await expect(page).toHaveURL(/mid=run/);
   await expect(page.locator(".run-stage")).toBeVisible();
+  await expect(page.locator(".dock")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
+  await expect(page.getByText("终端只在中间这一份。回看板或依赖图，底栏会回来。", { exact: true })).toBeVisible();
   await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await expect(page.locator(".dock")).toBeVisible();
+  await expect(page.locator(".lanes").first()).toBeVisible();
 
   // 依赖图：点节点只换详情；第一次打开默认折终端
   await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
@@ -98,8 +104,9 @@ test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page })
 
 test("占满右侧只放大现有终端，不复制一份", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
-  await page.locator('.map-side [data-act="focus-run"][data-id="r1"]').click();
+  await page.getByRole("button", { name: "看这次 Run", exact: true }).click();
   await expect(page.locator(".run-stage")).toBeVisible();
+  await expect(page.locator(".dock")).toHaveCount(0);
   await expect(page.locator(".term")).toHaveCount(1);
 
   await page.getByRole("button", { name: "占满右侧", exact: true }).first().click();

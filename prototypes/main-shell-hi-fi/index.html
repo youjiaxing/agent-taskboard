@@ -9,8 +9,8 @@
     一次性原型，不是产品。
     三个方向：
       codex-map  结构已动：左侧栏是 Host + 本机 Project，不是聊天清单。
-                中间仍是看板视图 | 依赖图；底栏 Embedded Terminal 占自己的高度。
-                学侧栏清单的密度，不仿 Codex 的会话壳。
+                中间是看板视图 | 依赖图，不是第三块「这次 Run」。
+                底栏是唯一终端；点「看这次 Run」才把终端抬到中间并收起底栏。
                 右侧 Issue 是文档栏：正文可滚，家族/依赖折在底下。
       codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
       paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
@@ -1428,8 +1428,8 @@ v1 桌面壳是否坚持 Tauri 2？
         id: "codex-map",
         name: "Codex 原貌映射",
         nameEn: "Codex layout map",
-        note: "动了结构：左侧 Host / Project / 进行中的 Run。可不看看板，中间给这次 Run。",
-        noteEn: "Structure moved: left rail is Host / Project / active Runs. The middle can hold this Run instead of the board.",
+        note: "动了结构：左侧 Host / Project / 进行中的 Run。中间默认是看板或依赖图；看这次 Run 才把终端抬到中间，底栏让开。",
+        noteEn: "Structure moved: left rail is Host / Project / active Runs. The middle stays board or graph; opening this Run lifts the terminal into the middle and clears the dock.",
         structureMoved: true
       },
       {
@@ -1473,6 +1473,7 @@ v1 桌面壳是否坚持 Tauri 2？
         unfoldSide: "展开左侧",
         foldDetail: "收起 Issue",
         unfoldDetail: "展开 Issue",
+        runFocusHint: "终端只在中间这一份。回看板或依赖图，底栏会回来。",
         issueWide: "加宽读票",
         issueNarrow: "收窄",
         issueBody: "正文",
@@ -1589,6 +1590,7 @@ v1 桌面壳是否坚持 Tauri 2？
         unfoldSide: "Open left",
         foldDetail: "Fold issue",
         unfoldDetail: "Open issue",
+        runFocusHint: "The terminal is only in the middle. Board or graph brings the dock back.",
         issueWide: "Widen to read",
         issueNarrow: "Narrow",
         issueBody: "Body",
@@ -2138,7 +2140,8 @@ v1 桌面壳是否坚持 Tauri 2？
       const fillRight = S.termZoom === "right";
       const hideDetail = S.detailFolded || fillRight;
       const termOnRight = fillRight && S.midMode !== "run";
-      const hideDockTerm = S.midMode === "run" || fillRight;
+      const hideDock = S.midMode === "run";
+      const hideDockTerm = hideDock || fillRight;
       const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(r) : board();
       return `
         <div class="stage">
@@ -2151,11 +2154,12 @@ v1 桌面壳是否坚持 Tauri 2？
                   ${termOnRight ? `<aside class="map-term-col">${termChrome(r)}${termSplit(r)}</aside>` : ""}
                   ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
                 </div>
+                ${hideDock ? "" : `
                 <div class="dock ${dockFolded() || hideDockTerm ? "slim" : ""}">
                   ${runTabs()}
                   ${hideDockTerm ? "" : termChrome(r)}
                   ${hideDockTerm ? "" : termSplit(r)}
-                </div>
+                </div>`}
               `}
             </div>
           </div>
@@ -2232,9 +2236,9 @@ v1 桌面壳是否坚持 Tauri 2？
           ${S.direction === "codex-map" ? `<button data-act="toggle-side">${S.sideFolded ? t("unfoldSide") : t("foldSide")}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
-          ${S.direction === "codex-map" && S.runId ? `<button data-act="mid-mode" data-id="run" class="${S.midMode === "run" ? "active" : ""}">${esc(t("thisRun"))}</button>` : ""}
-          <span class="tiny">${esc(t("graphEntry"))}</span>
+          <span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : t("graphEntry"))}</span>
           <span class="grow"></span>
+          ${S.midMode === "run" ? `<button data-act="all-runs">${esc(t("allRuns"))}</button>` : ""}
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
           ${S.direction === "codex-map" ? `<button data-act="toggle-detail">${S.detailFolded ? t("unfoldDetail") : t("foldDetail")}</button>` : ""}
         </div>`;
