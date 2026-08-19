@@ -1507,6 +1507,7 @@ v1 桌面壳是否坚持 Tauri 2？
         start: "开 Run",
         seeRun: "打开终端",
         claim: "认领",
+        claimOnly: "只认领",
         release: "释放认领",
         continue: "继续",
         gh: "在 GitHub 打开",
@@ -1627,6 +1628,7 @@ v1 桌面壳是否坚持 Tauri 2？
         start: "Start Run",
         seeRun: "Open terminal",
         claim: "Claim",
+        claimOnly: "Claim only",
         release: "Release claim",
         continue: "Continue",
         gh: "Open on GitHub",
@@ -1801,6 +1803,36 @@ v1 桌面壳是否坚持 Tauri 2？
     function selectedLiveRun() {
       const i = issue(S.issueId);
       return i ? issueRun(i) : null;
+    }
+    function startRunOnIssue(i) {
+      if (!i || i.closed) return;
+      i.claimed = true;
+      i.stopped = false;
+      let r = issueRun(i);
+      if (!r) {
+        const p = project(i.projectId);
+        r = {
+          id: "r-" + i.id + "-" + Date.now(),
+          issueId: i.id,
+          hostId: p.hostId,
+          projectId: i.projectId,
+          agent: "Grok Build",
+          status: "active",
+          isolation: false
+        };
+        RUNS.push(r);
+        FILES[r.id] = [{
+          repo: p.name,
+          path: "README.md",
+          add: 1,
+          del: 0,
+          lines: [{ n: 1, t: "+ 原型：刚开的 Run", k: "add" }]
+        }];
+      } else if (r.status === "stopped") {
+        r.status = "active";
+      }
+      setRun(r.id, true);
+      if (S.midMode === "board") S.dockFolded.board = false;
     }
     function restoreFromRun() {
       S.termZoom = null;
@@ -2485,7 +2517,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ? `<button data-act="restore-dock">${t("restoreDock")}</button>`
                 : r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>`
                 : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
-              ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
+              ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button class="ghost" data-act="fake-claim">${t("claimOnly")}</button>`}
               ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
               ${trackerOpen(i)}
             </div>
@@ -2990,8 +3022,27 @@ v1 桌面壳是否坚持 Tauri 2？
           return;
         }
         if (act === "register") { alert("原型：登记入口在这里。不真的加 Project。"); }
-        if (act === "fake-start" || act === "fake-claim" || act === "fake-release" || act === "fake-continue") {
-          alert("原型：只占位，不打到 Tracker / Host。");
+        if (act === "fake-start") {
+          startRunOnIssue(issue(S.issueId));
+          render();
+        }
+        if (act === "fake-claim") {
+          const cur = issue(S.issueId);
+          if (cur && !cur.closed) cur.claimed = true;
+          render();
+        }
+        if (act === "fake-release") {
+          const cur = issue(S.issueId);
+          if (cur) cur.claimed = false;
+          render();
+        }
+        if (act === "fake-continue") {
+          const cur = issue(S.issueId);
+          const live = cur ? issueRun(cur) : run(S.runId);
+          if (live) live.status = "active";
+          if (cur) cur.stopped = false;
+          if (live) setRun(live.id, true);
+          render();
         }
         if (act === "open-local") alert("原型：打开\n" + localPath(issue(Number(id))));
         if (act === "reveal-local") alert("原型：显示\n" + localPath(issue(Number(id))));

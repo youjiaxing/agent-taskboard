@@ -114,6 +114,13 @@ test("点 Issue 时底栏跟 Run：有则切换，无则给出开 Run", async ({
   await expect(page.locator(".dock-idle")).toBeVisible();
   await expect(page.locator(".dock").getByRole("button", { name: "开 Run", exact: true })).toBeVisible();
   await expect(page.getByText("这张 Issue 没有进行中的 Run", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "认领", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "只认领", exact: true })).toBeVisible();
+
+  await page.locator(".dock").getByRole("button", { name: "开 Run", exact: true }).click();
+  await expect(page.locator(".dock .term")).toBeVisible();
+  await expect(page.getByText("已认领", { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.lanes [data-act="issue"][data-id="51"]').first()).toBeVisible();
 
   await page.locator('[data-act="issue"][data-id="90"]').first().click();
   await expect(page.locator(".dock .term")).toBeVisible();
