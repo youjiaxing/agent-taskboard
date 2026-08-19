@@ -15,6 +15,10 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.getByText("Codex 原貌映射", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("结构已动 · 对照原貌", { exact: true }).first()).toBeVisible();
   await expect(page.locator(".map-side")).toBeVisible();
+  await expect(page.getByRole("button", { name: "本机 · MacBook" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "书房 Mini" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "公司台式机" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "+ 配对" })).toBeVisible();
   await expect(page.locator(".dock")).toBeVisible();
   await expect(page.locator(".map-detail-col")).toBeVisible();
   await expect(page.locator(".map-dock")).toHaveCount(0);
@@ -66,15 +70,16 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
 test("输入焦点时键盘 ←/→ 不切换方向", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
 
-  await page.locator('[data-act="map-search"]').click();
-  const search = page.locator(".ms-search");
-  await search.focus();
+  await page.locator('[data-act="toggle-vc"]').first().click();
+  await page.locator('[data-act="note-line"]').first().click();
+  const draft = page.locator("textarea[data-act=note-draft]");
+  await draft.focus();
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowLeft");
   await expect(page).toHaveURL(urlWithDirection(page, "codex-map"));
 
   // 移开焦点后恢复切换
-  await page.locator(".ms-brand").click();
+  await page.getByRole("button", { name: "本机 · MacBook" }).click();
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(urlWithDirection(page, "codex"));
 });
@@ -92,13 +97,9 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
   for (const direction of DIRECTIONS) {
     await page.goto(`${prototypeUrl}/?direction=${direction}&scenario=daily`);
 
-    // Host/Project：原貌映射在侧栏分组直接点项目；其余方向先切 Host 再点项目
-    if (direction === "codex-map") {
-      await page.locator('[data-act="project"][data-id="shop"]').first().click();
-    } else {
-      await page.locator('[data-act="host"][data-id="mini"]').click();
-      await page.locator('[data-act="project"][data-id="shop"]').first().click();
-    }
+    // Host/Project：先切 Host，再点这个 Host 上的 Project
+    await page.locator('[data-act="host"][data-id="mini"]').click();
+    await page.locator('[data-act="project"][data-id="shop"]').first().click();
     await expect(page.getByText("#30 修支付超时", { exact: true }).first()).toBeVisible();
 
     // Issue 详情

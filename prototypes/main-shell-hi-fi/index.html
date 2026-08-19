@@ -8,9 +8,9 @@
   <!--
     一次性原型，不是产品。
     三个方向：
-      codex-map  Codex 原貌映射（动了结构）：左侧原生栏、白主区。
-                中间仍是看板视图 | 依赖图；底栏 Embedded Terminal 占自己的高度，
-                不再悬浮遮挡看板。Issue 仍是工作单元；不搬聊天主表面。
+      codex-map  结构已动：左侧栏是 Host + 本机 Project，不是聊天清单。
+                中间仍是看板视图 | 依赖图；底栏 Embedded Terminal 占自己的高度。
+                学侧栏清单的密度，不仿 Codex 的会话壳。
       codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
       paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
     ?direction=codex-map|codex|paper  &mid=board|graph
@@ -712,38 +712,16 @@
       padding: 10px 10px 12px;
       overflow-y: auto;
     }
-    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 4px 4px; }
     .shell-codex-map .ms-top .traffic i { width: 12px; height: 12px; }
-    .shell-codex-map .ms-back { display: inline-flex; gap: 0; }
-    .shell-codex-map .ms-back button {
-      border: 0;
-      background: transparent;
-      color: #b0b0ac;
-      font-size: 13px;
-      line-height: 1;
-      padding: 4px 6px;
-      border-radius: 6px;
-    }
-    .shell-codex-map .ms-back button:hover { background: var(--sel); color: var(--ink); }
-    .shell-codex-map .ms-brand-row {
+    .shell-codex-map .ms-app { font-size: 12px; color: var(--muted); }
+    .shell-codex-map .ms-tag { margin-left: auto; font-size: 10px; color: #9a9a96; font-weight: 500; }
+    .shell-codex-map .ms-foot {
       display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 2px 4px 6px;
+      gap: 6px;
+      padding: 6px 4px 2px;
     }
-    .shell-codex-map .ms-brand {
-      border: 0;
-      background: transparent;
-      font-family: var(--sans);
-      font-size: 15px;
-      font-weight: 650;
-      letter-spacing: -.02em;
-      padding: 4px 6px;
-      border-radius: 8px;
-    }
-    .shell-codex-map .ms-brand:hover { background: var(--sel); }
-    .shell-codex-map .ms-brand .chev { color: var(--muted); font-weight: 500; font-size: 11px; margin-left: 2px; }
-    .shell-codex-map .ms-brand-row .grow { flex: 1; }
     .shell-codex-map .ms-ico {
       border: 0;
       background: transparent;
@@ -1128,8 +1106,8 @@
         id: "codex-map",
         name: "Codex 原貌映射",
         nameEn: "Codex layout map",
-        note: "动了结构：左侧原生栏。中间仍是看板视图 | 依赖图；底栏占自己的高度，不再悬浮遮挡。",
-        noteEn: "Structure moved: native left rail. Board | graph stay in the middle; the dock keeps its own height and no longer overlays the board.",
+        note: "动了结构：左侧是 Host + 本机 Project。中间仍是看板视图 | 依赖图；不仿聊天壳。",
+        noteEn: "Structure moved: left rail is Host + this machine's Projects. Board | graph stay in the middle; not a chat shell.",
         structureMoved: true
       },
       {
@@ -1219,7 +1197,9 @@
         structureSame: "结构未改",
         structureMoved: "结构已动 · 对照原貌",
         mapBoard: "看板视图",
-        mapFoot: "借 Codex 铬 · 中间仍是看板视图 / 依赖图",
+        mapFoot: "侧栏是 Host 和 Project，不是会话",
+        hosts: "Host",
+        thisHostProjects: "这个 Host 上的 Project",
         officialCli: "官方 CLI · Embedded Terminal",
         boardView: "看板视图",
         depGraph: "依赖图",
@@ -1312,7 +1292,9 @@
         structureSame: "Structure unchanged",
         structureMoved: "Structure moved",
         mapBoard: "Board",
-        mapFoot: "Codex chrome · Board | graph stay in the middle",
+        mapFoot: "The rail is Host and Project, not threads",
+        hosts: "Hosts",
+        thisHostProjects: "Projects on this Host",
         officialCli: "Official CLI · Embedded Terminal",
         boardView: "Board",
         depGraph: "Dependency graph",
@@ -1468,6 +1450,9 @@
       let list = PROJECTS.filter(p => hs.has(p.hostId));
       if (S.scenario === "single") list = list.filter(p => p.id === "tb");
       return list;
+    }
+    function hostProjects() {
+      return visibleProjects().filter(p => !S.hostId || p.hostId === S.hostId);
     }
     function projectIssues() {
       return ISSUES.filter(i => i.projectId === S.projectId);
@@ -1707,7 +1692,7 @@
                   <div class="tiny" style="margin-top:8px">${t("filterProject")}</div>
                 </div>
               </div>
-              <div class="pane mid-rel">${S.scenario === "noproject" ? noProjectMid() : (S.midMode === "graph" ? graphPane() : board())}</div>
+              <div class="pane mid-rel">${!S.projectId ? noProjectMid() : (S.midMode === "graph" ? graphPane() : board())}</div>
               <div class="pane">${issueDetail()}</div>
             </div>
             <div class="dock ${dockFolded() ? "slim" : ""}">
@@ -1726,7 +1711,7 @@
     /* Codex 原貌映射：左侧原生栏 + 白主区。中间看板/图，底栏占自己的高度。 */
     function renderMap() {
       const r = run(S.runId);
-      const empty = S.scenario === "unpaired" ? "unpaired" : S.scenario === "noproject" ? "noproject" : null;
+      const empty = S.scenario === "unpaired" ? "unpaired" : !S.projectId ? "noproject" : null;
       return `
         <div class="stage">
           <div class="map-frame">
@@ -1754,68 +1739,40 @@
 
     function mapSidebar() {
       const hs = visibleHosts();
-      const curH = host(S.hostId);
-      const curIssue = issue(S.issueId);
-      const recent = dockRuns().filter(r => r.status === "active" || r.status === "stopped").slice(0, 4);
+      const plist = hostProjects();
       return `
         <aside class="map-side">
           <div class="ms-top">
             <div class="traffic"><i></i><i></i><i></i></div>
-            <span class="ms-back">
-              <button title="原型：前进/后退占位" data-act="map-nav-back">←</button>
-              <button title="原型：前进/后退占位" data-act="map-nav-fwd">→</button>
-            </span>
+            <span class="ms-app">Agent Taskboard</span>
           </div>
-          <div class="ms-brand-row">
-            <button class="ms-brand" data-act="map-host-menu" title="${esc(t("hostMenu"))}">
-              Agent Taskboard<span class="chev">▾</span>
-            </button>
-            <span class="grow"></span>
-            <button class="ms-ico" data-act="map-search" title="${esc(t("search"))}">${icn("search")}</button>
-            <button class="ms-ico" data-act="map-notify" title="${esc(t("notify"))}">${icn("bell")}</button>
-          </div>
-          ${S.mapSearchOpen ? `<input class="ms-search" placeholder="${esc(t("search"))}" />` : ""}
-          ${S.mapHostOpen ? `
-            <nav class="ms-nav">
-              ${hs.map(hh => `
-                <button class="${hh.id === S.hostId ? "active" : ""}" data-act="host" data-id="${hh.id}">
-                  <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
-                </button>`).join("")}
-              <button data-act="pair">+ ${esc(t("pair"))}</button>
-            </nav>` : ""}
-          <nav class="ms-nav">
-            <button data-act="register">${icn("plus")}${esc(t("registerNav"))}</button>
-            <button class="${S.allRunsOpen ? "active" : ""}" data-act="map-nav" data-id="runs">${icn("runs")}${esc(t("allRuns"))}</button>
-            <button class="${S.settingsOpen ? "active" : ""}" data-act="map-nav" data-id="settings">${icn("gear")}${esc(t("settings"))}</button>
-          </nav>
           <div class="ms-groups">
             <div class="ms-group">
-              <div class="ms-group-name">${S.lang === "en" ? "Projects" : "项目"}</div>
-              ${visibleProjects().map(pp => {
-                const nest = curIssue && curIssue.projectId === pp.id
-                  ? `<button class="ms-nested ${S.issueId === curIssue.id ? "active" : ""}" data-act="issue" data-id="${curIssue.id}">#${curIssue.id} ${esc(shortTitle(curIssue.title, 16))}</button>`
-                  : "";
-                return `
-                  <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>
-                  ${nest}`;
-              }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
+              <div class="ms-group-name">${esc(t("hosts"))}</div>
+              ${hs.map(hh => `
+                <button class="ms-item ${S.hostId === hh.id ? "active" : ""}" data-act="host" data-id="${hh.id}">
+                  <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
+                </button>`).join("") || `<div class="ms-nested">${esc(t("unpairedTitle"))}</div>`}
+              <button class="ms-item" data-act="pair">+ ${esc(t("pair"))}</button>
             </div>
             <div class="ms-group">
-              <div class="ms-group-name">${S.lang === "en" ? "Recent" : "最近"}</div>
-              ${recent.length ? recent.map(rr => {
-                const ii = rr.issueId ? issue(rr.issueId) : null;
-                return `<button class="ms-item ${S.runId === rr.id ? "active" : ""}" data-act="run" data-id="${rr.id}">${ii ? "#" + ii.id + " " + esc(shortTitle(ii.title, 14)) : esc(t("free"))}</button>`;
-              }).join("") : `<div class="ms-nested">${esc(t("recentNone"))}</div>`}
+              <div class="ms-group-name">${esc(t("thisHostProjects"))}</div>
+              ${plist.map(pp => `
+                <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">
+                  ${esc(pp.name)}<span class="ms-tag">${esc(pp.tracker)}</span>
+                </button>`).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
+              <button class="ms-item" data-act="register">+ ${esc(plist.length ? t("registerAgain") : t("register"))}</button>
             </div>
           </div>
+          <nav class="ms-nav">
+            <button class="${S.allRunsOpen ? "active" : ""}" data-act="map-nav" data-id="runs">${esc(t("allRuns"))}</button>
+            <button class="${S.settingsOpen ? "active" : ""}" data-act="map-nav" data-id="settings">${esc(t("settings"))}</button>
+          </nav>
           <span class="grow"></span>
-          <div class="ms-user">
-            <span class="ms-avatar">yj</span>
-            <span>yjx</span>
-            <span class="grow"></span>
-            <button class="ms-ico" data-act="map-notify" title="${esc(t("help"))}">${icn("help")}</button>
+          <div class="ms-foot">
+            <span class="chip">${esc(t("autoOff"))}</span>
+            <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
           </div>
-          ${curH ? `<div class="tiny" style="padding:0 8px">${esc(hostName(curH))}</div>` : ""}
         </aside>`;
     }
 
@@ -1831,11 +1788,15 @@
     }
 
     function midBar() {
+      const h = host(S.hostId);
+      const p = project(S.projectId);
       return `
         <div class="mid-bar">
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
           <span class="tiny">${esc(t("graphEntry"))}</span>
+          <span class="grow"></span>
+          ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
         </div>`;
     }
 
@@ -2379,10 +2340,11 @@
           const first = visibleProjects().find(p => p.hostId === id);
           S.projectId = first ? first.id : null;
           if (S.projectId) restoreMidForProject(S.projectId);
-          const firstIssue = ISSUES.find(i => i.projectId === S.projectId && !i.closed);
-          if (firstIssue) S.issueId = firstIssue.id;
+          else S.midMode = "board";
+          const firstIssue = S.projectId ? ISSUES.find(i => i.projectId === S.projectId && !i.closed) : null;
+          S.issueId = firstIssue ? firstIssue.id : null;
           const firstRun = RUNS.find(r => r.hostId === id && r.status !== "ended");
-          if (firstRun) S.runId = firstRun.id;
+          S.runId = firstRun ? firstRun.id : null;
           render();
         }
         if (act === "project") {
