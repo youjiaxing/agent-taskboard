@@ -293,6 +293,20 @@
     .term .ok { color: #86efac; }
     .term .bad { color: #fca5a5; }
     .term .hi { color: #f0a399; }
+    .term.light {
+      background: #f4f3ef;
+      color: #1c1b19;
+    }
+    .term.light .dim { opacity: .55; color: #5c5b57; }
+    .term.light .ok { color: #1f7a3d; }
+    .term.light .bad { color: #b42318; }
+    .term.light .hi { color: #9a3412; }
+    .ident.light {
+      background: #eceae6;
+      color: #1c1b19;
+    }
+    .ident.light button { background: #fff; color: #1c1b19; border-color: #d4d2cc; }
+    .ident.light .who { color: #9a3412; }
     
     .diff { font: 12px/1.5 var(--mono); }
     .diff .add { background: color-mix(in srgb, var(--run) 16%, transparent); }
@@ -351,6 +365,13 @@
       padding-bottom: 72px;
     }
     .zoom-stage.full { padding-bottom: 0; }
+    .zoom-stage.right {
+      left: auto;
+      width: min(46vw, 640px);
+      border-left: 1px solid #3f3f46;
+      padding-bottom: 72px;
+    }
+    .zoom-stage.light { background: #f4f3ef; }
     .modal-bg {
       position: fixed;
       inset: 0;
@@ -822,12 +843,30 @@
       flex-direction: column;
       background: #fff;
     }
+    .shell-codex-map .map-frame.side-slim .map-side {
+      flex: 0 0 44px;
+      width: 44px;
+      padding: 8px 6px;
+      overflow: hidden;
+    }
+    .shell-codex-map .map-frame.side-slim .ms-groups,
+    .shell-codex-map .map-frame.side-slim .ms-app,
+    .shell-codex-map .map-frame.side-slim .ms-foot { display: none; }
     .shell-codex-map .map-cols {
       flex: 1;
       min-height: 0;
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(272px, 318px);
     }
+    .shell-codex-map .map-cols.no-detail { grid-template-columns: minmax(0, 1fr); }
+    .shell-codex-map .run-stage {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .shell-codex-map .run-stage .term-wrap,
+    .shell-codex-map .run-stage .split { flex: 1; min-height: 0; }
     .shell-codex-map .map-mid {
       min-width: 0;
       min-height: 0;
@@ -1095,7 +1134,11 @@
       midMode: "board",
       midByProject: {},
       showCtx: false,
-      dockFolded: { board: false, graph: true },
+      dockFolded: { board: false, graph: true, run: true },
+      sideFolded: false,
+      detailFolded: false,
+      recentMore: false,
+      termTheme: "dark",
       cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
       frontierWhy: "blocked"
@@ -1106,8 +1149,8 @@
         id: "codex-map",
         name: "Codex 原貌映射",
         nameEn: "Codex layout map",
-        note: "动了结构：左侧是 Host + 本机 Project。中间仍是看板视图 | 依赖图；不仿聊天壳。",
-        noteEn: "Structure moved: left rail is Host + this machine's Projects. Board | graph stay in the middle; not a chat shell.",
+        note: "动了结构：左侧 Host / Project / 进行中的 Run。可不看看板，中间给这次 Run。",
+        noteEn: "Structure moved: left rail is Host / Project / active Runs. The middle can hold this Run instead of the board.",
         structureMoved: true
       },
       {
@@ -1143,13 +1186,25 @@
         noFrontierClaimed: "没有可领的票。未关的都已被认领。",
         noFrontierEmpty: "没有可领的票。这个 Project 里没有未关的票。",
         noRecent: "还没有刚关的",
-        recentNote: "只留最近几张，不是全部已关闭。",
+        recentNote: "默认只画最近几张，不预加载更多。",
+        recentMore: "查看更多最近完成",
+        recentLess: "收起更多",
+        thisRun: "这次 Run",
+        foldSide: "收起左侧",
+        unfoldSide: "展开左侧",
+        foldDetail: "收起 Issue",
+        unfoldDetail: "展开 Issue",
+        zoomRight: "占满右侧",
+        termDark: "深色终端",
+        termLight: "浅色终端",
+        noDockRuns: "这个 Project 没有要打交道的 Run",
         autoOff: "自动推进 关",
         settings: "设置",
         pair: "配对",
         allRuns: "全部 Run",
         viewChanges: "查看改动",
         zoom: "窗内放大",
+        zoomRight: "占满右侧",
         full: "全屏",
         lang: "中文",
         issue: "Issue",
@@ -1238,13 +1293,25 @@
         noFrontierClaimed: "Nothing to claim. Open issues are already claimed.",
         noFrontierEmpty: "Nothing to claim. This Project has no open issues.",
         noRecent: "None just closed",
-        recentNote: "Only the last few, not all closed issues.",
+        recentNote: "Only the last few are drawn. More is not preloaded.",
+        recentMore: "Show more recently closed",
+        recentLess: "Show fewer",
+        thisRun: "This Run",
+        foldSide: "Fold left",
+        unfoldSide: "Open left",
+        foldDetail: "Fold issue",
+        unfoldDetail: "Open issue",
+        zoomRight: "Fill the right",
+        termDark: "Dark terminal",
+        termLight: "Light terminal",
+        noDockRuns: "No live Runs on this Project",
         autoOff: "Auto-advance off",
         settings: "Settings",
         pair: "Pair",
         allRuns: "All Runs",
         viewChanges: "View changes",
         zoom: "Expand",
+        zoomRight: "Fill the right",
         full: "Fullscreen",
         lang: "EN",
         issue: "Issue",
@@ -1323,6 +1390,7 @@
     function setDirection(id) {
       const next = directionOf(id);
       if (next.id === "codex-map" && S.direction !== "codex-map") S.mapDetailOpen = false;
+      if (next.id !== "codex-map" && S.midMode === "run") S.midMode = "board";
       S.direction = next.id;
       S.theme = next.id === "paper" ? "warm-light" : "plain-light";
     }
@@ -1330,8 +1398,8 @@
       return !!(S.dockFolded[S.midMode] ?? (S.midMode === "graph"));
     }
     function setMidMode(id) {
-      S.midMode = id === "graph" ? "graph" : "board";
-      if (S.projectId) S.midByProject[S.projectId] = S.midMode;
+      S.midMode = id === "graph" || id === "run" ? id : "board";
+      if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
       S.cam.user = false;
     }
     function restoreMidForProject(id) {
@@ -1356,7 +1424,7 @@
       else u.searchParams.delete("zoom");
       if (S.viewChangesOpen) u.searchParams.set("vc", "1");
       else u.searchParams.delete("vc");
-      if (S.midMode === "graph") u.searchParams.set("mid", "graph");
+      if (S.midMode === "graph" || S.midMode === "run") u.searchParams.set("mid", S.midMode);
       else u.searchParams.delete("mid");
       history.replaceState({}, "", u);
     }
@@ -1370,6 +1438,9 @@
       S.mapSearchOpen = false;
       S.mapHostOpen = false;
       S.cam.user = false;
+      S.recentMore = false;
+      S.sideFolded = false;
+      S.detailFolded = false;
       if (sc === "single") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
       } else if (sc === "stopped") {
@@ -1406,9 +1477,9 @@
       if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
       if (p.get("vc") === "1") S.viewChangesOpen = true;
       if (p.get("set") === "1") S.settingsOpen = true;
-      if (p.get("mid") === "graph") {
-        S.midMode = "graph";
-        if (S.projectId) S.midByProject[S.projectId] = "graph";
+      if (p.get("mid") === "graph" || p.get("mid") === "run") {
+        S.midMode = p.get("mid");
+        if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
       }
     }
 
@@ -1465,11 +1536,20 @@
       }
       return list;
     }
-    function recentClosed() {
+    function allRecentClosed() {
       return projectIssues()
         .filter(i => i.closed)
-        .sort((a, b) => (a.closedRank || 99) - (b.closedRank || 99))
-        .slice(0, S.recentN);
+        .sort((a, b) => (a.closedRank || 99) - (b.closedRank || 99));
+    }
+    function recentClosed() {
+      const all = allRecentClosed();
+      return S.recentMore ? all : all.slice(0, S.recentN);
+    }
+    function projectDockRuns(pid) {
+      return dockRuns().filter(r => r.projectId === pid);
+    }
+    function termSkin() {
+      return S.termTheme === "light" ? "light" : "dark";
     }
     function dockRuns() {
       if (!S.hostId) return [];
@@ -1641,7 +1721,8 @@
       const lines = [
         `观感 ${S.direction} · ${S.viewport} · ${S.scenario}`,
         `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15/#26"}`,
-        `中间: ${S.midMode === "graph" ? "依赖图" : "看板视图"}`,
+        `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "这次 Run" : "看板视图"}`,
+        `终端: ${S.termTheme}`,
         `底栏: ${dockFolded() ? "折起" : "拉开"}`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
@@ -1714,18 +1795,18 @@
       const empty = S.scenario === "unpaired" ? "unpaired" : !S.projectId ? "noproject" : null;
       return `
         <div class="stage">
-          <div class="map-frame">
+          <div class="map-frame ${S.sideFolded ? "side-slim" : ""}">
             ${mapSidebar()}
             <div class="map-workspace">
               ${empty ? mapEmpty(empty) : `
-                <div class="map-cols">
-                  <div class="map-mid">${S.midMode === "graph" ? graphPane() : board()}</div>
-                  <aside class="map-detail-col">${issueDetail()}</aside>
+                <div class="map-cols ${S.detailFolded || S.termZoom === "right" ? "no-detail" : ""}">
+                  <div class="map-mid">${S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(r) : board()}</div>
+                  ${S.detailFolded || S.termZoom === "right" ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
                 </div>
-                <div class="dock ${dockFolded() ? "slim" : ""}">
+                <div class="dock ${dockFolded() || S.midMode === "run" ? "slim" : ""}">
                   ${runTabs()}
-                  ${termChrome(r)}
-                  ${termSplit(r)}
+                  ${S.midMode === "run" ? "" : termChrome(r)}
+                  ${S.midMode === "run" ? "" : termSplit(r)}
                 </div>
               `}
             </div>
@@ -1745,6 +1826,7 @@
           <div class="ms-top">
             <div class="traffic"><i></i><i></i><i></i></div>
             <span class="ms-app">Agent Taskboard</span>
+            ${S.sideFolded ? `<button class="ms-ico" data-act="toggle-side" title="${esc(t("unfoldSide"))}">⟩</button>` : ""}
           </div>
           <div class="ms-groups">
             <div class="ms-group">
@@ -1757,21 +1839,28 @@
             </div>
             <div class="ms-group">
               <div class="ms-group-name">${esc(t("thisHostProjects"))}</div>
-              ${plist.map(pp => `
-                <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">
-                  ${esc(pp.name)}<span class="ms-tag">${esc(pp.tracker)}</span>
-                </button>`).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
+              ${plist.map(pp => {
+                const runs = projectDockRuns(pp.id);
+                return `
+                  <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">
+                    ${esc(pp.name)}<span class="ms-tag">${esc(pp.tracker)}</span>
+                  </button>
+                  ${runs.map(rr => {
+                    const ii = rr.issueId ? issue(rr.issueId) : null;
+                    const label = ii ? `#${ii.id} ${shortTitle(ii.title, 14)}` : t("free");
+                    return `<button class="ms-nested ${S.runId === rr.id ? "active" : ""}" data-act="focus-run" data-id="${rr.id}">
+                      <span class="dot ${rr.status === "active" ? "busy" : rr.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
+                    </button>`;
+                  }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}`;
+              }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
               <button class="ms-item" data-act="register">+ ${esc(plist.length ? t("registerAgain") : t("register"))}</button>
             </div>
           </div>
-          <nav class="ms-nav">
-            <button class="${S.allRunsOpen ? "active" : ""}" data-act="map-nav" data-id="runs">${esc(t("allRuns"))}</button>
-            <button class="${S.settingsOpen ? "active" : ""}" data-act="map-nav" data-id="settings">${esc(t("settings"))}</button>
-          </nav>
           <span class="grow"></span>
           <div class="ms-foot">
             <span class="chip">${esc(t("autoOff"))}</span>
             <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
+            <button data-act="settings" class="${S.settingsOpen ? "active" : ""}">${esc(t("settings"))}</button>
           </div>
         </aside>`;
     }
@@ -1792,11 +1881,23 @@
       const p = project(S.projectId);
       return `
         <div class="mid-bar">
+          ${S.direction === "codex-map" ? `<button data-act="toggle-side">${S.sideFolded ? t("unfoldSide") : t("foldSide")}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
+          ${S.direction === "codex-map" && S.runId ? `<button data-act="mid-mode" data-id="run" class="${S.midMode === "run" ? "active" : ""}">${esc(t("thisRun"))}</button>` : ""}
           <span class="tiny">${esc(t("graphEntry"))}</span>
           <span class="grow"></span>
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
+          ${S.direction === "codex-map" ? `<button data-act="toggle-detail">${S.detailFolded ? t("unfoldDetail") : t("foldDetail")}</button>` : ""}
+        </div>`;
+    }
+
+    function runPane(r) {
+      return `
+        ${midBar()}
+        <div class="run-stage">
+          ${termChrome(r)}
+          ${termSplit(r)}
         </div>`;
     }
 
@@ -1933,6 +2034,7 @@
         ["in-run", t("inRun"), list.filter(i => sectionOf(i) === "in-run")]
       ];
       const hint = S.childFilter ? t("childHint") : t("boardHint");
+      const recAll = allRecentClosed();
       return `
         ${midBar()}
         <div class="tiny pad">${esc(hint)}
@@ -1945,9 +2047,10 @@
               ${items.map(i => issueCard(i, key)).join("") || `<div class="empty">${key === "frontier" ? frontierEmptyText() : t("noItems")}</div>`}
             </div>`).join("")}
           <div class="col recent">
-            <div class="col-hd">${t("recent")} <span>${rec.length}/${S.recentN}</span></div>
+            <div class="col-hd">${t("recent")} <span>${rec.length}/${recAll.length}</span></div>
             ${rec.map(i => issueCard(i, "recent")).join("") || `<div class="empty">${t("noRecent")}</div>`}
             <div class="tiny pad">${t("recentNote")}</div>
+            ${recAll.length > S.recentN ? `<div class="pad"><button data-act="toggle-recent-more">${S.recentMore ? t("recentLess") : t("recentMore")}</button></div>` : ""}
           </div>
         </div>`;
     }
@@ -1986,7 +2089,7 @@
             ${i.closed ? `<span class="tag">${t("closed")}</span>` : i.claimed ? `<span class="tag">${t("claimed")}</span>` : `<span class="tag">${t("unclaimed")}</span>`}
           </div>
           <div class="row">
-            ${r ? `<button class="primary" data-act="run" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
+            ${r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
             ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
             ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
             ${trackerOpen(i)}
@@ -2058,13 +2161,15 @@
 
     function termChrome(r) {
       return `
-        <div class="ident">
+        <div class="ident ${termSkin()}">
           ${runIdentity(r)}
           <span class="grow"></span>
           <button data-act="swap-run" title="最近切过的 Run">上一条</button>
-          <button data-act="toggle-dock">${dockFolded() ? t("unfoldDock") : t("foldDock")}</button>
+          ${S.midMode === "run" ? "" : `<button data-act="toggle-dock">${dockFolded() ? t("unfoldDock") : t("foldDock")}</button>`}
           <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">${t("viewChanges")}</button>
+          <button data-act="term-theme">${S.termTheme === "light" ? t("termDark") : t("termLight")}</button>
           <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">${t("zoom")}</button>
+          <button data-act="term-zoom" data-id="right" class="${S.termZoom === "right" ? "active" : ""}">${t("zoomRight")}</button>
           <button data-act="term-zoom" data-id="full" class="${S.termZoom === "full" ? "active" : ""}">${t("full")}</button>
         </div>`;
     }
@@ -2130,10 +2235,10 @@
     }
 
     function termSplit(r) {
-      if (!S.viewChangesOpen) return `<div class="term-wrap"><div class="term">${termText(r)}</div></div>`;
+      if (!S.viewChangesOpen) return `<div class="term-wrap"><div class="term ${termSkin()}">${termText(r)}</div></div>`;
       return `
         <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px ${S.vcPct}%">
-          <div class="term-wrap"><div class="term">${termText(r)}</div></div>
+          <div class="term-wrap"><div class="term ${termSkin()}">${termText(r)}</div></div>
           <div class="splitter" data-act="drag-vc"></div>
           <div class="pane">${viewChangesPanel(r)}</div>
         </div>`;
@@ -2141,7 +2246,7 @@
 
     function termZoomStage(r) {
       return `
-        <div class="zoom-stage ${S.termZoom === "full" ? "full" : ""}">
+        <div class="zoom-stage ${S.termZoom === "full" ? "full" : ""} ${S.termZoom === "right" ? "right" : ""} ${termSkin()}">
           ${termChrome(r)}
           ${termSplit(r)}
         </div>`;
@@ -2215,6 +2320,12 @@
               <div>${t("codexBoundary")}</div>
               <a class="ext" href="https://openai.com/index/introducing-the-codex-app/" target="_blank" rel="noreferrer">${t("officialRef")}</a>
             </div>
+            <b>${S.lang === "en" ? "Terminal" : "终端"}</b>
+            <div class="row">
+              <button data-act="term-theme" class="${S.termTheme === "dark" ? "active" : ""}">${t("termDark")}</button>
+              <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
+            </div>
+            <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
             <b>${t("recentN")}</b>
             <div class="row">
               <input type="range" min="3" max="12" value="${S.recentN}" data-act="set-n" />
@@ -2349,12 +2460,29 @@
         }
         if (act === "project") {
           S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; S.mapDetailOpen = false;
-          restoreMidForProject(id);
+          if (S.midMode === "run") setMidMode("board");
+          else restoreMidForProject(id);
           const cur = issue(S.issueId);
           if (!cur || cur.projectId !== id) S.issueId = null;
           render();
         }
         if (act === "issue") setIssue(Number(id));
+        if (act === "focus-run") {
+          S.allRunsOpen = false;
+          setRun(id, true);
+          setMidMode("run");
+          S.detailFolded = false;
+          if (S.termZoom === "right") S.termZoom = null;
+          render();
+        }
+        if (act === "toggle-side") { S.sideFolded = !S.sideFolded; render(); }
+        if (act === "toggle-detail") {
+          S.detailFolded = !S.detailFolded;
+          if (!S.detailFolded && S.termZoom === "right") S.termZoom = null;
+          render();
+        }
+        if (act === "toggle-recent-more") { S.recentMore = !S.recentMore; render(); }
+        if (act === "term-theme") { S.termTheme = S.termTheme === "light" ? "dark" : "light"; render(); }
         if (act === "graph-node") {
           const i = issue(Number(id));
           if (i) {
@@ -2483,7 +2611,8 @@
     }
 
     function setTermZoom(id) {
-      S.termZoom = id || null;
+      if (S.termZoom === id) S.termZoom = null;
+      else S.termZoom = id || null;
       const want = S.termZoom === "full";
       if (want && !document.fullscreenElement && document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});

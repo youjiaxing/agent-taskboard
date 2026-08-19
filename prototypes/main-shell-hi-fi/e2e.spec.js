@@ -31,7 +31,20 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "看板视图", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
+  await expect(page.locator(".map-side [data-act=\"focus-run\"][data-id=\"r1\"]")).toBeVisible();
+  await expect(page.locator(".map-side").getByRole("button", { name: "全部 Run", exact: true })).toHaveCount(0);
+  await expect(page.locator(".dock").getByRole("button", { name: "全部 Run", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看更多最近完成", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "占满右侧", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "浅色终端", exact: true }).first()).toBeVisible();
   await expect(page.getByText("查看改动", { exact: true }).first()).toBeVisible();
+
+  // 左侧进行中的 Run：点进中间这次 Run，右侧仍是 Issue
+  await page.locator('.map-side [data-act="focus-run"][data-id="r1"]').click();
+  await expect(page).toHaveURL(/mid=run/);
+  await expect(page.locator(".run-stage")).toBeVisible();
+  await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
 
   // 依赖图：点节点只换详情；第一次打开默认折终端
   await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
@@ -119,11 +132,7 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await expect(page.getByText("认领还在。优先恢复原生会话。", { exact: false })).toBeVisible();
 
     // 设置面板列出三个方向
-    if (direction === "codex-map") {
-      await page.locator('[data-act="map-nav"][data-id="settings"]').click();
-    } else {
-      await page.locator('[data-act="settings"]').first().click();
-    }
+    await page.locator('[data-act="settings"]').first().click();
     await expect(page.getByText("观感方向", { exact: true })).toBeVisible();
     await expect(page.getByText(/没有取：线程列表、聊天输入框和会话主表面/)).toBeVisible();
     await expect(page.getByText("Codex 原貌映射", { exact: true }).last()).toBeVisible();
