@@ -9,8 +9,8 @@
     一次性原型，不是产品。
     三个方向：
       codex-map  结构已动：左侧栏是 Host + 本机 Project，不是聊天清单。
-                中间是看板视图 | 依赖图，不是第三块「这次 Run」。
-                底栏是唯一终端；点「看这次 Run」才把终端抬到中间并收起底栏。
+                中间是看板 | 依赖图。底栏跟选中的 Issue：有 Run 则切对应终端，没有则给出启动入口。
+                「打开终端」把 Embedded Terminal 抬到中间；「放回底栏」恢复。
                 右侧 Issue 是文档栏：正文可滚，家族/依赖折在底下。
       codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
       paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
@@ -692,7 +692,7 @@
     .shell-paper .dock { height: 34vh; }
 
     /* Codex 原貌映射：借截图铬——左侧原生栏 + 白主区。
-       看板和底栏不再互相遮挡：中间是看板视图/依赖图，底栏占自己的高度。 */
+       看板和底栏不再互相遮挡：中间是看板/依赖图，底栏占自己的高度。 */
     .shell-codex-map {
       --desk: #ffffff;
       --paper: #ffffff;
@@ -1292,7 +1292,7 @@ The detail pane currently shows family and blockers only, so you cannot tell wha
 
 主界面要不要另做一张依赖图，还是详情里的「挡住它的 / 它挡住的」列表就够？
 
-本票按已钉方案做图：入口在中间顶栏，出厂默认仍是看板视图。第一次打开默认折终端。点节点只换详情，不跳走。孤立点留在图上，不另开一栏。
+本票按已钉方案做图：入口在中间顶栏，出厂默认仍是看板。第一次打开默认折终端。点节点只换详情，不跳走。孤立点留在图上，不另开一栏。
 
 图不是第三种工作单元。Issue 仍是票。图只是同一批票的另一种看。`
       },
@@ -1428,22 +1428,22 @@ v1 桌面壳是否坚持 Tauri 2？
         id: "codex-map",
         name: "Codex 原貌映射",
         nameEn: "Codex layout map",
-        note: "动了结构：左侧 Host / Project / 进行中的 Run。中间默认是看板或依赖图；看这次 Run 才把终端抬到中间，底栏让开。",
-        noteEn: "Structure moved: left rail is Host / Project / active Runs. The middle stays board or graph; opening this Run lifts the terminal into the middle and clears the dock.",
+        note: "动了结构：左侧 Host / Project / 进行中的 Run。中间是看板或依赖图。底栏跟选中的 Issue。",
+        noteEn: "Structure moved: left rail is Host / Project / active Runs. The middle is board or graph. The dock follows the selected Issue.",
         structureMoved: true
       },
       {
         id: "codex",
         name: "Codex 气质",
         nameEn: "Codex mood",
-        note: "结构未改：只借截图气质——淡线、留白、安静控件。看板视图 | 依赖图仍在。",
+        note: "结构未改：只借截图气质——淡线、留白、安静控件。看板 | 依赖图仍在。",
         noteEn: "Structure unchanged: only the mood. Board | graph remain."
       },
       {
         id: "paper",
         name: "纸面精修",
         nameEn: "Refined paper",
-        note: "结构未改：保留桌面与纸卡。看板视图 | 依赖图仍在。",
+        note: "结构未改：保留桌面与纸卡。看板 | 依赖图仍在。",
         noteEn: "Structure unchanged: keep the desk and paper cards. Board | graph remain."
       }
     ];
@@ -1454,7 +1454,7 @@ v1 桌面壳是否坚持 Tauri 2？
         register: "登记一个 Project",
         registerAgain: "再登记一个",
         boardHint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。",
-        childHint: "只看这些直接子票。仍是看板视图，不是树。",
+        childHint: "只看这些直接子票。仍是看板，不是树。",
         clearFilter: "清除过滤",
         blocked: "阻塞中",
         frontier: "Frontier",
@@ -1468,23 +1468,25 @@ v1 桌面壳是否坚持 Tauri 2？
         recentNote: "默认只画最近几张，不预加载更多。",
         recentMore: "查看更多最近完成",
         recentLess: "收起更多",
-        thisRun: "这次 Run",
+        thisRun: "Run",
         foldSide: "收起左侧",
         unfoldSide: "展开左侧",
         foldDetail: "收起 Issue",
         unfoldDetail: "展开 Issue",
-        runFocusHint: "终端只在中间这一份。回看板或依赖图，底栏会回来。",
-        issueWide: "加宽读票",
+        runFocusHint: "Embedded Terminal 在中间",
+        restoreDock: "放回底栏",
+        issueWide: "加宽",
         issueNarrow: "收窄",
         issueBody: "正文",
         zoomRight: "占满右侧",
         termDark: "深色终端",
         termLight: "浅色终端",
-        noDockRuns: "这个 Project 没有要打交道的 Run",
+        noDockRuns: "没有进行中的 Run",
+        noIssueRun: "这张 Issue 没有进行中的 Run",
         autoOff: "自动推进 关",
         settings: "设置",
         pair: "配对",
-        allRuns: "全部 Run",
+        allRuns: "所有 Run",
         viewChanges: "查看改动",
         zoom: "窗内放大",
         zoomRight: "占满右侧",
@@ -1503,7 +1505,7 @@ v1 桌面壳是否坚持 Tauri 2？
         noneBlock: "无，可进 Frontier",
         none: "无",
         start: "开 Run",
-        seeRun: "看这次 Run",
+        seeRun: "打开终端",
         claim: "认领",
         release: "释放认领",
         continue: "继续",
@@ -1526,12 +1528,13 @@ v1 桌面壳是否坚持 Tauri 2？
         ended: "已结束",
         stopped: "执行已停",
         stopRun: "停止",
-        stopAsk: "停止这次 Run？",
+        stopAsk: "停止这条 Run？",
         stopSoft: "正常停止",
         stopHard: "强制停止",
         stopHint: "先请求正常终止，超时再强制。收起终端、折面板或关窗口都不会停进程。官方 TUI 里 Ctrl+C 仍可用。",
-        stopNeedRun: "先点一次还在跑的 Run",
-        free: "游离 · 没有 Issue",
+        stopNeedRun: "先选一条进行中的 Run",
+        free: "未绑定 Issue",
+        swapRun: "上一条 Run",
         collapse: "收起",
         thisRound: "这一轮",
         unstaged: "未提交",
@@ -1540,16 +1543,16 @@ v1 桌面壳是否坚持 Tauri 2？
         prototypeThemeNote: "本原型临时把 #25 主题清单降级为三版对照；提出者选定前不改词表和 ADR 0011。",
         structureSame: "结构未改",
         structureMoved: "结构已动 · 对照原貌",
-        mapBoard: "看板视图",
+        mapBoard: "看板",
         mapFoot: "侧栏是 Host 和 Project，不是会话",
         hosts: "Host",
         thisHostProjects: "这个 Host 上的 Project",
         officialCli: "官方 CLI · Embedded Terminal",
-        boardView: "看板视图",
+        boardView: "看板",
         depGraph: "依赖图",
-        graphEntry: "入口在中间顶栏 · 出厂默认仍是看板视图",
-        foldDock: "折起终端",
-        unfoldDock: "拉开终端",
+        graphEntry: "默认看板",
+        foldDock: "收起终端",
+        unfoldDock: "展开终端",
         showClosedCtx: "也显示已关闭的上下文",
         closedCtxOn: "已关闭上下文开着",
         resetCam: "回到当前票",
@@ -1563,7 +1566,7 @@ v1 桌面壳是否坚持 Tauri 2？
         help: "帮助",
         you: "你",
         codexBorrowed: "Codex 气质取了：中性色层、紧凑行高、低装饰控件、左侧原生栏。",
-        codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元；中间仍是看板视图 | 依赖图；底栏仍是官方 CLI 的 Embedded Terminal，不再悬浮遮挡看板。",
+        codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元；中间仍是看板 | 依赖图；底栏仍是官方 CLI 的 Embedded Terminal，不再悬浮遮挡看板。",
         officialRef: "查看 Codex 官方介绍"
       },
       en: {
@@ -1585,19 +1588,21 @@ v1 桌面壳是否坚持 Tauri 2？
         recentNote: "Only the last few are drawn. More is not preloaded.",
         recentMore: "Show more recently closed",
         recentLess: "Show fewer",
-        thisRun: "This Run",
+        thisRun: "Run",
         foldSide: "Fold left",
         unfoldSide: "Open left",
         foldDetail: "Fold issue",
         unfoldDetail: "Open issue",
-        runFocusHint: "The terminal is only in the middle. Board or graph brings the dock back.",
-        issueWide: "Widen to read",
+        runFocusHint: "Embedded Terminal is in the middle",
+        restoreDock: "Return to dock",
+        issueWide: "Widen",
         issueNarrow: "Narrow",
         issueBody: "Body",
         zoomRight: "Fill the right",
         termDark: "Dark terminal",
         termLight: "Light terminal",
-        noDockRuns: "No live Runs on this Project",
+        noDockRuns: "No live Run",
+        noIssueRun: "This Issue has no live Run",
         autoOff: "Auto-advance off",
         settings: "Settings",
         pair: "Pair",
@@ -1620,7 +1625,7 @@ v1 桌面壳是否坚持 Tauri 2？
         noneBlock: "None — can enter Frontier",
         none: "None",
         start: "Start Run",
-        seeRun: "Open this Run",
+        seeRun: "Open terminal",
         claim: "Claim",
         release: "Release claim",
         continue: "Continue",
@@ -1648,7 +1653,8 @@ v1 桌面壳是否坚持 Tauri 2？
         stopHard: "Force stop",
         stopHint: "Ask it to exit first, then force. Folding the terminal or closing the window does not stop the process. Ctrl+C in the official TUI still works.",
         stopNeedRun: "Pick a live Run first",
-        free: "Loose · no Issue",
+        free: "No Issue bound",
+        swapRun: "Previous Run",
         collapse: "Collapse",
         thisRound: "This round",
         unstaged: "Uncommitted",
@@ -1664,7 +1670,7 @@ v1 桌面壳是否坚持 Tauri 2？
         officialCli: "Official CLI · Embedded Terminal",
         boardView: "Board",
         depGraph: "Dependency graph",
-        graphEntry: "Toggle sits in the middle bar · factory default is the board",
+        graphEntry: "Board is the default",
         foldDock: "Fold terminal",
         unfoldDock: "Expand terminal",
         showClosedCtx: "Also show closed context",
@@ -1792,6 +1798,38 @@ v1 桌面壳是否坚持 Tauri 2？
     function issue(id) { return ISSUES.find(i => i.id === Number(id)); }
     function run(id) { return RUNS.find(r => r.id === id); }
     function issueRun(iss) { return RUNS.find(r => r.issueId === iss.id && r.status !== "ended"); }
+    function selectedLiveRun() {
+      const i = issue(S.issueId);
+      return i ? issueRun(i) : null;
+    }
+    function restoreFromRun() {
+      S.termZoom = null;
+      if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      restoreMidForProject(S.projectId);
+    }
+    function idleDock(i) {
+      return `
+        <div class="dock slim dock-idle">
+          <div class="ident">
+            <span class="muted">${i ? t("noIssueRun") : t("pickIssue")}</span>
+            <span class="grow"></span>
+            ${i && !i.closed ? `<button class="primary" data-act="fake-start">${t("start")}</button>` : ""}
+            <button data-act="all-runs">${t("allRuns")}</button>
+          </div>
+        </div>`;
+    }
+    function bottomDock(r) {
+      if (S.direction === "codex-map" && S.midMode === "run") return "";
+      const live = selectedLiveRun();
+      if (!live) return idleDock(issue(S.issueId));
+      if (S.direction === "codex-map" && S.termZoom === "right") return "";
+      const showTerm = !dockFolded();
+      return `
+        <div class="dock ${showTerm ? "" : "slim"}">
+          ${termChrome(live)}
+          ${showTerm ? termSplit(live) : ""}
+        </div>`;
+    }
     function esc(s) {
       return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
@@ -2007,8 +2045,14 @@ v1 桌面壳是否坚持 Tauri 2？
       if (S.direction === "codex-map") S.mapDetailOpen = true;
       S.projectId = i.projectId;
       S.hostId = project(i.projectId).hostId;
-      const r = RUNS.find(x => x.issueId === i.id);
-      if (r) setRun(r.id, true);
+      const live = issueRun(i);
+      if (live) {
+        setRun(live.id, true);
+        if (S.midMode === "board") S.dockFolded.board = false;
+      } else {
+        S.runId = null;
+        if (S.midMode === "run") restoreFromRun();
+      }
       S.phone = "issue";
       render();
     }
@@ -2064,7 +2108,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const lines = [
         `观感 ${S.direction} · ${S.viewport} · ${S.scenario}`,
         `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15/#26"}`,
-        `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "这次 Run" : "看板视图"}`,
+        `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "Run 终端" : "看板"}`,
         `终端: ${S.termTheme}`,
         `底栏: ${dockFolded() ? "折起" : "拉开"}`,
         `Host: ${h ? h.name : "（无）"}`,
@@ -2120,11 +2164,7 @@ v1 桌面壳是否坚持 Tauri 2？
               <div class="pane mid-rel">${!S.projectId ? noProjectMid() : (S.midMode === "graph" ? graphPane() : board())}</div>
               <div class="pane">${issueDetail()}</div>
             </div>
-            <div class="dock ${dockFolded() ? "slim" : ""}">
-              ${runTabs()}
-              ${termChrome(r)}
-              ${termSplit(r)}
-            </div>
+            ${bottomDock(r)}
           </div>
         </div>
         ${S.termZoom && !(S.direction === "codex-map" && S.termZoom === "right") ? termZoomStage(r) : ""}
@@ -2137,12 +2177,11 @@ v1 桌面壳是否坚持 Tauri 2？
     function renderMap() {
       const r = run(S.runId);
       const empty = S.scenario === "unpaired" ? "unpaired" : !S.projectId ? "noproject" : null;
+      const live = selectedLiveRun() || r;
       const fillRight = S.termZoom === "right";
       const hideDetail = S.detailFolded || fillRight;
-      const termOnRight = fillRight && S.midMode !== "run";
-      const hideDock = S.midMode === "run";
-      const hideDockTerm = hideDock || fillRight;
-      const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(r) : board();
+      const termOnRight = fillRight && S.midMode !== "run" && live;
+      const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(live) : board();
       return `
         <div class="stage">
           <div class="map-frame ${S.sideFolded ? "side-slim" : ""}">
@@ -2151,15 +2190,10 @@ v1 桌面壳是否坚持 Tauri 2？
               ${empty ? mapEmpty(empty) : `
                 <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""} ${!hideDetail && S.issueWide ? "issue-wide" : ""} ${!hideDetail && !S.issueWide && S.midMode === "run" ? "run-read" : ""}">
                   <div class="map-mid">${mid}</div>
-                  ${termOnRight ? `<aside class="map-term-col">${termChrome(r)}${termSplit(r)}</aside>` : ""}
+                  ${termOnRight ? `<aside class="map-term-col">${termChrome(live)}${termSplit(live)}</aside>` : ""}
                   ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
                 </div>
-                ${hideDock ? "" : `
-                <div class="dock ${dockFolded() || hideDockTerm ? "slim" : ""}">
-                  ${runTabs()}
-                  ${hideDockTerm ? "" : termChrome(r)}
-                  ${hideDockTerm ? "" : termSplit(r)}
-                </div>`}
+                ${bottomDock(live)}
               `}
             </div>
           </div>
@@ -2236,9 +2270,9 @@ v1 桌面壳是否坚持 Tauri 2？
           ${S.direction === "codex-map" ? `<button data-act="toggle-side">${S.sideFolded ? t("unfoldSide") : t("foldSide")}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
+          ${S.midMode === "run" ? `<button data-act="restore-dock">${esc(t("restoreDock"))}</button>` : ""}
           <span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : t("graphEntry"))}</span>
           <span class="grow"></span>
-          ${S.midMode === "run" ? `<button data-act="all-runs">${esc(t("allRuns"))}</button>` : ""}
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
           ${S.direction === "codex-map" ? `<button data-act="toggle-detail">${S.detailFolded ? t("unfoldDetail") : t("foldDetail")}</button>` : ""}
         </div>`;
@@ -2447,7 +2481,10 @@ v1 桌面壳是否坚持 Tauri 2？
               ${i.closed ? `<span class="tag">${t("closed")}</span>` : i.claimed ? `<span class="tag">${t("claimed")}</span>` : `<span class="tag">${t("unclaimed")}</span>`}
             </div>
             <div class="row" style="margin-top:6px">
-              ${r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
+              ${r && S.direction === "codex-map" && S.midMode === "run" && S.runId === r.id
+                ? `<button data-act="restore-dock">${t("restoreDock")}</button>`
+                : r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>`
+                : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
               ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
               ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
               ${trackerOpen(i)}
@@ -2500,12 +2537,12 @@ v1 桌面壳是否坚持 Tauri 2？
               <div class="gname">${esc(project(pid).name)}</div>
               ${groups[pid].map(r => {
                 const i = r.issueId ? issue(r.issueId) : null;
-                const label = i ? `#${i.id} ${shortTitle(i.title, 10)}` : "#— 游离";
+                const label = i ? `#${i.id} ${shortTitle(i.title, 10)}` : t("free");
                 return `<button class="${S.runId === r.id ? "sel" : ""}" data-act="run" data-id="${r.id}">
                   <span class="dot ${r.status === "active" ? "busy" : r.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
                 </button>`;
               }).join("")}
-            </div>`).join("") || `<div class="gname muted pad">${S.hostId ? "这条 Host 上没有要打交道的 Run" : ""}</div>`}
+            </div>`).join("") || `<div class="gname muted pad">${S.hostId ? t("noDockRuns") : ""}</div>`}
           <span class="grow"></span>
           <button data-act="all-runs">${t("allRuns")}</button>
         </div>`;
@@ -2530,9 +2567,10 @@ v1 桌面壳是否坚持 Tauri 2？
         <div class="ident ${termSkin()}">
           ${runIdentity(r)}
           <span class="grow"></span>
-          <button data-act="swap-run" title="最近切过的 Run">上一条</button>
+          <button data-act="swap-run" title="${esc(t("swapRun"))}">${t("swapRun")}</button>
           ${r && r.status === "active" ? `<button data-act="ask-stop">${t("stopRun")}</button>` : ""}
           ${S.midMode === "run" ? "" : `<button data-act="toggle-dock">${dockFolded() ? t("unfoldDock") : t("foldDock")}</button>`}
+          <button data-act="all-runs">${t("allRuns")}</button>
           <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">${t("viewChanges")}</button>
           <button data-act="term-theme">${S.termTheme === "light" ? t("termDark") : t("termLight")}</button>
           <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">${t("zoom")}</button>
@@ -2542,10 +2580,10 @@ v1 桌面壳是否坚持 Tauri 2？
     }
 
     function termText(r) {
-      if (!r) return `<span class="dim">没有选中的 Run。终端只画 Host 上那份 PTY。</span>`;
+      if (!r) return `<span class="dim">${t("noDockRuns")}</span>`;
       const i = r.issueId ? issue(r.issueId) : null;
       if (r.status === "stopped") {
-        return `<span class="dim">${r.agent}  ${project(r.projectId).name}  ${i ? "#"+i.id : "游离"}</span>
+        return `<span class="dim">${r.agent}  ${project(r.projectId).name}  ${i ? "#"+i.id : t("free")}</span>
 <span class="bad">× ${t("stopped")}</span>  <span class="dim">认领还在。优先恢复原生会话。</span>
 
 <button data-act="fake-continue">${t("continue")}</button>  <button data-act="fake-release">${t("release")}</button>`;
@@ -2867,6 +2905,10 @@ v1 桌面壳是否坚持 Tauri 2？
           if (!S.detailFolded && S.termZoom === "right") S.termZoom = null;
           render();
         }
+        if (act === "restore-dock") {
+          restoreFromRun();
+          render();
+        }
         if (act === "toggle-issue-wide") {
           S.issueWide = !S.issueWide;
           if (S.issueWide) {
@@ -2878,13 +2920,7 @@ v1 桌面壳是否坚持 Tauri 2？
         if (act === "toggle-recent-more") { S.recentMore = !S.recentMore; render(); }
         if (act === "term-theme") { S.termTheme = S.termTheme === "light" ? "dark" : "light"; render(); }
         if (act === "graph-node") {
-          const i = issue(Number(id));
-          if (i) {
-            S.issueId = i.id;
-            S.projectId = i.projectId;
-            S.hostId = project(i.projectId).hostId;
-          }
-          render();
+          if (issue(Number(id))) setIssue(Number(id));
         }
         if (act === "run") { S.allRunsOpen = false; setRun(id); }
         if (act === "toggle-vc") { S.viewChangesOpen = !S.viewChangesOpen; render(); }

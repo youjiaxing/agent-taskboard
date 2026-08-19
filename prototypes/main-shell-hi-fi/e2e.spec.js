@@ -25,35 +25,36 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await page.locator('[data-act="issue"][data-id="50"]').first().click();
   await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
   await expect(page.locator(".issue-body")).toContainText("详情栏现在只画家族");
-  await expect(page.getByRole("button", { name: "加宽读票", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "加宽", exact: true })).toBeVisible();
   await expect(page.locator(".lanes").first()).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^阻塞中/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^Frontier/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^进行中/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: "看板视图", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "看板", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
   await expect(page.locator(".map-side [data-act=\"focus-run\"][data-id=\"r1\"]")).toBeVisible();
-  await expect(page.locator(".map-side").getByRole("button", { name: "全部 Run", exact: true })).toHaveCount(0);
-  await expect(page.locator(".dock").getByRole("button", { name: "全部 Run", exact: true })).toBeVisible();
+  await expect(page.locator(".map-side").getByRole("button", { name: "所有 Run", exact: true })).toHaveCount(0);
+  await expect(page.locator(".dock").getByRole("button", { name: "所有 Run", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看更多最近完成", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "占满右侧", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "浅色终端", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "停止", exact: true }).first()).toBeVisible();
   await expect(page.getByText("查看改动", { exact: true }).first()).toBeVisible();
 
-  // 看这次 Run：中间抬起这一份终端，底栏让开，右侧仍是 Issue。顶栏没有第三块「这次 Run」按钮。
-  await page.getByRole("button", { name: "看这次 Run", exact: true }).click();
+  // 打开终端：抬到中间；放回底栏恢复。顶栏没有「这次 Run」。
+  await page.getByRole("button", { name: "打开终端", exact: true }).click();
   await expect(page).toHaveURL(/mid=run/);
   await expect(page.locator(".run-stage")).toBeVisible();
   await expect(page.locator(".dock")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
-  await expect(page.getByText("终端只在中间这一份。回看板或依赖图，底栏会回来。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "放回底栏", exact: true }).first()).toBeVisible();
   await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await page.getByRole("button", { name: "放回底栏", exact: true }).first().click();
   await expect(page.locator(".dock")).toBeVisible();
   await expect(page.locator(".lanes").first()).toBeVisible();
+  await expect(page.locator(".term")).toBeVisible();
 
   // 依赖图：点节点只换详情；第一次打开默认折终端
   await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
@@ -62,7 +63,7 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".dock.slim")).toBeVisible();
   await page.locator('[data-act="graph-node"][data-id="51"]').click();
   await expect(page.getByText("#51 实现：依赖图", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await page.getByRole("button", { name: "看板", exact: true }).first().click();
   await expect(page.locator(".col-hd").filter({ hasText: /^Frontier/ })).toBeVisible();
 
   // 切到气质版：结构未改，顶栏仍在
@@ -94,17 +95,34 @@ test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page })
   await page.locator('[data-act="issue"][data-id="50"]').first().click();
   await expect(page.locator(".issue-title")).toHaveText("#50 实现：详情挡住名单");
   await expect(page.locator(".issue-body")).toContainText("Question");
-  await expect(page.locator(".issue-body")).toContainText("加宽读票");
-  await page.getByRole("button", { name: "加宽读票", exact: true }).click();
+  await expect(page.locator(".issue-body")).toContainText("加宽");
+  await page.getByRole("button", { name: "加宽", exact: true }).click();
   await expect(page).toHaveURL(/iw=1/);
   await expect(page.locator(".map-cols.issue-wide")).toBeVisible();
   await page.locator('[data-act="issue"][data-id="1"]').first().click();
   await expect(page.locator(".issue-body")).toContainText("这张地图为什么这么长");
 });
 
+test("点 Issue 时底栏跟 Run：有则切换，无则给出开 Run", async ({ page }) => {
+  await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
+  await page.locator('[data-act="issue"][data-id="50"]').first().click();
+  await expect(page.locator(".dock .term")).toBeVisible();
+  await expect(page.locator(".dock")).toContainText("#50");
+
+  await page.locator('[data-act="issue"][data-id="51"]').first().click();
+  await expect(page.locator(".dock .term")).toHaveCount(0);
+  await expect(page.locator(".dock-idle")).toBeVisible();
+  await expect(page.locator(".dock").getByRole("button", { name: "开 Run", exact: true })).toBeVisible();
+  await expect(page.getByText("这张 Issue 没有进行中的 Run", { exact: true })).toBeVisible();
+
+  await page.locator('[data-act="issue"][data-id="90"]').first().click();
+  await expect(page.locator(".dock .term")).toBeVisible();
+  await expect(page.locator(".dock")).toContainText("#90");
+});
+
 test("占满右侧只放大现有终端，不复制一份", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
-  await page.getByRole("button", { name: "看这次 Run", exact: true }).click();
+  await page.getByRole("button", { name: "打开终端", exact: true }).click();
   await expect(page.locator(".run-stage")).toBeVisible();
   await expect(page.locator(".dock")).toHaveCount(0);
   await expect(page.locator(".term")).toHaveCount(1);
@@ -116,7 +134,7 @@ test("占满右侧只放大现有终端，不复制一份", async ({ page }) => 
   await expect(page.locator(".map-detail-col")).toHaveCount(0);
   await expect(page.locator(".run-stage")).toBeVisible();
 
-  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await page.getByRole("button", { name: "看板", exact: true }).first().click();
   await expect(page.locator(".zoom-stage")).toHaveCount(0);
   await expect(page.locator(".term")).toHaveCount(1);
   await expect(page.locator(".map-term-col")).toBeVisible();
@@ -169,10 +187,10 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await expect(page.locator(".graph-canvas")).toBeVisible();
     await page.locator('[data-act="graph-node"]').first().click();
     await expect(page.locator(".graph-canvas")).toBeVisible();
-    await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+    await page.getByRole("button", { name: "看板", exact: true }).first().click();
 
-    // Run：切到 r2（已停），终端给出恢复提示
-    await page.locator('[data-act="run"][data-id="r2"]').first().click();
+    // 点有 Run 的 Issue，底栏切到对应终端
+    await page.locator('[data-act="issue"][data-id="30"]').first().click();
     await expect(page.getByText("认领还在。优先恢复原生会话。", { exact: false })).toBeVisible();
 
     // 设置面板列出三个方向
