@@ -787,26 +787,87 @@
       --shadow: none;
       --r: 10px;
       --win-r: 0;
+      --side-w: 248px;
       background: #fff;
     }
     .shell-codex-map .stage { padding: 0 0 70px; background: #fff; }
     .shell-codex-map .map-frame {
       height: 100%;
       display: flex;
+      flex-direction: column;
       background: #fff;
     }
+    .shell-codex-map .map-chrome {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: stretch;
+      min-height: 38px;
+      background: #fff;
+    }
+    .shell-codex-map .map-chrome-lead {
+      flex: 0 0 var(--side-w);
+      width: var(--side-w);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      background: #f5f5f4;
+    }
+    .shell-codex-map .map-frame.side-folded .map-chrome-lead {
+      flex: 0 0 auto;
+      width: auto;
+      background: #fff;
+    }
+    .shell-codex-map .map-frame.side-folded .map-chrome {
+      border-bottom: 1px solid #f0f0ee;
+    }
+    .shell-codex-map .map-chrome-lead .traffic i { width: 12px; height: 12px; }
+    .shell-codex-map .side-toggle {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #6f6f6c;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+    }
+    .shell-codex-map .side-toggle:hover {
+      background: var(--sel);
+      color: var(--ink);
+      border-color: transparent;
+    }
+    .shell-codex-map .map-chrome-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: stretch;
+    }
+    .shell-codex-map .map-chrome-main .mid-bar {
+      flex: 1;
+      min-width: 0;
+      flex-wrap: nowrap;
+      border-bottom: 1px solid #f0f0ee;
+    }
+    .shell-codex-map .map-frame.side-folded .map-chrome-main .mid-bar { border-bottom: 0; }
+    .shell-codex-map .map-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+    }
     .shell-codex-map .map-side {
-      flex: 0 0 248px;
-      width: 248px;
+      flex: 0 0 var(--side-w);
+      width: var(--side-w);
       background: #f5f5f4;
       display: flex;
       flex-direction: column;
       gap: 8px;
-      padding: 10px 10px 12px;
+      padding: 4px 10px 12px;
       overflow-y: auto;
     }
-    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 4px 4px; }
-    .shell-codex-map .ms-top .traffic i { width: 12px; height: 12px; }
     .shell-codex-map .ms-app { font-size: 12px; color: var(--muted); }
     .shell-codex-map .ms-tag { margin-left: auto; font-size: 10px; color: #9a9a96; font-weight: 500; }
     .shell-codex-map .ms-foot {
@@ -1238,7 +1299,8 @@
     .shell-codex-map .graph-canvas { background: #fcfcfb; }
 
     @media (max-width: 1100px) {
-      .shell-codex-map .map-side { flex-basis: 220px; width: 220px; }
+      .shell-codex-map { --side-w: 220px; }
+      .shell-codex-map .map-side { flex-basis: var(--side-w); width: var(--side-w); }
       .shell-codex-map .map-cols { grid-template-columns: minmax(0, 1fr) minmax(280px, 36%); }
       .shell-codex-map .map-cols.run-read,
       .shell-codex-map .map-cols.issue-wide { grid-template-columns: minmax(0, 1fr) minmax(300px, 48%); }
@@ -1880,6 +1942,15 @@ v1 桌面壳是否坚持 Tauri 2？
       const cls = mode === "float" ? `reveal-chip float ${place}` : `reveal-chip ${place}`;
       return `<button type="button" class="${cls}" data-act="${act}" aria-label="${esc(label)}">${glyph} ${esc(label)}</button>`;
     }
+    function sideToggle() {
+      const label = S.sideFolded ? t("unfoldSide") : t("foldSide");
+      return `<button type="button" class="side-toggle" data-act="toggle-side" title="${esc(label)}" aria-label="${esc(label)}">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75" stroke="currentColor" stroke-width="1.25"/>
+          <path d="M6.25 2.75v10.5" stroke="currentColor" stroke-width="1.25"/>
+        </svg>
+      </button>`;
+    }
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
     function setDirection(id) {
       const next = directionOf(id);
@@ -2456,18 +2527,26 @@ v1 桌面壳是否坚持 Tauri 2？
       const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(live) : S.midMode === "overview" ? overviewPane() : board();
       return `
         <div class="stage">
-          <div class="map-frame">
-            ${S.sideFolded ? "" : mapSidebar()}
-            <div class="map-workspace">
-              ${empty && S.sideFolded ? revealChip("toggle-side", t("unfoldSide"), "left", "float") : ""}
-              ${empty ? mapEmpty(empty) : `
-                <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""} ${!hideDetail && S.issueWide ? "issue-wide" : ""} ${!hideDetail && !S.issueWide && S.midMode === "run" ? "run-read" : ""}">
-                  <div class="map-mid">${mid}</div>
-                  ${termOnRight ? `<aside class="map-term-col">${termChrome(live)}${termSplit(live)}</aside>` : ""}
-                  ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
-                </div>
-                ${bottomDock(live)}
-              `}
+          <div class="map-frame ${S.sideFolded ? "side-folded" : ""}">
+            <div class="map-chrome">
+              <div class="map-chrome-lead">
+                <div class="traffic"><i></i><i></i><i></i></div>
+                ${sideToggle()}
+              </div>
+              <div class="map-chrome-main">${empty ? "" : midBar()}</div>
+            </div>
+            <div class="map-body">
+              ${S.sideFolded ? "" : mapSidebar()}
+              <div class="map-workspace">
+                ${empty ? mapEmpty(empty) : `
+                  <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""} ${!hideDetail && S.issueWide ? "issue-wide" : ""} ${!hideDetail && !S.issueWide && S.midMode === "run" ? "run-read" : ""}">
+                    <div class="map-mid">${mid}</div>
+                    ${termOnRight ? `<aside class="map-term-col">${termChrome(live)}${termSplit(live)}</aside>` : ""}
+                    ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
+                  </div>
+                  ${bottomDock(live)}
+                `}
+              </div>
             </div>
           </div>
         </div>
@@ -2482,12 +2561,6 @@ v1 桌面壳是否坚持 Tauri 2？
       const plist = hostProjects();
       return `
         <aside class="map-side">
-          <div class="ms-top">
-            <div class="traffic"><i></i><i></i><i></i></div>
-            <span class="ms-app">Agent Taskboard</span>
-            <span class="grow"></span>
-            ${foldHit("toggle-side", S.sideFolded ? t("unfoldSide") : t("foldSide"), S.sideFolded ? "›" : "‹")}
-          </div>
           <div class="ms-groups">
             <div class="ms-group">
               <div class="ms-group-name">${esc(t("hosts"))}</div>
@@ -2543,7 +2616,6 @@ v1 桌面壳是否坚持 Tauri 2？
       const hideDetail = S.detailFolded || S.termZoom === "right";
       return `
         <div class="mid-bar">
-          ${S.sideFolded ? revealChip("toggle-side", t("unfoldSide"), "left") : ""}
           ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
@@ -2560,9 +2632,13 @@ v1 桌面壳是否坚持 Tauri 2？
         </div>`;
     }
 
+    function paneMidBar() {
+      return S.direction === "codex-map" ? "" : midBar();
+    }
+
     function runPane(r) {
       return `
-        ${midBar()}
+        ${paneMidBar()}
         <div class="run-stage">
           ${termChrome(r)}
           ${termSplit(r)}
@@ -2643,7 +2719,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const i = issue(S.issueId);
       return `
         <div class="graph-sheet">
-          ${midBar()}
+          ${paneMidBar()}
           <div class="graph-toolbar">
             <span class="chip">${all.length} · ${S.lang === "en" ? "isolated" : "孤立"} ${iso.length} · ${S.lang === "en" ? "closed" : "已关闭"} ${extras.length} · #${i ? i.id : "?"}</span>
             <button data-act="toggle-ctx" class="${S.showCtx ? "active" : ""}">${S.showCtx ? t("closedCtxOn") : t("showClosedCtx")}</button>
@@ -2666,7 +2742,7 @@ v1 桌面壳是否坚持 Tauri 2？
       ];
       const allOn = !S.ovFilter.length;
       return `
-        ${midBar()}
+        ${paneMidBar()}
         <div class="ov">
           <div class="ov-tools">
             <button data-act="ov-proj" data-id="all" class="${allOn ? "active" : ""}">${esc(t("ovAllProjects"))}</button>
@@ -2754,7 +2830,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const hint = S.childFilter ? t("childHint") : t("boardHint");
       const recAll = allRecentClosed();
       return `
-        ${midBar()}
+        ${paneMidBar()}
         <div class="tiny pad">${esc(hint)}
           ${S.childFilter ? `<button data-act="clear-filter">${t("clearFilter")}</button>` : ""}
         </div>

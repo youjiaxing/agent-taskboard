@@ -95,23 +95,23 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
 test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
   const lanesBefore = await page.locator(".lanes").first().boundingBox();
-  const foldLeft = await page.getByRole("button", { name: "收起左侧", exact: true }).boundingBox();
-  await page.getByRole("button", { name: "收起左侧", exact: true }).click();
+  const toggle = page.locator(".map-chrome [data-act=\"toggle-side\"]");
+  const foldBox = await toggle.boundingBox();
+  await expect(toggle).toHaveAttribute("aria-label", "收起左侧");
+  await toggle.click();
   await expect(page.locator(".map-side")).toHaveCount(0);
-  const unfoldLeft = page.getByRole("button", { name: "展开左侧", exact: true });
-  await expect(unfoldLeft).toBeVisible();
-  await expect(page.locator(".mid-bar").getByRole("button", { name: "展开左侧", exact: true })).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-label", "展开左侧");
+  const unfoldBox = await toggle.boundingBox();
+  expect(Math.abs(unfoldBox.x - foldBox.x)).toBeLessThan(2);
+  expect(Math.abs(unfoldBox.y - foldBox.y)).toBeLessThan(2);
   const lanesAfter = await page.locator(".lanes").first().boundingBox();
   expect(lanesAfter.x).toBeLessThan(lanesBefore.x - 80);
-  const boardTab = await page.getByRole("button", { name: "看板", exact: true }).first().boundingBox();
-  const unfoldBox = await unfoldLeft.boundingBox();
-  expect(Math.abs(unfoldBox.y - boardTab.y)).toBeLessThan(8);
-  expect(Math.abs(unfoldBox.y - foldLeft.y)).toBeLessThan(12);
 
   await page.getByRole("button", { name: "总览", exact: true }).first().click();
-  const unfoldOnOverview = await page.getByRole("button", { name: "展开左侧", exact: true }).boundingBox();
+  const toggleOnOverview = await toggle.boundingBox();
   const allProjects = await page.getByRole("button", { name: "全部 Project", exact: true }).boundingBox();
-  expect(unfoldOnOverview.y + unfoldOnOverview.height).toBeLessThan(allProjects.y + 2);
+  expect(Math.abs(toggleOnOverview.x - foldBox.x)).toBeLessThan(2);
+  expect(toggleOnOverview.y + toggleOnOverview.height).toBeLessThan(allProjects.y + 2);
   await page.getByRole("button", { name: "看板", exact: true }).first().click();
 
   await page.getByRole("button", { name: "收起终端", exact: true }).click();
