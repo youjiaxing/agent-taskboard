@@ -8,12 +8,12 @@
   <!--
     一次性原型，不是产品。
     三个方向：
-      codex-map  Codex 原貌映射（动了结构）：左侧原生栏、大片白主区、底部悬浮操作面。
-                Issue 仍是工作单元；Host/Project、四列、Issue 详情、官方 CLI Embedded
-                Terminal 都可达；不搬会话或聊天主表面。
-      codex      Codex 气质（结构未改 #15）：只借截图气质。
-      paper      纸面精修（结构未改 #15）：保留现状。
-    ?direction=codex-map|codex|paper
+      codex-map  Codex 原貌映射（动了结构）：左侧原生栏、白主区。
+                中间仍是看板视图 | 依赖图；底栏 Embedded Terminal 占自己的高度，
+                不再悬浮遮挡看板。Issue 仍是工作单元；不搬聊天主表面。
+      codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
+      paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
+    ?direction=codex-map|codex|paper  &mid=board|graph
   -->
   <style>
     :root {
@@ -502,6 +502,74 @@
       font-size: 11px;
       white-space: nowrap;
     }
+    .mid-rel { position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .mid-rel > .lanes { flex: 1; min-height: 0; overflow: auto; }
+    .mid-rel > .graph-sheet { flex: 1; min-height: 0; }
+    .mid-bar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+      flex: 0 0 auto;
+    }
+    .mid-bar button.active {
+      background: var(--sel);
+      border-color: var(--line-strong);
+      font-weight: 600;
+    }
+    .graph-sheet {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--paper);
+    }
+    .graph-toolbar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper-2);
+    }
+    .graph-canvas { flex: 1; min-height: 0; overflow: hidden; background: var(--paper); }
+    .graph-canvas svg { width: 100%; height: 100%; display: block; }
+    .node-card { cursor: pointer; }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 16px minmax(88px, .75fr) 16px 1fr;
+      gap: 4px;
+      align-items: start;
+    }
+    .flow .arrow {
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 16px;
+    }
+    .flow .here {
+      border: 1px solid var(--line-strong);
+      background: var(--sel);
+      padding: 8px;
+      border-radius: var(--r);
+    }
+    .dock.slim { height: auto !important; min-height: 0; flex: 0 0 auto; }
+    .dock.slim .tabs,
+    .dock.slim .term-wrap,
+    .dock.slim .split { display: none; }
+    .icn {
+      width: 15px;
+      height: 15px;
+      display: inline-block;
+      flex: 0 0 auto;
+      opacity: .72;
+    }
 
     /* Codex 气质：结构未改 #15，只借截图气质——淡线、留白、安静控件。 */
     .shell-codex {
@@ -601,20 +669,21 @@
     .shell-paper .issue-card { margin: 7px; width: calc(100% - 14px); box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 3px 9px rgba(67,45,21,.06); }
     .shell-paper .dock { height: 34vh; }
 
-    /* Codex 原貌映射：借截图骨架——左侧原生栏、大片白主区、底部悬浮操作面。结构动了，Issue 仍是工作单元。 */
+    /* Codex 原貌映射：借截图铬——左侧原生栏 + 白主区。
+       看板和底栏不再互相遮挡：中间是看板视图/依赖图，底栏占自己的高度。 */
     .shell-codex-map {
       --desk: #ffffff;
       --paper: #ffffff;
-      --paper-2: #f7f7f8;
+      --paper-2: #f5f5f4;
       --card: #ffffff;
-      --ink: #1f1f1e;
+      --ink: #1a1a19;
       --on-ink: #ffffff;
-      --muted: #6f6e6b;
-      --line: #eceae8;
-      --line-strong: #d9d8d5;
-      --accent: #1f1f1e;
-      --accent-ink: #1f1f1e;
-      --sel: #eceae8;
+      --muted: #8a8a86;
+      --line: #ececea;
+      --line-strong: #d8d8d5;
+      --accent: #1a1a19;
+      --accent-ink: #1a1a19;
+      --sel: #e8e8e6;
       --chip: #f1f1f0;
       --btn: #fafaf9;
       --field: #ffffff;
@@ -623,74 +692,85 @@
       --ident: #222221;
       --card-sel: #f0f0ee;
       --shadow: none;
-      --r: 8px;
+      --r: 10px;
       --win-r: 0;
       background: #fff;
     }
-    .shell-codex-map .map-stage {
-      display: flex;
+    .shell-codex-map .stage { padding: 0 0 70px; background: #fff; }
+    .shell-codex-map .map-frame {
       height: 100%;
-      padding: 0;
+      display: flex;
       background: #fff;
-      position: relative;
     }
-    /* 左侧原生栏（贯穿全高，280px，#f7f7f8） */
     .shell-codex-map .map-side {
-      flex: 0 0 280px;
-      width: 280px;
-      background: #f7f7f8;
-      border-right: 1px solid var(--line);
+      flex: 0 0 248px;
+      width: 248px;
+      background: #f5f5f4;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      padding: 14px 10px 16px;
+      gap: 8px;
+      padding: 10px 10px 12px;
       overflow-y: auto;
     }
-    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 10px; }
-    .shell-codex-map .ms-top .traffic i { width: 11px; height: 11px; }
-    .shell-codex-map .ms-back { display: inline-flex; gap: 2px; margin-left: 2px; }
+    .shell-codex-map .ms-top { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+    .shell-codex-map .ms-top .traffic i { width: 12px; height: 12px; }
+    .shell-codex-map .ms-back { display: inline-flex; gap: 0; }
     .shell-codex-map .ms-back button {
       border: 0;
       background: transparent;
-      color: var(--muted);
-      font-size: 14px;
+      color: #b0b0ac;
+      font-size: 13px;
       line-height: 1;
-      padding: 4px 7px;
-      border-radius: 7px;
+      padding: 4px 6px;
+      border-radius: 6px;
     }
     .shell-codex-map .ms-back button:hover { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .ms-brand-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 4px 6px;
+    }
     .shell-codex-map .ms-brand {
-      font-family: var(--sans);
-      font-size: 16px;
-      font-weight: 700;
-      letter-spacing: -.02em;
-      padding: 0 6px;
-    }
-    .shell-codex-map .ms-actions { display: flex; gap: 6px; padding: 0 2px; }
-    .shell-codex-map .ms-search {
-      flex: 1;
-      border: 1px solid transparent;
-      background: #eae9e7;
-      border-radius: 8px;
-      padding: 5px 10px;
-      font-size: 12px;
-      color: var(--ink);
-    }
-    .shell-codex-map .ms-search::placeholder { color: #a3a29e; }
-    .shell-codex-map .ms-search:focus { border-color: var(--line-strong); background: #fff; outline: 0; }
-    .shell-codex-map .ms-bell {
       border: 0;
       background: transparent;
-      font-size: 14px;
-      padding: 3px 8px;
+      font-family: var(--sans);
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -.02em;
+      padding: 4px 6px;
       border-radius: 8px;
     }
-    .shell-codex-map .ms-bell:hover { background: var(--sel); }
-    .shell-codex-map .ms-nav { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+    .shell-codex-map .ms-brand:hover { background: var(--sel); }
+    .shell-codex-map .ms-brand .chev { color: var(--muted); font-weight: 500; font-size: 11px; margin-left: 2px; }
+    .shell-codex-map .ms-brand-row .grow { flex: 1; }
+    .shell-codex-map .ms-ico {
+      border: 0;
+      background: transparent;
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #6f6f6c;
+    }
+    .shell-codex-map .ms-ico:hover { background: var(--sel); }
+    .shell-codex-map .ms-search {
+      width: 100%;
+      border: 0;
+      background: #e8e8e6;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .shell-codex-map .ms-search:focus { outline: 0; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); }
+    .shell-codex-map .ms-nav { display: flex; flex-direction: column; gap: 1px; padding: 2px 0 8px; }
     .shell-codex-map .ms-nav button {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
       text-align: left;
       border: 0;
       background: transparent;
@@ -701,19 +781,11 @@
     }
     .shell-codex-map .ms-nav button:hover { background: var(--sel); }
     .shell-codex-map .ms-nav button.active { background: var(--sel); font-weight: 600; }
-    .shell-codex-map .ms-nav .ic { width: 15px; text-align: center; color: var(--muted); font-size: 12px; }
-    .shell-codex-map .ms-groups {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding-top: 10px;
-      border-top: 1px solid var(--line);
-    }
+    .shell-codex-map .ms-groups { display: flex; flex-direction: column; gap: 14px; padding-top: 6px; }
     .shell-codex-map .ms-group-name {
       font-size: 11px;
-      color: var(--muted);
+      color: #9a9a96;
       padding: 0 10px 4px;
-      letter-spacing: .02em;
     }
     .shell-codex-map .ms-item {
       display: flex;
@@ -723,205 +795,184 @@
       text-align: left;
       border: 0;
       background: transparent;
-      border-radius: 10px;
-      padding: 7px 10px;
+      border-radius: 8px;
+      padding: 6px 10px;
       font-size: 13px;
       color: var(--ink);
     }
     .shell-codex-map .ms-item:hover { background: var(--sel); }
-    .shell-codex-map .ms-item.active { background: var(--sel); font-weight: 600; }
-    .shell-codex-map .ms-foot { font-size: 11px; color: var(--muted); padding: 0 8px; }
-    /* 主区：大片白 + 中央看板 */
-    .shell-codex-map .map-main {
+    .shell-codex-map .ms-item.active { background: #e4e4e2; font-weight: 600; }
+    .shell-codex-map .ms-nested {
+      display: block;
+      width: calc(100% - 18px);
+      margin: 1px 0 1px 18px;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      border-radius: 7px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .shell-codex-map .ms-nested:hover,
+    .shell-codex-map .ms-nested.active { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .ms-user {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px 2px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+    .shell-codex-map .ms-avatar {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #c4a574;
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .shell-codex-map .map-workspace {
       flex: 1;
       min-width: 0;
-      position: relative;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       background: #fff;
     }
-    .shell-codex-map .map-board {
+    .shell-codex-map .map-cols {
       flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(272px, 318px);
+    }
+    .shell-codex-map .map-mid {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .shell-codex-map .map-mid .lanes {
+      flex: 1;
+      min-height: 0;
       overflow: auto;
-      padding: 48px 40px 520px;
+      gap: 10px;
+      padding: 10px 12px 12px;
+      background: #fff;
     }
-    .shell-codex-map .map-board > .tiny.pad {
-      max-width: 1160px;
-      margin: 0 auto 12px;
-      padding: 0 4px;
-      color: var(--muted);
-    }
-    .shell-codex-map .map-board .lanes {
-      max-width: 1160px;
-      margin: 0 auto;
-      min-height: auto;
-      grid-template-columns: repeat(4, minmax(170px, 1fr));
-      gap: 14px;
-      background: transparent;
-    }
-    .shell-codex-map .map-board .lanes .col {
+    .shell-codex-map .map-mid .lanes .col {
       border: 0;
-      background: #f7f7f8;
+      background: #f7f7f6;
       border-radius: 12px;
-      padding: 12px 10px 8px;
-      min-height: 320px;
+      overflow: auto;
     }
-    .shell-codex-map .map-board .lanes .col-hd {
-      position: static;
+    .shell-codex-map .map-mid .col-hd {
+      position: sticky;
       border: 0;
       background: transparent;
-      padding: 2px 4px 10px;
+      padding: 10px 12px 6px;
       font-family: var(--sans);
       font-weight: 590;
-      color: #7c7b78;
+      color: #7a7a76;
     }
-    .shell-codex-map .map-board .lanes .col-hd span { color: #a6a5a1; font-weight: 500; }
-    .shell-codex-map .map-board .lanes .empty { padding: 20px 6px; font-size: 12px; }
-    .shell-codex-map .map-board .lanes .issue-card {
-      width: 100%;
-      margin: 0 0 8px;
+    .shell-codex-map .map-mid .issue-card {
+      width: calc(100% - 16px);
+      margin: 0 8px 8px;
       padding: 10px 11px;
       border: 1px solid transparent;
       border-radius: 10px;
       background: #fff;
       box-shadow: none;
     }
-    .shell-codex-map .map-board .lanes .issue-card:hover { transform: none; border-color: var(--line-strong); }
-    .shell-codex-map .map-board .lanes .issue-card.sel {
+    .shell-codex-map .map-mid .issue-card:hover { transform: none; border-color: var(--line); }
+    .shell-codex-map .map-mid .issue-card.sel {
       outline: 0;
-      border-color: #b9b8b4;
+      border-color: #c8c8c4;
       background: #fff;
-      box-shadow: 0 0 0 1px #b9b8b4 inset;
     }
-    /* Issue 详情：主区右缘滑出面板 */
-    .shell-codex-map .map-detail {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      bottom: 448px;
-      width: min(372px, calc(100% - 40px));
-      background: #fff;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      box-shadow: 0 8px 24px rgba(15, 15, 14, .06);
+    .shell-codex-map .map-detail-col {
+      min-width: 0;
       overflow: auto;
-      z-index: 6;
-      animation: map-detail-in .16s ease;
+      border-left: 1px solid #f0f0ee;
+      background: #fff;
     }
-    @keyframes map-detail-in { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
-    .shell-codex-map .map-detail-x {
-      position: absolute;
-      top: 5px;
-      right: 5px;
-      z-index: 2;
-    }
-    .shell-codex-map .map-detail-x button {
-      border: 0;
-      background: transparent;
-      color: var(--muted);
-      font-size: 15px;
-      padding: 2px 8px;
-      border-radius: 6px;
-    }
-    .shell-codex-map .map-detail-x button:hover { background: var(--sel); color: var(--ink); }
-    .shell-codex-map .map-detail .hd {
-      position: static;
-      background: transparent;
-      border-bottom: 1px solid var(--line);
-      min-height: 40px;
+    .shell-codex-map .map-detail-col .hd {
+      position: sticky;
+      background: #fff;
+      border-bottom: 1px solid #f0f0ee;
       color: var(--muted);
     }
-    .shell-codex-map .map-detail .block {
+    .shell-codex-map .map-detail-col .block {
       background: #fafaf9;
-      border-color: var(--line);
+      border-color: #efefed;
       border-radius: 10px;
     }
-    /* 底部中央悬浮操作面：元信息条 + 白色大圆角面 */
-    .shell-codex-map .map-dock {
-      position: absolute;
-      left: 50%;
-      bottom: 64px;
-      transform: translateX(-50%);
-      width: min(810px, calc(100% - 64px));
-      z-index: 8;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .shell-codex-map .dock-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      padding: 0 8px;
-    }
-    .shell-codex-map .dock-meta .who { color: var(--ink); font-weight: 600; }
-    .shell-codex-map .dock-surface {
+    .shell-codex-map .dock {
+      flex: 0 0 28vh;
+      height: 28vh;
+      min-height: 132px;
+      position: relative;
+      left: auto;
+      bottom: auto;
+      transform: none;
+      width: auto;
       background: #fff;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: 0 12px 32px rgba(15, 15, 14, .08);
-      display: flex;
-      flex-direction: column;
-      height: 320px;
+      border-top: 1px solid #ececea;
+      z-index: 2;
+    }
+    .shell-codex-map .dock.slim {
+      flex: 0 0 auto;
+      height: auto;
       min-height: 0;
-      overflow: hidden;
+      border-top: 1px solid #ececea;
     }
-    .shell-codex-map .dock-surface .tabs {
-      flex: 0 0 auto;
-      min-height: 40px;
-      border-bottom: 1px solid var(--line);
-      background: transparent;
-    }
-    .shell-codex-map .dock-surface .tabs .gname { color: var(--muted); }
-    .shell-codex-map .dock-surface .tabs button { padding: 7px 12px; }
-    .shell-codex-map .dock-surface .tabs button.sel {
-      background: var(--sel);
+    .shell-codex-map .dock .tabs { background: #fafafa; }
+    .shell-codex-map .dock .tabs button.sel { background: #e8e8e6; color: var(--ink); box-shadow: none; }
+    .shell-codex-map .dock .ident { background: #171716; }
+    .shell-codex-map .dock.slim .ident {
+      background: #f7f7f6;
       color: var(--ink);
-      box-shadow: none;
+      border: 0;
     }
-    .shell-codex-map .dock-surface .ident {
-      background: transparent;
-      color: var(--ink);
-      border-bottom: 1px solid var(--line);
-      padding: 7px 12px;
-      flex: 0 0 auto;
-    }
-    .shell-codex-map .dock-surface .ident button {
+    .shell-codex-map .dock.slim .ident button {
       background: transparent;
       border-color: transparent;
       color: var(--ink);
     }
-    .shell-codex-map .dock-surface .ident button:hover { background: var(--sel); }
-    .shell-codex-map .dock-surface .ident .who { color: var(--ink); font-weight: 650; }
-    .shell-codex-map .dock-surface .term-wrap { flex: 1; min-height: 0; }
-    .shell-codex-map .dock-surface .split { flex: 1; min-height: 0; }
-    .shell-codex-map .dock-surface .pane { background: #fafaf9; }
-    .shell-codex-map .dock-surface .pane .hd { background: transparent; }
-    /* 空状态：主区中央 */
+    .shell-codex-map .dock.slim .ident .who { color: var(--ink); }
     .shell-codex-map .map-empty-strong {
       flex: 1;
       display: flex;
       flex-direction: column;
       justify-content: center;
+      align-items: flex-start;
       gap: 10px;
-      max-width: 460px;
+      max-width: 480px;
       margin: 0 auto;
       padding: 0 24px;
     }
     .shell-codex-map .map-empty-strong .brand {
       font-family: var(--sans);
-      font-weight: 700;
-      letter-spacing: -.01em;
+      font-size: 26px;
+      font-weight: 500;
+      letter-spacing: -.03em;
     }
+    .shell-codex-map .mid-bar { border-bottom-color: #f0f0ee; }
+    .shell-codex-map .graph-canvas { background: #fcfcfb; }
 
     @media (max-width: 1100px) {
-      .shell-codex-map .map-side { flex-basis: 240px; width: 240px; }
-      .shell-codex-map .map-dock { width: min(810px, calc(100% - 32px)); }
+      .shell-codex-map .map-side { flex-basis: 220px; width: 220px; }
+      .shell-codex-map .map-cols { grid-template-columns: minmax(0, 1fr) minmax(240px, 280px); }
     }
     @media (max-width: 900px) {
-      .shell-codex-map .map-board .lanes { grid-template-columns: repeat(2, minmax(170px, 1fr)); }
+      .shell-codex-map .map-cols { grid-template-columns: 1fr; }
+      .shell-codex-map .map-detail-col { border-left: 0; border-top: 1px solid #f0f0ee; max-height: 34vh; }
+      .shell-codex-map .map-mid .lanes { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
     }
 
     @media (max-width: 900px) {
@@ -1061,6 +1112,13 @@
       allRunsOpen: false,
       childFilter: null,
       mapDetailOpen: false,
+      mapSearchOpen: false,
+      mapHostOpen: false,
+      midMode: "board",
+      midByProject: {},
+      showCtx: false,
+      dockFolded: { board: false, graph: true },
+      cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
       frontierWhy: "blocked"
     };
@@ -1070,23 +1128,23 @@
         id: "codex-map",
         name: "Codex 原貌映射",
         nameEn: "Codex layout map",
-        note: "动了结构：左侧原生栏、大片白主区、底部悬浮操作面。Issue 仍是工作单元。",
-        noteEn: "Structure moved: native left rail, white main area, floating bottom surface. Issues stay the work unit.",
+        note: "动了结构：左侧原生栏。中间仍是看板视图 | 依赖图；底栏占自己的高度，不再悬浮遮挡。",
+        noteEn: "Structure moved: native left rail. Board | graph stay in the middle; the dock keeps its own height and no longer overlays the board.",
         structureMoved: true
       },
       {
         id: "codex",
         name: "Codex 气质",
         nameEn: "Codex mood",
-        note: "结构未改：只借截图气质——淡线、留白、安静控件。",
-        noteEn: "Structure unchanged: only the mood — faint lines, whitespace, quiet controls."
+        note: "结构未改：只借截图气质——淡线、留白、安静控件。看板视图 | 依赖图仍在。",
+        noteEn: "Structure unchanged: only the mood. Board | graph remain."
       },
       {
         id: "paper",
         name: "纸面精修",
         nameEn: "Refined paper",
-        note: "结构未改：保留桌面与纸卡，收敛颜色、阴影和装饰。",
-        noteEn: "Structure unchanged: keep the desk and paper cards, quieter color and depth."
+        note: "结构未改：保留桌面与纸卡。看板视图 | 依赖图仍在。",
+        noteEn: "Structure unchanged: keep the desk and paper cards. Board | graph remain."
       }
     ];
 
@@ -1156,15 +1214,32 @@
         thisRound: "这一轮",
         unstaged: "未提交",
         direction: "观感方向",
-        directionHelp: "三版对照：原貌映射动了结构；气质与纸面共用已钉主壳 #15。",
+        directionHelp: "三版对照：原貌映射动了壳；气质与纸面共用已钉主壳 #15/#26。",
         prototypeThemeNote: "本原型临时把 #25 主题清单降级为三版对照；提出者选定前不改词表和 ADR 0011。",
         structureSame: "结构未改",
         structureMoved: "结构已动 · 对照原貌",
-        mapBoard: "看板",
-        mapFoot: "借 Codex 原貌骨架 · Issue 仍是工作单元",
+        mapBoard: "看板视图",
+        mapFoot: "借 Codex 铬 · 中间仍是看板视图 / 依赖图",
         officialCli: "官方 CLI · Embedded Terminal",
-        codexBorrowed: "Codex 气质取了：中性色层、紧凑行高、低装饰控件、侧面板式查看改动。",
-        codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元，底栏仍是官方 CLI 的 Embedded Terminal。",
+        boardView: "看板视图",
+        depGraph: "依赖图",
+        graphEntry: "入口在中间顶栏 · 出厂默认仍是看板视图",
+        foldDock: "折起终端",
+        unfoldDock: "拉开终端",
+        showClosedCtx: "也显示已关闭的上下文",
+        closedCtxOn: "已关闭上下文开着",
+        resetCam: "回到当前票",
+        graphHint: "拖动画布 · 滚轮缩放 · 点节点只换详情",
+        graphIso: "孤立点留在图上，不另开一栏。",
+        registerNav: "登记 Project",
+        recentNone: "无进行中",
+        hostMenu: "切 Host",
+        search: "搜索",
+        notify: "通知",
+        help: "帮助",
+        you: "你",
+        codexBorrowed: "Codex 气质取了：中性色层、紧凑行高、低装饰控件、左侧原生栏。",
+        codexBoundary: "没有取：线程列表、聊天输入框和会话主表面。Issue 仍是工作单元；中间仍是看板视图 | 依赖图；底栏仍是官方 CLI 的 Embedded Terminal，不再悬浮遮挡看板。",
         officialRef: "查看 Codex 官方介绍"
       },
       en: {
@@ -1232,15 +1307,32 @@
         thisRound: "This round",
         unstaged: "Uncommitted",
         direction: "Visual direction",
-        directionHelp: "Three directions: the layout map moves structure; mood and paper keep the agreed shell #15.",
+        directionHelp: "Three directions: the layout map moves chrome; mood and paper keep the agreed shell #15/#26.",
         prototypeThemeNote: "This prototype temporarily demotes the #25 theme list to compare three directions; vocabulary and ADR 0011 stay unchanged until a direction is chosen.",
         structureSame: "Structure unchanged",
         structureMoved: "Structure moved",
         mapBoard: "Board",
-        mapFoot: "Codex layout skeleton · Issues stay the work unit",
+        mapFoot: "Codex chrome · Board | graph stay in the middle",
         officialCli: "Official CLI · Embedded Terminal",
-        codexBorrowed: "Borrowed from Codex: neutral layers, compact rows, quiet controls, and a side panel for changes.",
-        codexBoundary: "Not borrowed: thread lists, chat composer, or a conversation-first surface. Issues remain the work unit and the bottom dock remains the official CLI Embedded Terminal.",
+        boardView: "Board",
+        depGraph: "Dependency graph",
+        graphEntry: "Toggle sits in the middle bar · factory default is the board",
+        foldDock: "Fold terminal",
+        unfoldDock: "Expand terminal",
+        showClosedCtx: "Also show closed context",
+        closedCtxOn: "Closed context on",
+        resetCam: "Back to current issue",
+        graphHint: "Drag canvas · scroll to zoom · a node only swaps the detail",
+        graphIso: "Isolated nodes stay on the graph.",
+        registerNav: "Add a Project",
+        recentNone: "No active runs",
+        hostMenu: "Switch Host",
+        search: "Search",
+        notify: "Notifications",
+        help: "Help",
+        you: "You",
+        codexBorrowed: "Borrowed from Codex: neutral layers, compact rows, quiet controls, and a native left rail.",
+        codexBoundary: "Not borrowed: thread lists, chat composer, or a conversation-first surface. Issues remain the work unit; the middle stays Board | graph; the dock remains the official CLI Embedded Terminal and no longer overlays the board.",
         officialRef: "Open the official Codex introduction"
       }
     };
@@ -1251,6 +1343,18 @@
       if (next.id === "codex-map" && S.direction !== "codex-map") S.mapDetailOpen = false;
       S.direction = next.id;
       S.theme = next.id === "paper" ? "warm-light" : "plain-light";
+    }
+    function dockFolded() {
+      return !!(S.dockFolded[S.midMode] ?? (S.midMode === "graph"));
+    }
+    function setMidMode(id) {
+      S.midMode = id === "graph" ? "graph" : "board";
+      if (S.projectId) S.midByProject[S.projectId] = S.midMode;
+      S.cam.user = false;
+    }
+    function restoreMidForProject(id) {
+      S.midMode = S.midByProject[id] || "board";
+      S.cam.user = false;
     }
     function stepDirection(step) {
       const index = DIRECTIONS.findIndex(direction => direction.id === S.direction);
@@ -1270,6 +1374,8 @@
       else u.searchParams.delete("zoom");
       if (S.viewChangesOpen) u.searchParams.set("vc", "1");
       else u.searchParams.delete("vc");
+      if (S.midMode === "graph") u.searchParams.set("mid", "graph");
+      else u.searchParams.delete("mid");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -1279,6 +1385,9 @@
       S.allRunsOpen = false;
       S.pairing = false;
       S.mapDetailOpen = false;
+      S.mapSearchOpen = false;
+      S.mapHostOpen = false;
+      S.cam.user = false;
       if (sc === "single") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
       } else if (sc === "stopped") {
@@ -1315,6 +1424,10 @@
       if (["panel", "full"].includes(zoom)) S.termZoom = zoom;
       if (p.get("vc") === "1") S.viewChangesOpen = true;
       if (p.get("set") === "1") S.settingsOpen = true;
+      if (p.get("mid") === "graph") {
+        S.midMode = "graph";
+        if (S.projectId) S.midByProject[S.projectId] = "graph";
+      }
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -1386,6 +1499,85 @@
     function allHostRuns() {
       const pids = new Set(visibleProjects().map(p => p.id));
       return RUNS.filter(r => r.hostId === S.hostId && pids.has(r.projectId));
+    }
+    function extraClosedIds() {
+      const extra = new Set();
+      const open = projectIssues().filter(i => !i.closed);
+      for (const i of open) {
+        for (const n of [...i.blockedBy, ...i.blocking]) {
+          const o = issue(n);
+          if (o && o.closed && o.projectId === S.projectId) extra.add(o.id);
+        }
+        const p = parentOf(i);
+        if (p && p.closed && p.projectId === S.projectId) extra.add(p.id);
+        for (const c of childrenOf(i.id)) {
+          if (c.closed) extra.add(c.id);
+        }
+      }
+      return extra;
+    }
+    function graphIds() {
+      const open = projectIssues().filter(i => !i.closed).map(i => i.id);
+      const extra = S.showCtx ? extraClosedIds() : new Set();
+      return [...new Set([...open, ...extra])];
+    }
+    function isolatedIds(ids) {
+      const idSet = new Set(ids);
+      return ids.filter(id => {
+        const i = issue(id);
+        return ![...i.blockedBy, ...i.blocking].some(n => idSet.has(n));
+      });
+    }
+    function layoutDag(ids) {
+      const idSet = new Set(ids);
+      const preds = {};
+      for (const id of ids) preds[id] = [];
+      for (const id of ids) {
+        const iss = issue(id);
+        if (!iss) continue;
+        for (const b of iss.blockedBy) {
+          if (idSet.has(b)) preds[id].push(b);
+        }
+      }
+      const layer = {};
+      const stack = new Set();
+      function depth(id) {
+        if (layer[id] != null) return layer[id];
+        if (stack.has(id)) return 0;
+        stack.add(id);
+        const p = preds[id];
+        layer[id] = p.length ? Math.max(...p.map(depth)) + 1 : 0;
+        stack.delete(id);
+        return layer[id];
+      }
+      ids.forEach(depth);
+      const byLayer = {};
+      for (const id of ids) (byLayer[layer[id]] ||= []).push(id);
+      const NW = 176, NH = 50, GX = 64, GY = 16;
+      const pos = {};
+      const layers = Object.keys(byLayer).map(Number).sort((a, b) => a - b);
+      let maxH = 0;
+      for (const L of layers) {
+        const row = byLayer[L];
+        row.forEach((id, i) => {
+          pos[id] = { x: 20 + L * (NW + GX), y: 20 + i * (NH + GY), w: NW, h: NH };
+        });
+        maxH = Math.max(maxH, row.length * (NH + GY) - GY);
+      }
+      const width = 40 + layers.length * (NW + GX) - GX;
+      const height = 40 + maxH;
+      return { pos, width: Math.max(width, 360), height: Math.max(height, 200) };
+    }
+    function icn(name) {
+      const d = {
+        search: "M11 11 15 15M7.5 13a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z",
+        bell: "M8 14.5a1.5 1.5 0 0 0 3 0M4 12h11l-1.2-2V7.2A4.3 4.3 0 0 0 9.5 3 4.3 4.3 0 0 0 5.2 7.2V10z",
+        plus: "M8 3.5v9M3.5 8h9",
+        runs: "M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12zm0-9v4l2.5 1.5",
+        gear: "M8 10.2A2.2 2.2 0 1 0 8 5.8a2.2 2.2 0 0 0 0 4.4zM8 1.8l.7 1.6 1.7-.4 1.2 1.2-.4 1.7L13.8 7l-.4 1.4-1.6.7.4 1.7-1.2 1.2-1.7-.4L8 14.2l-.7-1.6-1.7.4-1.2-1.2.4-1.7L3.2 9l.4-1.4 1.6-.7-.4-1.7 1.2-1.2 1.7.4z",
+        help: "M8 14.5A6.5 6.5 0 1 0 8 1.5a6.5 6.5 0 0 0 0 13zM8 11.6h.01M6.6 6.4a1.5 1.5 0 1 1 2.1 1.4c-.5.3-.8.7-.8 1.3V10"
+      };
+      return `<svg class="icn" viewBox="0 0 16 16" aria-hidden="true"><path d="${d[name] || ""}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     }
 
     function trackerOpen(i) {
@@ -1463,7 +1655,9 @@
       const r = run(S.runId);
       const lines = [
         `观感 ${S.direction} · ${S.viewport} · ${S.scenario}`,
-        `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15"}`,
+        `主壳结构：${S.direction === "codex-map" ? "已动（对照 Codex 原貌）" : "未改 Issue #15/#26"}`,
+        `中间: ${S.midMode === "graph" ? "依赖图" : "看板视图"}`,
+        `底栏: ${dockFolded() ? "折起" : "拉开"}`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
@@ -1513,10 +1707,10 @@
                   <div class="tiny" style="margin-top:8px">${t("filterProject")}</div>
                 </div>
               </div>
-              <div class="pane">${S.scenario === "noproject" ? noProjectMid() : board()}</div>
+              <div class="pane mid-rel">${S.scenario === "noproject" ? noProjectMid() : (S.midMode === "graph" ? graphPane() : board())}</div>
               <div class="pane">${issueDetail()}</div>
             </div>
-            <div class="dock">
+            <div class="dock ${dockFolded() ? "slim" : ""}">
               ${runTabs()}
               ${termChrome(r)}
               ${termSplit(r)}
@@ -1529,22 +1723,28 @@
         ${S.allRunsOpen ? allRunsSheet() : ""}`;
     }
 
-    /* Codex 原貌映射：左侧原生栏 + 大片白主区 + 底部悬浮操作面。 */
+    /* Codex 原貌映射：左侧原生栏 + 白主区。中间看板/图，底栏占自己的高度。 */
     function renderMap() {
       const r = run(S.runId);
       const empty = S.scenario === "unpaired" ? "unpaired" : S.scenario === "noproject" ? "noproject" : null;
       return `
-        <div class="stage map-stage">
-          ${mapSidebar()}
-          <main class="map-main">
-            ${empty ? mapEmpty(empty) : `
-              <section class="map-board">
-                ${board()}
-              </section>
-              ${S.issueId && S.mapDetailOpen ? mapDetail() : ""}
-              ${mapDock(r)}
-            `}
-          </main>
+        <div class="stage">
+          <div class="map-frame">
+            ${mapSidebar()}
+            <div class="map-workspace">
+              ${empty ? mapEmpty(empty) : `
+                <div class="map-cols">
+                  <div class="map-mid">${S.midMode === "graph" ? graphPane() : board()}</div>
+                  <aside class="map-detail-col">${issueDetail()}</aside>
+                </div>
+                <div class="dock ${dockFolded() ? "slim" : ""}">
+                  ${runTabs()}
+                  ${termChrome(r)}
+                  ${termSplit(r)}
+                </div>
+              `}
+            </div>
+          </div>
         </div>
         ${S.termZoom ? termZoomStage(r) : ""}
         ${S.pairing ? pairingModal() : ""}
@@ -1554,6 +1754,9 @@
 
     function mapSidebar() {
       const hs = visibleHosts();
+      const curH = host(S.hostId);
+      const curIssue = issue(S.issueId);
+      const recent = dockRuns().filter(r => r.status === "active" || r.status === "stopped").slice(0, 4);
       return `
         <aside class="map-side">
           <div class="ms-top">
@@ -1563,69 +1766,163 @@
               <button title="原型：前进/后退占位" data-act="map-nav-fwd">→</button>
             </span>
           </div>
-          <div class="ms-brand">Codex</div>
-          <div class="ms-actions">
-            <input class="ms-search" placeholder="${esc(S.lang === "en" ? "Search" : "搜索")}" />
-            <button class="ms-bell" title="通知（原型占位）" data-act="map-notify">🔔</button>
+          <div class="ms-brand-row">
+            <button class="ms-brand" data-act="map-host-menu" title="${esc(t("hostMenu"))}">
+              Agent Taskboard<span class="chev">▾</span>
+            </button>
+            <span class="grow"></span>
+            <button class="ms-ico" data-act="map-search" title="${esc(t("search"))}">${icn("search")}</button>
+            <button class="ms-ico" data-act="map-notify" title="${esc(t("notify"))}">${icn("bell")}</button>
           </div>
+          ${S.mapSearchOpen ? `<input class="ms-search" placeholder="${esc(t("search"))}" />` : ""}
+          ${S.mapHostOpen ? `
+            <nav class="ms-nav">
+              ${hs.map(hh => `
+                <button class="${hh.id === S.hostId ? "active" : ""}" data-act="host" data-id="${hh.id}">
+                  <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
+                </button>`).join("")}
+              <button data-act="pair">+ ${esc(t("pair"))}</button>
+            </nav>` : ""}
           <nav class="ms-nav">
-            <button class="active" data-act="map-nav" data-id="board"><span class="ic">▦</span>${esc(t("mapBoard"))}</button>
-            <button data-act="map-nav" data-id="runs"><span class="ic">◉</span>${esc(t("allRuns"))}</button>
-            <button data-act="map-nav" data-id="settings"><span class="ic">⚙</span>${esc(t("settings"))}</button>
+            <button data-act="register">${icn("plus")}${esc(t("registerNav"))}</button>
+            <button class="${S.allRunsOpen ? "active" : ""}" data-act="map-nav" data-id="runs">${icn("runs")}${esc(t("allRuns"))}</button>
+            <button class="${S.settingsOpen ? "active" : ""}" data-act="map-nav" data-id="settings">${icn("gear")}${esc(t("settings"))}</button>
           </nav>
           <div class="ms-groups">
-            ${hs.map(hh => `
-              <div class="ms-group">
-                <div class="ms-group-name">${esc(hostName(hh))}</div>
-                ${visibleProjects().filter(pp => pp.hostId === hh.id).map(pp => `
+            <div class="ms-group">
+              <div class="ms-group-name">${S.lang === "en" ? "Projects" : "项目"}</div>
+              ${visibleProjects().map(pp => {
+                const nest = curIssue && curIssue.projectId === pp.id
+                  ? `<button class="ms-nested ${S.issueId === curIssue.id ? "active" : ""}" data-act="issue" data-id="${curIssue.id}">#${curIssue.id} ${esc(shortTitle(curIssue.title, 16))}</button>`
+                  : "";
+                return `
                   <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>
-                `).join("")}
-              </div>`).join("")}
+                  ${nest}`;
+              }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
+            </div>
+            <div class="ms-group">
+              <div class="ms-group-name">${S.lang === "en" ? "Recent" : "最近"}</div>
+              ${recent.length ? recent.map(rr => {
+                const ii = rr.issueId ? issue(rr.issueId) : null;
+                return `<button class="ms-item ${S.runId === rr.id ? "active" : ""}" data-act="run" data-id="${rr.id}">${ii ? "#" + ii.id + " " + esc(shortTitle(ii.title, 14)) : esc(t("free"))}</button>`;
+              }).join("") : `<div class="ms-nested">${esc(t("recentNone"))}</div>`}
+            </div>
           </div>
           <span class="grow"></span>
-          <div class="ms-foot">Agent Taskboard · ${esc(t("mapFoot"))}</div>
+          <div class="ms-user">
+            <span class="ms-avatar">yj</span>
+            <span>yjx</span>
+            <span class="grow"></span>
+            <button class="ms-ico" data-act="map-notify" title="${esc(t("help"))}">${icn("help")}</button>
+          </div>
+          ${curH ? `<div class="tiny" style="padding:0 8px">${esc(hostName(curH))}</div>` : ""}
         </aside>`;
     }
 
     function mapEmpty(kind) {
       const body = kind === "unpaired" ? `
-          <div class="brand" style="font-size:22px">${t("unpairedTitle")}</div>
+          <div class="brand">${t("unpairedTitle")}</div>
           <p class="muted">${t("unpairedBody")}</p>
           <div><button class="primary" data-act="pair">${t("pairNow")}</button></div>` : `
-          <div class="brand" style="font-size:22px">${t("noProjectTitle")}</div>
+          <div class="brand">${t("noProjectTitle")}</div>
           <p class="muted">${t("noProjectBody")}</p>
           <div><button class="primary" data-act="register">${t("register")}</button></div>`;
       return `<div class="map-empty-strong">${body}</div>`;
     }
 
-    function mapDetail() {
+    function midBar() {
       return `
-        <aside class="map-detail">
-          <div class="map-detail-x"><button data-act="map-close-detail" title="收起详情">×</button></div>
-          ${issueDetail()}
-        </aside>`;
+        <div class="mid-bar">
+          <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
+          <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
+          <span class="tiny">${esc(t("graphEntry"))}</span>
+        </div>`;
     }
 
-    function mapDock(r) {
-      const p = r ? project(r.projectId) : null;
-      const h = r ? host(r.hostId) : null;
+    function renderSvg() {
+      const ids = graphIds();
+      if (!ids.length) return `<div class="empty">${esc(t("noItems"))}</div>`;
+      const { pos, width, height } = layoutDag(ids);
+      if (!S.cam.user) {
+        const focus = pos[S.issueId] || Object.values(pos)[0];
+        S.cam.k = 1;
+        if (focus) {
+          S.cam.x = 280 - (focus.x + focus.w / 2);
+          S.cam.y = 150 - (focus.y + focus.h / 2);
+        }
+      }
+      const depEdges = [];
+      for (const id of ids) {
+        const iss = issue(id);
+        for (const b of iss.blockedBy) {
+          if (pos[b] && pos[id]) depEdges.push({ from: b, to: id, closed: !!(issue(b).closed || iss.closed) });
+        }
+      }
+      const node = (id) => {
+        const i = issue(id);
+        const p = pos[id];
+        const cur = id === S.issueId;
+        const closed = !!i.closed;
+        const fill = cur ? "#ececea" : closed ? "#f5f5f4" : "#ffffff";
+        const stroke = cur ? "#1a1a19" : closed ? "#b0b0ac" : "#d0d0cc";
+        const dash = closed ? "4 3" : "none";
+        const title = `#${id} ${shortTitle(i.title, 12)}`;
+        const sub = closed ? (S.lang === "en" ? "Closed · context" : "已关闭 · 上下文")
+          : sectionOf(i) === "blocked" ? t("blocked")
+          : sectionOf(i) === "in-run" ? t("inRun")
+          : t("frontier");
+        return `
+          <g class="node-card" data-act="graph-node" data-id="${id}">
+            <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="8"
+              fill="${fill}" stroke="${stroke}" stroke-width="${cur ? 2 : 1}" stroke-dasharray="${dash}" />
+            <text x="${p.x + 10}" y="${p.y + 20}" font-size="12" font-weight="650" fill="#1a1a19">${esc(title)}</text>
+            <text x="${p.x + 10}" y="${p.y + 36}" font-size="10" fill="#8a8a86">${esc(sub)}</text>
+          </g>`;
+      };
+      const depPath = (e) => {
+        const a = pos[e.from], b = pos[e.to];
+        const x1 = a.x + a.w, y1 = a.y + a.h / 2;
+        const x2 = b.x, y2 = b.y + b.h / 2;
+        const mid = (x1 + x2) / 2;
+        const col = e.closed ? "#b0b0ac" : "#6f6e6b";
+        const dash = e.closed ? "5 4" : "none";
+        return `<path d="M${x1} ${y1} C${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" fill="none" stroke="${col}" stroke-width="1.5" stroke-dasharray="${dash}" marker-end="${e.closed ? "url(#arr-off)" : "url(#arr)"}" />`;
+      };
       return `
-        <section class="map-dock">
-          <div class="dock-meta">
-            <span class="who">${esc(p ? p.name : S.projectId ? project(S.projectId).name : "—")}</span>
-            <span class="muted">·</span>
-            <span>${esc(h ? hostName(h) : "")}</span>
-            <span class="muted">·</span>
-            <span>main</span>
-            <span class="grow"></span>
-            <span class="tiny">${esc(t("officialCli"))}</span>
+        <svg viewBox="0 0 800 420" data-act="svg-root" data-w="${width}" data-h="${height}">
+          <defs>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#6f6e6b" />
+            </marker>
+            <marker id="arr-off" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#b0b0ac" />
+            </marker>
+          </defs>
+          <g transform="translate(${S.cam.x} ${S.cam.y}) scale(${S.cam.k})">
+            <rect x="-400" y="-400" width="${width + 800}" height="${height + 800}" fill="transparent" data-act="svg-bg" />
+            ${depEdges.map(depPath).join("")}
+            ${ids.map(node).join("")}
+          </g>
+        </svg>`;
+    }
+
+    function graphPane() {
+      const all = graphIds();
+      const extras = all.filter(id => issue(id).closed);
+      const iso = isolatedIds(all);
+      const i = issue(S.issueId);
+      return `
+        <div class="graph-sheet">
+          ${midBar()}
+          <div class="graph-toolbar">
+            <span class="chip">${all.length} · ${S.lang === "en" ? "isolated" : "孤立"} ${iso.length} · ${S.lang === "en" ? "closed" : "已关闭"} ${extras.length} · #${i ? i.id : "?"}</span>
+            <button data-act="toggle-ctx" class="${S.showCtx ? "active" : ""}">${S.showCtx ? t("closedCtxOn") : t("showClosedCtx")}</button>
+            <button data-act="reset-cam">${t("resetCam")}</button>
+            <span class="tiny">${esc(t("graphHint"))}</span>
           </div>
-          <div class="dock-surface">
-            ${runTabs()}
-            ${termChrome(r)}
-            ${termSplit(r)}
-          </div>
-        </section>`;
+          <div class="tiny pad">${esc(t("graphIso"))}</div>
+          <div class="graph-canvas">${renderSvg()}</div>
+        </div>`;
     }
 
     function projectList() {
@@ -1676,6 +1973,7 @@
       ];
       const hint = S.childFilter ? t("childHint") : t("boardHint");
       return `
+        ${midBar()}
         <div class="tiny pad">${esc(hint)}
           ${S.childFilter ? `<button data-act="clear-filter">${t("clearFilter")}</button>` : ""}
         </div>
@@ -1742,10 +2040,22 @@
           </div>
           <div class="block">
             <h4>${t("deps")}</h4>
-            <div class="tiny">${t("blockedBy")}</div>
-            ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">${t("noneBlock")}</span>`}
-            <div class="tiny" style="margin-top:6px">${t("blocking")}</div>
-            ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">${t("none")}</span>`}
+            <div class="flow">
+              <div>
+                <div class="tiny">${t("blockedBy")}</div>
+                ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">${t("noneBlock")}</span>`}
+              </div>
+              <div class="arrow">→</div>
+              <div class="here">
+                <div class="tiny">${t("issue")}</div>
+                <b>#${i.id}</b>
+              </div>
+              <div class="arrow">→</div>
+              <div>
+                <div class="tiny">${t("blocking")}</div>
+                ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">${t("none")}</span>`}
+              </div>
+            </div>
           </div>
         </div>`;
     }
@@ -1791,6 +2101,7 @@
           ${runIdentity(r)}
           <span class="grow"></span>
           <button data-act="swap-run" title="最近切过的 Run">上一条</button>
+          <button data-act="toggle-dock">${dockFolded() ? t("unfoldDock") : t("foldDock")}</button>
           <button data-act="toggle-vc" class="${S.viewChangesOpen ? "active" : ""}">${t("viewChanges")}</button>
           <button data-act="term-zoom" data-id="panel" class="${S.termZoom === "panel" ? "active" : ""}">${t("zoom")}</button>
           <button data-act="term-zoom" data-id="full" class="${S.termZoom === "full" ? "active" : ""}">${t("full")}</button>
@@ -2064,8 +2375,10 @@
         if (act === "host") {
           S.hostId = id;
           S.mapDetailOpen = false;
+          S.mapHostOpen = false;
           const first = visibleProjects().find(p => p.hostId === id);
           S.projectId = first ? first.id : null;
+          if (S.projectId) restoreMidForProject(S.projectId);
           const firstIssue = ISSUES.find(i => i.projectId === S.projectId && !i.closed);
           if (firstIssue) S.issueId = firstIssue.id;
           const firstRun = RUNS.find(r => r.hostId === id && r.status !== "ended");
@@ -2074,11 +2387,21 @@
         }
         if (act === "project") {
           S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; S.mapDetailOpen = false;
+          restoreMidForProject(id);
           const cur = issue(S.issueId);
           if (!cur || cur.projectId !== id) S.issueId = null;
           render();
         }
         if (act === "issue") setIssue(Number(id));
+        if (act === "graph-node") {
+          const i = issue(Number(id));
+          if (i) {
+            S.issueId = i.id;
+            S.projectId = i.projectId;
+            S.hostId = project(i.projectId).hostId;
+          }
+          render();
+        }
         if (act === "run") { S.allRunsOpen = false; setRun(id); }
         if (act === "toggle-vc") { S.viewChangesOpen = !S.viewChangesOpen; render(); }
         if (act === "base") { S.viewBase = id; render(); }
@@ -2107,14 +2430,24 @@
         if (act === "map-nav") {
           if (id === "settings") { S.settingsOpen = true; S.allRunsOpen = false; }
           else if (id === "runs") { S.allRunsOpen = true; S.settingsOpen = false; }
+          else if (id === "board") { setMidMode("board"); S.settingsOpen = false; S.allRunsOpen = false; }
           else { S.settingsOpen = false; S.allRunsOpen = false; }
           render();
         }
+        if (act === "mid-mode") { setMidMode(id); render(); }
+        if (act === "toggle-ctx") { S.showCtx = !S.showCtx; S.cam.user = false; render(); }
+        if (act === "reset-cam") { S.cam.user = false; render(); }
+        if (act === "toggle-dock") {
+          S.dockFolded[S.midMode] = !dockFolded();
+          render();
+        }
+        if (act === "map-search") { S.mapSearchOpen = !S.mapSearchOpen; render(); }
+        if (act === "map-host-menu") { S.mapHostOpen = !S.mapHostOpen; render(); }
         if (act === "map-close-detail") { S.mapDetailOpen = false; render(); }
         if (act === "map-notify" || act === "map-nav-back" || act === "map-nav-fwd") {
           alert("原型：入口占位。");
         }
-        if (act === "child-filter") { S.childFilter = Number(id); render(); }
+        if (act === "child-filter") { S.childFilter = Number(id); setMidMode("board"); render(); }
         if (act === "clear-filter") { S.childFilter = null; render(); }
         if (act === "term-zoom") { setTermZoom(id || null); return; }
         if (act === "swap-run") {
@@ -2159,6 +2492,31 @@
           window.addEventListener("mousemove", move);
           window.addEventListener("mouseup", up);
         };
+      }
+      const svg = app.querySelector("svg[data-act=svg-root]");
+      if (svg) {
+        let drag = null;
+        svg.addEventListener("pointerdown", (e) => {
+          if (e.target.closest(".node-card")) return;
+          drag = { x: e.clientX, y: e.clientY, cx: S.cam.x, cy: S.cam.y };
+          svg.setPointerCapture(e.pointerId);
+        });
+        svg.addEventListener("pointermove", (e) => {
+          if (!drag) return;
+          S.cam.x = drag.cx + (e.clientX - drag.x);
+          S.cam.y = drag.cy + (e.clientY - drag.y);
+          S.cam.user = true;
+          const g = svg.querySelector("g");
+          if (g) g.setAttribute("transform", `translate(${S.cam.x} ${S.cam.y}) scale(${S.cam.k})`);
+        });
+        svg.addEventListener("pointerup", () => { drag = null; });
+        svg.addEventListener("wheel", (e) => {
+          e.preventDefault();
+          S.cam.k = Math.min(1.8, Math.max(0.35, S.cam.k * (e.deltaY > 0 ? 0.9 : 1.1)));
+          S.cam.user = true;
+          const g = svg.querySelector("g");
+          if (g) g.setAttribute("transform", `translate(${S.cam.x} ${S.cam.y}) scale(${S.cam.k})`);
+        }, { passive: false });
       }
     }
 

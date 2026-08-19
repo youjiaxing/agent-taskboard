@@ -11,22 +11,33 @@ function urlWithDirection(page, direction) {
 test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
 
-  // 原貌映射：左侧原生栏 + 大片白主区 + 底部悬浮操作面，四列都在
+  // 原貌映射：左侧原生栏 + 中间看板/图 + 底栏占自己的高度（不悬浮遮挡）
   await expect(page.getByText("Codex 原貌映射", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("结构已动 · 对照原貌", { exact: true }).first()).toBeVisible();
   await expect(page.locator(".map-side")).toBeVisible();
-  await expect(page.locator(".map-dock")).toBeVisible();
-  await expect(page.locator(".map-detail")).toHaveCount(0);
+  await expect(page.locator(".dock")).toBeVisible();
+  await expect(page.locator(".map-detail-col")).toBeVisible();
+  await expect(page.locator(".map-dock")).toHaveCount(0);
   await page.locator('[data-act="issue"][data-id="50"]').first().click();
-  await expect(page.locator(".map-detail")).toBeVisible();
-  await page.locator('[data-act="map-close-detail"]').click();
-  await expect(page.locator(".map-detail")).toHaveCount(0);
-  await expect(page.locator(".map-lanes, .map-board .lanes").first()).toBeVisible();
+  await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
+  await expect(page.locator(".lanes").first()).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^阻塞中/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^Frontier/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^进行中/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "看板视图", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
   await expect(page.getByText("查看改动", { exact: true }).first()).toBeVisible();
+
+  // 依赖图：点节点只换详情；第一次打开默认折终端
+  await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
+  await expect(page).toHaveURL(/mid=graph/);
+  await expect(page.locator(".graph-canvas")).toBeVisible();
+  await expect(page.locator(".dock.slim")).toBeVisible();
+  await page.locator('[data-act="graph-node"][data-id="51"]').click();
+  await expect(page.getByText("#51 实现：依赖图", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+  await expect(page.locator(".col-hd").filter({ hasText: /^Frontier/ })).toBeVisible();
 
   // 切到气质版：结构未改，顶栏仍在
   await page.getByRole("button", { name: "Codex 气质", exact: true }).first().click();
@@ -55,6 +66,7 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
 test("输入焦点时键盘 ←/→ 不切换方向", async ({ page }) => {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
 
+  await page.locator('[data-act="map-search"]').click();
   const search = page.locator(".ms-search");
   await search.focus();
   await page.keyboard.press("ArrowRight");
@@ -94,6 +106,13 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
     await expect(page.getByText("挡住它的", { exact: true }).first()).toBeVisible();
 
+    // 依赖图仍在，不因观感方向丢失
+    await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
+    await expect(page.locator(".graph-canvas")).toBeVisible();
+    await page.locator('[data-act="graph-node"]').first().click();
+    await expect(page.locator(".graph-canvas")).toBeVisible();
+    await page.getByRole("button", { name: "看板视图", exact: true }).first().click();
+
     // Run：切到 r2（已停），终端给出恢复提示
     await page.locator('[data-act="run"][data-id="r2"]').first().click();
     await expect(page.getByText("认领还在。优先恢复原生会话。", { exact: false })).toBeVisible();
@@ -111,7 +130,7 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
 
     // 空状态：未配对 / 无 Project / Frontier 为空 / 执行已停
     await page.locator('select[data-act="scenario"]').selectOption("unpaired");
-    await expect(page.getByText("这个窗口还没连上 Host", { exact: true })).toBeVisible();
+    await expect(page.getByText("这个窗口还没连上 Host", { exact: true }).first()).toBeVisible();
     await page.locator('select[data-act="scenario"]').selectOption("noproject");
     await expect(page.getByText("这台 Host 上还没有 Project", { exact: true }).first()).toBeVisible();
     await page.locator('select[data-act="scenario"]').selectOption("emptyfront");
