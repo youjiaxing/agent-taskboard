@@ -11,9 +11,10 @@
       codex-map  结构已动：左侧栏是 Host + 本机 Project，不是聊天清单。
                 中间仍是看板视图 | 依赖图；底栏 Embedded Terminal 占自己的高度。
                 学侧栏清单的密度，不仿 Codex 的会话壳。
+                右侧 Issue 是文档栏：正文可滚，家族/依赖折在底下。
       codex      Codex 气质（结构未改 #15/#26）：只借截图气质。
       paper      纸面精修（结构未改 #15/#26）：保留书桌骨架。
-    ?direction=codex-map|codex|paper  &mid=board|graph
+    ?direction=codex-map|codex|paper  &mid=board|graph|run  &iw=1
   -->
   <style>
     :root {
@@ -215,7 +216,7 @@
       background: var(--paper);
       border-right: 1px solid var(--line);
     }
-    .pane:last-child { border-right: 0; }
+    .pane:last-child { border-right: 0; overflow: hidden; display: flex; flex-direction: column; }
     .hd, .col-hd {
       margin: 0;
       padding: 8px 10px;
@@ -856,11 +857,20 @@
       flex: 1;
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(272px, 318px);
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 38%);
     }
     .shell-codex-map .map-cols.no-detail { grid-template-columns: minmax(0, 1fr); }
     .shell-codex-map .map-cols.with-term-col {
       grid-template-columns: minmax(0, 1fr) minmax(360px, 46%);
+    }
+    .shell-codex-map .map-cols.run-read {
+      grid-template-columns: minmax(0, 1fr) minmax(380px, 46%);
+    }
+    .shell-codex-map .map-cols.issue-wide {
+      grid-template-columns: minmax(0, 1fr) minmax(520px, 56%);
+    }
+    .cols.issue-wide {
+      grid-template-columns: 148px minmax(240px, 1fr) minmax(460px, 1.2fr);
     }
     .shell-codex-map .map-term-col {
       min-width: 0;
@@ -925,18 +935,110 @@
     }
     .shell-codex-map .map-detail-col {
       min-width: 0;
-      overflow: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       border-left: 1px solid #f0f0ee;
       background: #fff;
     }
-    .shell-codex-map .map-detail-col .hd {
-      position: sticky;
-      background: #fff;
+    .issue-doc {
+      flex: 1 1 auto;
+      min-height: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .issue-hd {
+      flex: 0 0 auto;
+      padding: 10px 14px 8px;
       border-bottom: 1px solid #f0f0ee;
+      background: #fff;
+    }
+    .issue-kicker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 11px;
       color: var(--muted);
     }
-    .shell-codex-map .map-detail-col .block {
+    .issue-title {
+      font-size: 16px;
+      font-weight: 620;
+      letter-spacing: -.02em;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .issue-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 14px 18px;
+      font-size: 13px;
+      line-height: 1.62;
+      color: #2c2c2a;
+    }
+    .issue-body h3 {
+      margin: 16px 0 6px;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: -.01em;
+    }
+    .issue-body h3:first-child { margin-top: 0; }
+    .issue-body h4 {
+      margin: 12px 0 4px;
+      font-size: 12px;
+      font-weight: 620;
+      color: #555;
+    }
+    .issue-body p { margin: 0 0 10px; overflow-wrap: anywhere; }
+    .issue-body ul, .issue-body ol { margin: 0 0 10px; padding-left: 1.25em; }
+    .issue-body li { margin: 3px 0; overflow-wrap: anywhere; }
+    .issue-body code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: #f3f3f1;
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+    .issue-body .md-pre {
+      margin: 0 0 10px;
+      padding: 10px;
+      background: #f6f6f4;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .issue-body .md-a { color: inherit; text-decoration: underline; text-underline-offset: 2px; border: 0; padding: 0; background: none; border-radius: 0; }
+    .issue-rels {
+      flex: 0 1 auto;
+      max-height: 38%;
+      overflow: auto;
+      border-top: 1px solid #f0f0ee;
       background: #fafaf9;
+    }
+    .phone-body .issue-doc { height: auto; }
+    .phone-body .issue-body { overflow: visible; flex: none; }
+    .phone-body .issue-rels { max-height: none; }
+    .issue-rels details { border-top: 1px solid #f0f0ee; }
+    .issue-rels details:first-child { border-top: 0; }
+    .issue-rels summary {
+      cursor: pointer;
+      padding: 8px 14px;
+      font-size: 12px;
+      color: var(--muted);
+      list-style: none;
+    }
+    .issue-rels summary::-webkit-details-marker { display: none; }
+    .issue-rels summary::before { content: "▸ "; }
+    .issue-rels details[open] summary::before { content: "▾ "; }
+    .issue-rels details[open] summary { color: var(--ink); }
+    .issue-rels .pad { padding-top: 0; }
+    .shell-codex-map .map-detail-col .block {
+      background: #fff;
       border-color: #efefed;
       border-radius: 10px;
     }
@@ -995,7 +1097,9 @@
 
     @media (max-width: 1100px) {
       .shell-codex-map .map-side { flex-basis: 220px; width: 220px; }
-      .shell-codex-map .map-cols { grid-template-columns: minmax(0, 1fr) minmax(240px, 280px); }
+      .shell-codex-map .map-cols { grid-template-columns: minmax(0, 1fr) minmax(280px, 36%); }
+      .shell-codex-map .map-cols.run-read,
+      .shell-codex-map .map-cols.issue-wide { grid-template-columns: minmax(0, 1fr) minmax(300px, 48%); }
     }
     @media (max-width: 900px) {
       .shell-codex-map .map-cols { grid-template-columns: 1fr; }
@@ -1072,6 +1176,168 @@
         if (src) src.blocking.push(i.id);
       }
     }
+    const BODIES = {
+      1: {
+        zh: `Part of —
+
+## Destination
+
+Agent Taskboard v1 的规格与关键决策写清楚：人能从一张地图看见已经钉死的路，以及还要问什么。
+
+## Notes
+
+域是个人本地、无账号、Issue 为工作单元。官方 CLI 的交互 TUI 跑在 Embedded Terminal 里。Codex Desktop 只是观感参考，不是产品模型。
+
+## Decisions so far
+
+- 主界面信息架构：Host 一次一台；中间四列是阻塞中 → Frontier → 进行中 → 最近完成；Issue 在中间，终端在底栏。
+- 依赖图是次级视图，入口在中间顶栏。第一次打开默认折终端。点节点只换详情。
+- 执行已停不等于释放认领。收起终端、折面板或关窗口都不会停进程。
+
+## Not yet specified
+
+默认主壳对照 Codex Desktop 再调到哪一步才过关，是还开着的原型票。提出者选定前不改词表，也不改 ADR 0011。
+
+## 这张地图为什么这么长
+
+Wayfinder 的地图票会把 Destination、Notes、已钉决策和雾写在同一张正文里。真实 #1 大约一万字。右侧必须按文档滚，不能只画标题和家族。下面是垫高滚动的段落，模拟那种体量。
+
+第一段。规格不是功能清单。每一条决策都要能回答「人每天盯着的那一屏怎么走」。Host、Project、Issue、Run 的词不要混。Client 只连一台 Host。Project 是目录加 Tracker。Issue 是工作单元。Run 是一次执行。
+
+第二段。Frontier 是「现在能领」的票，不是「我觉得重要」。挡住它的票还开着，就不能进 Frontier。最近完成默认只画几张，更多要人点，不预加载。
+
+第三段。详情栏的职责是让人读懂这张票要干什么，然后再看家族和挡住关系。Tracker 上的复杂编辑仍回 Tracker。Client 里打开链接只有两种：浏览器里的 GitHub，或本地 markdown 文件。
+
+第四段。Embedded Terminal 画的是官方交互 TUI。停止 Run 是产品动作，不是关窗口。先正常停止，超时再强制。官方 TUI 里 Ctrl+C 仍可用。
+
+第五段。主题、快捷键、命令面板、搜索，不在这张地图里一次拍死。先把每天盯着的壳钉住。壳不对，后面的功能会贴错地方。`,
+        en: `Part of —
+
+## Destination
+
+Write down Agent Taskboard v1 specs and the key decisions so a map shows what is already nailed.
+
+## Notes
+
+Personal, local, no account. The work unit is an Issue. The official CLI TUI runs in the Embedded Terminal. Codex Desktop is look-and-feel, not the product model.
+
+## This map is long on purpose
+
+A real wayfinder map can be about ten thousand characters. The right pane has to scroll as a document, not as a metadata card.`
+      },
+      50: {
+        zh: `Part of #1
+
+## Question
+
+详情栏现在只画家族和挡住关系，人看不出这张票要干什么。真正 Tracker 上的票正文经常很长（地图票上万字，决策票一两千字）。本票要把右侧改成「能读完一张票」的文档栏。
+
+## 为什么现在不行
+
+- 右侧只有标题、标签、认领 / 开 Run、属于 / 子票、挡住关系。
+- 没有 Question，没有已经钉死的约束，没有列表。
+- 栏宽大约 280px，即便倒进正文也会折成细条。
+
+## 本票要看见的
+
+1. 打开一张票，第一屏就能读到 Question。
+2. 长正文在栏内滚。标题和动作钉在顶上。家族和依赖折在底下，需要时再展开。
+3. 「加宽读票」把栏拉到大约一半。看板还在，只是变窄。盯这次 Run 时右侧默认就宽一点，因为这时人是边看终端边读票。
+4. 正文按 Markdown 画：标题、列表、粗体、行内代码、链接。原型不接真 Tracker。
+
+## 不要动的
+
+- 工作单元仍是 Issue。
+- 家族和挡住关系还在，只是不再占掉第一屏。
+- \`在 GitHub 打开\` 仍跳到 Tracker；复杂编辑不在这边做。
+
+## 夹具说明
+
+#1 按地图票的体量来，要滚才能看完。#15 按已关决策票。本票自己也写长一点，方便直接点开试。`,
+        en: `Part of #1
+
+## Question
+
+The detail pane currently shows family and blockers only, so you cannot tell what the issue is for. Real tracker bodies are often long. This ticket turns the right pane into a document you can actually finish reading.
+
+## What should be visible
+
+1. The Question is on the first screen.
+2. Long bodies scroll in the pane. Title and actions stay pinned. Family and deps fold underneath.
+3. Widen-to-read grows the pane to about half the workspace.
+4. Markdown headings, lists, bold, code, and links. No live tracker in this prototype.`
+      },
+      15: {
+        zh: `Part of #1
+
+## Question
+
+在已锁的轮廓上，钉死 v1 默认主布局还没写清的部分。
+
+**已钉，不要重开：** Host 用顶栏切换器（一次一台）；中间四列是被挡住 → Frontier → 干活中 → 最近完成；N 默认 5、人可改；Issue 在中间、Embedded Terminal 在底栏；查看改动可收起、宽度可拖；跳到 Tracker 的两种打开方式。
+
+**本票要钉：**
+
+- 多 Run 在底栏挤满时怎么呈现
+- 依赖是详情里的列表邻域，还是另要一张图 / 次级视图
+- 空状态（还没配对、Host 上没有 Project、Frontier 为空）
+- 这个 Host 上只有一个 Project 时，侧栏还在不在、怎么聚焦
+
+依赖：主界面原型（已关）。`
+      },
+      51: {
+        zh: `Part of #1
+
+## Question
+
+主界面要不要另做一张依赖图，还是详情里的「挡住它的 / 它挡住的」列表就够？
+
+本票按已钉方案做图：入口在中间顶栏，出厂默认仍是看板视图。第一次打开默认折终端。点节点只换详情，不跳走。孤立点留在图上，不另开一栏。
+
+图不是第三种工作单元。Issue 仍是票。图只是同一批票的另一种看。`
+      },
+      90: {
+        zh: `Part of #1
+
+## Question
+
+设置页放哪、里面有什么？本票只做壳里的入口和最少几项：最近完成列张数、观感方向说明、语言。
+
+不要把 Host 配对、登记 Project 塞进设置。那两件是空状态上的动作，不是偏好。`
+      },
+      12: {
+        zh: `Part of #1
+
+## Question
+
+v1 桌面壳是否坚持 Tauri 2？
+
+**已关。** 坚持。本机 Client 用 Tauri 2 拉起本机 Host，也可以只当 Client 去配对另一台。`
+      },
+      30: {
+        zh: `## Question
+
+支付回调超过 8 秒没有 ack，渠道会重放。本票要在 \`shop-api\` 里把超时收到 3 秒内，并记下幂等键。
+
+重现：用沙箱订单连续点两次支付。第二次应返回已受理，而不是再扣一笔。
+
+不要改退款。退款是被这张票挡住的 #31。`
+      },
+      31: {
+        zh: `Part of shop-api
+
+## Question
+
+加退款接口。被 #30 挡住：超时没修之前不要开，避免对同一笔订单又扣又退。
+
+范围：原路退、部分退、失败重试。不包含发票。`
+      },
+      40: {
+        zh: `## Question
+
+把 \`docs/adr/\` 的索引整理成一张能扫的表。本票还在 needs-triage，先不要开 Run。`
+      }
+    };
     const RUNS = [
       { id: "r1", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
       { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false },
@@ -1150,6 +1416,7 @@
       sideFolded: false,
       detailFolded: false,
       recentMore: false,
+      issueWide: false,
       termTheme: "dark",
       cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
@@ -1206,6 +1473,9 @@
         unfoldSide: "展开左侧",
         foldDetail: "收起 Issue",
         unfoldDetail: "展开 Issue",
+        issueWide: "加宽读票",
+        issueNarrow: "收窄",
+        issueBody: "正文",
         zoomRight: "占满右侧",
         termDark: "深色终端",
         termLight: "浅色终端",
@@ -1319,6 +1589,9 @@
         unfoldSide: "Open left",
         foldDetail: "Fold issue",
         unfoldDetail: "Open issue",
+        issueWide: "Widen to read",
+        issueNarrow: "Narrow",
+        issueBody: "Body",
         zoomRight: "Fill the right",
         termDark: "Dark terminal",
         termLight: "Light terminal",
@@ -1450,6 +1723,8 @@
       else u.searchParams.delete("vc");
       if (S.midMode === "graph" || S.midMode === "run") u.searchParams.set("mid", S.midMode);
       else u.searchParams.delete("mid");
+      if (S.issueWide) u.searchParams.set("iw", "1");
+      else u.searchParams.delete("iw");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -1466,6 +1741,7 @@
       S.recentMore = false;
       S.sideFolded = false;
       S.detailFolded = false;
+      S.issueWide = false;
       if (sc === "single") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
       } else if (sc === "stopped") {
@@ -1506,6 +1782,7 @@
         S.midMode = p.get("mid");
         if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
       }
+      if (p.get("iw") === "1") S.issueWide = true;
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -1515,6 +1792,45 @@
     function issueRun(iss) { return RUNS.find(r => r.issueId === iss.id && r.status !== "ended"); }
     function esc(s) {
       return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function issueBodyText(i) {
+      const pack = BODIES[i.id];
+      if (pack) return (S.lang === "en" && pack.en) ? pack.en : pack.zh;
+      const parent = i.parentId ? "#" + i.parentId : "—";
+      return S.lang === "en"
+        ? `Part of ${parent}\n\n## Question\n\n${i.title}\n\nThis fixture has no long body yet. Real tracker issues can be thousands of characters; this pane scrolls as a document.`
+        : `Part of ${parent}\n\n## Question\n\n${i.title}\n\n这张夹具还没写长正文。真正 Tracker 上的票可以很长，右侧按文档滚。`;
+    }
+    function inlineMd(s) {
+      let out = esc(s);
+      out = out.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a class="md-a" href="$2" target="_blank" rel="noreferrer">$1</a>');
+      out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+      return out;
+    }
+    function renderMd(src) {
+      const raw = String(src || "").replace(/\r\n/g, "\n");
+      const chunks = [];
+      const fence = /```[^\n]*\n([\s\S]*?)```/g;
+      let last = 0, m;
+      while ((m = fence.exec(raw))) {
+        if (m.index > last) chunks.push(["md", raw.slice(last, m.index)]);
+        chunks.push(["pre", m[1]]);
+        last = m.index + m[0].length;
+      }
+      if (last < raw.length) chunks.push(["md", raw.slice(last)]);
+      return chunks.map(([kind, text]) => {
+        if (kind === "pre") return `<pre class="md-pre"><code>${esc(text)}</code></pre>`;
+        return text.trim().split(/\n{2,}/).map(block => {
+          const lines = block.split("\n");
+          if (/^###\s/.test(lines[0])) return `<h4>${inlineMd(lines[0].replace(/^###\s+/, ""))}</h4>${lines.length > 1 ? `<p>${lines.slice(1).map(inlineMd).join("<br>")}</p>` : ""}`;
+          if (/^##\s/.test(lines[0])) return `<h3>${inlineMd(lines[0].replace(/^##\s+/, ""))}</h3>${lines.length > 1 ? `<p>${lines.slice(1).map(inlineMd).join("<br>")}</p>` : ""}`;
+          if (/^#\s/.test(lines[0])) return `<h3>${inlineMd(lines[0].replace(/^#\s+/, ""))}</h3>${lines.length > 1 ? `<p>${lines.slice(1).map(inlineMd).join("<br>")}</p>` : ""}`;
+          if (lines.every(l => /^[-*]\s+/.test(l))) return `<ul>${lines.map(l => `<li>${inlineMd(l.replace(/^[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+          if (lines.every(l => /^\d+\.\s+/.test(l))) return `<ol>${lines.map(l => `<li>${inlineMd(l.replace(/^\d+\.\s+/, ""))}</li>`).join("")}</ol>`;
+          return `<p>${lines.map(inlineMd).join("<br>")}</p>`;
+        }).join("");
+      }).join("");
     }
     function shortTitle(text, n) {
       let t0 = String(text).replace(/^[^：:]*[：:]/, "");
@@ -1756,7 +2072,8 @@
         `查看改动: ${S.viewChangesOpen ? "开" : "收起"}`,
         `最近完成 N=${S.recentN}`,
         `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
-        `终端放大: ${S.termZoom || "无"}`
+        `终端放大: ${S.termZoom || "无"}`,
+        `读票加宽: ${S.issueWide ? "开" : "关"}`
       ];
       return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
     }
@@ -1789,7 +2106,7 @@
               <button data-act="lang">${S.lang === "zh" ? "中文" : "EN"}</button>
               <button data-act="settings" class="${S.settingsOpen ? "active" : ""}" title="设置入口在这里">⚙ ${t("settings")}</button>
             </div>
-            <div class="cols">
+            <div class="cols ${S.issueWide ? "issue-wide" : ""}">
               <div class="pane">
                 <div class="hd">${t("projects")}</div>
                 ${projectList()}
@@ -1829,7 +2146,7 @@
             ${mapSidebar()}
             <div class="map-workspace">
               ${empty ? mapEmpty(empty) : `
-                <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""}">
+                <div class="map-cols ${hideDetail && !termOnRight ? "no-detail" : ""} ${termOnRight ? "with-term-col" : ""} ${!hideDetail && S.issueWide ? "issue-wide" : ""} ${!hideDetail && !S.issueWide && S.midMode === "run" ? "run-read" : ""}">
                   <div class="map-mid">${mid}</div>
                   ${termOnRight ? `<aside class="map-term-col">${termChrome(r)}${termSplit(r)}</aside>` : ""}
                   ${hideDetail ? "" : `<aside class="map-detail-col">${issueDetail()}</aside>`}
@@ -2110,49 +2427,63 @@
       const blockers = i.blockedBy.map(issue).filter(Boolean);
       const blocks = i.blocking.map(issue).filter(Boolean);
       const r = issueRun(i) || RUNS.find(x => x.issueId === i.id && S.runId === x.id);
+      const wideBtn = S.viewport === "phone" ? "" : `<button data-act="toggle-issue-wide" class="${S.issueWide ? "active" : ""}">${S.issueWide ? t("issueNarrow") : t("issueWide")}</button>`;
       return `
-        <div class="hd">${t("issue")}</div>
-        <div class="pad stack">
-          <div><b>${esc(issueLabel(i))}</b></div>
-          <div class="tiny">${esc(hostName(host(p.hostId)))} / ${esc(p.name)} · ${esc(p.tracker)}</div>
-          <div class="row">
-            <span class="tag">${esc(i.role)}</span>
-            ${i.closed ? `<span class="tag">${t("closed")}</span>` : i.claimed ? `<span class="tag">${t("claimed")}</span>` : `<span class="tag">${t("unclaimed")}</span>`}
-          </div>
-          <div class="row">
-            ${r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
-            ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
-            ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
-            ${trackerOpen(i)}
-          </div>
-          <div class="block">
-            <h4>${t("family")}</h4>
-            <div class="tiny">${t("parent")}</div>
-            ${par ? nameBtn(par) : `<span class="muted">${t("noParent")}</span>`}
-            <div class="tiny" style="margin-top:6px">${t("kids")}</div>
-            ${kids.length ? kids.map(nameBtn).join(" ") : `<span class="muted">${t("noKids")}</span>`}
-            ${kids.length ? `<div class="row" style="margin-top:6px"><button data-act="child-filter" data-id="${i.id}">${t("onlyKids")}</button></div>` : ""}
-          </div>
-          <div class="block">
-            <h4>${t("deps")}</h4>
-            <div class="flow">
-              <div>
-                <div class="tiny">${t("blockedBy")}</div>
-                ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">${t("noneBlock")}</span>`}
-              </div>
-              <div class="arrow">→</div>
-              <div class="here">
-                <div class="tiny">${t("issue")}</div>
-                <b>#${i.id}</b>
-              </div>
-              <div class="arrow">→</div>
-              <div>
-                <div class="tiny">${t("blocking")}</div>
-                ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">${t("none")}</span>`}
-              </div>
+        <article class="issue-doc">
+          <header class="issue-hd">
+            <div class="issue-kicker">
+              <span>${t("issue")}</span>
+              <span class="grow"></span>
+              ${wideBtn}
             </div>
+            <div class="issue-title">${esc(issueLabel(i))}</div>
+            <div class="row" style="margin-top:5px">
+              <span class="tiny">${esc(hostName(host(p.hostId)))} / ${esc(p.name)} · ${esc(p.tracker)}</span>
+              <span class="tag">${esc(i.role)}</span>
+              ${i.closed ? `<span class="tag">${t("closed")}</span>` : i.claimed ? `<span class="tag">${t("claimed")}</span>` : `<span class="tag">${t("unclaimed")}</span>`}
+            </div>
+            <div class="row" style="margin-top:6px">
+              ${r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>` : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
+              ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button data-act="fake-claim">${t("claim")}</button>`}
+              ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
+              ${trackerOpen(i)}
+            </div>
+          </header>
+          <div class="issue-body">${renderMd(issueBodyText(i))}</div>
+          <div class="issue-rels">
+            <details>
+              <summary>${t("family")}</summary>
+              <div class="pad stack">
+                <div class="tiny">${t("parent")}</div>
+                ${par ? nameBtn(par) : `<span class="muted">${t("noParent")}</span>`}
+                <div class="tiny">${t("kids")}</div>
+                ${kids.length ? kids.map(nameBtn).join(" ") : `<span class="muted">${t("noKids")}</span>`}
+                ${kids.length ? `<div class="row"><button data-act="child-filter" data-id="${i.id}">${t("onlyKids")}</button></div>` : ""}
+              </div>
+            </details>
+            <details>
+              <summary>${t("deps")}</summary>
+              <div class="pad">
+                <div class="flow">
+                  <div>
+                    <div class="tiny">${t("blockedBy")}</div>
+                    ${blockers.length ? blockers.map(nameBtn).join(" ") : `<span class="muted">${t("noneBlock")}</span>`}
+                  </div>
+                  <div class="arrow">→</div>
+                  <div class="here">
+                    <div class="tiny">${t("issue")}</div>
+                    <b>#${i.id}</b>
+                  </div>
+                  <div class="arrow">→</div>
+                  <div>
+                    <div class="tiny">${t("blocking")}</div>
+                    ${blocks.length ? blocks.map(nameBtn).join(" ") : `<span class="muted">${t("none")}</span>`}
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
-        </div>`;
+        </article>`;
     }
 
     function runTabs() {
@@ -2530,6 +2861,14 @@
         if (act === "toggle-detail") {
           S.detailFolded = !S.detailFolded;
           if (!S.detailFolded && S.termZoom === "right") S.termZoom = null;
+          render();
+        }
+        if (act === "toggle-issue-wide") {
+          S.issueWide = !S.issueWide;
+          if (S.issueWide) {
+            S.detailFolded = false;
+            if (S.termZoom === "right") S.termZoom = null;
+          }
           render();
         }
         if (act === "toggle-recent-more") { S.recentMore = !S.recentMore; render(); }

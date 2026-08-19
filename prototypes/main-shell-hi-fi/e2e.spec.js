@@ -24,6 +24,8 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".map-dock")).toHaveCount(0);
   await page.locator('[data-act="issue"][data-id="50"]').first().click();
   await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
+  await expect(page.locator(".issue-body")).toContainText("详情栏现在只画家族");
+  await expect(page.getByRole("button", { name: "加宽读票", exact: true })).toBeVisible();
   await expect(page.locator(".lanes").first()).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^阻塞中/ })).toBeVisible();
   await expect(page.locator(".col-hd").filter({ hasText: /^Frontier/ })).toBeVisible();
@@ -79,6 +81,19 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page).toHaveURL(urlWithDirection(page, "paper"));
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(urlWithDirection(page, "codex-map"));
+});
+
+test("右侧 Issue 第一屏能读正文，加宽后栏变宽", async ({ page }) => {
+  await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily`);
+  await page.locator('[data-act="issue"][data-id="50"]').first().click();
+  await expect(page.locator(".issue-title")).toHaveText("#50 实现：详情挡住名单");
+  await expect(page.locator(".issue-body")).toContainText("Question");
+  await expect(page.locator(".issue-body")).toContainText("加宽读票");
+  await page.getByRole("button", { name: "加宽读票", exact: true }).click();
+  await expect(page).toHaveURL(/iw=1/);
+  await expect(page.locator(".map-cols.issue-wide")).toBeVisible();
+  await page.locator('[data-act="issue"][data-id="1"]').first().click();
+  await expect(page.locator(".issue-body")).toContainText("这张地图为什么这么长");
 });
 
 test("占满右侧只放大现有终端，不复制一份", async ({ page }) => {
@@ -139,7 +154,8 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     // Issue 详情
     await page.locator('[data-act="issue"][data-id="30"]').first().click();
     await expect(page.getByText("属于 / 子票", { exact: true })).toBeVisible();
-    await expect(page.getByText("挡住它的", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("挡住它的 / 它挡住的", { exact: true })).toBeVisible();
+    await expect(page.locator(".issue-body")).toContainText("支付回调超过 8 秒");
 
     // 依赖图仍在，不因观感方向丢失
     await page.getByRole("button", { name: "依赖图", exact: true }).first().click();
