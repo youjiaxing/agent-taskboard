@@ -140,7 +140,16 @@ test("总览按终端状态分组，可按 Project 过滤", async ({ page }) => 
   await expect(page.locator(".dock")).toHaveCount(0);
 
   await page.locator('[data-act="ov-run"][data-id="r5"]').click();
+  await expect(page).toHaveURL(/mid=run/);
+  await expect(page.locator(".run-stage")).toBeVisible();
   await expect(page.locator(".issue-title")).toHaveText("#90 实现：设置页");
+  await expect(page.getByRole("button", { name: "返回总览", exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "下一条", exact: true }).click();
+  await expect(page.locator(".run-stage")).toBeVisible();
+  await page.getByRole("button", { name: "返回总览", exact: true }).first().click();
+  await expect(page).toHaveURL(/mid=overview/);
+  await expect(page.locator(".ov")).toBeVisible();
+  await expect(page.locator(".ov-tile.sel")).toBeVisible();
 
   await page.locator('[data-act="ov-proj"][data-id="notes"]').click();
   await expect(page.getByText("这个过滤下没有 Run", { exact: true })).toBeVisible();

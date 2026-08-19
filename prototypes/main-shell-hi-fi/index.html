@@ -985,6 +985,23 @@
     }
     .ov-tile:hover { border-color: var(--line-strong); }
     .ov-tile.sel { border-color: #111; box-shadow: 0 0 0 1px #111; }
+    .nav-back {
+      border: 0;
+      background: transparent;
+      font-weight: 620;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+    .nav-back:hover { background: var(--sel); border-color: transparent; }
+    .ov-step {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .ov-step:hover { background: var(--sel); color: var(--ink); border-color: transparent; }
+    .ov-step:disabled { opacity: .35; cursor: default; }
     .ov-tile.wait { border-color: #c9a227; }
     .ov-tile.stop { border-color: color-mix(in srgb, var(--stop) 50%, var(--line)); }
     .ov-cap {
@@ -1524,6 +1541,7 @@ v1 桌面壳是否坚持 Tauri 2？
       allRunsOpen: false,
       ovFilter: [],
       ovShowEnded: false,
+      ovReturn: false,
       childFilter: null,
       mapDetailOpen: false,
       mapSearchOpen: false,
@@ -1608,6 +1626,10 @@ v1 桌面壳是否坚持 Tauri 2？
         allRuns: "所有 Run",
         overview: "总览",
         overviewHint: "这个 Host 上的 Run，按终端状态分组。",
+        backOverview: "返回总览",
+        ovOpenHint: "打开并操作",
+        ovPrev: "上一条",
+        ovNext: "下一条",
         ovAllProjects: "全部 Project",
         ovShowEnded: "显示已结束",
         ovHideEnded: "隐藏已结束",
@@ -1740,6 +1762,10 @@ v1 桌面壳是否坚持 Tauri 2？
         allRuns: "All Runs",
         overview: "Overview",
         overviewHint: "Runs on this Host, grouped by terminal state.",
+        backOverview: "Back to overview",
+        ovOpenHint: "Open and work",
+        ovPrev: "Previous",
+        ovNext: "Next",
         ovAllProjects: "All Projects",
         ovShowEnded: "Show ended",
         ovHideEnded: "Hide ended",
@@ -1854,6 +1880,7 @@ v1 桌面壳是否坚持 Tauri 2？
     function setMidMode(id) {
       S.midMode = id === "graph" || id === "run" || id === "overview" ? id : "board";
       if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
+      if (S.midMode !== "run") S.ovReturn = false;
       S.cam.user = false;
     }
     function restoreMidForProject(id) {
@@ -1901,6 +1928,7 @@ v1 桌面壳是否坚持 Tauri 2？
       S.issueWide = false;
       S.ovFilter = [];
       S.ovShowEnded = false;
+      S.ovReturn = false;
       if (sc === "single") {
         S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
       } else if (sc === "stopped") {
@@ -1986,7 +2014,31 @@ v1 桌面壳是否坚持 Tauri 2？
     function restoreFromRun() {
       S.termZoom = null;
       if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      if (S.ovReturn) {
+        S.midMode = "overview";
+        S.ovReturn = false;
+        S.cam.user = false;
+        return;
+      }
       restoreMidForProject(S.projectId);
+    }
+    function overviewCursor() {
+      const list = overviewRuns();
+      const idx = list.findIndex(r => r.id === S.runId);
+      return {
+        list,
+        idx,
+        prev: idx > 0 ? list[idx - 1] : null,
+        next: idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null
+      };
+    }
+    function openRunFromOverview(id) {
+      S.allRunsOpen = false;
+      S.detailFolded = false;
+      if (S.termZoom === "right") S.termZoom = null;
+      setRun(id, true);
+      S.ovReturn = true;
+      setMidMode("run");
     }
     function idleDock(i) {
       return `
@@ -2323,7 +2375,8 @@ v1 桌面壳是否坚持 Tauri 2？
         `最近完成 N=${S.recentN}`,
         `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
         `终端放大: ${S.termZoom || "无"}`,
-        `读票加宽: ${S.issueWide ? "开" : "关"}`
+        `读票加宽: ${S.issueWide ? "开" : "关"}`,
+        `从总览进入: ${S.ovReturn ? "是" : "否"}`
       ];
       return `<h3>当前状态（原型）</h3><pre>${esc(lines.join("\n"))}</pre>`;
     }
@@ -2470,13 +2523,19 @@ v1 桌面壳是否坚持 Tauri 2？
     function midBar() {
       const h = host(S.hostId);
       const p = project(S.projectId);
+      const cur = S.midMode === "run" && S.ovReturn ? overviewCursor() : null;
       return `
         <div class="mid-bar">
+          ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
           <button data-act="mid-mode" data-id="overview" class="${S.midMode === "overview" ? "active" : ""}">${esc(t("overview"))}</button>
-          ${S.midMode === "run" ? foldHit("restore-dock", t("restoreDock"), "↓") : ""}
-          <span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>
+          ${S.midMode === "run" && !S.ovReturn ? foldHit("restore-dock", t("restoreDock"), "↓") : ""}
+          ${cur ? `
+            <button class="ov-step" data-act="ov-step" data-id="prev" ${cur.prev ? "" : "disabled"}>${esc(t("ovPrev"))}</button>
+            <span class="tiny">${cur.idx + 1} / ${cur.list.length}</span>
+            <button class="ov-step" data-act="ov-step" data-id="next" ${cur.next ? "" : "disabled"}>${esc(t("ovNext"))}</button>
+          ` : `<span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>`}
           <span class="grow"></span>
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
         </div>`;
@@ -2610,7 +2669,7 @@ v1 桌面壳是否坚持 Tauri 2？
                     const p = project(r.projectId);
                     const kind = runAttention(r);
                     return `
-                      <button class="ov-tile ${S.runId === r.id ? "sel" : ""} ${kind === "waiting" ? "wait" : kind === "stopped" ? "stop" : ""}" data-act="ov-run" data-id="${r.id}">
+                      <button class="ov-tile ${S.runId === r.id ? "sel" : ""} ${kind === "waiting" ? "wait" : kind === "stopped" ? "stop" : ""}" data-act="ov-run" data-id="${r.id}" title="${esc(t("ovOpenHint"))}">
                         <div class="ov-cap">
                           <div class="row">
                             <span class="dot ${r.status === "active" ? (r.wait ? "stop" : "busy") : r.status === "stopped" ? "stop" : "off"}"></span>
@@ -2738,7 +2797,9 @@ v1 桌面壳是否坚持 Tauri 2？
             </div>
             <div class="row" style="margin-top:6px">
               ${r && S.direction === "codex-map" && S.midMode === "run" && S.runId === r.id
-                ? foldHit("restore-dock", t("restoreDock"), "↓")
+                ? (S.ovReturn
+                  ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>`
+                  : foldHit("restore-dock", t("restoreDock"), "↓"))
                 : r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>`
                 : `<button class="primary" data-act="fake-start">${t("start")}</button>`}
               ${i.closed ? "" : i.claimed ? `<button data-act="fake-release">${t("release")}</button>` : `<button class="ghost" data-act="fake-claim">${t("claimOnly")}</button>`}
@@ -3154,11 +3215,14 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (act === "issue") setIssue(Number(id));
         if (act === "focus-run") {
-          S.allRunsOpen = false;
-          setRun(id, true);
-          setMidMode("run");
-          S.detailFolded = false;
-          if (S.termZoom === "right") S.termZoom = null;
+          if (S.midMode === "overview" || S.ovReturn) openRunFromOverview(id);
+          else {
+            S.allRunsOpen = false;
+            setRun(id, true);
+            setMidMode("run");
+            S.detailFolded = false;
+            if (S.termZoom === "right") S.termZoom = null;
+          }
           render();
         }
         if (act === "toggle-side") { S.sideFolded = !S.sideFolded; render(); }
@@ -3167,7 +3231,8 @@ v1 桌面壳是否坚持 Tauri 2？
           if (!S.detailFolded && S.termZoom === "right") S.termZoom = null;
           render();
         }
-        if (act === "restore-dock") {
+        if (act === "restore-dock" || act === "back-overview") {
+          S.ovReturn = act === "back-overview" ? true : S.ovReturn;
           restoreFromRun();
           render();
         }
@@ -3242,7 +3307,16 @@ v1 桌面壳是否坚持 Tauri 2？
           setMidMode(id);
           render();
         }
-        if (act === "ov-run") { S.allRunsOpen = false; setRun(id); }
+        if (act === "ov-run") {
+          openRunFromOverview(id);
+          render();
+        }
+        if (act === "ov-step") {
+          const cur = overviewCursor();
+          const next = id === "next" ? cur.next : cur.prev;
+          if (next) openRunFromOverview(next.id);
+          render();
+        }
         if (act === "ov-proj") {
           if (id === "all") S.ovFilter = [];
           else {
