@@ -56,6 +56,14 @@ _Avoid_: Plugin（可口语化，不要做成插件市场）, Integration（过�
 将某一种 Issue Tracker（GitHub / GitLab / local markdown 等）的读写与依赖模型适配进 Taskboard 的边界。
 _Avoid_: Plugin, Connector
 
+**上次数据**:
+某个 Project 最近一次成功从 Issue Tracker 读到的只读副本。用于先画出看板和离线查看，并标明数据截至时间；不能用来判断 Issue 已关、认领或自动推进。
+_Avoid_: 上次态势, 本地真源, Issue 缓存库, 同步副本
+
+**离线**:
+某个 Project 暂时连不上它的 Issue Tracker 的状况。不是一种工作模式，也不表示 Host、Client 或已有 Run 已停。
+_Avoid_: 离线模式, 未配对, Host 离线
+
 **启动配置**:
 某次启动 Run 时，用户在表单上确认过的、该 Agent Adapter 声明的那些值（如 model、effort、权限）。点启动时表单上是什么，这次 Run 就带着什么。按 Project×Agent 记住的那份默认不含隔离执行目录。
 _Avoid_: RunConfig（假统一成三家同一套字段）, 把「用默认」当成用户看得见的值, 把是否隔离当成和 model 一样可记忆的偏好
@@ -113,8 +121,8 @@ _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 /
 _Avoid_: Server（易理解成我们提供的云）, 后台（过糊）, 把 Host 说成那台机器
 
 **Client**:
-连上 Host、用来看态势、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。一个 Client 窗口可以同时连本机 Host 和已配对的远程 Host。手机只当 Client，不在手机上起 Host。关掉 Client 不等于停掉 Host 上的 Run。
-_Avoid_: 只把 Client 说成浏览器, 前端（只说技术层）
+连上 Host、用来看板数据、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。一个 Client 窗口可以同时连本机 Host 和已配对的远程 Host。手机只当 Client，不在手机上起 Host。关掉 Client 不等于停掉 Host 上的 Run。
+_Avoid_: 只把 Client 说成浏览器, 前端（只说技术层）, 把看板数据叫态势
 
 **配对**:
 Client 获准连上某个 Host 的一次性手续：交换可到达地址和一次性配对码，之后靠长期令牌。不是产品账号。Host 上可以撤销某个 Client。连通走用户自己的 Tailscale / VPN / 局域网。

@@ -10,6 +10,10 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 
 **底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端，给出「开 Run」（一步认领并启动）。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
 
+**进入 Run**时，从看板点击已有 Run 的 Issue 会直接把 Embedded Terminal 抬到中间，自动收起左侧，右侧保留完整 Issue；终端约占中间与详情区域的三分之二。「返回看板」恢复原看板和自动收起的左侧。依赖图节点仍只换 Issue 详情，不触发这条流转。
+
+**手机**默认只突出当前 Project、刷新状态、进行中和 Frontier；Host / Project 清单收进「切换」面板。底栏是「看板 | 票 | Run」。进行中优先展示，并提供打开 Run；手机仍不以完整官方 TUI 为验收。
+
 **折叠**把区域从布局里拿掉，不留占位条。左侧和 Issue 的开关钉在不会消失的顶栏上，收起后坐标不变。
 
 这改写了 [决策：主界面信息架构定稿](https://github.com/youjiaxing/agent-taskboard/issues/15) 里「Host 顶栏切换器」和「底栏列出这台 Host 全部 Run」；能力仍在，摆位变了。钉于 [原型：对照 Codex Desktop 再调默认主壳](https://github.com/youjiaxing/agent-taskboard/issues/31)。
@@ -26,5 +30,6 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 
 ## Consequences
 
-- `/to-spec` 按「左侧 Host/Project、中间看板|图、Host 级总览、底栏跟 Issue、折叠不占位」写，不要写回顶栏 Host 条或默认列出全部 Run 的底栏。
+- `/to-spec` 按「左侧 Host/Project、中间看板|图、Host 级总览、底栏跟 Issue、看板点 Run Issue 直达中间终端、折叠不占位」写，不要写回顶栏 Host 条或默认列出全部 Run 的底栏。
+- 手机按当前 Project 聚焦，不平铺全部 Host / Project；切换范围是次级面板。
 - 四列、依赖图、空状态三件套、最近完成 N、查看改动、Embedded Terminal 官方 CLI 仍按已钉能力做。
