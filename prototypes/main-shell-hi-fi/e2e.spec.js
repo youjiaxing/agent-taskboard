@@ -43,7 +43,8 @@ test("A：左侧入口 + 流水；今天与 24 小时不同；缺字段是 —�
   await expect(page.getByRole("button", { name: "全部模型" })).toBeVisible();
   await expect(page.getByRole("button", { name: "grok-4" })).toBeVisible();
   await expect(page.getByText("缓存命中率")).toBeVisible();
-  await expect(page.getByText("最近请求")).toBeVisible();
+  await expect(page.getByText("首字趋势")).toBeVisible();
+  await expect(page.getByText("速率趋势")).toBeVisible();
   await expect(page.locator('[data-act="usage-range"][data-id="today"]')).toHaveClass(/active/);
   await expect(page.locator(".usage-pane")).toContainText("今天 11:20");
   await expect(page.locator(".usage-pane")).not.toContainText("昨天 21:40");

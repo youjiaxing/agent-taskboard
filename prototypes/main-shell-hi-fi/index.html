@@ -1394,9 +1394,10 @@
     }
     .usage-health {
       display: grid;
-      grid-template-columns: minmax(0, 1.6fr) minmax(160px, .7fr);
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(140px, .6fr);
       gap: 10px;
     }
+    .usage-health-wide { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .usage-card {
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -1431,6 +1432,14 @@
       border: 1px solid var(--line-strong);
       border-radius: 4px 4px 0 0;
       min-height: 3px;
+    }
+    .usage-trend i.slow {
+      background: color-mix(in srgb, var(--stop) 35%, var(--paper));
+      border-color: color-mix(in srgb, var(--stop) 45%, var(--line));
+    }
+    .usage-trend i.gap {
+      background: var(--chip);
+      border-color: var(--line);
     }
     .usage-trend span { font-size: 10px; color: var(--muted); text-align: center; }
     .usage-recent { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
@@ -2091,6 +2100,13 @@ v1 桌面壳是否坚持 Tauri 2？
       { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, ts: "2026-08-20T11:20:00", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true, ttftMs: 1860, tokPerSec: 19 },
       { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, ts: "2026-08-20T10:04:00", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true, ttftMs: 420, tokPerSec: 48 },
       { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, ts: "2026-08-20T09:18:00", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true, ttftMs: 890, tokPerSec: 33 },
+      { id: "u-r7", runId: "r7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, ts: "2026-08-20T13:48:00", input: 41000, output: 8200, cacheRead: 120000, cacheWrite: 4000, reasoning: 1100, total: 174300, live: false, ttftMs: 2480, tokPerSec: 9 },
+      { id: "u-r8", runId: "r8", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, ts: "2026-08-20T13:05:00", input: 22000, output: 5100, cacheRead: 64000, cacheWrite: null, reasoning: null, total: 91100, live: false, ttftMs: 390, tokPerSec: 51 },
+      { id: "u-r9", runId: "r9", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, ts: "2026-08-20T12:41:00", input: 18000, output: 4200, cacheRead: 30000, cacheWrite: 1500, reasoning: 400, total: 54100, live: false, ttftMs: 1920, tokPerSec: 12 },
+      { id: "u-r10", runId: "r10", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 24, ts: "2026-08-20T12:08:00", input: 26000, output: 6100, cacheRead: 48000, cacheWrite: 2000, reasoning: 700, total: 80800, live: false, ttftMs: 610, tokPerSec: 38 },
+      { id: "u-r11", runId: "r11", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, ts: "2026-08-20T08:22:00", input: 9000, output: 1800, cacheRead: 11000, cacheWrite: null, reasoning: null, total: 21800, live: false, ttftMs: 440, tokPerSec: 46 },
+      { id: "u-r12", runId: "r12", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 15, ts: "2026-08-19T23:12:00", input: 33000, output: 7200, cacheRead: 90000, cacheWrite: 3000, reasoning: 900, total: 134100, live: false, ttftMs: 2610, tokPerSec: 8 },
+      { id: "u-r13", runId: "r13", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, ts: "2026-08-19T18:33:00", input: 15000, output: 3400, cacheRead: 22000, cacheWrite: 800, reasoning: 200, total: 41400, live: false, ttftMs: 780, tokPerSec: 34 },
       { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, ts: "2026-08-19T21:40:00", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false, ttftMs: 2100, tokPerSec: 14 },
       { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, ts: "2026-08-19T16:12:00", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false, ttftMs: 1740, tokPerSec: 21 },
       { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, ts: "2026-08-19T14:02:00", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false, ttftMs: 640, tokPerSec: 41 },
@@ -2381,7 +2397,9 @@ v1 桌面壳是否坚持 Tauri 2？
         usageHitHelp: "缓存读 ÷（缓存读 + 输入）。只拿给了缓存读的 Run 算；没给的不把 0 算进去。",
         usageTrend: "用量趋势",
         usageRecent: "最近请求",
-        usageRecentHelp: "看通路快慢，用来判断要不要换网络通路。不是 token 账。Agent 没给的字段是 —。看板不管理代理节点。",
+        usageRecentHelp: "首字和速率看一段时间的波动，用来判断本地网络通路（如 Clash 节点）稳不稳。不是 token 账。看板不切换节点。缺则 —。",
+        usageTrendTtft: "首字趋势",
+        usageTrendRate: "速率趋势",
         usageTtft: "首字",
         usageRate: "生成速率",
         usageSlow: "偏慢",
@@ -2588,7 +2606,9 @@ v1 桌面壳是否坚持 Tauri 2？
         usageHitHelp: "Cache read ÷ (cache read + input). Only Runs that reported cache read. Missing is not treated as 0.",
         usageTrend: "Usage trend",
         usageRecent: "Recent requests",
-        usageRecentHelp: "Path speed, to decide whether the network path is slow. Not the token ledger. Missing fields are —. Taskboard does not manage proxy nodes.",
+        usageRecentHelp: "TTFT and token rate over the selected range, to see if the local network path (e.g. a Clash node) is unstable. Not the token ledger. Taskboard does not switch nodes. Missing fields are —.",
+        usageTrendTtft: "TTFT trend",
+        usageTrendRate: "Rate trend",
         usageTtft: "Time to first token",
         usageRate: "Token rate",
         usageSlow: "Slow",
@@ -2924,55 +2944,86 @@ v1 桌面壳是否坚持 Tauri 2？
     function usageIsSlow(row) {
       return (row.ttftMs != null && row.ttftMs >= 1500) || (row.tokPerSec != null && row.tokPerSec < 20);
     }
-    function usageTrend(rows) {
-      const map = new Map();
-      for (const r of rows) {
-        const k = usageDayKey(r);
-        map.set(k, (map.get(k) || 0) + (r.total || 0));
+    function usageActiveRange() {
+      return S.variant === "B" ? S.usageFilter.range : S.usageRange;
+    }
+    function usageHourly() {
+      const range = usageActiveRange();
+      return range === "today" || range === "24h";
+    }
+    function usageBucketKeys() {
+      const range = usageActiveRange();
+      const keys = [];
+      if (range === "today") {
+        for (let h = 0; h <= USAGE_NOW.getHours(); h++) keys.push(String(h).padStart(2, "0") + "时");
+        return keys;
       }
-      const keys = [...map.keys()];
-      const max = Math.max(1, ...keys.map(k => map.get(k)));
+      if (range === "24h") {
+        const start = new Date(USAGE_NOW.getTime() - 23 * 3600000);
+        start.setMinutes(0, 0, 0);
+        for (let i = 0; i < 24; i++) {
+          const d = new Date(start.getTime() + i * 3600000);
+          const today = d.getDate() === USAGE_NOW.getDate();
+          keys.push((today ? "今" : "昨") + String(d.getHours()).padStart(2, "0") + "时");
+        }
+        return keys;
+      }
+      const days = range === "7d" ? 7 : range === "30d" ? 30 : 14;
+      for (let i = days - 1; i >= 0; i--) {
+        const d = new Date(USAGE_NOW.getFullYear(), USAGE_NOW.getMonth(), USAGE_NOW.getDate() - i);
+        keys.push(`${d.getMonth() + 1}/${d.getDate()}`);
+      }
+      return keys;
+    }
+    function usageBucketOf(row) {
+      const d = new Date(row.ts);
+      if (usageActiveRange() === "today") return String(d.getHours()).padStart(2, "0") + "时";
+      if (usageActiveRange() === "24h") {
+        const today = d.getDate() === USAGE_NOW.getDate();
+        return (today ? "今" : "昨") + String(d.getHours()).padStart(2, "0") + "时";
+      }
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    function usageChart(rows, pick, fmt, slowIf) {
+      const keys = usageBucketKeys();
+      const bags = new Map(keys.map(k => [k, []]));
+      for (const r of rows) {
+        const k = usageBucketOf(r);
+        if (!bags.has(k)) continue;
+        const v = pick(r);
+        if (v != null) bags.get(k).push(v);
+      }
+      const avgs = keys.map(k => {
+        const list = bags.get(k);
+        if (!list.length) return null;
+        return list.reduce((n, x) => n + x, 0) / list.length;
+      });
+      const max = Math.max(1, ...avgs.filter(v => v != null));
       if (!keys.length) return `<div class="tiny">${esc(t("ovEmpty"))}</div>`;
-      return `<div class="usage-trend">${keys.map(k => {
-        const v = map.get(k);
-        const h = Math.max(4, Math.round((v / max) * 56));
-        return `<button type="button" title="${esc(k + " · " + fmtTok(v))}"><i style="height:${h}px"></i><span>${esc(k)}</span></button>`;
+      return `<div class="usage-trend">${keys.map((k, i) => {
+        const v = avgs[i];
+        const gap = v == null;
+        const slow = !gap && slowIf && slowIf(v);
+        const h = gap ? 3 : Math.max(4, Math.round((v / max) * 56));
+        const label = keys.length > 14 && i % 2 ? "" : k.replace("时", "");
+        return `<button type="button" title="${esc(k + " · " + (gap ? "—" : fmt(v)))}"><i class="${gap ? "gap" : slow ? "slow" : ""}" style="height:${h}px"></i><span>${esc(label)}</span></button>`;
       }).join("")}</div>`;
     }
     function usageHealth(rows) {
       const hit = usageCacheHit(rows);
       const miss = rows.some(r => r.cacheRead == null);
-      return `<div class="usage-health">
-        <div class="usage-card"><div class="k">${esc(t("usageTrend"))}</div>${usageTrend(rows)}</div>
-        <div class="usage-card">
-          <div class="k">${esc(t("usageHit"))}</div>
-          <div class="usage-kpi ${hit == null ? "missing" : ""}" style="border:0;padding:8px 0 0;background:transparent"><div class="v">${esc(usageFmtPct(hit))}</div></div>
-          <div class="tiny">${esc(t("usageHitHelp"))}${miss ? (S.lang === "en" ? " Some Runs omitted." : " 有的 Run 没给缓存读，已排除。") : ""}</div>
+      return `
+        <div class="tiny">${esc(t("usageRecentHelp"))}</div>
+        <div class="usage-health">
+          <div class="usage-card"><div class="k">${esc(t("usageTrend"))}</div>${usageChart(rows, r => r.total, fmtTok)}</div>
+          <div class="usage-card"><div class="k">${esc(t("usageTrendTtft"))}</div>${usageChart(rows, r => r.ttftMs, usageFmtTtft, v => v >= 1500)}</div>
+          <div class="usage-card">
+            <div class="k">${esc(t("usageHit"))}</div>
+            <div class="usage-kpi ${hit == null ? "missing" : ""}" style="border:0;padding:8px 0 0;background:transparent"><div class="v">${esc(usageFmtPct(hit))}</div></div>
+            <div class="tiny">${esc(t("usageHitHelp"))}${miss ? (S.lang === "en" ? " Some Runs omitted." : " 有的 Run 没给缓存读，已排除。") : ""}</div>
+          </div>
         </div>
-      </div>`;
-    }
-    function usageRecent(rows) {
-      const list = rows.slice(0, 5);
-      if (!list.length) return "";
-      return `<div class="usage-card">
-        <div class="k">${esc(t("usageRecent"))}</div>
-        <div class="tiny" style="margin-top:4px">${esc(t("usageRecentHelp"))}</div>
-        <table class="usage-recent">
-          <thead><tr><th>Run</th><th>${S.lang === "en" ? "Model" : "模型"}</th><th>${esc(t("usageTtft"))}</th><th>${esc(t("usageRate"))}</th><th></th></tr></thead>
-          <tbody>${list.map(r => {
-            const i = r.issueId ? issue(r.issueId) : null;
-            const title = i ? `#${i.id}` : t("usageFree");
-            const slow = usageIsSlow(r);
-            return `<tr data-act="usage-run" data-id="${r.id}">
-              <td><b>${esc(title)}</b><div class="tiny">${esc(usageWhen(r))}</div></td>
-              <td>${esc(r.model)}</td>
-              <td class="${slow && r.ttftMs >= 1500 ? "usage-slow" : ""}">${esc(usageFmtTtft(r.ttftMs))}</td>
-              <td class="${slow && r.tokPerSec != null && r.tokPerSec < 20 ? "usage-slow" : ""}">${esc(usageFmtRate(r.tokPerSec))}</td>
-              <td class="tiny">${slow ? esc(t("usageSlow")) : ""}</td>
-            </tr>`;
-          }).join("")}</tbody>
-        </table>
-      </div>`;
+        <div class="usage-card"><div class="k">${esc(t("usageTrendRate"))}</div>${usageChart(rows, r => r.tokPerSec, usageFmtRate, v => v < 20)}</div>`;
     }
     function usageAcctBox(agent) {
       const rec = AGENT_ACCT[agent];
@@ -2995,7 +3046,10 @@ v1 桌面壳是否坚持 Tauri 2？
         <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(usageWhen(row))}${row.live ? " · " + t("usageLive") : ""}</div>
         <div class="usage-fields" style="margin-top:10px">${USAGE_FIELDS.map(([k]) => `
           <div class="usage-field"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${row[k] == null ? "—" : esc(fmtTok(row[k]))}</div></div>
-        `).join("")}</div>
+        `).join("")}
+          <div class="usage-field"><div class="k">${esc(t("usageTtft"))}</div><div class="v ${row.ttftMs >= 1500 ? "usage-slow" : ""}">${esc(usageFmtTtft(row.ttftMs))}</div></div>
+          <div class="usage-field"><div class="k">${esc(t("usageRate"))}</div><div class="v ${row.tokPerSec != null && row.tokPerSec < 20 ? "usage-slow" : ""}">${esc(usageFmtRate(row.tokPerSec))}</div></div>
+        </div>
         <div class="usage-note" style="margin-top:8px">${esc(t("usageTotalHelp"))}</div>
         ${usageAcctBox(row.agent)}
       </div>`;
@@ -3108,7 +3162,6 @@ v1 桌面壳是否坚持 Tauri 2？
         ${usageKpis(rows)}
         ${usageMixedNote(rows)}
         ${usageHealth(rows)}
-        ${usageRecent(rows)}
         <div class="usage-filters">
           <button data-act="usage-slice" data-kind="project" data-id="all" class="${!S.usageSlice ? "active" : ""}">${esc(t("usageAllProjects"))}</button>
           ${plist.map(p => `<button data-act="usage-slice" data-kind="project" data-id="${p.id}" class="${S.usageSlice && S.usageSlice.kind === "project" && S.usageSlice.id === p.id ? "active" : ""}">${esc(p.name)}</button>`).join("")}
@@ -3124,7 +3177,7 @@ v1 桌面壳是否坚持 Tauri 2？
         ${days.map(d => `
           <div class="usage-day">${esc(d)}</div>
           <table class="usage-ledger">
-            <thead><tr><th>Run</th><th>${S.lang === "en" ? "Agent / model" : "Agent / 模型"}</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th></tr></thead>
+            <thead><tr><th>Run</th><th>${S.lang === "en" ? "Agent / model" : "Agent / 模型"}</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th><th>${esc(t("usageTtft"))}</th><th>${esc(t("usageRate"))}</th></tr></thead>
             <tbody>${shown.filter(r => usageDayKey(r) === d).map(r => {
               const i = r.issueId ? issue(r.issueId) : null;
               const title = i ? `#${i.id} ${shortTitle(i.title, 22)}` : t("usageFree");
@@ -3137,7 +3190,9 @@ v1 桌面壳是否坚持 Tauri 2？
                 <td>${usageTokCell(r.output)}</td>
                 <td>${usageTokCell(r.cacheRead)}</td>
                 <td>${usageTokCell(r.total)}</td>
-              </tr>${open ? `<tr class="sel"><td colspan="6">${usageRunDetail(r)}</td></tr>` : ""}`;
+                <td class="${r.ttftMs >= 1500 ? "usage-slow" : ""}">${esc(usageFmtTtft(r.ttftMs))}</td>
+                <td class="${r.tokPerSec != null && r.tokPerSec < 20 ? "usage-slow" : ""}">${esc(usageFmtRate(r.tokPerSec))}</td>
+              </tr>${open ? `<tr class="sel"><td colspan="8">${usageRunDetail(r)}</td></tr>` : ""}`;
             }).join("")}</tbody>
           </table>
         `).join("")}
