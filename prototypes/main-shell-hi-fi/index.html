@@ -960,6 +960,18 @@
       color: var(--ink);
       border-color: transparent;
     }
+    .shell-codex-map .map-chrome-trail .chip {
+      height: auto;
+      min-width: 0;
+      padding: 3px 10px;
+      background: var(--chip);
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+    .shell-codex-map .map-chrome-trail .chip:hover {
+      border-color: var(--line-strong);
+      background: var(--sel);
+    }
     .shell-codex-map .map-body {
       flex: 1;
       min-height: 0;
@@ -1734,6 +1746,9 @@ v1 桌面壳是否坚持 Tauri 2？
       recentMore: false,
       issueWide: false,
       termTheme: "dark",
+      autoAdvance: false,
+      coldResume: false,
+      coldWait: 60,
       cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
       frontierWhy: "blocked"
@@ -1805,7 +1820,17 @@ v1 桌面壳是否坚持 Tauri 2？
         termLight: "浅色终端",
         noDockRuns: "没有进行中的 Run",
         noIssueRun: "这张 Issue 没有进行中的 Run",
-        autoOff: "自动推进 关",
+        autoOff: "关",
+        autoOn: "开",
+        autoAdvance: "自动推进",
+        autoAdvanceHelp: "默认关。记在这台 Host 上。当前票已关且状态正常、待确认没人否决之后，才认领下一张 ready-for-agent 并开 Run。不是无人值守编排器。",
+        autoAdvanceOn: "自动推进 开",
+        thisHost: "这台 Host",
+        thisClient: "这个 Client",
+        coldResume: "冷启动后恢复自动推进",
+        coldResumeHelp: "默认关。只有自动推进开着才生效。Host 刚起来先不推进，到点后再等下面的秒数。",
+        coldWait: "等待秒数",
+        coldWaitHelp: "默认 60 秒。冷启动恢复开着时，到点后再等这么久才按规则推进。",
         settings: "设置",
         pair: "配对",
         allRuns: "所有 Run",
@@ -1914,7 +1939,6 @@ v1 桌面壳是否坚持 Tauri 2？
         themeHelp: "没有「跟随系统」。值是一份具体主题，记在这个 Client 上。",
         appearanceLight: "浅",
         appearanceDark: "深",
-        autoAdvanceHelp: "本原型不接真开关。"
       },
       en: {
         projects: "Projects on this Host",
@@ -1950,7 +1974,17 @@ v1 桌面壳是否坚持 Tauri 2？
         termLight: "Light terminal",
         noDockRuns: "No live Run",
         noIssueRun: "This Issue has no live Run",
-        autoOff: "Auto-advance off",
+        autoOff: "Off",
+        autoOn: "On",
+        autoAdvance: "Auto-advance",
+        autoAdvanceHelp: "Off by default. Stored on this Host. After the current issue is closed and healthy, and nobody vetoes the confirm wait, claim the next ready-for-agent and start a Run. Not an unattended orchestrator.",
+        autoAdvanceOn: "Auto-advance on",
+        thisHost: "This Host",
+        thisClient: "This Client",
+        coldResume: "Resume auto-advance after cold start",
+        coldResumeHelp: "Off by default. Only applies when auto-advance is on. After the Host starts, wait the seconds below before advancing.",
+        coldWait: "Wait seconds",
+        coldWaitHelp: "Default 60. After cold start, wait this long before advancing.",
         settings: "Settings",
         pair: "Pair",
         allRuns: "All Runs",
@@ -2059,7 +2093,6 @@ v1 桌面壳是否坚持 Tauri 2？
         themeHelp: "No Follow system. The value is one concrete theme, stored on this Client.",
         appearanceLight: "Light",
         appearanceDark: "Dark",
-        autoAdvanceHelp: "This prototype does not wire the real switch."
       }
     };
     function t(k) { return T[S.lang][k]; }
@@ -2111,6 +2144,13 @@ v1 桌面壳是否坚持 Tauri 2？
       const dark = themeOf(S.theme).appearance === "dark";
       const label = dark ? t("appearanceLight") : t("appearanceDark");
       return `<button type="button" data-act="appearance" title="${esc(t("themeQuick"))}" aria-label="${esc(label)}">${esc(label)}</button>`;
+    }
+    function onOff(act, on) {
+      return `
+        <div class="row">
+          <button data-act="${act}" data-id="off" class="${on ? "" : "active"}">${t("autoOff")}</button>
+          <button data-act="${act}" data-id="on" class="${on ? "active" : ""}">${t("autoOn")}</button>
+        </div>`;
     }
     function settingsBtn(iconOnly) {
       const label = t("settings");
@@ -2631,6 +2671,7 @@ v1 桌面壳是否坚持 Tauri 2？
         `Run: ${r ? r.id + " / " + r.status : "（无）"}`,
         `查看改动: ${S.viewChangesOpen ? "开" : "收起"}`,
         `最近完成 N=${S.recentN}`,
+        `自动推进: ${S.autoAdvance ? "开" : "关"}${S.autoAdvance && S.coldResume ? ` · 冷启动恢复 ${S.coldWait}s` : ""}`,
         `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
         `终端放大: ${S.termZoom || "无"}`,
         `读票加宽: ${S.issueWide ? "开" : "关"}`,
@@ -2663,6 +2704,7 @@ v1 桌面壳是否坚持 Tauri 2？
               <button class="ghost" data-act="pair">+ ${t("pair")}</button>
               <span class="grow"></span>
               ${directionToggle()}
+              ${S.autoAdvance ? `<button type="button" class="chip" data-act="settings">${esc(t("autoAdvanceOn"))}</button>` : ""}
               ${appearanceBtn()}
               ${settingsBtn()}
             </div>
@@ -2706,7 +2748,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${settingsBtn(true)}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${appearanceBtn()}${empty ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${S.autoAdvance ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -3309,6 +3351,7 @@ v1 桌面壳是否坚持 Tauri 2？
         <div class="modal-bg">
           <div class="modal settings-modal">
             <div class="row"><b>${t("settings")}</b><span class="grow"></span><button class="ghost" data-act="settings">×</button></div>
+            <div class="tiny">${t("thisClient")}</div>
             <b>${t("uiLang")}</b>
             <div class="row">
               <button data-act="lang" data-id="zh" class="${S.lang === "zh" ? "active" : ""}">${t("langZh")}</button>
@@ -3337,6 +3380,23 @@ v1 桌面壳是否坚持 Tauri 2？
               <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
             </div>
             <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
+            <div class="tiny">${t("thisHost")}</div>
+            <b>${t("autoAdvance")}</b>
+            <div class="tiny">${t("autoAdvanceHelp")}</div>
+            ${onOff("auto-advance", S.autoAdvance)}
+            ${S.autoAdvance ? `
+              <b>${t("coldResume")}</b>
+              <div class="tiny">${t("coldResumeHelp")}</div>
+              ${onOff("cold-resume", S.coldResume)}
+              ${S.coldResume ? `
+                <b>${t("coldWait")}</b>
+                <div class="row">
+                  <input type="range" min="10" max="300" step="10" value="${S.coldWait}" data-act="set-cold-wait" />
+                  <span class="mono" data-role="cold-wait-val">${S.coldWait}</span>
+                </div>
+                <div class="tiny">${t("coldWaitHelp")}</div>
+              ` : ""}
+            ` : ""}
           </div>
         </div>`;
     }
@@ -3550,6 +3610,8 @@ v1 桌面壳是否坚持 Tauri 2？
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "theme") { setTheme(id); render(); }
         if (act === "appearance") { toggleAppearance(); render(); }
+        if (act === "auto-advance") { S.autoAdvance = id === "on"; render(); }
+        if (act === "cold-resume") { if (S.autoAdvance) S.coldResume = id === "on"; render(); }
         if (act === "all-runs") {
           S.allRunsOpen = false;
           S.settingsOpen = false;
@@ -3646,10 +3708,19 @@ v1 桌面壳是否坚持 Tauri 2？
           const label = app.querySelector("[data-role=n-val]");
           if (label) label.textContent = String(S.recentN);
         }
+        if (e.target.dataset.act === "set-cold-wait") {
+          S.coldWait = Number(e.target.value);
+          const label = app.querySelector("[data-role=cold-wait-val]");
+          if (label) label.textContent = String(S.coldWait);
+        }
       };
       app.onchange = (e) => {
         if (e.target.dataset.act === "set-n") {
           S.recentN = Number(e.target.value);
+          render();
+        }
+        if (e.target.dataset.act === "set-cold-wait") {
+          S.coldWait = Number(e.target.value);
           render();
         }
       };

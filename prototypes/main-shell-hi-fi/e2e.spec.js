@@ -294,7 +294,19 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await expect(page.getByRole("button", { name: "素纸", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "素纸夜间", exact: true })).toBeVisible();
     await expect(page.locator(".settings-modal").getByText("观感方向", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("自动推进", { exact: true })).toBeVisible();
+    await expect(page.getByText("这台 Host", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-act="auto-advance"][data-id="off"]')).toHaveClass(/active/);
+    await expect(page.getByText("冷启动后恢复自动推进", { exact: true })).toHaveCount(0);
+    await page.locator('[data-act="auto-advance"][data-id="on"]').click();
+    await expect(page.getByText("冷启动后恢复自动推进", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-act="cold-resume"][data-id="off"]')).toHaveClass(/active/);
+    await expect(page.getByText("等待秒数", { exact: true })).toHaveCount(0);
+    await page.locator('[data-act="cold-resume"][data-id="on"]').click();
+    await expect(page.getByText("等待秒数", { exact: true })).toBeVisible();
+    await expect(page.locator("[data-role=cold-wait-val]")).toHaveText("60");
     await page.locator('[data-act="settings"]').last().click();
+    await expect(page.getByRole("button", { name: "自动推进 开", exact: true })).toBeVisible();
 
     // 空状态：未配对 / 无 Project / Frontier 为空 / 执行已停
     await page.locator('select[data-act="scenario"]').selectOption("unpaired");
