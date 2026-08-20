@@ -12,7 +12,7 @@ test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
   await expect(page.locator(".map-side")).toBeVisible();
   await expect(page.getByRole("button", { name: "用量", exact: true }).first()).toBeVisible();
   await expect(page.locator(".usage-pane")).toBeVisible();
-  await expect(page.locator(".usage-kpi .v").first()).not.toHaveText(/^$/);
+  await expect(page.locator(".usage-ledger").first()).toBeVisible();
   await expect(page).toHaveURL(/variant=A/);
   await expect(page).toHaveURL(/mid=usage/);
 
@@ -33,24 +33,35 @@ test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
   await expect(page).toHaveURL(/variant=C/);
 });
 
-test("A：从左侧进入，返回看板，下钻 Project 并打开 Run 明细；缺字段是 —", async ({ page }) => {
+test("A：左侧入口 + 流水；今天与 24 小时不同；缺字段是 —；可自定义范围", async ({ page }) => {
   await open(page, "&variant=A&mid=board");
 
   await expect(page.locator(".lanes")).toBeVisible();
   await page.locator('.map-side [data-act="mid-mode"][data-id="usage"]').click();
   await expect(page.locator(".usage-pane")).toBeVisible();
   await expect(page.getByText("这台 Host 合计")).toBeVisible();
+  await expect(page.locator('[data-act="usage-range"][data-id="today"]')).toHaveClass(/active/);
+  await expect(page.locator(".usage-pane")).toContainText("今天 11:20");
+  await expect(page.locator(".usage-pane")).not.toContainText("昨天 21:40");
 
-  await page.getByRole("button", { name: "按 Agent" }).click();
-  await page.locator('.usage-table tr[data-kind="agent"][data-id="Codex"]').click();
-  await expect(page.locator(".usage-table tr.sel")).toContainText("Codex");
+  await page.getByRole("button", { name: "最近 24 小时" }).click();
+  await expect(page.locator(".usage-pane")).toContainText("昨天 21:40");
+  await expect(page.locator(".usage-pane")).not.toContainText("昨天 14:02");
 
+  await page.getByRole("button", { name: "Codex", exact: true }).click();
   await expect(page.locator(".usage-kpi.missing .v").first()).toHaveText("—");
 
-  await page.locator('.usage-table tr[data-act="usage-run"]').first().click();
+  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
   await expect(page.locator("[data-usage-detail]")).toBeVisible();
   await expect(page.locator("[data-usage-detail]")).toContainText("这家怎么记账");
   await expect(page.locator("[data-usage-detail]")).toContainText("合计是 Agent 自己报的");
+
+  await page.getByRole("button", { name: "自定义" }).click();
+  await expect(page.locator('input[data-act="usage-from"]')).toBeVisible();
+  await expect(page.locator('input[data-act="usage-to"]')).toBeVisible();
+  await page.locator('input[data-act="usage-from"]').fill("2026-08-01");
+  await page.locator('input[data-act="usage-to"]').fill("2026-08-20");
+  await expect(page.locator(".usage-ledger").first()).toBeVisible();
 
   await page.getByRole("button", { name: "返回看板" }).click();
   await expect(page.locator(".lanes")).toBeVisible();

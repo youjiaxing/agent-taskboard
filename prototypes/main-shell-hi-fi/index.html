@@ -11,7 +11,7 @@
 
     三种结构不同的信息层级，共用选定的 Codex 原貌映射主壳。
     刷新状态栏按 #33 已钉的 C 方案常驻，本票不再对照刷新摆位。
-      A  独立页 · 仪表盘：左侧 Host 区进「用量」，先总量再拆分再 Run。
+      A  独立页 · 流水：左侧 Host 区进「用量」；主表面是 Run 流水。时间含 24 小时 / 今天 / 自定义。
       B  浮层 · 先筛后看：顶栏齿轮旁打开，看板还在下面；没筛选不出 Host 总量。
       C  总览里的账本：总览顶栏「Run | 用量」，主表面是 Run 流水。
     ?variant=A|B|C  &usage=mixed|sparse|empty|unreachable  &mid=usage|overview|board
@@ -1381,6 +1381,17 @@
     }
     .usage-sheet-body { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
     .usage-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .usage-date {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .usage-date input[type="date"] {
+      padding: 3px 8px;
+      background: var(--field);
+    }
     .usage-prompt {
       padding: 28px 12px;
       text-align: center;
@@ -2030,21 +2041,22 @@ v1 桌面壳是否坚持 Tauri 2？
         en: "Sub-agents count. Compacted prompts are not counted again as input. Cache read/write are separate. Reasoning is sometimes omitted."
       }
     };
+    const USAGE_NOW = new Date(2026, 7, 20, 14, 32, 0);
     const USAGE_ROWS = [
-      { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, when: "今天 11:20", day: "今天", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true },
-      { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, when: "今天 10:04", day: "今天", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true },
-      { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, when: "今天 09:18", day: "今天", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true },
-      { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, when: "昨天 21:40", day: "昨天", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false },
-      { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, when: "昨天 16:12", day: "昨天", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false },
-      { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, when: "昨天 14:02", day: "昨天", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false },
-      { id: "u-h2", runId: "rh2", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 15, when: "3 天前", day: "更早", input: 54000, output: 9000, cacheRead: 80000, cacheWrite: null, reasoning: null, total: 143000, live: false },
-      { id: "u-h3", runId: "rh3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, when: "5 天前", day: "更早", input: 91000, output: 16000, cacheRead: 140000, cacheWrite: 9000, reasoning: 2100, total: 258100, live: false },
-      { id: "u-h4", runId: "rh4", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, when: "8 天前", day: "更早", input: 12000, output: 2200, cacheRead: null, cacheWrite: null, reasoning: null, total: 14200, live: false },
-      { id: "u-h5", runId: "rh5", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 14, when: "12 天前", day: "更早", input: 330000, output: 58000, cacheRead: 1200000, cacheWrite: 44000, reasoning: 19000, total: 1651000, live: false },
-      { id: "u-h6", runId: "rh6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 11, when: "18 天前", day: "更早", input: 47000, output: 8800, cacheRead: 62000, cacheWrite: 3000, reasoning: null, total: 120800, live: false },
-      { id: "u-h7", runId: "rh7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 8, when: "40 天前", day: "更早", input: 88000, output: 15000, cacheRead: 210000, cacheWrite: 11000, reasoning: 4000, total: 328000, live: false },
-      { id: "u-m1", runId: "rm1", hostId: "mini", projectId: "shop", agent: "Codex", model: "gpt-5", issueId: 30, when: "今天 08:40", day: "今天", input: 41000, output: 7600, cacheRead: 90000, cacheWrite: null, reasoning: null, total: 138600, live: false },
-      { id: "u-m2", runId: "rm2", hostId: "mini", projectId: "shop", agent: "Grok Build", model: "grok-4", issueId: 31, when: "昨天 19:10", day: "昨天", input: 26000, output: 5100, cacheRead: 14000, cacheWrite: 800, reasoning: 600, total: 46500, live: false }
+      { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, ts: "2026-08-20T11:20:00", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true },
+      { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, ts: "2026-08-20T10:04:00", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true },
+      { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, ts: "2026-08-20T09:18:00", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true },
+      { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, ts: "2026-08-19T21:40:00", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false },
+      { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, ts: "2026-08-19T16:12:00", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false },
+      { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, ts: "2026-08-19T14:02:00", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false },
+      { id: "u-h2", runId: "rh2", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 15, ts: "2026-08-17T11:00:00", input: 54000, output: 9000, cacheRead: 80000, cacheWrite: null, reasoning: null, total: 143000, live: false },
+      { id: "u-h3", runId: "rh3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, ts: "2026-08-15T16:40:00", input: 91000, output: 16000, cacheRead: 140000, cacheWrite: 9000, reasoning: 2100, total: 258100, live: false },
+      { id: "u-h4", runId: "rh4", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, ts: "2026-08-12T09:10:00", input: 12000, output: 2200, cacheRead: null, cacheWrite: null, reasoning: null, total: 14200, live: false },
+      { id: "u-h5", runId: "rh5", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 14, ts: "2026-08-08T13:22:00", input: 330000, output: 58000, cacheRead: 1200000, cacheWrite: 44000, reasoning: 19000, total: 1651000, live: false },
+      { id: "u-h6", runId: "rh6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 11, ts: "2026-08-02T10:05:00", input: 47000, output: 8800, cacheRead: 62000, cacheWrite: 3000, reasoning: null, total: 120800, live: false },
+      { id: "u-h7", runId: "rh7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 8, ts: "2026-07-11T18:00:00", input: 88000, output: 15000, cacheRead: 210000, cacheWrite: 11000, reasoning: 4000, total: 328000, live: false },
+      { id: "u-m1", runId: "rm1", hostId: "mini", projectId: "shop", agent: "Codex", model: "gpt-5", issueId: 30, ts: "2026-08-20T08:40:00", input: 41000, output: 7600, cacheRead: 90000, cacheWrite: null, reasoning: null, total: 138600, live: false },
+      { id: "u-m2", runId: "rm2", hostId: "mini", projectId: "shop", agent: "Grok Build", model: "grok-4", issueId: 31, ts: "2026-08-19T19:10:00", input: 26000, output: 5100, cacheRead: 14000, cacheWrite: 800, reasoning: 600, total: 46500, live: false }
     ];
     const USAGE_STATES = [
       ["mixed", "混合口径 · 大量历史"],
@@ -2145,7 +2157,9 @@ v1 桌面壳是否坚持 Tauri 2？
       usageState: "mixed",
       usageSheet: false,
       usageTab: "runs",
-      usageRange: "30d",
+      usageRange: "today",
+      usageFrom: "2026-08-13",
+      usageTo: "2026-08-20",
       usageBreak: "project",
       usageSlice: null,
       usageRunId: null,
@@ -2199,8 +2213,8 @@ v1 桌面壳是否坚持 Tauri 2？
     const USAGE_VARIANTS = [
       {
         id: "A",
-        name: "独立页 · 仪表盘",
-        note: "入口在左侧 Host 区，和总览并列。先看这台 Host 的总量，再按 Project / Agent / 模型拆，再点进单次 Run。"
+        name: "独立页 · 流水",
+        note: "入口在左侧 Host 区。主表面是 Run 流水。时间：最近 24 小时 / 今天 / 近 7 天 / 近 30 天 / 自定义。"
       },
       {
         id: "B",
@@ -2307,10 +2321,13 @@ v1 桌面壳是否坚持 Tauri 2？
         usageAcctTitle: "这家怎么记账",
         usageClose: "关闭用量",
         usageMore: "更早的 Run",
+        usageRange24: "最近 24 小时",
+        usageRangeToday: "今天",
         usageRange7: "近 7 天",
         usageRange30: "近 30 天",
-        usageRange90: "近 90 天",
-        usageRangeAll: "全部",
+        usageRangeCustom: "自定义",
+        usageFrom: "从",
+        usageTo: "到",
         usageAllProjects: "全部 Project",
         usageAllAgents: "全部 Agent",
         usageAllModels: "全部模型",
@@ -2503,10 +2520,13 @@ v1 桌面壳是否坚持 Tauri 2？
         usageAcctTitle: "How this Agent counts",
         usageClose: "Close usage",
         usageMore: "Older Runs",
+        usageRange24: "Last 24 hours",
+        usageRangeToday: "Today",
         usageRange7: "Last 7 days",
         usageRange30: "Last 30 days",
-        usageRange90: "Last 90 days",
-        usageRangeAll: "All",
+        usageRangeCustom: "Custom",
+        usageFrom: "From",
+        usageTo: "To",
         usageAllProjects: "All Projects",
         usageAllAgents: "All Agents",
         usageAllModels: "All models",
@@ -2695,15 +2715,47 @@ v1 桌面壳是否坚持 Tauri 2？
       const row = USAGE_FIELDS.find(f => f[0] === key);
       return row ? (S.lang === "en" ? row[2] : row[1]) : key;
     }
-    function usageDayRank(day) {
-      return day === "今天" ? 7 : day === "昨天" ? 6 : 1;
+    function usageYmd(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+    function usageTs(row) { return new Date(row.ts).getTime(); }
+    function usageDayKey(row) {
+      const d = new Date(row.ts);
+      const today = new Date(USAGE_NOW.getFullYear(), USAGE_NOW.getMonth(), USAGE_NOW.getDate());
+      const that = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const diff = Math.round((today - that) / 86400000);
+      if (diff === 0) return S.lang === "en" ? "Today" : "今天";
+      if (diff === 1) return S.lang === "en" ? "Yesterday" : "昨天";
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    function usageWhen(row) {
+      const d = new Date(row.ts);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      return `${usageDayKey(row)} ${hh}:${mm}`;
+    }
+    function usageEnsureCustom() {
+      if (!S.usageFrom) S.usageFrom = usageYmd(new Date(USAGE_NOW.getTime() - 7 * 86400000));
+      if (!S.usageTo) S.usageTo = usageYmd(USAGE_NOW);
     }
     function usageInRange(row, range) {
       if (!range || range === "all") return true;
-      const rank = usageDayRank(row.day);
-      if (range === "7d") return rank >= 6;
-      if (range === "30d") return rank >= 1 && row.when !== "40 天前";
-      if (range === "90d") return true;
+      const t = usageTs(row);
+      const now = USAGE_NOW.getTime();
+      const startToday = new Date(USAGE_NOW.getFullYear(), USAGE_NOW.getMonth(), USAGE_NOW.getDate()).getTime();
+      if (range === "24h") return t >= now - 86400000 && t <= now;
+      if (range === "today") return t >= startToday && t < startToday + 86400000;
+      if (range === "7d") return t >= now - 7 * 86400000 && t <= now;
+      if (range === "30d") return t >= now - 30 * 86400000 && t <= now;
+      if (range === "custom") {
+        usageEnsureCustom();
+        const from = new Date(S.usageFrom + "T00:00:00").getTime();
+        const to = new Date(S.usageTo + "T23:59:59").getTime();
+        return t >= from && t <= to;
+      }
       return true;
     }
     function usageVisibleRows() {
@@ -2712,7 +2764,7 @@ v1 桌面壳是否坚持 Tauri 2？
       let rows = USAGE_ROWS.filter(r => r.hostId === S.hostId);
       if (S.usageState === "sparse") rows = rows.filter(r => r.id === "u-r1" || r.id === "u-r5" || r.id === "u-m1");
       const range = S.variant === "B" ? S.usageFilter.range : S.usageRange;
-      rows = rows.filter(r => usageInRange(r, range));
+      rows = rows.filter(r => usageInRange(r, range)).sort((a, b) => usageTs(b) - usageTs(a));
       if (S.variant === "A" && S.usageSlice) {
         if (S.usageSlice.kind === "project") rows = rows.filter(r => r.projectId === S.usageSlice.id);
         if (S.usageSlice.kind === "agent") rows = rows.filter(r => r.agent === S.usageSlice.id);
@@ -2770,12 +2822,17 @@ v1 桌面壳是否坚持 Tauri 2？
     }
     function usageRangeBtns(current, act) {
       const items = [
+        ["24h", t("usageRange24")],
+        ["today", t("usageRangeToday")],
         ["7d", t("usageRange7")],
         ["30d", t("usageRange30")],
-        ["90d", t("usageRange90")],
-        ["all", t("usageRangeAll")]
+        ["custom", t("usageRangeCustom")]
       ];
-      return items.map(([id, label]) => `<button data-act="${act}" data-id="${id}" class="${current === id ? "active" : ""}">${esc(label)}</button>`).join("");
+      const chips = items.map(([id, label]) => `<button data-act="${act}" data-id="${id}" class="${current === id ? "active" : ""}">${esc(label)}</button>`).join("");
+      if (current !== "custom") return chips;
+      const fromAct = act === "usage-b-range" ? "usage-b-from" : "usage-from";
+      const toAct = act === "usage-b-range" ? "usage-b-to" : "usage-to";
+      return `${chips}<label class="usage-date">${esc(t("usageFrom"))} <input type="date" data-act="${fromAct}" value="${esc(S.usageFrom || "")}"></label><label class="usage-date">${esc(t("usageTo"))} <input type="date" data-act="${toAct}" value="${esc(S.usageTo || "")}"></label>`;
     }
     function usageKpis(rows) {
       return `<div class="usage-kpis">${USAGE_FIELDS.map(([k]) => {
@@ -2801,7 +2858,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const title = i ? `#${i.id} ${shortTitle(i.title, 28)}` : t("usageFree");
       return `<div class="usage-detail" data-usage-detail="${row.id}">
         <h3>${esc(title)}</h3>
-        <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(row.when)}${row.live ? " · " + t("usageLive") : ""}</div>
+        <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(usageWhen(row))}${row.live ? " · " + t("usageLive") : ""}</div>
         <div class="usage-fields" style="margin-top:10px">${USAGE_FIELDS.map(([k]) => `
           <div class="usage-field"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${row[k] == null ? "—" : esc(fmtTok(row[k]))}</div></div>
         `).join("")}</div>
@@ -2819,7 +2876,7 @@ v1 桌面壳是否坚持 Tauri 2？
           const p = project(r.projectId);
           const title = i ? `#${i.id} ${shortTitle(i.title, 18)}` : t("usageFree");
           return `<tr data-act="usage-run" data-id="${r.id}" class="${S.usageRunId === r.id ? "sel" : ""}">
-            <td><b>${esc(title)}</b><div class="tiny">${esc(r.when)}${r.live ? " · " + t("usageLive") : ""}</div></td>
+            <td><b>${esc(title)}</b><div class="tiny">${esc(usageWhen(r))}${r.live ? " · " + t("usageLive") : ""}</div></td>
             <td>${esc(p ? p.name : r.projectId)}</td>
             <td>${esc(r.agent)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}" title="${esc(t("usageAcctTitle"))}">i</button></td>
             <td>${usageTokCell(r.total)}</td>
@@ -2847,33 +2904,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `<div class="usage-caveat">${esc(S.usageState === "sparse" ? t("usageSparse") : t("usageMixedNote"))}</div>`;
     }
     function usagePaneA() {
-      if (usageHostUnreachable() || S.usageState === "empty") return `${paneMidBar()}<div class="usage-pane">${usageEmptyBlock()}</div>`;
-      const rows = usageVisibleRows();
-      const sliceRows = rows;
-      const run = usageRow(S.usageRunId);
-      return `
-        ${paneMidBar()}
-        <div class="usage-pane">
-          <div class="row"><b>${esc(t("usageHostTotal"))}</b><span class="grow"></span><div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div></div>
-          <div class="tiny">${esc(t("usageHint"))}</div>
-          ${usageKpis(sliceRows)}
-          ${usageMixedNote(sliceRows)}
-          <div class="row">
-            <button data-act="usage-break" data-id="project" class="${S.usageBreak === "project" ? "active" : ""}">${esc(t("usageByProject"))}</button>
-            <button data-act="usage-break" data-id="agent" class="${S.usageBreak === "agent" ? "active" : ""}">${esc(t("usageByAgent"))}</button>
-            <button data-act="usage-break" data-id="model" class="${S.usageBreak === "model" ? "active" : ""}">${esc(t("usageByModel"))}</button>
-            ${S.usageSlice ? `<button class="ghost" data-act="usage-slice-clear">${esc(t("clearFilter"))}</button>` : ""}
-          </div>
-          <div class="usage-split">
-            <div>${usageBreakTable(S.usageBreak, sliceRows)}<div class="tiny" style="margin-top:8px">${esc(t("usageNoSlice"))}</div></div>
-            <div>
-              <b>${esc(t("usageRuns"))}</b>
-              ${usageRunTable(sliceRows, 8)}
-              ${run ? usageRunDetail(run) : ""}
-              ${S.usageAcct ? usageAcctBox(S.usageAcct) : ""}
-            </div>
-          </div>
-        </div>`;
+      return `${paneMidBar()}<div class="usage-pane">${usageLedger(t("usageHostTotal"))}</div>`;
     }
     function usageBReady() {
       const f = S.usageFilter;
@@ -2927,16 +2958,18 @@ v1 桌面壳是否坚持 Tauri 2？
         </div>
       </div>`;
     }
-    function usageLedger() {
+    function usageLedger(totalLabel) {
       if (usageHostUnreachable() || S.usageState === "empty") return usageEmptyBlock();
       const rows = usageVisibleRows();
-      const shown = S.usageMore ? rows : rows.filter(r => r.day === "今天" || r.day === "昨天").concat(rows.filter(r => r.day === "更早").slice(0, 3));
-      const days = [...new Set(shown.map(r => r.day))];
+      const shown = S.usageMore || rows.length <= 12 ? rows : rows.slice(0, 12);
+      const days = [...new Set(shown.map(usageDayKey))];
       const run = usageRow(S.usageRunId);
       const plist = hostProjects();
       const agents = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.agent))];
       return `
-        <div class="row"><b>${esc(t("usageTotal"))}</b><span class="grow"></span><div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div></div>
+        <div class="row"><b>${esc(totalLabel || t("usageTotal"))}</b><span class="grow"></span></div>
+        <div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div>
+        <div class="tiny">${esc(t("usageHint"))} · ${S.lang === "en" ? "Prototype clock 20 Aug 14:32" : "原型时钟 8 月 20 日 14:32"}</div>
         ${usageKpis(rows)}
         ${usageMixedNote(rows)}
         <div class="usage-filters">
@@ -2948,13 +2981,13 @@ v1 桌面壳是否坚持 Tauri 2？
           <div class="usage-day">${esc(d)}</div>
           <table class="usage-ledger">
             <thead><tr><th>Run</th><th>Agent</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th></tr></thead>
-            <tbody>${shown.filter(r => r.day === d).map(r => {
+            <tbody>${shown.filter(r => usageDayKey(r) === d).map(r => {
               const i = r.issueId ? issue(r.issueId) : null;
               const title = i ? `#${i.id} ${shortTitle(i.title, 22)}` : t("usageFree");
               const p = project(r.projectId);
               const open = S.usageRunId === r.id;
               return `<tr data-act="usage-run" data-id="${r.id}" class="${open ? "sel" : ""}">
-                <td><b>${esc(title)}</b><div class="tiny">${esc(p ? p.name : "")} · ${esc(r.when)}</div></td>
+                <td><b>${esc(title)}</b><div class="tiny">${esc(p ? p.name : "")} · ${esc(usageWhen(r))}${r.live ? " · " + t("usageLive") : ""}</div></td>
                 <td>${esc(r.agent)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}">i</button></td>
                 <td>${usageTokCell(r.input)}</td>
                 <td>${usageTokCell(r.output)}</td>
@@ -2964,11 +2997,11 @@ v1 桌面壳是否坚持 Tauri 2？
             }).join("")}</tbody>
           </table>
         `).join("")}
-        ${!S.usageMore && rows.length > shown.length ? `<button data-act="usage-more">${esc(t("usageMore"))}</button>` : ""}
+        ${!S.usageMore && rows.length > shown.length ? `<button data-act="usage-more">${esc(t("usageMore"))} · ${rows.length - shown.length}</button>` : ""}
         ${S.usageAcct && !run ? usageAcctBox(S.usageAcct) : ""}`;
     }
     function usagePaneC() {
-      return `${paneMidBar()}<div class="usage-pane">${usageLedger()}</div>`;
+      return `${paneMidBar()}<div class="usage-pane">${usageLedger(t("usageTotal"))}</div>`;
     }
     function usagePhone() {
       const keep = `<div class="banner">${esc(t("usagePhoneKeep"))}</div>`;
@@ -3445,7 +3478,7 @@ v1 桌面壳是否坚持 Tauri 2？
         </div>`;
     }
     function bottomDock(r) {
-      if (S.direction === "codex-map" && (S.midMode === "run" || S.midMode === "overview")) return "";
+      if (S.direction === "codex-map" && (S.midMode === "run" || S.midMode === "overview" || S.midMode === "usage")) return "";
       if (S.direction !== "codex-map" && S.midMode === "overview") return "";
       const live = selectedLiveRun();
       if (!live) return idleDock(issue(S.issueId));
@@ -3860,7 +3893,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${S.variant === "B" && !empty ? usageBtn() : ""}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${empty ? "" : `${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${empty ? "" : `${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -4939,8 +4972,19 @@ v1 桌面壳是否坚持 Tauri 2？
           render();
         }
         if (act === "usage-sheet-inner") return;
-        if (act === "usage-range") { S.usageRange = id; S.usageRunId = null; render(); }
-        if (act === "usage-b-range") { S.usageFilter.range = id; S.usageRunId = null; render(); }
+        if (act === "usage-range") {
+          S.usageRange = id;
+          S.usageRunId = null;
+          S.usageMore = false;
+          if (id === "custom") usageEnsureCustom();
+          render();
+        }
+        if (act === "usage-b-range") {
+          S.usageFilter.range = id;
+          S.usageRunId = null;
+          if (id === "custom") usageEnsureCustom();
+          render();
+        }
         if (act === "usage-b-project") { S.usageFilter.project = id; S.usageRunId = null; render(); }
         if (act === "usage-b-agent") { S.usageFilter.agent = id; S.usageRunId = null; render(); }
         if (act === "usage-b-model") { S.usageFilter.model = id; S.usageRunId = null; render(); }
@@ -5050,6 +5094,21 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (e.target.dataset.act === "set-cold-wait") {
           patchProjAuto(S.projectId, { coldWait: Number(e.target.value) });
+          render();
+        }
+        const act = e.target.dataset.act;
+        if (act === "usage-from" || act === "usage-b-from") {
+          S.usageFrom = e.target.value;
+          if (act === "usage-from") S.usageRange = "custom";
+          else S.usageFilter.range = "custom";
+          S.usageRunId = null;
+          render();
+        }
+        if (act === "usage-to" || act === "usage-b-to") {
+          S.usageTo = e.target.value;
+          if (act === "usage-to") S.usageRange = "custom";
+          else S.usageFilter.range = "custom";
+          S.usageRunId = null;
           render();
         }
       };
