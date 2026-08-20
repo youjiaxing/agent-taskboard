@@ -5121,10 +5121,30 @@ v1 桌面壳是否坚持 Tauri 2？
       ];
     }
 
+    function computeModelBaseline(calls) {
+      if (!calls || !calls.length) return { medianTtft: 0, medianTps: 0, maxTtft: 1000 };
+      const ttfts = calls.map(c => c.ttft).filter(n => n != null).sort((a, b) => a - b);
+      const tpss = calls.map(c => c.tps).filter(n => n != null).sort((a, b) => a - b);
+      const medianTtft = ttfts.length ? ttfts[Math.floor(ttfts.length / 2)] : 0;
+      const medianTps = tpss.length ? tpss[Math.floor(tpss.length / 2)] : 0;
+      const maxTtft = ttfts.length ? Math.max(...ttfts, 1000) : 1000;
+      return { medianTtft, medianTps, maxTtft };
+    }
+
     function renderModelTrackCard(m, r) {
       const calls = m.recentCalls || [];
+      const baseline = computeModelBaseline(calls);
+      const isCallSpike = (c) => {
+        if (c.status === "slow" || c.jitter) return true;
+        if (c.ttft != null && baseline.medianTtft > 0 && c.ttft > baseline.medianTtft * 2.5 && (c.ttft - baseline.medianTtft) > 500) return true;
+        if (c.tps != null && baseline.medianTps > 0 && c.tps < baseline.medianTps * 0.4) return true;
+        return false;
+      };
       const latestCall = calls[calls.length - 1] || {};
-      const hasSlow = calls.some(c => c.status === "slow" || c.jitter);
+      const latestIsSpike = isCallSpike(latestCall);
+      const hasSlow = m.hasJitter || calls.some(isCallSpike);
+      const maxT = Math.max(baseline.maxTtft, 1000);
+
       return `
         <div class="track-card ${m.status === "inactive" ? "history-card" : ""}">
           <div class="track-card-hd">
@@ -5133,8 +5153,8 @@ v1 桌面壳是否坚持 Tauri 2？
               <span class="telemetry-model-name">${esc(m.model)}</span>
             </div>
             <div style="display:flex; align-items:center; gap:6px;">
-              ${latestCall.ttft != null ? `<span class="telemetry-speed-tag ${latestCall.status === "slow" ? "slow" : "ok"}">${latestCall.ttft}ms</span>` : ""}
-              ${latestCall.tps != null ? `<span class="telemetry-speed-tag ${latestCall.status === "slow" ? "slow" : "ok"}">${latestCall.tps} t/s</span>` : ""}
+              ${latestCall.ttft != null ? `<span class="telemetry-speed-tag ${latestIsSpike ? "slow" : "ok"}">${latestCall.ttft}ms</span>` : ""}
+              ${latestCall.tps != null ? `<span class="telemetry-speed-tag ${latestIsSpike ? "slow" : "ok"}">${latestCall.tps} t/s</span>` : ""}
             </div>
           </div>
           <div class="track-fields">
@@ -5148,20 +5168,21 @@ v1 桌面壳是否坚持 Tauri 2？
           ${calls.length ? `
             <div class="track-sparkline-wrap">
               <div class="track-sparkline-hd">
-                <span>最近 ${calls.length} 次请求首字 (TTFT) 与速率</span>
-                <span>${hasSlow ? '<b style="color:var(--stop)">发现抖动/偏慢</b>' : '通路稳定'}</span>
+                <span>最近 ${calls.length} 次请求 ${baseline.medianTtft ? `(自身基线中位数: ${baseline.medianTtft}ms · ${baseline.medianTps} t/s)` : ""}</span>
+                <span>${hasSlow ? '<b style="color:var(--stop)">发现通道抖动/突刺</b>' : '通路稳定'}</span>
               </div>
               <div class="track-sparkline">
                 ${calls.map((c, idx) => {
-                  const h = Math.max(18, Math.min(100, Math.round((c.ttft / 3500) * 100)));
-                  return `<div class="spark-bar ${c.status === "slow" || c.jitter ? "slow" : ""}" style="height:${h}%" title="Call #${c.id || idx+1}: 首字 ${c.ttft}ms · ${c.tps} tok/s${c.note ? ' · ' + c.note : ''}"></div>`;
+                  const spike = isCallSpike(c);
+                  const h = Math.max(18, Math.min(100, Math.round((c.ttft / maxT) * 100)));
+                  return `<div class="spark-bar ${spike ? "slow" : ""}" style="height:${h}%" title="Call #${c.id || idx+1}: 首字 ${c.ttft}ms · ${c.tps} tok/s${spike ? ' (相对基线偏慢/抖动)' : ''}${c.note ? ' · ' + c.note : ''}"></div>`;
                 }).join("")}
               </div>
             </div>
           ` : ""}
-          ${m.hasJitter || hasSlow ? `
+          ${hasSlow ? `
             <div class="telemetry-jitter-banner">
-              ⚠️ ${esc(m.jitterNote || "检测到首字耗时突增或速率下降，可能为本机网络代理（如 Clash Verge）抖动。")}
+              ⚠️ ${esc(m.jitterNote || "检测到单次调用相对自身基线耗时突增 2.5x+，可能为本机网络代理（如 Clash Verge）通路抖动；看板不管理节点。")}
             </div>
           ` : ""}
           ${m.missingNote ? `
