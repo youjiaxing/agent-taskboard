@@ -33,7 +33,9 @@ test("三个方向可切换，底部切换与 URL 参数稳定", async ({ page }
   await expect(page.locator(".col-hd").filter({ hasText: /^最近完成/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "看板", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "依赖图", exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "总览", exact: true }).first()).toBeVisible();
+  await expect(page.locator(".mid-bar").getByRole("button", { name: "总览", exact: true })).toHaveCount(0);
+  await expect(page.locator(".map-side").getByRole("button", { name: "总览", exact: true })).toBeVisible();
+  await expect(page.locator(".map-chrome-trail").getByRole("button", { name: "总览", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "这次 Run", exact: true })).toHaveCount(0);
   await expect(page.locator(".map-side [data-act=\"focus-run\"][data-id=\"r1\"]")).toBeVisible();
   await expect(page.locator(".map-side").getByRole("button", { name: "所有 Run", exact: true })).toHaveCount(0);
@@ -294,10 +296,12 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await expect(page.getByRole("button", { name: "素纸", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "素纸夜间", exact: true })).toBeVisible();
     await expect(page.locator(".settings-modal").getByText("观感方向", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("自动推进", { exact: true })).toBeVisible();
-    await expect(page.getByText("这台 Host", { exact: true })).toBeVisible();
-    await expect(page.locator('[data-act="auto-advance"][data-id="off"]')).toHaveClass(/active/);
+    await expect(page.getByText("自动推进总开关", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^这个 Project · /)).toBeVisible();
+    await expect(page.locator('[data-act="auto-master"][data-id="off"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-act="auto-advance"][data-id="on"]')).toBeDisabled();
     await expect(page.getByText("冷启动后恢复自动推进", { exact: true })).toHaveCount(0);
+    await page.locator('[data-act="auto-master"][data-id="on"]').click();
     await page.locator('[data-act="auto-advance"][data-id="on"]').click();
     await expect(page.getByText("冷启动后恢复自动推进", { exact: true })).toBeVisible();
     await expect(page.locator('[data-act="cold-resume"][data-id="off"]')).toHaveClass(/active/);
@@ -320,18 +324,40 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
   }
 });
 
-test("390px 手机：三个方向都可切换并查看降级界面", async ({ page }) => {
+test("390px 手机：切 Host、开票、开 Run，已连上时没有配对页", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const direction of DIRECTIONS) {
-    await page.goto(`${prototypeUrl}/?direction=${direction}&viewport=phone&scenario=daily`);
-    await expect(page.getByText("手机只看态势和开停。查看改动请到电脑。")).toBeVisible();
-    await expect(page.getByText("态势", { exact: true })).toBeVisible();
-    await expect(page.getByText("Run", { exact: true }).last()).toBeVisible();
-  }
+  await page.goto(`${prototypeUrl}/?direction=codex-map&viewport=phone&scenario=daily`);
 
-  // 手机内切换方向
-  await page.getByRole("button", { name: "纸面精修", exact: true }).first().click();
-  await expect(page).toHaveURL(urlWithDirection(page, "paper"));
-  await page.getByRole("button", { name: "Codex 原貌映射", exact: true }).first().click();
-  await expect(page).toHaveURL(urlWithDirection(page, "codex-map"));
+  await expect(page.getByText("态势", { exact: true })).toBeVisible();
+  await expect(page.getByText("票", { exact: true })).toBeVisible();
+  await expect(page.locator(".phone-tabbar").getByRole("button", { name: "配对", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "本机 · MacBook" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "书房 Mini" })).toBeVisible();
+
+  await page.getByRole("button", { name: "书房 Mini" }).click();
+  await expect(page.getByRole("button", { name: "shop-api" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /#30 修支付超时/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "本机 · MacBook" }).click();
+  await expect(page.getByRole("button", { name: "agent-taskboard" })).toBeVisible();
+  await page.locator('[data-act="issue"][data-id="50"]').first().click();
+  await expect(page.locator(".issue-title")).toHaveText("#50 实现：详情挡住名单");
+  await expect(page.locator(".issue-body")).toContainText("Question");
+
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator(".term")).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toBeVisible();
+  await expect(page.getByText("手机只看态势和开停。查看改动请到电脑。")).toBeVisible();
+
+  await page.getByRole("button", { name: "态势", exact: true }).click();
+  await page.getByRole("button", { name: "总览", exact: true }).click();
+  await expect(page.locator(".ov")).toBeVisible();
+
+  await page.goto(`${prototypeUrl}/?direction=codex-map&viewport=phone&scenario=unpaired`);
+  await expect(page.getByText("这个窗口还没连上 Host", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "配对一个 Host", exact: true }).click();
+  await expect(page.getByText("这是 Client。填对方 Host 出示的地址和一次性码。", { exact: false })).toBeVisible();
+  await expect(page.getByText("假装已连上", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "假装已连上", exact: true }).click();
+  await expect(page.getByRole("button", { name: "本机 · MacBook" })).toBeVisible();
 });

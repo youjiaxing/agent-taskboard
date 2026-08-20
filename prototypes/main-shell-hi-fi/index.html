@@ -34,6 +34,7 @@
       cursor: pointer;
     }
     button:hover { border-color: var(--line-strong); }
+    button:disabled { opacity: .45; cursor: default; }
     button.primary { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
     button.ghost { background: transparent; }
     button.active { background: var(--sel); border-color: var(--accent); color: var(--accent-ink); }
@@ -469,8 +470,11 @@
     .phone-bar { padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
     .phone-body { flex: 1; overflow: auto; }
     .phone-tabbar { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--line); }
-    .phone-tabbar button { border: 0; border-radius: 0; padding: 10px 4px; background: var(--paper); }
-    .phone-tabbar button.active { background: var(--sel); }
+    .phone-tabbar button { border: 0; border-radius: 0; padding: 12px 4px; background: var(--paper); }
+    .phone-tabbar button.active { background: var(--sel); font-weight: 620; }
+    .phone-sec { padding: 12px 14px 4px; font-size: 11px; color: var(--muted); }
+    .phone .item { width: calc(100% - 16px); margin: 4px 8px; text-align: left; padding: 10px 12px; }
+    .phone-bar .row { align-items: center; }
     .banner {
       margin: 8px 10px;
       padding: 8px 10px;
@@ -1746,9 +1750,8 @@ v1 桌面壳是否坚持 Tauri 2？
       recentMore: false,
       issueWide: false,
       termTheme: "dark",
-      autoAdvance: false,
-      coldResume: false,
-      coldWait: 60,
+      autoMaster: false,
+      projAuto: {},
       cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
       frontierWhy: "blocked"
@@ -1823,7 +1826,10 @@ v1 桌面壳是否坚持 Tauri 2？
         autoOff: "关",
         autoOn: "开",
         autoAdvance: "自动推进",
-        autoAdvanceHelp: "默认关。记在这台 Host 上。当前票已关且状态正常、待确认没人否决之后，才认领下一张 ready-for-agent 并开 Run。不是无人值守编排器。",
+        autoAdvanceHelp: "默认关。记在这个 Project 上。当前票已关且状态正常、待确认没人否决之后，才认领下一张 ready-for-agent 并开 Run。总开关关着时不生效。",
+        autoMaster: "自动推进总开关",
+        autoMasterHelp: "默认关。关掉后，这台 Host 上所有 Project 都不推进。",
+        thisProject: "这个 Project",
         autoAdvanceOn: "自动推进 开",
         thisHost: "这台 Host",
         thisClient: "这个 Client",
@@ -1881,6 +1887,12 @@ v1 桌面壳是否坚持 Tauri 2？
         unpairedTitle: "这个窗口还没连上 Host",
         unpairedBody: "本机桌面应用打开时会先拉起本机 Host。也可以只当 Client，去配对另一台。",
         pairNow: "配对一个 Host",
+        pairClientHelp: "这是 Client。填对方 Host 出示的地址和一次性码。不是登录。",
+        pairFake: "假装已连上",
+        cancel: "取消",
+        phoneIssueTab: "票",
+        phoneHome: "态势",
+        noIssueShort: "还没点票",
         noProjectTitle: "这台 Host 上还没有 Project",
         noProjectBody: "先登记一个本地目录，并选好 Issue Tracker。",
         recentN: "最近完成列张数",
@@ -1977,7 +1989,10 @@ v1 桌面壳是否坚持 Tauri 2？
         autoOff: "Off",
         autoOn: "On",
         autoAdvance: "Auto-advance",
-        autoAdvanceHelp: "Off by default. Stored on this Host. After the current issue is closed and healthy, and nobody vetoes the confirm wait, claim the next ready-for-agent and start a Run. Not an unattended orchestrator.",
+        autoAdvanceHelp: "Off by default. Stored on this Project. After the current issue is closed and healthy, and nobody vetoes the confirm wait, claim the next ready-for-agent and start a Run. The Host master switch must also be on.",
+        autoMaster: "Auto-advance master",
+        autoMasterHelp: "Off by default. When off, no Project on this Host advances.",
+        thisProject: "This Project",
         autoAdvanceOn: "Auto-advance on",
         thisHost: "This Host",
         thisClient: "This Client",
@@ -2035,6 +2050,12 @@ v1 桌面壳是否坚持 Tauri 2？
         unpairedTitle: "This window is not connected to a Host",
         unpairedBody: "The desktop app starts the local Host first. You can also pair another machine.",
         pairNow: "Pair a Host",
+        pairClientHelp: "This is the Client. Enter the address and one-time code the Host shows. Not a login.",
+        pairFake: "Pretend connected",
+        cancel: "Cancel",
+        phoneIssueTab: "Issue",
+        phoneHome: "Status",
+        noIssueShort: "No issue yet",
         noProjectTitle: "No Project on this Host yet",
         noProjectBody: "Register a local folder and pick an Issue Tracker.",
         recentN: "Recently-closed count",
@@ -2145,12 +2166,27 @@ v1 桌面壳是否坚持 Tauri 2？
       const label = dark ? t("appearanceLight") : t("appearanceDark");
       return `<button type="button" data-act="appearance" title="${esc(t("themeQuick"))}" aria-label="${esc(label)}">${esc(label)}</button>`;
     }
-    function onOff(act, on) {
+    function onOff(act, on, disabled) {
+      const dis = disabled ? " disabled" : "";
       return `
         <div class="row">
-          <button data-act="${act}" data-id="off" class="${on ? "" : "active"}">${t("autoOff")}</button>
-          <button data-act="${act}" data-id="on" class="${on ? "active" : ""}">${t("autoOn")}</button>
+          <button data-act="${act}" data-id="off" class="${on ? "" : "active"}"${dis}>${t("autoOff")}</button>
+          <button data-act="${act}" data-id="on" class="${on ? "active" : ""}"${dis}>${t("autoOn")}</button>
         </div>`;
+    }
+    function overviewBtn() {
+      return `<button type="button" class="${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>`;
+    }
+    function projAutoOf(id) {
+      const cur = (id && S.projAuto[id]) || {};
+      return { on: !!cur.on, coldResume: !!cur.coldResume, coldWait: cur.coldWait || 60 };
+    }
+    function patchProjAuto(id, patch) {
+      if (!id) return;
+      S.projAuto[id] = Object.assign(projAutoOf(id), patch);
+    }
+    function autoArmed() {
+      return !!(S.autoMaster && S.projectId && projAutoOf(S.projectId).on);
     }
     function settingsBtn(iconOnly) {
       const label = t("settings");
@@ -2306,6 +2342,7 @@ v1 桌面壳是否坚持 Tauri 2？
       }
       setRun(r.id, true);
       if (S.midMode === "board") S.dockFolded.board = false;
+      if (S.viewport === "phone") S.phone = "run";
     }
     function restoreFromRun() {
       S.termZoom = null;
@@ -2335,6 +2372,7 @@ v1 桌面壳是否坚持 Tauri 2？
       setRun(id, true);
       S.ovReturn = true;
       setMidMode("run");
+      if (S.viewport === "phone") S.phone = "run";
     }
     function idleDock(i) {
       return `
@@ -2671,7 +2709,8 @@ v1 桌面壳是否坚持 Tauri 2？
         `Run: ${r ? r.id + " / " + r.status : "（无）"}`,
         `查看改动: ${S.viewChangesOpen ? "开" : "收起"}`,
         `最近完成 N=${S.recentN}`,
-        `自动推进: ${S.autoAdvance ? "开" : "关"}${S.autoAdvance && S.coldResume ? ` · 冷启动恢复 ${S.coldWait}s` : ""}`,
+        `自动推进总开关: ${S.autoMaster ? "开" : "关"}`,
+        `本 Project 自动推进: ${S.projectId && projAutoOf(S.projectId).on ? "开" : "关"}`,
         `子票过滤: ${S.childFilter ? "#" + S.childFilter : "无"}`,
         `终端放大: ${S.termZoom || "无"}`,
         `读票加宽: ${S.issueWide ? "开" : "关"}`,
@@ -2704,7 +2743,8 @@ v1 桌面壳是否坚持 Tauri 2？
               <button class="ghost" data-act="pair">+ ${t("pair")}</button>
               <span class="grow"></span>
               ${directionToggle()}
-              ${S.autoAdvance ? `<button type="button" class="chip" data-act="settings">${esc(t("autoAdvanceOn"))}</button>` : ""}
+              ${overviewBtn()}
+              ${autoArmed() ? `<button type="button" class="chip" data-act="settings">${esc(t("autoAdvanceOn"))}</button>` : ""}
               ${appearanceBtn()}
               ${settingsBtn()}
             </div>
@@ -2748,7 +2788,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${settingsBtn(true)}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${S.autoAdvance ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${empty ? "" : overviewBtn()}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -2784,6 +2824,7 @@ v1 桌面壳是否坚持 Tauri 2？
                   <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
                 </button>`).join("") || `<div class="ms-nested">${esc(t("unpairedTitle"))}</div>`}
               <button class="ms-item" data-act="pair">+ ${esc(t("pair"))}</button>
+              <button class="ms-item ${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>
             </div>
             <div class="ms-group">
               <div class="ms-group-name">${esc(t("thisHostProjects"))}</div>
@@ -2828,7 +2869,6 @@ v1 桌面壳是否坚持 Tauri 2？
           ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
           <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
           <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
-          <button data-act="mid-mode" data-id="overview" class="${S.midMode === "overview" ? "active" : ""}">${esc(t("overview"))}</button>
           ${S.midMode === "run" && !S.ovReturn ? foldHit("restore-dock", t("restoreDock"), "↓") : ""}
           ${cur ? `
             <button class="ov-step" data-act="ov-step" data-id="prev" ${cur.prev ? "" : "disabled"}>${esc(t("ovPrev"))}</button>
@@ -3081,7 +3121,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const blockers = i.blockedBy.map(issue).filter(Boolean);
       const blocks = i.blocking.map(issue).filter(Boolean);
       const r = issueRun(i) || RUNS.find(x => x.issueId === i.id && S.runId === x.id);
-      const wideBtn = S.viewport === "phone" ? "" : foldHit("toggle-issue-wide", S.issueWide ? t("issueNarrow") : t("issueWide"), S.issueWide ? "«" : "»");
+      const wideBtn = S.viewport === "phone" ? "" : `<button type="button" class="ghost" data-act="toggle-issue-wide">${esc(S.issueWide ? t("issueNarrow") : t("issueWide"))}</button>`;
       return `
         <article class="issue-doc">
           <header class="issue-hd">
@@ -3306,7 +3346,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const i = r && r.issueId ? issue(r.issueId) : null;
       return `
         <div class="modal-bg" data-act="close-stop">
-          <div class="modal" onclick="event.stopPropagation()">
+          <div class="modal">
             <b>${t("stopAsk")}</b>
             <div class="tiny">${r ? esc(r.agent) + (i ? " · #" + i.id + " " + shortTitle(i.title, 18) : "") : t("stopNeedRun")}</div>
             <div class="tiny">${t("stopHint")}</div>
@@ -3322,16 +3362,16 @@ v1 桌面壳是否坚持 Tauri 2？
     function pairingModal() {
       return `
         <div class="modal-bg" data-act="close-pair">
-          <div class="modal" onclick="event.stopPropagation()">
-            <b>${t("pair")}</b>
-            <div class="tiny">不是登录。Host 出示地址 + 一次性码。</div>
-            <div class="stack">
-              <div class="mono">http://100.86.12.4:7420</div>
-              <div class="mono">7K2M-QP9C</div>
-            </div>
+          <div class="modal">
+            <b>${t("pairNow")}</b>
+            <div class="tiny">${t("pairClientHelp")}</div>
+            <label class="tiny">${S.lang === "en" ? "Address" : "地址"}</label>
+            <input class="mono" value="http://100.86.12.4:7420" readonly />
+            <label class="tiny">${S.lang === "en" ? "One-time code" : "一次性码"}</label>
+            <input class="mono" value="7K2M-QP9C" readonly />
             <div class="row">
-              <button class="primary" data-act="fake-paired">假装已扫</button>
-              <button data-act="close-pair">取消</button>
+              <button class="primary" data-act="fake-paired">${t("pairFake")}</button>
+              <button data-act="close-pair">${t("cancel")}</button>
             </div>
           </div>
         </div>`;
@@ -3381,22 +3421,31 @@ v1 桌面壳是否坚持 Tauri 2？
             </div>
             <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
             <div class="tiny">${t("thisHost")}</div>
+            <b>${t("autoMaster")}</b>
+            <div class="tiny">${t("autoMasterHelp")}</div>
+            ${onOff("auto-master", S.autoMaster)}
+            ${S.projectId ? (() => {
+              const pa = projAutoOf(S.projectId);
+              const p = project(S.projectId);
+              return `
+            <div class="tiny">${t("thisProject")}${p ? " · " + esc(p.name) : ""}</div>
             <b>${t("autoAdvance")}</b>
             <div class="tiny">${t("autoAdvanceHelp")}</div>
-            ${onOff("auto-advance", S.autoAdvance)}
-            ${S.autoAdvance ? `
+            ${onOff("auto-advance", pa.on, !S.autoMaster)}
+            ${S.autoMaster && pa.on ? `
               <b>${t("coldResume")}</b>
               <div class="tiny">${t("coldResumeHelp")}</div>
-              ${onOff("cold-resume", S.coldResume)}
-              ${S.coldResume ? `
+              ${onOff("cold-resume", pa.coldResume)}
+              ${pa.coldResume ? `
                 <b>${t("coldWait")}</b>
                 <div class="row">
-                  <input type="range" min="10" max="300" step="10" value="${S.coldWait}" data-act="set-cold-wait" />
-                  <span class="mono" data-role="cold-wait-val">${S.coldWait}</span>
+                  <input type="range" min="10" max="300" step="10" value="${pa.coldWait}" data-act="set-cold-wait" />
+                  <span class="mono" data-role="cold-wait-val">${pa.coldWait}</span>
                 </div>
                 <div class="tiny">${t("coldWaitHelp")}</div>
               ` : ""}
-            ` : ""}
+            ` : ""}`;
+            })() : ""}
           </div>
         </div>`;
     }
@@ -3423,7 +3472,7 @@ v1 桌面壳是否坚持 Tauri 2？
     function renderPhone() {
       if (S.scenario === "unpaired") {
         return `<div class="phone-stage"><div class="phone">
-          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${appearanceBtn()}${settingsBtn()}${directionToggle()}</div>
+          <div class="phone-bar row"><b>Client</b><span class="grow"></span>${settingsBtn()}</div>
           <div class="phone-body pad stack">
             <b>${t("unpairedTitle")}</b>
             <div class="muted">${t("unpairedBody")}</div>
@@ -3431,25 +3480,24 @@ v1 桌面壳是否坚持 Tauri 2？
           </div>
         </div>${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}${S.settingsOpen ? settingsSheet() : ""}</div>`;
       }
-      const body = S.phone === "issue" ? phoneIssue() : S.phone === "run" ? phoneRun() : phoneHome();
+      const tab = S.phone === "issue" || S.phone === "run" || S.phone === "overview" ? S.phone : "home";
+      const body = tab === "issue" ? phoneIssue() : tab === "run" ? phoneRun() : tab === "overview" ? phoneOverview() : phoneHome();
+      const h = host(S.hostId);
       return `
         <div class="phone-stage">
           <div class="phone">
             <div class="phone-bar">
               <div class="row">
-                ${S.phone !== "home" ? `<button data-act="phone" data-id="home">返回</button>` : `<b>Client</b>`}
+                ${tab !== "home" ? `<button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回"}</button>` : `<b>${h ? esc(hostName(h)) : "Client"}</b>`}
                 <span class="grow"></span>
-                ${appearanceBtn()}
                 ${settingsBtn()}
-                ${directionToggle()}
               </div>
-              <div class="tiny">${t("phoneNote")}</div>
             </div>
             <div class="phone-body">${body}</div>
             <div class="phone-tabbar">
-              <button class="${S.phone === "home" ? "active" : ""}" data-act="phone" data-id="home">态势</button>
-              <button class="${S.phone === "run" ? "active" : ""}" data-act="phone" data-id="run">Run</button>
-              <button data-act="pair">${t("pair")}</button>
+              <button class="${tab === "home" || tab === "overview" ? "active" : ""}" data-act="phone" data-id="home">${esc(t("phoneHome"))}</button>
+              <button class="${tab === "issue" ? "active" : ""}" data-act="phone" data-id="issue">${esc(t("phoneIssueTab"))}</button>
+              <button class="${tab === "run" ? "active" : ""}" data-act="phone" data-id="run">Run</button>
             </div>
           </div>
           ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
@@ -3457,23 +3505,60 @@ v1 桌面壳是否坚持 Tauri 2？
         </div>`;
     }
     function phoneHome() {
-      const list = S.projectId ? boardIssues().concat(recentClosed()) : [];
+      const hs = visibleHosts();
+      const plist = hostProjects();
+      const live = S.projectId ? boardIssues().filter(i => sectionOf(i) === "frontier" || sectionOf(i) === "in-run") : [];
+      if (!S.projectId) {
+        return `
+          <div class="phone-sec">${esc(t("hosts"))}</div>
+          ${hs.map(hh => `
+            <button class="item ${S.hostId === hh.id ? "sel" : ""}" data-act="host" data-id="${hh.id}">
+              <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
+            </button>`).join("")}
+          <div class="pad"><button data-act="pair">+ ${esc(t("pair"))}</button></div>
+          <div class="cta stack">
+            <b>${t("noProjectTitle")}</b>
+            <div class="muted">${t("noProjectBody")}</div>
+            <button class="primary" data-act="register">${t("register")}</button>
+          </div>`;
+      }
       return `
-        <div class="pad tiny">${visibleHosts().map(h => hostName(h)).join(" · ")}</div>
-        ${visibleProjects().map(p => `
-          <button class="item ${S.projectId === p.id ? "sel" : ""}" data-act="project" data-id="${p.id}">${esc(p.name)}</button>
+        <div class="phone-sec">${esc(t("hosts"))}</div>
+        ${hs.map(hh => `
+          <button class="item ${S.hostId === hh.id ? "sel" : ""}" data-act="host" data-id="${hh.id}">
+            <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
+          </button>`).join("")}
+        <div class="pad"><button data-act="pair">+ ${esc(t("pair"))}</button></div>
+        <div class="phone-sec">${esc(t("thisHostProjects"))}</div>
+        ${plist.map(pp => `
+          <button class="item ${S.projectId === pp.id ? "sel" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>
         `).join("")}
-        <div class="hd">${t("frontier")}</div>
-        ${list.map(i => issueCard(i)).join("") || `<div class="empty">${t("noItems")}</div>`}`;
+        <div class="pad"><button data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button></div>
+        <div class="hd">${esc(t("frontier"))} / ${esc(t("inRun"))}</div>
+        ${live.map(i => issueCard(i)).join("") || `<div class="empty">${esc(t("noItems"))}</div>`}`;
+    }
+    function phoneOverview() {
+      return `<div class="pad"><button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回态势"}</button></div>${overviewPane()}`;
     }
     function phoneIssue() {
-      return issueDetail() + `<div class="banner">${t("phoneNote")}</div>`;
+      const i = issue(S.issueId);
+      if (!i) return `<div class="empty pad">${esc(t("noIssueShort"))}</div>`;
+      return issueDetail();
     }
     function phoneRun() {
-      const r = run(S.runId) || dockRuns()[0];
+      const i = issue(S.issueId);
+      const r = selectedLiveRun() || run(S.runId);
+      if (!r) {
+        return `
+          <div class="hd">Run</div>
+          <div class="pad stack">
+            <div class="muted">${i ? t("noIssueRun") : t("pickIssue")}</div>
+            ${i && !i.closed ? `<button class="primary" data-act="fake-start">${t("start")}</button>` : ""}
+          </div>`;
+      }
       return `
-        <div class="hd">Run</div>
-        ${r && r.status === "active" ? `<div class="pad"><button data-act="ask-stop">${t("stopRun")}</button></div>` : ""}
+        <div class="hd">Run · ${i ? "#" + i.id : t("free")}</div>
+        ${r.status === "active" ? `<div class="pad"><button data-act="ask-stop">${t("stopRun")}</button></div>` : ""}
         <div class="term" style="min-height:220px">${termText(r)}</div>
         <div class="banner">${t("phoneNote")}</div>`;
     }
@@ -3606,12 +3691,17 @@ v1 桌面壳是否坚持 Tauri 2？
           S.stopAsk = false;
           render();
         }
-        if (act === "phone") { S.phone = id; render(); }
+        if (act === "phone") {
+          S.phone = id;
+          if (id === "home" && S.midMode === "overview") setMidMode("board");
+          render();
+        }
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
         if (act === "theme") { setTheme(id); render(); }
         if (act === "appearance") { toggleAppearance(); render(); }
-        if (act === "auto-advance") { S.autoAdvance = id === "on"; render(); }
-        if (act === "cold-resume") { if (S.autoAdvance) S.coldResume = id === "on"; render(); }
+        if (act === "auto-master") { S.autoMaster = id === "on"; render(); }
+        if (act === "auto-advance") { if (S.autoMaster) patchProjAuto(S.projectId, { on: id === "on" }); render(); }
+        if (act === "cold-resume") { if (S.autoMaster) patchProjAuto(S.projectId, { coldResume: id === "on" }); render(); }
         if (act === "all-runs") {
           S.allRunsOpen = false;
           S.settingsOpen = false;
@@ -3634,6 +3724,7 @@ v1 桌面壳是否坚持 Tauri 2？
         if (act === "mid-mode") {
           if (id === "overview") S.termZoom = null;
           setMidMode(id);
+          if (S.viewport === "phone") S.phone = id === "overview" ? "overview" : "home";
           render();
         }
         if (act === "ov-run") {
@@ -3709,9 +3800,9 @@ v1 桌面壳是否坚持 Tauri 2？
           if (label) label.textContent = String(S.recentN);
         }
         if (e.target.dataset.act === "set-cold-wait") {
-          S.coldWait = Number(e.target.value);
+          patchProjAuto(S.projectId, { coldWait: Number(e.target.value) });
           const label = app.querySelector("[data-role=cold-wait-val]");
-          if (label) label.textContent = String(S.coldWait);
+          if (label) label.textContent = String(projAutoOf(S.projectId).coldWait);
         }
       };
       app.onchange = (e) => {
@@ -3720,7 +3811,7 @@ v1 桌面壳是否坚持 Tauri 2？
           render();
         }
         if (e.target.dataset.act === "set-cold-wait") {
-          S.coldWait = Number(e.target.value);
+          patchProjAuto(S.projectId, { coldWait: Number(e.target.value) });
           render();
         }
       };
