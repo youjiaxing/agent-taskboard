@@ -118,16 +118,26 @@ test("折叠栏不占布局，只留浮层展开", async ({ page }) => {
   await expect(page.locator(".dock")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "展开终端", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "收起 Issue", exact: true }).click();
+  const detailToggle = page.locator(".map-chrome-trail [data-act=\"toggle-detail\"]");
+  const detailBox = await detailToggle.boundingBox();
+  await expect(detailToggle).toHaveAttribute("aria-label", "收起 Issue");
+  await detailToggle.click();
   await expect(page.locator(".map-detail-col")).toHaveCount(0);
-  await expect(page.locator(".mid-bar").getByRole("button", { name: "展开 Issue", exact: true })).toBeVisible();
-  const unfoldIssue = await page.getByRole("button", { name: "展开 Issue", exact: true }).boundingBox();
-  const boardTab2 = await page.getByRole("button", { name: "看板", exact: true }).first().boundingBox();
-  expect(Math.abs(unfoldIssue.y - boardTab2.y)).toBeLessThan(8);
+  await expect(detailToggle).toHaveAttribute("aria-label", "展开 Issue");
+  const detailUnfold = await detailToggle.boundingBox();
+  expect(Math.abs(detailUnfold.x - detailBox.x)).toBeLessThan(2);
+  expect(Math.abs(detailUnfold.y - detailBox.y)).toBeLessThan(2);
+  await expect(page.locator(".mid-bar").getByRole("button", { name: "展开 Issue", exact: true })).toHaveCount(0);
 
-  await expect(page.locator(".map-chrome-trail [data-act=\"settings\"]")).toBeVisible();
-  await page.locator(".map-chrome-trail [data-act=\"settings\"]").click();
+  const settingsBtn = page.locator(".map-chrome-lead [data-act=\"settings\"]");
+  await expect(settingsBtn).toBeVisible();
+  const settingsBox = await settingsBtn.boundingBox();
+  const sideBox = await toggle.boundingBox();
+  expect(settingsBox.x).toBeGreaterThan(sideBox.x);
+  expect(Math.abs(settingsBox.y - sideBox.y)).toBeLessThan(4);
+  await settingsBtn.click();
   await expect(page.getByText("界面语言", { exact: true })).toBeVisible();
+  await expect(page.locator(".settings-modal").getByText("观感方向", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "素纸夜间", exact: true }).click();
   await expect(page).toHaveURL(/skin=plain-dark/);
   await page.locator('[data-act="settings"]').last().click();
@@ -276,16 +286,14 @@ test("三个方向都保留 Host/Project、Issue、Run 与空状态", async ({ p
     await page.locator('[data-act="issue"][data-id="30"]').first().click();
     await expect(page.getByText("认领还在。优先恢复原生会话。", { exact: false })).toBeVisible();
 
-    // 设置面板：语言、主题清单、三版对照
+    // 设置面板：语言、主题清单；观感方向只在原型底栏
     await page.locator('[data-act="settings"]').first().click();
     await expect(page.getByText("界面语言", { exact: true })).toBeVisible();
     await expect(page.getByText("主题", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "暖纸", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "素纸", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "素纸夜间", exact: true })).toBeVisible();
-    await expect(page.getByText("观感方向", { exact: true })).toBeVisible();
-    await expect(page.getByText(/没有取：线程列表、聊天输入框和会话主表面/)).toBeVisible();
-    await expect(page.getByText("Codex 原貌映射", { exact: true }).last()).toBeVisible();
+    await expect(page.locator(".settings-modal").getByText("观感方向", { exact: true })).toHaveCount(0);
     await page.locator('[data-act="settings"]').last().click();
 
     // 空状态：未配对 / 无 Project / Frontier 为空 / 执行已停

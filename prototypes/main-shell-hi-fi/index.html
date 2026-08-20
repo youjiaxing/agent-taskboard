@@ -901,7 +901,8 @@
       border-bottom: 1px solid var(--line);
     }
     .shell-codex-map .map-chrome-lead .traffic i { width: 12px; height: 12px; }
-    .shell-codex-map .side-toggle {
+    .shell-codex-map .side-toggle,
+    .shell-codex-map .chrome-ico {
       width: 28px;
       height: 28px;
       padding: 0;
@@ -914,7 +915,9 @@
       justify-content: center;
       flex: 0 0 auto;
     }
-    .shell-codex-map .side-toggle:hover {
+    .shell-codex-map .side-toggle:hover,
+    .shell-codex-map .chrome-ico:hover,
+    .shell-codex-map .chrome-ico.active {
       background: var(--sel);
       color: var(--ink);
       border-color: transparent;
@@ -2080,6 +2083,16 @@ v1 桌面壳是否坚持 Tauri 2？
         </svg>
       </button>`;
     }
+    function detailToggle() {
+      const hidden = S.detailFolded || S.termZoom === "right";
+      const label = hidden ? t("unfoldDetail") : t("foldDetail");
+      return `<button type="button" class="chrome-ico" data-act="toggle-detail" title="${esc(label)}" aria-label="${esc(label)}">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75" stroke="currentColor" stroke-width="1.25"/>
+          <path d="M9.75 2.75v10.5" stroke="currentColor" stroke-width="1.25"/>
+        </svg>
+      </button>`;
+    }
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
     function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[1]; }
     function setTheme(id) {
@@ -2101,7 +2114,8 @@ v1 桌面壳是否坚持 Tauri 2？
     }
     function settingsBtn(iconOnly) {
       const label = t("settings");
-      return `<button type="button" class="${S.settingsOpen ? "active" : ""}" data-act="settings" title="${esc(label)}" aria-label="${esc(label)}">${iconOnly ? icn("gear") : "⚙ " + esc(label)}</button>`;
+      const cls = iconOnly ? `chrome-ico${S.settingsOpen ? " active" : ""}` : (S.settingsOpen ? "active" : "");
+      return `<button type="button" class="${cls}" data-act="settings" title="${esc(label)}" aria-label="${esc(label)}">${iconOnly ? icn("gear") : "⚙ " + esc(label)}</button>`;
     }
     function setDirection(id) {
       const next = directionOf(id);
@@ -2689,9 +2703,10 @@ v1 桌面壳是否坚持 Tauri 2？
               <div class="map-chrome-lead">
                 <div class="traffic"><i></i><i></i><i></i></div>
                 ${sideToggle()}
+                ${settingsBtn(true)}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${appearanceBtn()}${settingsBtn(true)}</div>
+              <div class="map-chrome-trail">${appearanceBtn()}${empty ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -2766,7 +2781,6 @@ v1 桌面壳是否坚持 Tauri 2？
       const h = host(S.hostId);
       const p = project(S.projectId);
       const cur = S.midMode === "run" && S.ovReturn ? overviewCursor() : null;
-      const hideDetail = S.detailFolded || S.termZoom === "right";
       return `
         <div class="mid-bar">
           ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
@@ -2781,7 +2795,6 @@ v1 桌面壳是否坚持 Tauri 2？
           ` : `<span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>`}
           <span class="grow"></span>
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
-          ${hideDetail && S.viewport !== "phone" ? revealChip("toggle-detail", t("unfoldDetail"), "right") : ""}
         </div>`;
     }
 
@@ -3027,12 +3040,10 @@ v1 桌面壳是否坚持 Tauri 2？
       const blocks = i.blocking.map(issue).filter(Boolean);
       const r = issueRun(i) || RUNS.find(x => x.issueId === i.id && S.runId === x.id);
       const wideBtn = S.viewport === "phone" ? "" : foldHit("toggle-issue-wide", S.issueWide ? t("issueNarrow") : t("issueWide"), S.issueWide ? "«" : "»");
-      const foldIssueBtn = S.direction === "codex-map" && S.viewport !== "phone" ? foldHit("toggle-detail", t("foldDetail"), "›") : "";
       return `
         <article class="issue-doc">
           <header class="issue-hd">
             <div class="issue-kicker">
-              ${foldIssueBtn}
               <span>${t("issue")}</span>
               <span class="grow"></span>
               ${wideBtn}
@@ -3326,22 +3337,6 @@ v1 桌面壳是否坚持 Tauri 2？
               <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
             </div>
             <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
-            <div class="tiny">${esc(t("autoOff"))} · ${esc(t("autoAdvanceHelp"))}</div>
-            <b>${t("direction")}</b>
-            <div class="tiny">${t("directionHelp")}</div>
-            <div class="banner tiny">${t("prototypeThemeNote")}</div>
-            ${DIRECTIONS.map(direction => `
-              <button class="direction-pick ${S.direction === direction.id ? "active" : ""}" data-act="direction" data-id="${direction.id}">
-                <span>${esc(S.lang === "en" ? direction.nameEn : direction.name)}</span>
-                <span class="tiny">${direction.structureMoved ? t("structureMoved") : t("structureSame")}</span>
-              </button>
-              <div class="tiny">${esc(S.lang === "en" ? direction.noteEn : direction.note)}</div>
-            `).join("")}
-            <div class="block tiny stack">
-              <div>${t("codexBorrowed")}</div>
-              <div>${t("codexBoundary")}</div>
-              <a class="ext" href="https://openai.com/index/introducing-the-codex-app/" target="_blank" rel="noreferrer">${t("officialRef")}</a>
-            </div>
           </div>
         </div>`;
     }
