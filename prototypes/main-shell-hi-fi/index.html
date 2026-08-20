@@ -4,16 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:," />
-  <title>原型 · Tracker 刷新状态摆位</title>
+  <title>原型 · Host 用量统计页面的信息层级</title>
   <!--
-    PROTOTYPE — 一次性原型，不是产品。Issue #33：
-    「刷新倒计时、数据截至时间、离线与限流怎样进入已定主壳？」
+    PROTOTYPE — 一次性原型，不是产品。Issue #34：
+    「Host 级用量页面怎样组织信息，才能看清 token 消耗而不挤占主看板，也不把不完整的数据伪装成精确统计？」
 
-    三种摆位，共用选定的 Codex 原貌映射主壳：
-      A  顶栏脉冲：日常状态收进顶栏，异常在看板上方展开。
-      B  Project 行：状态跟着左侧当前 Project，异常才进入主区。
-      C  刷新状态栏：看板上方常驻一条完整刷新轨道。
-    ?variant=A|B|C  &refresh=normal|manual|slow|offline-cached|offline-empty|limited-until|limited-unknown|auth
+    三种结构不同的信息层级，共用选定的 Codex 原貌映射主壳。
+    刷新状态栏按 #33 已钉的 C 方案常驻，本票不再对照刷新摆位。
+      A  独立页 · 仪表盘：左侧 Host 区进「用量」，先总量再拆分再 Run。
+      B  浮层 · 先筛后看：顶栏齿轮旁打开，看板还在下面；没筛选不出 Host 总量。
+      C  总览里的账本：总览顶栏「Run | 用量」，主表面是 Run 流水。
+    ?variant=A|B|C  &usage=mixed|sparse|empty|unreachable  &mid=usage|overview|board
   -->
   <style>
     :root {
@@ -1278,6 +1279,132 @@
       white-space: pre-wrap;
       pointer-events: none;
     }
+    .usage-pane {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 16px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .usage-kpis {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .usage-kpi {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+      padding: 10px 10px 8px;
+      min-width: 0;
+    }
+    .usage-kpi .k { font-size: 11px; color: var(--muted); }
+    .usage-kpi .v { font-family: var(--mono); font-size: 18px; font-weight: 650; letter-spacing: -0.03em; margin-top: 4px; }
+    .usage-kpi.missing .v { color: var(--muted); font-weight: 500; }
+    .usage-note, .usage-caveat {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .usage-caveat {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--block) 12%, var(--paper));
+      border: 1px solid color-mix(in srgb, var(--block) 28%, var(--line));
+      color: var(--ink);
+    }
+    .usage-split { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 12px; min-height: 0; }
+    .usage-table, .usage-ledger { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .usage-table th, .usage-table td, .usage-ledger th, .usage-ledger td {
+      text-align: left;
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .usage-table th, .usage-ledger th { color: var(--muted); font-weight: 600; font-size: 11px; }
+    .usage-table tr[data-act], .usage-ledger tr[data-act] { cursor: pointer; }
+    .usage-table tr.sel, .usage-ledger tr.sel { background: var(--sel); }
+    .usage-table .num, .usage-ledger .num, .usage-kpi .v { font-variant-numeric: tabular-nums; }
+    .usage-dash { color: var(--muted); }
+    .usage-empty {
+      margin: 24px auto;
+      max-width: 420px;
+      text-align: center;
+      padding: 24px 16px;
+    }
+    .usage-empty h2 { margin: 0 0 8px; font-size: 18px; }
+    .usage-detail {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+      padding: 12px;
+    }
+    .usage-detail h3 { margin: 0 0 8px; font-size: 14px; }
+    .usage-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .usage-field .k { font-size: 11px; color: var(--muted); }
+    .usage-field .v { font-family: var(--mono); font-size: 14px; margin-top: 2px; }
+    .usage-acct {
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--ink);
+      background: var(--chip);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .usage-sheet-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(24, 24, 23, .28);
+      z-index: 18;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .usage-sheet {
+      width: min(560px, 100%);
+      height: 100%;
+      background: var(--paper);
+      border-left: 1px solid var(--line);
+      box-shadow: -16px 0 40px rgba(0,0,0,.12);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .usage-sheet-hd {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .usage-sheet-body { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .usage-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .usage-prompt {
+      padding: 28px 12px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .usage-day { margin: 14px 0 6px; font-size: 11px; color: var(--muted); font-weight: 650; }
+    .usage-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 99px;
+      border: 1px solid var(--line-strong);
+      font-size: 10px;
+      color: var(--muted);
+      background: var(--chip);
+    }
+    .phone-usage { padding: 10px 12px 20px; display: flex; flex-direction: column; gap: 10px; }
+    @media (max-width: 1100px) {
+      .usage-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .usage-split { grid-template-columns: 1fr; }
+      .usage-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     .shell-codex-map .map-mid {
       min-width: 0;
       min-height: 0;
@@ -1881,6 +2008,50 @@ v1 桌面壳是否坚持 Tauri 2？
       { id: "r6", issueId: 1, hostId: "local", projectId: "tb", agent: "Claude Code", status: "stopped", isolation: false },
       { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true }
     ];
+    const USAGE_FIELDS = [
+      ["input", "输入", "Input"],
+      ["output", "输出", "Output"],
+      ["cacheRead", "缓存读", "Cache read"],
+      ["cacheWrite", "缓存写", "Cache write"],
+      ["reasoning", "推理", "Reasoning"],
+      ["total", "合计（Agent 自报）", "Total (agent-reported)"]
+    ];
+    const AGENT_ACCT = {
+      "Grok Build": {
+        zh: "子代理计入这次 Run。压缩前后的 input 都记。cache read / write 都给。六个字段都有。",
+        en: "Sub-agents count in this Run. Input is counted before and after compaction. Cache read/write are both reported. All six fields are present."
+      },
+      "Codex": {
+        zh: "只计主会话，子代理不进这份数。没有 reasoning。cache write 经常不给。合计是 Codex 自己报的，不是我们把能看见的字段加总。",
+        en: "Main session only; sub-agents are omitted. No reasoning field. Cache write is often missing. Total is what Codex reported, not a sum of visible fields."
+      },
+      "Claude Code": {
+        zh: "子代理计入。压缩后的提示不再重复计 input。cache read / write 分开。reasoning 有时不给。",
+        en: "Sub-agents count. Compacted prompts are not counted again as input. Cache read/write are separate. Reasoning is sometimes omitted."
+      }
+    };
+    const USAGE_ROWS = [
+      { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, when: "今天 11:20", day: "今天", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true },
+      { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, when: "今天 10:04", day: "今天", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true },
+      { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, when: "今天 09:18", day: "今天", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true },
+      { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, when: "昨天 21:40", day: "昨天", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false },
+      { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, when: "昨天 16:12", day: "昨天", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false },
+      { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, when: "昨天 14:02", day: "昨天", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false },
+      { id: "u-h2", runId: "rh2", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 15, when: "3 天前", day: "更早", input: 54000, output: 9000, cacheRead: 80000, cacheWrite: null, reasoning: null, total: 143000, live: false },
+      { id: "u-h3", runId: "rh3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, when: "5 天前", day: "更早", input: 91000, output: 16000, cacheRead: 140000, cacheWrite: 9000, reasoning: 2100, total: 258100, live: false },
+      { id: "u-h4", runId: "rh4", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, when: "8 天前", day: "更早", input: 12000, output: 2200, cacheRead: null, cacheWrite: null, reasoning: null, total: 14200, live: false },
+      { id: "u-h5", runId: "rh5", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 14, when: "12 天前", day: "更早", input: 330000, output: 58000, cacheRead: 1200000, cacheWrite: 44000, reasoning: 19000, total: 1651000, live: false },
+      { id: "u-h6", runId: "rh6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 11, when: "18 天前", day: "更早", input: 47000, output: 8800, cacheRead: 62000, cacheWrite: 3000, reasoning: null, total: 120800, live: false },
+      { id: "u-h7", runId: "rh7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 8, when: "40 天前", day: "更早", input: 88000, output: 15000, cacheRead: 210000, cacheWrite: 11000, reasoning: 4000, total: 328000, live: false },
+      { id: "u-m1", runId: "rm1", hostId: "mini", projectId: "shop", agent: "Codex", model: "gpt-5", issueId: 30, when: "今天 08:40", day: "今天", input: 41000, output: 7600, cacheRead: 90000, cacheWrite: null, reasoning: null, total: 138600, live: false },
+      { id: "u-m2", runId: "rm2", hostId: "mini", projectId: "shop", agent: "Grok Build", model: "grok-4", issueId: 31, when: "昨天 19:10", day: "昨天", input: 26000, output: 5100, cacheRead: 14000, cacheWrite: 800, reasoning: 600, total: 46500, live: false }
+    ];
+    const USAGE_STATES = [
+      ["mixed", "混合口径 · 大量历史"],
+      ["sparse", "只有几次 Run"],
+      ["empty", "还没有用量"],
+      ["unreachable", "远程 Host 暂不可达"]
+    ];
     const FILES = {
       r1: [
         { repo: "agent-taskboard", path: "src/ui/IssueDetail.tsx", add: 48, del: 6, lines: [
@@ -1970,7 +2141,17 @@ v1 桌面壳是否坚持 Tauri 2？
       phone: "home",
       phoneContextOpen: false,
       autoFoldedForRun: false,
-      frontierWhy: "blocked"
+      frontierWhy: "blocked",
+      usageState: "mixed",
+      usageSheet: false,
+      usageTab: "runs",
+      usageRange: "30d",
+      usageBreak: "project",
+      usageSlice: null,
+      usageRunId: null,
+      usageFilter: { range: null, project: "all", agent: "all", model: "all" },
+      usageAcct: null,
+      usageMore: false
     };
 
     const DIRECTIONS = [
@@ -2013,6 +2194,23 @@ v1 桌面壳是否坚持 Tauri 2？
         id: "C",
         name: "刷新状态栏",
         note: "看板上方常驻完整刷新轨道，倒计时、截至时间和异常始终在同一位置。"
+      }
+    ];
+    const USAGE_VARIANTS = [
+      {
+        id: "A",
+        name: "独立页 · 仪表盘",
+        note: "入口在左侧 Host 区，和总览并列。先看这台 Host 的总量，再按 Project / Agent / 模型拆，再点进单次 Run。"
+      },
+      {
+        id: "B",
+        name: "浮层 · 先筛后看",
+        note: "入口在顶栏齿轮旁。打开浮层，看板还在下面。必须先选时间或维度，才出数字，避免甩出一个看起来很准的 Host 总量。"
+      },
+      {
+        id: "C",
+        name: "总览里的账本",
+        note: "从总览顶栏切到「用量」。主表面是按时间倒序的 Run 流水，合计钉在顶上。点一行看六个字段和这家口径。"
       }
     ];
 
@@ -2088,6 +2286,39 @@ v1 桌面壳是否坚持 Tauri 2？
         overview: "总览",
         overviewHint: "这个 Host 上的 Run，按终端状态分组。",
         backOverview: "返回总览",
+        usage: "用量",
+        usageHint: "这台 Host 上的 token，不估美元。",
+        backBoard: "返回看板",
+        usageTotal: "这一刀合计",
+        usageHostTotal: "这台 Host 合计",
+        usageByProject: "按 Project",
+        usageByAgent: "按 Agent",
+        usageByModel: "按模型",
+        usageRuns: "Run 明细",
+        usageRunTab: "Run",
+        usageNeedFilter: "先选时间范围或一个维度，才出数字。不先甩 Host 总量，避免把不同口径加在一起。",
+        usageEmpty: "这台 Host 上还没有可统计的 Run。",
+        usageEmptyHint: "开过 Run 并且 Agent 报了 token 之后，才会出现在这里。",
+        usageUnreachable: "这台 Host 暂时连不上。",
+        usageUnreachableHint: "用量跟 Host 走。连不上就不画上次数字，避免把过期统计当成当前消耗。",
+        usageSparse: "目前只有很少几次 Run。数字会跳，还看不出趋势。",
+        usageMissing: "Agent 没给这个字段。显示 —，不用 0 冒充。",
+        usageTotalHelp: "合计是 Agent 自己报的，不是我们把能看见的字段加总。缺字段时两头对不上是正常的。",
+        usageAcctTitle: "这家怎么记账",
+        usageClose: "关闭用量",
+        usageMore: "更早的 Run",
+        usageRange7: "近 7 天",
+        usageRange30: "近 30 天",
+        usageRange90: "近 90 天",
+        usageRangeAll: "全部",
+        usageAllProjects: "全部 Project",
+        usageAllAgents: "全部 Agent",
+        usageAllModels: "全部模型",
+        usageNoSlice: "点左边一行，过滤下面的 Run。",
+        usagePhoneKeep: "手机只保留合计和当前这一刀。拆分表、完整流水和单次六字段请到电脑。",
+        usageLive: "进行中，数字还会变",
+        usageFree: "未绑定 Issue",
+        usageMixedNote: "Grok / Codex / Claude 对子代理、压缩和缓存的口径不同。不要把下面的合计读成同一把尺。",
         ovOpenHint: "打开并操作",
         ovPrev: "上一条",
         ovNext: "下一条",
@@ -2251,6 +2482,39 @@ v1 桌面壳是否坚持 Tauri 2？
         overview: "Overview",
         overviewHint: "Runs on this Host, grouped by terminal state.",
         backOverview: "Back to overview",
+        usage: "Usage",
+        usageHint: "Tokens on this Host. No dollars.",
+        backBoard: "Back to board",
+        usageTotal: "This slice",
+        usageHostTotal: "This Host total",
+        usageByProject: "By Project",
+        usageByAgent: "By Agent",
+        usageByModel: "By model",
+        usageRuns: "Run details",
+        usageRunTab: "Runs",
+        usageNeedFilter: "Pick a time range or a dimension first. No Host-wide total until then, so mixed accounting is not summed by default.",
+        usageEmpty: "No countable Runs on this Host yet.",
+        usageEmptyHint: "Usage appears after a Run reports tokens.",
+        usageUnreachable: "This Host is unreachable right now.",
+        usageUnreachableHint: "Usage follows the Host. If it is down, we do not paint a stale total.",
+        usageSparse: "Only a few Runs so far. The numbers will jump.",
+        usageMissing: "The Agent did not report this field. Shown as —, never as 0.",
+        usageTotalHelp: "Total is what the Agent reported, not a sum of the visible fields. Gaps are expected.",
+        usageAcctTitle: "How this Agent counts",
+        usageClose: "Close usage",
+        usageMore: "Older Runs",
+        usageRange7: "Last 7 days",
+        usageRange30: "Last 30 days",
+        usageRange90: "Last 90 days",
+        usageRangeAll: "All",
+        usageAllProjects: "All Projects",
+        usageAllAgents: "All Agents",
+        usageAllModels: "All models",
+        usageNoSlice: "Pick a row on the left to filter Runs.",
+        usagePhoneKeep: "Phone keeps the total for the current slice. Breakdowns, the full ledger and six-field detail stay on a computer.",
+        usageLive: "Still running; numbers may change",
+        usageFree: "Unbound Issue",
+        usageMixedNote: "Grok / Codex / Claude count sub-agents, compaction and cache differently. Do not read the total as one ruler.",
         ovOpenHint: "Open and work",
         ovPrev: "Previous",
         ovNext: "Next",
@@ -2394,14 +2658,351 @@ v1 桌面壳是否坚持 Tauri 2？
     }
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
     function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[1]; }
-    function variantOf(id) { return REFRESH_VARIANTS.find(variant => variant.id === id) || REFRESH_VARIANTS[0]; }
+    function variantOf(id) { return USAGE_VARIANTS.find(variant => variant.id === id) || USAGE_VARIANTS[0]; }
     function setVariant(id) {
       S.variant = variantOf(id).id;
       S.refreshOpen = false;
+      S.usageRunId = null;
+      S.usageSlice = null;
+      S.usageAcct = null;
+      S.usageMore = false;
+      if (S.variant === "A") {
+        S.usageSheet = false;
+        S.midMode = "usage";
+        if (S.viewport === "phone") S.phone = "usage";
+      } else if (S.variant === "B") {
+        S.usageSheet = true;
+        if (S.midMode === "usage") S.midMode = "board";
+        if (S.viewport === "phone") S.phone = "usage";
+      } else {
+        S.usageSheet = false;
+        S.midMode = "overview";
+        S.usageTab = "usage";
+        if (S.viewport === "phone") S.phone = "overview";
+      }
     }
     function stepVariant(step) {
-      const index = REFRESH_VARIANTS.findIndex(variant => variant.id === S.variant);
-      setVariant(REFRESH_VARIANTS[(index + step + REFRESH_VARIANTS.length) % REFRESH_VARIANTS.length].id);
+      const index = USAGE_VARIANTS.findIndex(variant => variant.id === S.variant);
+      setVariant(USAGE_VARIANTS[(index + step + USAGE_VARIANTS.length) % USAGE_VARIANTS.length].id);
+    }
+    function fmtTok(n) {
+      if (n == null) return "—";
+      if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+      if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
+      return String(n);
+    }
+    function usageFieldLabel(key) {
+      const row = USAGE_FIELDS.find(f => f[0] === key);
+      return row ? (S.lang === "en" ? row[2] : row[1]) : key;
+    }
+    function usageDayRank(day) {
+      return day === "今天" ? 7 : day === "昨天" ? 6 : 1;
+    }
+    function usageInRange(row, range) {
+      if (!range || range === "all") return true;
+      const rank = usageDayRank(row.day);
+      if (range === "7d") return rank >= 6;
+      if (range === "30d") return rank >= 1 && row.when !== "40 天前";
+      if (range === "90d") return true;
+      return true;
+    }
+    function usageVisibleRows() {
+      if (S.usageState === "empty") return [];
+      if (S.usageState === "unreachable") return [];
+      let rows = USAGE_ROWS.filter(r => r.hostId === S.hostId);
+      if (S.usageState === "sparse") rows = rows.filter(r => r.id === "u-r1" || r.id === "u-r5" || r.id === "u-m1");
+      const range = S.variant === "B" ? S.usageFilter.range : S.usageRange;
+      rows = rows.filter(r => usageInRange(r, range));
+      if (S.variant === "A" && S.usageSlice) {
+        if (S.usageSlice.kind === "project") rows = rows.filter(r => r.projectId === S.usageSlice.id);
+        if (S.usageSlice.kind === "agent") rows = rows.filter(r => r.agent === S.usageSlice.id);
+        if (S.usageSlice.kind === "model") rows = rows.filter(r => r.model === S.usageSlice.id);
+      }
+      if (S.variant === "B") {
+        const f = S.usageFilter;
+        if (f.project && f.project !== "all") rows = rows.filter(r => r.projectId === f.project);
+        if (f.agent && f.agent !== "all") rows = rows.filter(r => r.agent === f.agent);
+        if (f.model && f.model !== "all") rows = rows.filter(r => r.model === f.model);
+      }
+      if (S.variant === "C" && S.usageSlice) {
+        if (S.usageSlice.kind === "project") rows = rows.filter(r => r.projectId === S.usageSlice.id);
+        if (S.usageSlice.kind === "agent") rows = rows.filter(r => r.agent === S.usageSlice.id);
+        if (S.usageSlice.kind === "model") rows = rows.filter(r => r.model === S.usageSlice.id);
+      }
+      return rows;
+    }
+    function usageSum(rows, key) {
+      if (!rows.length) return null;
+      if (rows.some(r => r[key] == null)) return null;
+      return rows.reduce((n, r) => n + r[key], 0);
+    }
+    function usageAgentsIn(rows) {
+      return [...new Set(rows.map(r => r.agent))];
+    }
+    function usageGroup(rows, kind) {
+      const map = new Map();
+      for (const r of rows) {
+        const id = kind === "project" ? r.projectId : kind === "agent" ? r.agent : r.model;
+        const rec = map.get(id) || { id, rows: [] };
+        rec.rows.push(r);
+        map.set(id, rec);
+      }
+      return [...map.values()].map(g => ({
+        id: g.id,
+        label: kind === "project" ? (project(g.id) ? project(g.id).name : g.id) : g.id,
+        count: g.rows.length,
+        total: usageSum(g.rows, "total"),
+        input: usageSum(g.rows, "input"),
+        output: usageSum(g.rows, "output"),
+        cacheRead: usageSum(g.rows, "cacheRead"),
+        cacheWrite: usageSum(g.rows, "cacheWrite"),
+        reasoning: usageSum(g.rows, "reasoning"),
+        missing: USAGE_FIELDS.filter(([k]) => g.rows.some(r => r[k] == null)).map(([k]) => k)
+      })).sort((a, b) => (b.total || 0) - (a.total || 0));
+    }
+    function usageRow(id) { return USAGE_ROWS.find(r => r.id === id || r.runId === id); }
+    function usageHostUnreachable() {
+      const h = host(S.hostId);
+      return S.usageState === "unreachable" || (h && !h.online);
+    }
+    function usageTokCell(n) {
+      return n == null ? `<span class="usage-dash" title="${esc(t("usageMissing"))}">—</span>` : `<span class="num">${esc(fmtTok(n))}</span>`;
+    }
+    function usageRangeBtns(current, act) {
+      const items = [
+        ["7d", t("usageRange7")],
+        ["30d", t("usageRange30")],
+        ["90d", t("usageRange90")],
+        ["all", t("usageRangeAll")]
+      ];
+      return items.map(([id, label]) => `<button data-act="${act}" data-id="${id}" class="${current === id ? "active" : ""}">${esc(label)}</button>`).join("");
+    }
+    function usageKpis(rows) {
+      return `<div class="usage-kpis">${USAGE_FIELDS.map(([k]) => {
+        const v = usageSum(rows, k);
+        return `<div class="usage-kpi ${v == null ? "missing" : ""}"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${v == null ? "—" : esc(fmtTok(v))}</div></div>`;
+      }).join("")}</div>`;
+    }
+    function usageAcctBox(agent) {
+      const rec = AGENT_ACCT[agent];
+      if (!rec) return "";
+      return `<div class="usage-acct"><b>${esc(t("usageAcctTitle"))} · ${esc(agent)}</b><div>${esc(S.lang === "en" ? rec.en : rec.zh)}</div></div>`;
+    }
+    function usageEmptyBlock() {
+      if (usageHostUnreachable()) {
+        return `<div class="usage-empty"><h2>${esc(t("usageUnreachable"))}</h2><p class="muted">${esc(t("usageUnreachableHint"))}</p></div>`;
+      }
+      return `<div class="usage-empty"><h2>${esc(t("usageEmpty"))}</h2><p class="muted">${esc(t("usageEmptyHint"))}</p></div>`;
+    }
+    function usageRunDetail(row) {
+      if (!row) return "";
+      const i = row.issueId ? issue(row.issueId) : null;
+      const p = project(row.projectId);
+      const title = i ? `#${i.id} ${shortTitle(i.title, 28)}` : t("usageFree");
+      return `<div class="usage-detail" data-usage-detail="${row.id}">
+        <h3>${esc(title)}</h3>
+        <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(row.when)}${row.live ? " · " + t("usageLive") : ""}</div>
+        <div class="usage-fields" style="margin-top:10px">${USAGE_FIELDS.map(([k]) => `
+          <div class="usage-field"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${row[k] == null ? "—" : esc(fmtTok(row[k]))}</div></div>
+        `).join("")}</div>
+        <div class="usage-note" style="margin-top:8px">${esc(t("usageTotalHelp"))}</div>
+        ${usageAcctBox(row.agent)}
+      </div>`;
+    }
+    function usageRunTable(rows, limit) {
+      const shown = limit && !S.usageMore ? rows.slice(0, limit) : rows;
+      if (!rows.length) return `<div class="tiny">${esc(t("ovEmpty"))}</div>`;
+      return `<table class="usage-table">
+        <thead><tr><th>Run</th><th>Project</th><th>Agent</th><th>合计</th><th></th></tr></thead>
+        <tbody>${shown.map(r => {
+          const i = r.issueId ? issue(r.issueId) : null;
+          const p = project(r.projectId);
+          const title = i ? `#${i.id} ${shortTitle(i.title, 18)}` : t("usageFree");
+          return `<tr data-act="usage-run" data-id="${r.id}" class="${S.usageRunId === r.id ? "sel" : ""}">
+            <td><b>${esc(title)}</b><div class="tiny">${esc(r.when)}${r.live ? " · " + t("usageLive") : ""}</div></td>
+            <td>${esc(p ? p.name : r.projectId)}</td>
+            <td>${esc(r.agent)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}" title="${esc(t("usageAcctTitle"))}">i</button></td>
+            <td>${usageTokCell(r.total)}</td>
+            <td class="tiny">${USAGE_FIELDS.filter(([k]) => r[k] == null).length ? "含 —" : ""}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>${limit && rows.length > limit && !S.usageMore ? `<button data-act="usage-more">${esc(t("usageMore"))} · ${rows.length - limit}</button>` : ""}`;
+    }
+    function usageBreakTable(kind, rows) {
+      const groups = usageGroup(rows, kind);
+      return `<table class="usage-table">
+        <thead><tr><th></th><th>Run</th><th>合计</th><th>缺的字段</th></tr></thead>
+        <tbody>${groups.map(g => `
+          <tr data-act="usage-slice" data-kind="${kind}" data-id="${esc(g.id)}" class="${S.usageSlice && S.usageSlice.kind === kind && S.usageSlice.id === g.id ? "sel" : ""}">
+            <td><b>${esc(g.label)}</b></td>
+            <td>${g.count}</td>
+            <td>${usageTokCell(g.total)}</td>
+            <td class="tiny">${g.missing.length ? g.missing.map(usageFieldLabel).join("、") : ""}</td>
+          </tr>`).join("")}</tbody>
+      </table>`;
+    }
+    function usageMixedNote(rows) {
+      const agents = usageAgentsIn(rows);
+      if (agents.length <= 1 && S.usageState !== "sparse") return `<div class="usage-note">${esc(t("usageTotalHelp"))}</div>`;
+      return `<div class="usage-caveat">${esc(S.usageState === "sparse" ? t("usageSparse") : t("usageMixedNote"))}</div>`;
+    }
+    function usagePaneA() {
+      if (usageHostUnreachable() || S.usageState === "empty") return `${paneMidBar()}<div class="usage-pane">${usageEmptyBlock()}</div>`;
+      const rows = usageVisibleRows();
+      const sliceRows = rows;
+      const run = usageRow(S.usageRunId);
+      return `
+        ${paneMidBar()}
+        <div class="usage-pane">
+          <div class="row"><b>${esc(t("usageHostTotal"))}</b><span class="grow"></span><div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div></div>
+          <div class="tiny">${esc(t("usageHint"))}</div>
+          ${usageKpis(sliceRows)}
+          ${usageMixedNote(sliceRows)}
+          <div class="row">
+            <button data-act="usage-break" data-id="project" class="${S.usageBreak === "project" ? "active" : ""}">${esc(t("usageByProject"))}</button>
+            <button data-act="usage-break" data-id="agent" class="${S.usageBreak === "agent" ? "active" : ""}">${esc(t("usageByAgent"))}</button>
+            <button data-act="usage-break" data-id="model" class="${S.usageBreak === "model" ? "active" : ""}">${esc(t("usageByModel"))}</button>
+            ${S.usageSlice ? `<button class="ghost" data-act="usage-slice-clear">${esc(t("clearFilter"))}</button>` : ""}
+          </div>
+          <div class="usage-split">
+            <div>${usageBreakTable(S.usageBreak, sliceRows)}<div class="tiny" style="margin-top:8px">${esc(t("usageNoSlice"))}</div></div>
+            <div>
+              <b>${esc(t("usageRuns"))}</b>
+              ${usageRunTable(sliceRows, 8)}
+              ${run ? usageRunDetail(run) : ""}
+              ${S.usageAcct ? usageAcctBox(S.usageAcct) : ""}
+            </div>
+          </div>
+        </div>`;
+    }
+    function usageBReady() {
+      const f = S.usageFilter;
+      return !!(f.range || (f.project && f.project !== "all") || (f.agent && f.agent !== "all") || (f.model && f.model !== "all"));
+    }
+    function usagePaneB() {
+      const plist = hostProjects();
+      const agents = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.agent))];
+      const models = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.model))];
+      if (usageHostUnreachable() || S.usageState === "empty") {
+        return `${usageEmptyBlock()}`;
+      }
+      const ready = usageBReady();
+      const rows = ready ? usageVisibleRows() : [];
+      const run = usageRow(S.usageRunId);
+      return `
+        <div class="usage-filters">
+          ${usageRangeBtns(S.usageFilter.range, "usage-b-range")}
+        </div>
+        <div class="usage-filters">
+          <button data-act="usage-b-project" data-id="all" class="${S.usageFilter.project === "all" ? "active" : ""}">${esc(t("usageAllProjects"))}</button>
+          ${plist.map(p => `<button data-act="usage-b-project" data-id="${p.id}" class="${S.usageFilter.project === p.id ? "active" : ""}">${esc(p.name)}</button>`).join("")}
+        </div>
+        <div class="usage-filters">
+          <button data-act="usage-b-agent" data-id="all" class="${S.usageFilter.agent === "all" ? "active" : ""}">${esc(t("usageAllAgents"))}</button>
+          ${agents.map(a => `<button data-act="usage-b-agent" data-id="${esc(a)}" class="${S.usageFilter.agent === a ? "active" : ""}">${esc(a)}</button>`).join("")}
+        </div>
+        <div class="usage-filters">
+          <button data-act="usage-b-model" data-id="all" class="${S.usageFilter.model === "all" ? "active" : ""}">${esc(t("usageAllModels"))}</button>
+          ${models.map(m => `<button data-act="usage-b-model" data-id="${esc(m)}" class="${S.usageFilter.model === m ? "active" : ""}">${esc(m)}</button>`).join("")}
+        </div>
+        ${!ready ? `<div class="usage-prompt">${esc(t("usageNeedFilter"))}</div>` : `
+          ${usageMixedNote(rows)}
+          ${usageKpis(rows)}
+          <div class="tiny">${esc(t("usageTotalHelp"))}</div>
+          ${usageRunTable(rows, 6)}
+          ${run ? usageRunDetail(run) : ""}
+          ${S.usageAcct ? usageAcctBox(S.usageAcct) : ""}
+        `}`;
+    }
+    function usageSheet() {
+      return `<div class="usage-sheet-backdrop" data-act="usage-close">
+        <div class="usage-sheet" data-act="usage-sheet-inner">
+          <div class="usage-sheet-hd">
+            <b>${esc(t("usage"))}</b>
+            <span class="tiny">${esc(t("usageHint"))}</span>
+            <span class="grow"></span>
+            <button data-act="usage-close" aria-label="${esc(t("usageClose"))}">×</button>
+          </div>
+          <div class="usage-sheet-body">${usagePaneB()}</div>
+        </div>
+      </div>`;
+    }
+    function usageLedger() {
+      if (usageHostUnreachable() || S.usageState === "empty") return usageEmptyBlock();
+      const rows = usageVisibleRows();
+      const shown = S.usageMore ? rows : rows.filter(r => r.day === "今天" || r.day === "昨天").concat(rows.filter(r => r.day === "更早").slice(0, 3));
+      const days = [...new Set(shown.map(r => r.day))];
+      const run = usageRow(S.usageRunId);
+      const plist = hostProjects();
+      const agents = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.agent))];
+      return `
+        <div class="row"><b>${esc(t("usageTotal"))}</b><span class="grow"></span><div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div></div>
+        ${usageKpis(rows)}
+        ${usageMixedNote(rows)}
+        <div class="usage-filters">
+          <button data-act="usage-slice" data-kind="project" data-id="all" class="${!S.usageSlice ? "active" : ""}">${esc(t("usageAllProjects"))}</button>
+          ${plist.map(p => `<button data-act="usage-slice" data-kind="project" data-id="${p.id}" class="${S.usageSlice && S.usageSlice.id === p.id ? "active" : ""}">${esc(p.name)}</button>`).join("")}
+          ${agents.map(a => `<button data-act="usage-slice" data-kind="agent" data-id="${esc(a)}" class="${S.usageSlice && S.usageSlice.id === a ? "active" : ""}">${esc(a)}</button>`).join("")}
+        </div>
+        ${days.map(d => `
+          <div class="usage-day">${esc(d)}</div>
+          <table class="usage-ledger">
+            <thead><tr><th>Run</th><th>Agent</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th></tr></thead>
+            <tbody>${shown.filter(r => r.day === d).map(r => {
+              const i = r.issueId ? issue(r.issueId) : null;
+              const title = i ? `#${i.id} ${shortTitle(i.title, 22)}` : t("usageFree");
+              const p = project(r.projectId);
+              const open = S.usageRunId === r.id;
+              return `<tr data-act="usage-run" data-id="${r.id}" class="${open ? "sel" : ""}">
+                <td><b>${esc(title)}</b><div class="tiny">${esc(p ? p.name : "")} · ${esc(r.when)}</div></td>
+                <td>${esc(r.agent)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}">i</button></td>
+                <td>${usageTokCell(r.input)}</td>
+                <td>${usageTokCell(r.output)}</td>
+                <td>${usageTokCell(r.cacheRead)}</td>
+                <td>${usageTokCell(r.total)}</td>
+              </tr>${open ? `<tr class="sel"><td colspan="6">${usageRunDetail(r)}</td></tr>` : ""}`;
+            }).join("")}</tbody>
+          </table>
+        `).join("")}
+        ${!S.usageMore && rows.length > shown.length ? `<button data-act="usage-more">${esc(t("usageMore"))}</button>` : ""}
+        ${S.usageAcct && !run ? usageAcctBox(S.usageAcct) : ""}`;
+    }
+    function usagePaneC() {
+      return `${paneMidBar()}<div class="usage-pane">${usageLedger()}</div>`;
+    }
+    function usagePhone() {
+      const keep = `<div class="banner">${esc(t("usagePhoneKeep"))}</div>`;
+      if (usageHostUnreachable() || S.usageState === "empty") return `<div class="phone-usage">${usageEmptyBlock()}${keep}</div>`;
+      if (S.variant === "B") {
+        const ready = usageBReady();
+        const rows = ready ? usageVisibleRows() : [];
+        const total = ready ? usageSum(rows, "total") : null;
+        return `<div class="phone-usage">
+          <div class="usage-filters">${usageRangeBtns(S.usageFilter.range, "usage-b-range")}</div>
+          ${!ready ? `<div class="usage-prompt">${esc(t("usageNeedFilter"))}</div>` : `<div class="usage-kpi"><div class="k">${esc(t("usageTotal"))}</div><div class="v">${total == null ? "—" : esc(fmtTok(total))}</div></div>${usageMixedNote(rows)}`}
+          ${keep}
+        </div>`;
+      }
+      const rows = usageVisibleRows();
+      const total = usageSum(rows, "total");
+      if (S.variant === "C") {
+        const last = rows.slice(0, 5);
+        return `<div class="phone-usage">
+          <div class="usage-kpi"><div class="k">${esc(t("usageRange7"))}</div><div class="v">${total == null ? "—" : esc(fmtTok(total))}</div></div>
+          ${last.map(r => {
+            const i = r.issueId ? issue(r.issueId) : null;
+            return `<div class="phone-run-card"><div class="phone-run-title">${esc(i ? "#" + i.id + " " + shortTitle(i.title, 22) : t("usageFree"))}</div><div class="phone-run-meta">${esc(r.agent)} · ${r.total == null ? "—" : fmtTok(r.total)}</div></div>`;
+          }).join("")}
+          ${keep}
+        </div>`;
+      }
+      const groups = usageGroup(rows, "project").slice(0, 3);
+      return `<div class="phone-usage">
+        <div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div>
+        <div class="usage-kpi"><div class="k">${esc(t("usageHostTotal"))}</div><div class="v">${total == null ? "—" : esc(fmtTok(total))}</div></div>
+        ${groups.map(g => `<div class="phone-run-card"><div class="phone-run-title">${esc(g.label)}</div><div class="phone-run-meta">${g.count} Run · ${g.total == null ? "—" : fmtTok(g.total)}</div></div>`).join("")}
+        ${keep}
+      </div>`;
     }
     function refreshMeta() {
       const zh = S.lang !== "en";
@@ -2529,10 +3130,7 @@ v1 桌面壳是否坚持 Tauri 2？
       </div>`;
     }
     function refreshBoardLead() {
-      if (S.variant === "C") return refreshRail();
-      if (S.variant === "A" && refreshAbnormal()) return refreshAlert();
-      if (S.variant === "B" && S.refreshState === "auth") return refreshAlert();
-      return "";
+      return refreshRail();
     }
     function refreshPopover() {
       const meta = refreshMeta();
@@ -2607,6 +3205,13 @@ v1 桌面壳是否坚持 Tauri 2？
     function overviewBtn() {
       return `<button type="button" class="${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>`;
     }
+    function usageBtn() {
+      if (S.variant === "B") {
+        return `<button type="button" class="${S.usageSheet ? "active" : ""}" data-act="usage-open">${esc(t("usage"))}</button>`;
+      }
+      if (S.variant === "C") return "";
+      return `<button type="button" class="${S.midMode === "usage" ? "active" : ""}" data-act="mid-mode" data-id="usage">${esc(t("usage"))}</button>`;
+    }
     function projAutoOf(id) {
       const cur = (id && S.projAuto[id]) || {};
       return { on: !!cur.on, coldResume: !!cur.coldResume, coldWait: cur.coldWait || 60 };
@@ -2633,12 +3238,13 @@ v1 桌面壳是否坚持 Tauri 2？
       }
     }
     function dockFolded() {
-      return !!(S.dockFolded[S.midMode] ?? (S.midMode === "graph"));
+      return !!(S.dockFolded[S.midMode] ?? (S.midMode === "graph" || S.midMode === "usage"));
     }
     function setMidMode(id) {
-      S.midMode = id === "graph" || id === "run" || id === "overview" ? id : "board";
+      S.midMode = id === "graph" || id === "run" || id === "overview" || id === "usage" ? id : "board";
       if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
       if (S.midMode !== "run") S.ovReturn = false;
+      if (S.midMode !== "usage" && S.variant !== "B") S.usageSheet = false;
       S.cam.user = false;
     }
     function restoreMidForProject(id) {
@@ -2668,8 +3274,11 @@ v1 桌面壳是否坚持 Tauri 2？
       else u.searchParams.delete("zoom");
       if (S.viewChangesOpen) u.searchParams.set("vc", "1");
       else u.searchParams.delete("vc");
-      if (S.midMode === "graph" || S.midMode === "run" || S.midMode === "overview") u.searchParams.set("mid", S.midMode);
+      if (S.midMode === "graph" || S.midMode === "run" || S.midMode === "overview" || S.midMode === "usage") u.searchParams.set("mid", S.midMode);
       else u.searchParams.delete("mid");
+      u.searchParams.set("usage", S.usageState);
+      if (S.usageSheet) u.searchParams.set("sheet", "1");
+      else u.searchParams.delete("sheet");
       if (S.issueWide) u.searchParams.set("iw", "1");
       else u.searchParams.delete("iw");
       history.replaceState({}, "", u);
@@ -2712,7 +3321,8 @@ v1 桌面壳是否坚持 Tauri 2？
     function loadQS() {
       const p = qs();
       setDirection("codex-map");
-      setVariant((p.get("variant") || "A").toUpperCase());
+      const incomingVariant = (p.get("variant") || "A").toUpperCase();
+      S.variant = variantOf(incomingVariant).id;
       const refresh = p.get("refresh");
       if (REFRESH_STATES.some(([id]) => id === refresh)) S.refreshState = refresh;
       const interval = Number(p.get("interval"));
@@ -2730,10 +3340,22 @@ v1 桌面壳是否坚持 Tauri 2？
       if (["panel", "full", "right"].includes(zoom)) S.termZoom = zoom;
       if (p.get("vc") === "1") S.viewChangesOpen = true;
       if (p.get("set") === "1") S.settingsOpen = true;
-      if (p.get("mid") === "graph" || p.get("mid") === "run" || p.get("mid") === "overview") {
-        S.midMode = p.get("mid");
-        if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
+      const usage = p.get("usage");
+      if (USAGE_STATES.some(([id]) => id === usage)) S.usageState = usage;
+      if (S.usageState === "unreachable") {
+        S.hostId = "office";
+        S.projectId = null;
+        S.issueId = null;
+        S.runId = null;
       }
+      if (p.get("mid") === "graph" || p.get("mid") === "run" || p.get("mid") === "overview" || p.get("mid") === "usage" || p.get("mid") === "board") {
+        S.midMode = p.get("mid") === "board" ? "board" : p.get("mid");
+        if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
+        if (S.variant === "B" && p.get("sheet") !== "0") S.usageSheet = true;
+      } else {
+        setVariant(S.variant);
+      }
+      if (p.get("sheet") === "1") S.usageSheet = true;
       if (p.get("iw") === "1") S.issueWide = true;
     }
 
@@ -3122,16 +3744,16 @@ v1 桌面壳是否坚持 Tauri 2？
     function renderSwitcher() {
       const cur = variantOf(S.variant);
       return `
-        <button data-act="prev" title="上一个摆位方案">←</button>
-        <div class="direction-toggle" aria-label="刷新信息摆位方案">
-          ${REFRESH_VARIANTS.map(variant => `<button data-act="refresh-variant" data-id="${variant.id}" class="${S.variant === variant.id ? "active" : ""}" title="${esc(variant.name)}">${S.viewport === "phone" ? variant.id : `${variant.id} · ${esc(variant.name)}`}</button>`).join("")}
+        <button data-act="prev" title="上一个用量方案">←</button>
+        <div class="direction-toggle" aria-label="用量信息层级">
+          ${USAGE_VARIANTS.map(variant => `<button data-act="refresh-variant" data-id="${variant.id}" class="${S.variant === variant.id ? "active" : ""}" title="${esc(variant.name)}">${S.viewport === "phone" ? variant.id : `${variant.id} · ${esc(variant.name)}`}</button>`).join("")}
         </div>
         <div class="lab">${esc(cur.note)}</div>
-        <button data-act="next" title="下一个摆位方案">→</button>
+        <button data-act="next" title="下一个用量方案">→</button>
         <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
         <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
-        <select data-act="refresh-state" aria-label="刷新状态">
-          ${REFRESH_STATES.map(([id, label]) => `<option value="${id}" ${S.refreshState === id ? "selected" : ""}>${esc(label)}</option>`).join("")}
+        <select data-act="usage-state" aria-label="用量边界状态">
+          ${USAGE_STATES.map(([id, label]) => `<option value="${id}" ${S.usageState === id ? "selected" : ""}>${esc(label)}</option>`).join("")}
         </select>`;
     }
     function renderInspector() {
@@ -3140,10 +3762,10 @@ v1 桌面壳是否坚持 Tauri 2？
       const i = issue(S.issueId);
       const r = run(S.runId);
       const lines = [
-        `刷新摆位 ${S.variant} · ${variantOf(S.variant).name}`,
-        `刷新状态 ${S.refreshState} · 间隔 ${S.refreshInterval} 秒`,
+        `用量层级 ${S.variant} · ${variantOf(S.variant).name}`,
+        `用量边界 ${S.usageState} · 浮层 ${S.usageSheet ? "开" : "关"}`,
         `主壳：Codex 原貌映射 · 主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
-        `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "Run 终端" : S.midMode === "overview" ? "总览" : "看板"}`,
+        `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "Run 终端" : S.midMode === "overview" ? "总览" : S.midMode === "usage" ? "用量" : "看板"}`,
         `终端: ${S.termTheme}`,
         `底栏: ${dockFolded() ? "折起" : "拉开"}`,
         `Host: ${h ? h.name : "（无）"}`,
@@ -3215,13 +3837,18 @@ v1 桌面壳是否坚持 Tauri 2？
     /* Codex 原貌映射：左侧原生栏 + 白主区。中间看板/图，底栏占自己的高度。 */
     function renderMap() {
       const r = run(S.runId);
-      const empty = S.scenario === "unpaired" ? "unpaired" : !S.projectId ? "noproject" : null;
+      const usageOpen = S.midMode === "usage" || S.usageSheet || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") || S.usageState === "unreachable";
+      const empty = S.scenario === "unpaired" ? "unpaired" : (!S.projectId && !usageOpen) ? "noproject" : null;
       const live = selectedLiveRun() || r;
       const noSnapshot = !refreshMeta().hasSnapshot;
       const fillRight = S.termZoom === "right";
-      const hideDetail = S.detailFolded || fillRight || noSnapshot;
+      const hideDetail = S.detailFolded || fillRight || noSnapshot || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage");
       const termOnRight = fillRight && S.midMode !== "run" && live && !noSnapshot;
-      const mid = S.midMode === "graph" ? graphPane() : S.midMode === "run" ? runPane(live) : S.midMode === "overview" ? overviewPane() : board();
+      const mid = S.midMode === "graph" ? graphPane()
+        : S.midMode === "run" ? runPane(live)
+        : S.midMode === "overview" ? (S.variant === "C" && S.usageTab === "usage" ? usagePaneC() : overviewPane())
+        : S.midMode === "usage" ? usagePaneA()
+        : board();
       return `
         <div class="stage">
           <div class="map-frame ${S.sideFolded ? "side-folded" : ""}">
@@ -3230,9 +3857,10 @@ v1 桌面壳是否坚持 Tauri 2？
                 <div class="traffic"><i></i><i></i><i></i></div>
                 ${sideToggle()}
                 ${settingsBtn(true)}
+                ${S.variant === "B" && !empty ? usageBtn() : ""}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${empty ? "" : overviewBtn()}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${empty ? "" : `${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -3245,6 +3873,7 @@ v1 桌面壳是否坚持 Tauri 2？
                   </div>
                   ${noSnapshot ? "" : bottomDock(live)}
                 `}
+                ${S.variant === "B" && S.usageSheet && !empty ? usageSheet() : ""}
               </div>
             </div>
           </div>
@@ -3270,6 +3899,8 @@ v1 桌面壳是否坚持 Tauri 2？
                 </button>`).join("") || `<div class="ms-nested">${esc(t("unpairedTitle"))}</div>`}
               <button class="ms-item" data-act="pair">+ ${esc(t("pair"))}</button>
               <button class="ms-item ${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>
+              ${S.variant === "A" ? `<button class="ms-item ${S.midMode === "usage" ? "active" : ""}" data-act="mid-mode" data-id="usage">${esc(t("usage"))}</button>` : ""}
+              ${S.variant === "B" ? `<button class="ms-item ${S.usageSheet ? "active" : ""}" data-act="usage-open">${esc(t("usage"))}</button>` : ""}
             </div>
             <div class="ms-group">
               <div class="ms-group-name">${esc(t("thisHostProjects"))}</div>
@@ -3321,13 +3952,19 @@ v1 桌面壳是否坚持 Tauri 2？
               <span class="tiny">${cur.idx + 1} / ${cur.list.length}</span>
               <button class="ov-step" data-act="ov-step" data-id="next" ${cur.next ? "" : "disabled"}>${esc(t("ovNext"))}</button>
             ` : `<span class="tiny">${esc(t("runFocusHint"))}</span>`}
+          ` : S.midMode === "usage" ? `
+            <button class="nav-back" data-act="mid-mode" data-id="board">← ${esc(t("backBoard"))}</button>
+            <span class="tiny">${esc(t("usageHint"))}</span>
+          ` : S.midMode === "overview" && S.variant === "C" ? `
+            <button data-act="usage-tab" data-id="runs" class="${S.usageTab !== "usage" ? "active" : ""}">${esc(t("usageRunTab"))}</button>
+            <button data-act="usage-tab" data-id="usage" class="${S.usageTab === "usage" ? "active" : ""}">${esc(t("usage"))}</button>
+            <span class="tiny">${esc(S.usageTab === "usage" ? t("usageHint") : t("overviewHint"))}</span>
           ` : `
             <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
             <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
             <span class="tiny">${esc(S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>
           `}
           <span class="grow"></span>
-          ${(S.midMode === "board" || S.midMode === "graph") && (S.variant === "A" || (S.variant === "B" && S.sideFolded)) && S.projectId ? refreshCompact() : ""}
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
         </div>`;
     }
@@ -3951,11 +4588,11 @@ v1 桌面壳是否坚持 Tauri 2？
           </div>
         </div>${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}${S.settingsOpen ? settingsSheet() : ""}</div>`;
       }
-      const tab = S.phone === "issue" || S.phone === "run" || S.phone === "overview" ? S.phone : "home";
-      const body = tab === "issue" ? phoneIssue() : tab === "run" ? phoneRun() : tab === "overview" ? phoneOverview() : phoneHome();
+      const tab = S.phone === "issue" || S.phone === "run" || S.phone === "overview" || S.phone === "usage" ? S.phone : "home";
+      const body = tab === "issue" ? phoneIssue() : tab === "run" ? phoneRun() : tab === "overview" ? phoneOverview() : tab === "usage" ? usagePhone() : phoneHome();
       const h = host(S.hostId);
       const p = project(S.projectId);
-      const tabLabel = tab === "issue" ? "Issue" : tab === "run" ? "Run" : S.lang === "en" ? "Run overview" : "Run 总览";
+      const tabLabel = tab === "issue" ? "Issue" : tab === "run" ? "Run" : tab === "usage" ? t("usage") : S.lang === "en" ? "Run overview" : "Run 总览";
       return `
         <div class="phone-stage">
           <div class="phone">
@@ -4050,10 +4687,10 @@ v1 桌面壳是否坚持 Tauri 2？
       }
       return `
         ${S.phoneContextOpen ? phoneContextPanel() : ""}
-        ${S.variant === "B" ? refreshPhoneProjectRow() : ""}
-        ${S.variant === "C" ? refreshPhoneCard() : ""}
+        ${refreshPhoneCard()}
         <div class="phone-home-actions">
           <button data-act="mid-mode" data-id="overview">${S.lang === "en" ? "Run overview" : "Run 总览"}</button>
+          <button data-act="${S.variant === "C" ? "usage-tab" : S.variant === "B" ? "usage-open" : "mid-mode"}" data-id="${S.variant === "A" ? "usage" : "usage"}">${esc(t("usage"))}</button>
           <button data-act="refresh-toggle">${S.lang === "en" ? "Refresh details" : "刷新详情"}</button>
         </div>
         ${!refreshMeta().hasSnapshot ? refreshEmptyState() : `
@@ -4070,6 +4707,9 @@ v1 桌面壳是否坚持 Tauri 2？
         `}`;
     }
     function phoneOverview() {
+      if (S.variant === "C" && S.usageTab === "usage") {
+        return `<div class="pad"><button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回看板"}</button></div>${usagePhone()}`;
+      }
       return `<div class="pad"><button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回看板"}</button></div>${overviewPane()}`;
     }
     function phoneIssue() {
@@ -4121,6 +4761,23 @@ v1 桌面壳是否坚持 Tauri 2？
         if (e.target.dataset.act === "refresh-state") {
           S.refreshState = e.target.value;
           S.refreshOpen = false;
+          render();
+        }
+        if (e.target.dataset.act === "usage-state") {
+          S.usageState = e.target.value;
+          S.usageRunId = null;
+          S.usageSlice = null;
+          if (S.usageState === "unreachable") {
+            S.hostId = "office";
+            S.projectId = null;
+            S.issueId = null;
+            S.runId = null;
+          } else if (!host(S.hostId) || S.hostId === "office") {
+            S.hostId = "local";
+            S.projectId = "tb";
+            S.issueId = 50;
+            S.runId = "r1";
+          }
           render();
         }
       };
@@ -4235,7 +4892,8 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (act === "phone") {
           S.phone = id;
-          if (id === "home" && S.midMode === "overview") setMidMode("board");
+          if (id === "home" && (S.midMode === "overview" || S.midMode === "usage")) setMidMode("board");
+          if (id === "home") S.usageSheet = false;
           render();
         }
         if (act === "settings") { S.settingsOpen = !S.settingsOpen; S.allRunsOpen = false; render(); }
@@ -4264,10 +4922,42 @@ v1 桌面壳是否坚持 Tauri 2？
           render();
         }
         if (act === "mid-mode") {
-          if (id === "overview") S.termZoom = null;
+          if (id === "overview") { S.termZoom = null; if (S.variant === "C") S.usageTab = "runs"; }
           if (id === "board" && S.midMode === "run" && !S.ovReturn) restoreFromRun();
           else setMidMode(id);
-          if (S.viewport === "phone") S.phone = id === "overview" ? "overview" : "home";
+          if (S.viewport === "phone") S.phone = id === "overview" ? "overview" : id === "usage" ? "usage" : "home";
+          render();
+        }
+        if (act === "usage-open") {
+          S.usageSheet = true;
+          if (S.viewport === "phone") S.phone = "usage";
+          render();
+        }
+        if (act === "usage-close") {
+          S.usageSheet = false;
+          if (S.viewport === "phone" && S.phone === "usage") S.phone = "home";
+          render();
+        }
+        if (act === "usage-sheet-inner") return;
+        if (act === "usage-range") { S.usageRange = id; S.usageRunId = null; render(); }
+        if (act === "usage-b-range") { S.usageFilter.range = id; S.usageRunId = null; render(); }
+        if (act === "usage-b-project") { S.usageFilter.project = id; S.usageRunId = null; render(); }
+        if (act === "usage-b-agent") { S.usageFilter.agent = id; S.usageRunId = null; render(); }
+        if (act === "usage-b-model") { S.usageFilter.model = id; S.usageRunId = null; render(); }
+        if (act === "usage-break") { S.usageBreak = id; S.usageSlice = null; render(); }
+        if (act === "usage-slice") {
+          S.usageSlice = !id || id === "all" ? null : { kind: b.dataset.kind || "project", id };
+          S.usageRunId = null;
+          render();
+        }
+        if (act === "usage-slice-clear") { S.usageSlice = null; render(); }
+        if (act === "usage-run") { S.usageRunId = S.usageRunId === id ? null : id; render(); }
+        if (act === "usage-acct") { S.usageAcct = S.usageAcct === id ? null : id; render(); }
+        if (act === "usage-more") { S.usageMore = true; render(); }
+        if (act === "usage-tab") {
+          S.usageTab = id;
+          S.midMode = "overview";
+          if (S.viewport === "phone") S.phone = "overview";
           render();
         }
         if (act === "ov-run") {
@@ -4430,6 +5120,11 @@ v1 桌面壳是否坚持 Tauri 2？
     document.addEventListener("keydown", (e) => {
       const el = e.target;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.key === "Escape" && S.usageSheet) {
+        S.usageSheet = false;
+        render();
+        return;
+      }
       if (e.key === "Escape" && S.termZoom && S.termZoom !== "full") {
         setTermZoom(null);
         return;

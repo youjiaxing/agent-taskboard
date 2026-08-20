@@ -6,32 +6,26 @@ async function open(page, params = "") {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily${params}`);
 }
 
-async function setRefresh(page, state) {
-  await page.locator('select[data-act="refresh-state"]').selectOption(state);
-}
-
-test("三种摆位在同一主壳切换，URL 与键盘稳定", async ({ page }) => {
-  await open(page, "&variant=A&refresh=normal");
+test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
+  await open(page, "&variant=A");
 
   await expect(page.locator(".map-side")).toBeVisible();
-  await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".mid-bar .refresh-compact")).toBeVisible();
-  await expect(page.locator('[data-refresh-placement="alert"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "用量", exact: true }).first()).toBeVisible();
+  await expect(page.locator(".usage-pane")).toBeVisible();
+  await expect(page.locator(".usage-kpi .v").first()).not.toHaveText(/^$/);
   await expect(page).toHaveURL(/variant=A/);
+  await expect(page).toHaveURL(/mid=usage/);
 
-  await page.getByRole("button", { name: /B · Project 行/ }).click();
+  await page.getByRole("button", { name: /B · 浮层/ }).click();
   await expect(page).toHaveURL(/variant=B/);
-  await expect(page.locator(".map-side .refresh-project-row")).toBeVisible();
-  await expect(page.locator(".mid-bar .refresh-compact")).toHaveCount(0);
+  await expect(page.locator(".lanes")).toBeVisible();
+  await expect(page.locator(".usage-sheet")).toBeVisible();
+  await expect(page.locator(".usage-prompt")).toContainText("先选时间范围");
 
-  await page.locator('.map-chrome [data-act="toggle-side"]').click();
-  await expect(page.locator(".map-side")).toHaveCount(0);
-  await expect(page.locator(".mid-bar .refresh-compact")).toBeVisible();
-
-  await page.getByRole("button", { name: /C · 刷新状态栏/ }).click();
+  await page.getByRole("button", { name: /C · 总览里的账本/ }).click();
   await expect(page).toHaveURL(/variant=C/);
-  await expect(page.locator('[data-refresh-placement="rail"]')).toBeVisible();
-  await expect(page.locator(".mid-bar .refresh-compact")).toHaveCount(0);
+  await expect(page.locator(".usage-pane")).toBeVisible();
+  await expect(page.locator(".usage-ledger").first()).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/variant=A/);
@@ -39,189 +33,83 @@ test("三种摆位在同一主壳切换，URL 与键盘稳定", async ({ page })
   await expect(page).toHaveURL(/variant=C/);
 });
 
-test("正常轮询可手动刷新，完成后按设置间隔重新倒计时", async ({ page }) => {
-  await open(page, "&variant=A&refresh=normal");
+test("A：从左侧进入，返回看板，下钻 Project 并打开 Run 明细；缺字段是 —", async ({ page }) => {
+  await open(page, "&variant=A&mid=board");
 
-  await page.locator(".mid-bar .refresh-compact").click();
-  const details = page.getByRole("dialog", { name: "Tracker 刷新详情" });
-  await expect(details).toContainText("42 秒后自动刷新");
-  await expect(details).toContainText("数据截至 今天 14:32");
-  await details.getByRole("button", { name: "刷新设置" }).click();
-
-  const interval = page.getByRole("combobox", { name: "Tracker 刷新间隔" });
-  await expect(interval).toHaveValue("60");
-  await interval.selectOption("120");
-  await expect(page).toHaveURL(/interval=120/);
-  await page.locator(".settings-modal").getByRole("button", { name: "×" }).click();
-
-  await page.locator(".mid-bar .refresh-compact").click();
-  await page.getByRole("dialog", { name: "Tracker 刷新详情" }).getByRole("button", { name: "立即刷新" }).click();
-  await expect(page.locator(".mid-bar .refresh-compact")).toContainText("正在刷新");
   await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".dock")).toBeVisible();
+  await page.locator('.map-side [data-act="mid-mode"][data-id="usage"]').click();
+  await expect(page.locator(".usage-pane")).toBeVisible();
+  await expect(page.getByText("这台 Host 合计")).toBeVisible();
 
-  await expect(page.locator(".mid-bar .refresh-compact")).toContainText("120 秒", { timeout: 3000 });
-});
+  await page.getByRole("button", { name: "按 Agent" }).click();
+  await page.locator('.usage-table tr[data-kind="agent"][data-id="Codex"]').click();
+  await expect(page.locator(".usage-table tr.sel")).toContainText("Codex");
 
-test("慢刷新继续画上次数据，不重复出现刷新按钮", async ({ page }) => {
-  await open(page, "&variant=C&refresh=slow");
+  await expect(page.locator(".usage-kpi.missing .v").first()).toHaveText("—");
 
-  const rail = page.locator('[data-refresh-placement="rail"]');
-  await expect(rail).toContainText("刷新还在继续");
-  await expect(rail).toContainText("已等待 18 秒");
-  await expect(rail.getByRole("button", { name: "立即刷新" })).toHaveCount(0);
+  await page.locator('.usage-table tr[data-act="usage-run"]').first().click();
+  await expect(page.locator("[data-usage-detail]")).toBeVisible();
+  await expect(page.locator("[data-usage-detail]")).toContainText("这家怎么记账");
+  await expect(page.locator("[data-usage-detail]")).toContainText("合计是 Agent 自己报的");
+
+  await page.getByRole("button", { name: "返回看板" }).click();
   await expect(page.locator(".lanes")).toBeVisible();
+  await expect(page.locator(".usage-pane")).toHaveCount(0);
 });
 
-test("离线但有上次数据：四列保留，Tracker 写动作暂停，已有 Run 仍可打开", async ({ page }) => {
-  await open(page, "&variant=A&refresh=offline-cached");
+test("B：浮层不拆掉看板，关掉回到原工作面；没筛选不出总量", async ({ page }) => {
+  await open(page, "&variant=B&mid=board");
 
-  const alert = page.locator('[data-refresh-placement="alert"]');
-  await expect(alert).toContainText("Project 离线");
-  await expect(alert).toContainText("截至 今天 14:32");
   await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.getByText(/认领、放领和自动推进暂停/)).toBeVisible();
+  await expect(page.locator(".usage-sheet")).toBeVisible();
+  await expect(page.locator(".usage-prompt")).toContainText("先选时间范围");
+  await expect(page.locator(".usage-kpis")).toHaveCount(0);
 
-  await page.locator('[data-act="issue"][data-id="24"]').first().click();
-  await expect(page.locator(".run-stage")).toHaveCount(0);
-  await expect(page.locator('[data-act="fake-start"]:disabled').first()).toBeVisible();
-  await expect(page.locator('[data-act="fake-claim"]:disabled').first()).toBeVisible();
+  await page.getByRole("button", { name: "近 7 天" }).click();
+  await expect(page.locator(".usage-kpis")).toBeVisible();
+  await expect(page.locator(".usage-caveat, .usage-note").first()).toBeVisible();
 
-  await page.locator('.lanes [data-act="issue"][data-id="50"]').click();
-  await expect(page.locator(".run-stage")).toBeVisible();
-  await expect(page.locator(".term")).toBeVisible();
-  await expect(page.locator(".map-side")).toHaveCount(0);
-  await expect(page.locator(".map-detail-col")).toBeVisible();
-  await expect(page.locator(".issue-title")).toHaveText("#50 实现：详情挡住名单");
-  await page.getByRole("button", { name: /返回看板/ }).click();
+  await page.locator(".usage-sheet-hd [data-act='usage-close']").click();
+  await expect(page.locator(".usage-sheet")).toHaveCount(0);
   await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".map-side")).toBeVisible();
+
+  await page.locator('.map-chrome-lead [data-act="usage-open"]').click();
+  await expect(page.locator(".usage-sheet")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".usage-sheet")).toHaveCount(0);
 });
 
-test("离线且没有上次数据：看板、依赖图、Issue 和底栏都不伪造数据", async ({ page }) => {
-  await open(page, "&variant=C&refresh=offline-empty");
+test("C：总览切到用量账本，点一行看六个字段", async ({ page }) => {
+  await open(page, "&variant=C");
 
-  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的数据");
-  await expect(page.locator(".lanes")).toHaveCount(0);
-  await expect(page.locator(".map-detail-col")).toHaveCount(0);
-  await expect(page.locator(".dock")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "依赖图", exact: true }).click();
-  await expect(page.locator('[data-refresh-empty="true"]')).toBeVisible();
-  await expect(page.locator(".graph-canvas")).toHaveCount(0);
-});
-
-test("限流有恢复时间和无恢复时间分开，均允许手动试一次", async ({ page }) => {
-  await open(page, "&variant=C&refresh=limited-until");
-  let rail = page.locator('[data-refresh-placement="rail"]');
-  await expect(rail).toContainText("约 15:10 恢复");
-  await expect(rail.getByRole("button", { name: "立即刷新" })).toBeVisible();
-
-  await setRefresh(page, "limited-unknown");
-  rail = page.locator('[data-refresh-placement="rail"]');
-  await expect(rail).toContainText("未给恢复时间");
-  await rail.getByRole("button", { name: "立即刷新" }).click();
-  await expect(page.locator('[data-refresh-placement="rail"]')).toContainText("正在刷新");
-  await expect(page.locator(".lanes")).toBeVisible();
-});
-
-test("鉴权失败与离线、限流使用不同文案和处理入口", async ({ page }) => {
-  await open(page, "&variant=B&refresh=auth");
-
-  await expect(page.locator(".refresh-project-row")).toContainText("GitHub 鉴权失败");
-  const alert = page.locator('[data-refresh-placement="alert"]');
-  await expect(alert).toContainText("更新这个 Project 的凭据");
-  await expect(alert.getByRole("button", { name: "Project 设置" })).toBeVisible();
-  await expect(alert.getByRole("button", { name: "立即刷新" })).toHaveCount(0);
-  await alert.getByRole("button", { name: "Project 设置" }).click();
-  await expect(page.locator(".settings-modal")).toBeVisible();
-});
-
-test("看板与依赖图共享 Project 刷新状态；Host 总览和 Run 不误挂 Project 状态", async ({ page }) => {
-  await open(page, "&variant=C&refresh=offline-cached");
-  await expect(page.locator('[data-refresh-placement="rail"]')).toBeVisible();
-
-  await page.getByRole("button", { name: "依赖图", exact: true }).click();
-  await expect(page.locator(".graph-canvas")).toBeVisible();
-  await expect(page.locator('[data-refresh-placement="rail"]')).toContainText("Project 离线");
-  await page.locator('[data-act="graph-node"][data-id="51"]').click();
-  await expect(page.locator(".graph-canvas")).toBeVisible();
-  await expect(page.locator(".run-stage")).toHaveCount(0);
-  await expect(page.locator(".issue-title")).toHaveText("#51 实现：依赖图");
-
-  await page.getByRole("button", { name: "总览", exact: true }).first().click();
-  await expect(page.locator(".ov")).toBeVisible();
-  await expect(page.locator('[data-refresh-placement="rail"]')).toHaveCount(0);
-
-  await page.locator('[data-act="ov-run"]').first().click();
-  await expect(page.locator(".run-stage")).toBeVisible();
-  await expect(page.locator('[data-refresh-placement="rail"]')).toHaveCount(0);
-});
-
-test("390px 手机：三个摆位都可读，离线空状态不画真实 Issue", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-
-  await open(page, "&viewport=phone&variant=A&refresh=offline-cached");
-  await expect(page.locator(".phone-bar .refresh-compact")).toContainText("离线 · 截至 14:32");
-  await page.locator(".phone-bar .refresh-compact").click();
-  await expect(page.getByRole("dialog", { name: "Tracker 刷新详情" })).toBeVisible();
-  await page.getByRole("dialog", { name: "Tracker 刷新详情" }).getByRole("button", { name: "关闭" }).click();
-
-  await page.getByRole("button", { name: "B", exact: true }).click();
-  await expect(page.locator('[data-refresh-placement="phone-project"]')).toContainText("离线 · 截至 14:32");
-
-  await page.getByRole("button", { name: "C", exact: true }).click();
-  await setRefresh(page, "limited-until");
-  await expect(page.locator('[data-refresh-placement="phone-card"]')).toContainText("约 15:10 恢复");
-
-  await setRefresh(page, "offline-empty");
-  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的数据");
-  await expect(page.locator(".phone-body .issue-card")).toHaveCount(0);
-});
-
-test("390px 手机默认突出当前 Project、刷新状态、进行中和 Frontier", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await open(page, "&viewport=phone&variant=C&refresh=normal");
-
-  await expect(page.locator(".phone-current-copy")).toContainText("agent-taskboard");
-  await expect(page.locator(".phone-current-copy")).toContainText("本机 · MacBook · GitHub");
-  await expect(page.locator('[data-refresh-placement="phone-card"]')).toBeVisible();
-  await expect(page.locator(".phone-board-section.running")).toBeVisible();
-  await expect(page.locator(".phone-board-section").filter({ hasText: "Frontier" })).toBeVisible();
-  await expect(page.locator(".phone-run-card")).toHaveCount(3);
-  await expect(page.getByRole("button", { name: "书房 Mini" })).toHaveCount(0);
-
-  const runningBox = await page.locator(".phone-board-section.running").boundingBox();
-  const frontierBox = await page.locator(".phone-board-section").filter({ hasText: "Frontier" }).boundingBox();
-  expect(runningBox.y).toBeLessThan(frontierBox.y);
-
-  await page.getByRole("button", { name: "切换", exact: true }).click();
-  await expect(page.getByRole("button", { name: "书房 Mini" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "garden-notes", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "收起", exact: true }).click();
-  await expect(page.getByRole("button", { name: "书房 Mini" })).toHaveCount(0);
-
-  await page.locator('.phone-run-actions [data-act="focus-run"][data-id="r1"]').click();
-  await expect(page.locator(".phone-tabbar").getByRole("button", { name: "Run", exact: true })).toHaveClass(/active/);
-  await expect(page.locator(".term")).toBeVisible();
-});
-
-test("390px 手机周边流程：切 Host、读 Issue、打开和停止已有 Run", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await open(page, "&viewport=phone&variant=A&refresh=normal");
-
-  await page.getByRole("button", { name: "切换", exact: true }).click();
-  await page.getByRole("button", { name: "书房 Mini" }).click();
-  await expect(page.locator(".phone-current-copy")).toContainText("shop-api");
-  await page.locator('.phone-run-main[data-id="30"]').click();
-  await expect(page.locator(".issue-body")).toContainText("支付回调超过 8 秒");
-
+  await expect(page.locator('.mid-bar [data-act="usage-tab"][data-id="usage"]')).toHaveClass(/active/);
   await page.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.locator(".term")).toBeVisible();
-  await page.locator('[data-act="fake-continue"]').click();
-  await page.locator('[data-act="ask-stop"]').click();
-  await expect(page.locator('[data-act="stop-soft"]')).toBeVisible();
-  await page.locator('[data-act="stop-soft"]').click();
-  await expect(page.locator(".term")).toContainText("认领还在");
-  await expect(page.locator('[data-act="fake-continue"]')).toBeVisible();
+  await expect(page.locator(".ov")).toBeVisible();
+
+  await page.locator('.mid-bar [data-act="usage-tab"][data-id="usage"]').click();
+  await expect(page.locator(".usage-ledger").first()).toBeVisible();
+  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
+  await expect(page.locator("[data-usage-detail]")).toBeVisible();
+  await expect(page.locator("[data-usage-detail]")).toContainText("输入");
+  await expect(page.locator("[data-usage-detail]")).toContainText("合计（Agent 自报）");
+});
+
+test("空数据和远程 Host 不可达不画假数字", async ({ page }) => {
+  await open(page, "&variant=A&usage=empty");
+  await expect(page.locator(".usage-empty")).toContainText("还没有可统计的 Run");
+  await expect(page.locator(".usage-kpis")).toHaveCount(0);
+
+  await page.locator('select[data-act="usage-state"]').selectOption("unreachable");
+  await expect(page.locator(".usage-empty")).toContainText("暂时连不上");
+  await expect(page.getByText("不画上次数字")).toBeVisible();
+});
+
+test("手机只留合计，丢掉拆分表和六字段明细", async ({ page }) => {
+  await open(page, "&variant=A&viewport=phone");
+
+  await expect(page.locator(".phone")).toBeVisible();
+  await expect(page.locator(".phone-usage")).toBeVisible();
+  await expect(page.locator(".phone-usage")).toContainText("手机只保留合计");
+  await expect(page.locator(".usage-split")).toHaveCount(0);
+  await expect(page.locator("[data-usage-detail]")).toHaveCount(0);
 });

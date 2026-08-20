@@ -1,9 +1,9 @@
 #!/bin/sh
-# 一次性原型：三方向对照。浏览器打开后用底栏或 ← → 切换。
-#   ?direction=codex-map  Codex 原貌映射（动了结构）
-#   ?direction=codex      Codex 气质（结构未改）
-#   ?direction=paper      纸面精修（结构未改）
-#   ?mid=graph            打开依赖图
+# 一次性原型：Host 用量页三种信息层级。浏览器打开后用底栏或 ← → 切换。
+#   ?variant=A            独立页 · 仪表盘
+#   ?variant=B            浮层 · 先筛后看
+#   ?variant=C            总览里的账本
+#   ?usage=mixed|sparse|empty|unreachable
 cd "$(dirname "$0")"
 PORT="${PORT:-8767}"
 echo "http://127.0.0.1:${PORT}/?direction=codex-map"
