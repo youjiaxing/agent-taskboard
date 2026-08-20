@@ -1470,6 +1470,188 @@
       .usage-split { grid-template-columns: 1fr; }
       .usage-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
+    /* Run 侧多模型用量与通路遥测 */
+    .run-telemetry-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      flex-wrap: wrap;
+    }
+    .telemetry-capsule {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      font-size: 11px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .telemetry-capsule:hover { border-color: var(--line-strong); }
+    .telemetry-capsule.sel { background: var(--sel); border-color: var(--accent); }
+    .role-badge {
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .role-badge.main { background: color-mix(in srgb, var(--run) 16%, var(--card)); color: var(--run); }
+    .role-badge.subagent { background: color-mix(in srgb, var(--accent) 16%, var(--card)); color: var(--accent-ink); }
+    .role-badge.history { background: var(--chip); color: var(--muted); text-decoration: line-through; }
+    .telemetry-model-name { font-family: var(--mono); font-weight: 650; font-size: 11px; }
+    .telemetry-metric { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .telemetry-speed-tag {
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .telemetry-speed-tag.ok { background: #edf7ee; color: #237804; }
+    .telemetry-speed-tag.slow { background: #fff1f0; color: #cf1322; font-weight: 700; border: 1px solid #ffa39e; }
+    .telemetry-panel {
+      padding: 10px 12px;
+      background: var(--paper);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .telemetry-panel-hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .telemetry-panel-hd h4 { margin: 0; font-size: 12px; font-weight: 650; }
+    .telemetry-tracks {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .track-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      padding: 9px 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .track-card.history-card {
+      opacity: 0.82;
+      background: var(--paper-2);
+      border-style: dashed;
+    }
+    .track-card-hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .track-fields {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px 6px;
+      font-size: 10.5px;
+      background: var(--paper-2);
+      padding: 6px 8px;
+      border-radius: 6px;
+    }
+    .track-field .k { color: var(--muted); font-size: 10px; }
+    .track-field .v { font-family: var(--mono); font-size: 12px; font-weight: 600; margin-top: 1px; }
+    .track-sparkline-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .track-sparkline-hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .track-sparkline {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 28px;
+      padding: 3px 4px;
+      background: var(--paper-2);
+      border-radius: 4px;
+      border: 1px solid var(--line);
+    }
+    .spark-bar {
+      flex: 1;
+      min-width: 5px;
+      background: #52c41a;
+      border-radius: 2px 2px 0 0;
+      cursor: pointer;
+      position: relative;
+    }
+    .spark-bar.slow {
+      background: #f5222d;
+    }
+    .spark-bar:hover {
+      opacity: 0.8;
+      filter: brightness(1.1);
+    }
+    .telemetry-jitter-banner {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--stop) 10%, var(--paper));
+      border: 1px solid color-mix(in srgb, var(--stop) 30%, var(--line));
+      color: var(--stop);
+      font-size: 10.5px;
+      line-height: 1.35;
+    }
+    .telemetry-side-panel {
+      width: 320px;
+      border-left: 1px solid var(--line);
+      background: var(--paper);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      overflow: auto;
+      padding: 10px 12px;
+      gap: 10px;
+    }
+    .telemetry-bottom-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--paper-2);
+      border-top: 1px solid var(--line);
+      font-size: 11px;
+      flex-wrap: wrap;
+    }
+    .telemetry-popover {
+      position: absolute;
+      bottom: 34px;
+      left: 12px;
+      right: 12px;
+      max-height: 260px;
+      overflow: auto;
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.12);
+      z-index: 15;
+      padding: 10px 12px;
+    }
     .shell-codex-map .map-mid {
       min-width: 0;
       min-height: 0;
@@ -2071,7 +2253,14 @@ v1 桌面壳是否坚持 Tauri 2？
       { id: "r5", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "active", isolation: true, wait: true },
       { id: "r4", issueId: 12, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
       { id: "r6", issueId: 1, hostId: "local", projectId: "tb", agent: "Claude Code", status: "stopped", isolation: false },
-      { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true }
+      { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true },
+      { id: "r7", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
+      { id: "r8", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "ended", isolation: false },
+      { id: "r9", issueId: 1, hostId: "local", projectId: "tb", agent: "Claude Code", status: "ended", isolation: false },
+      { id: "r10", issueId: 24, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
+      { id: "r11", issueId: 40, hostId: "local", projectId: "notes", agent: "Codex", status: "ended", isolation: false },
+      { id: "r12", issueId: 15, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
+      { id: "r13", issueId: 22, hostId: "local", projectId: "tb", agent: "Claude Code", status: "ended", isolation: false }
     ];
     const USAGE_FIELDS = [
       ["input", "输入", "Input"],
@@ -2160,6 +2349,157 @@ v1 桌面壳是否坚持 Tauri 2？
       ]
     };
 
+    const RUN_MODELS = {
+      r1: [
+        {
+          model: "grok-4",
+          role: "main",
+          roleLabel: "主会话",
+          roleLabelEn: "Main session",
+          status: "active",
+          input: 182400,
+          output: 24100,
+          cacheRead: 880000,
+          cacheWrite: 42000,
+          reasoning: 8600,
+          total: 1137100,
+          recentCalls: [
+            { id: 1, ttft: 420, tps: 48, status: "ok" },
+            { id: 2, ttft: 510, tps: 45, status: "ok" },
+            { id: 3, ttft: 480, tps: 47, status: "ok" },
+            { id: 4, ttft: 2800, tps: 8, status: "slow", jitter: true, note: "首字 2.8s · 8 tok/s (偏慢)" },
+            { id: 5, ttft: 490, tps: 46, status: "ok" },
+            { id: 6, ttft: 430, tps: 50, status: "ok" },
+            { id: 7, ttft: 410, tps: 48, status: "ok" },
+            { id: 8, ttft: 450, tps: 49, status: "ok" }
+          ]
+        },
+        {
+          model: "grok-4-mini",
+          role: "subagent",
+          roleLabel: "子代理: researcher",
+          roleLabelEn: "Subagent: researcher",
+          status: "active",
+          input: 320000,
+          output: 14200,
+          cacheRead: 560000,
+          cacheWrite: 12000,
+          reasoning: 3400,
+          total: 909600,
+          recentCalls: [
+            { id: 1, ttft: 280, tps: 62, status: "ok" },
+            { id: 2, ttft: 310, tps: 59, status: "ok" },
+            { id: 3, ttft: 290, tps: 65, status: "ok" },
+            { id: 4, ttft: 300, tps: 60, status: "ok" }
+          ]
+        }
+      ],
+      r5: [
+        {
+          model: "gpt-5",
+          role: "main",
+          roleLabel: "主会话",
+          roleLabelEn: "Main session",
+          status: "active",
+          input: 96400,
+          output: 18200,
+          cacheRead: 410000,
+          cacheWrite: null,
+          reasoning: null,
+          total: 524600,
+          recentCalls: [
+            { id: 1, ttft: 390, tps: 52, status: "ok" },
+            { id: 2, ttft: 410, tps: 50, status: "ok" },
+            { id: 3, ttft: 420, tps: 48, status: "ok" },
+            { id: 4, ttft: 400, tps: 51, status: "ok" },
+            { id: 5, ttft: 430, tps: 49, status: "ok" }
+          ]
+        },
+        {
+          model: "gpt-5-mini",
+          role: "subagent",
+          roleLabel: "子代理: reviewer",
+          roleLabelEn: "Subagent: reviewer",
+          status: "active",
+          input: 68000,
+          output: 8900,
+          cacheRead: 190000,
+          cacheWrite: null,
+          reasoning: null,
+          total: 266900,
+          recentCalls: [
+            { id: 1, ttft: 220, tps: 78, status: "ok" },
+            { id: 2, ttft: 240, tps: 75, status: "ok" },
+            { id: 3, ttft: 210, tps: 80, status: "ok" }
+          ]
+        },
+        {
+          model: "o3-mini",
+          role: "history",
+          roleLabel: "已停用 (切换前)",
+          roleLabelEn: "Inactive (before switch)",
+          status: "inactive",
+          input: 24000,
+          output: 4200,
+          cacheRead: 48000,
+          cacheWrite: null,
+          reasoning: 18000,
+          total: 94200,
+          recentCalls: [
+            { id: 1, ttft: 850, tps: 22, status: "ok" },
+            { id: 2, ttft: 920, tps: 20, status: "ok" }
+          ]
+        }
+      ],
+      r3: [
+        {
+          model: "claude-opus-4",
+          role: "main",
+          roleLabel: "主会话",
+          roleLabelEn: "Main session",
+          status: "active",
+          input: 128000,
+          output: 33400,
+          cacheRead: 256000,
+          cacheWrite: 18000,
+          reasoning: null,
+          total: 435400,
+          recentCalls: [
+            { id: 1, ttft: 890, tps: 33, status: "ok" },
+            { id: 2, ttft: 920, tps: 31, status: "ok" },
+            { id: 3, ttft: 3400, tps: 7, status: "slow", jitter: true, note: "首字 3.4s · 7 tok/s (偏慢)" },
+            { id: 4, ttft: 880, tps: 34, status: "ok" }
+          ]
+        },
+        {
+          model: "claude-sonnet-4",
+          role: "subagent",
+          roleLabel: "子代理: test-runner",
+          roleLabelEn: "Subagent: test-runner",
+          status: "active",
+          input: 84000,
+          output: 12100,
+          cacheRead: 110000,
+          cacheWrite: 6000,
+          reasoning: 2100,
+          total: 212100,
+          recentCalls: [
+            { id: 1, ttft: 420, tps: 45, status: "ok" },
+            { id: 2, ttft: 410, tps: 47, status: "ok" },
+            { id: 3, ttft: 430, tps: 44, status: "ok" }
+          ]
+        }
+      ]
+    };
+
+    const TELEMETRY_SCENARIOS = [
+      ["multi-model", "多模型并发 (主会话+子代理)"],
+      ["switched-model", "中途换模型 (含已停用)"],
+      ["jitter", "代理网络抖动 (首字延迟告警)"],
+      ["sparse", "刚开跑 (少量调用)"],
+      ["missing", "字段缺失 (含 —)"]
+    ];
+
     const S = {
       direction: "codex-map",
       variant: "A",
@@ -2226,7 +2566,11 @@ v1 桌面壳是否坚持 Tauri 2？
       usageRunId: null,
       usageFilter: { range: null, project: "all", agent: "all", model: "all" },
       usageAcct: null,
-      usageMore: false
+      usageMore: false,
+      telemetryExpanded: false,
+      telemetrySideOpen: false,
+      telemetryPopoverOpen: false,
+      telemetryScenario: "multi-model"
     };
 
     const DIRECTIONS = [
@@ -2274,18 +2618,18 @@ v1 桌面壳是否坚持 Tauri 2？
     const USAGE_VARIANTS = [
       {
         id: "A",
-        name: "独立页 · 流水",
-        note: "入口在左侧 Host 区。主表面是 Run 流水。时间：最近 24 小时 / 今天 / 近 7 天 / 近 30 天 / 自定义。"
+        name: "独立页 · 顶栏分轨",
+        note: "Host 用量为独立页；Run 侧在终端顶栏紧凑分轨，点击展开多模型 6 字段与 Sparkline。"
       },
       {
         id: "B",
-        name: "浮层 · 先筛后看",
-        note: "入口在顶栏齿轮旁。打开浮层，看板还在下面。必须先选时间或维度，才出数字，避免甩出一个看起来很准的 Host 总量。"
+        name: "浮层 · 侧栏抽屉",
+        note: "Host 用量为浮层；Run 侧在终端右侧提供独立遥测抽屉，垂直展示多模型分轨与抖动诊断。"
       },
       {
         id: "C",
-        name: "总览里的账本",
-        note: "从总览顶栏切到「用量」。主表面是按时间倒序的 Run 流水，合计钉在顶上。点一行看六个字段和这家口径。"
+        name: "总览账本 · 底栏状态条",
+        note: "Host 用量在总览账本；Run 侧在终端底部展示状态条，点击弹出多模型浮层。"
       }
     ];
 
@@ -3042,8 +3386,17 @@ v1 桌面壳是否坚持 Tauri 2？
       const p = project(row.projectId);
       const title = i ? `#${i.id} ${shortTitle(i.title, 28)}` : t("usageFree");
       return `<div class="usage-detail" data-usage-detail="${row.id}">
-        <h3>${esc(title)}</h3>
-        <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(usageWhen(row))}${row.live ? " · " + t("usageLive") : ""}</div>
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+          <div>
+            <h3>${esc(title)}</h3>
+            <div class="tiny">${esc(p ? p.name : row.projectId)} · ${esc(row.agent)} · ${esc(row.model)} · ${esc(usageWhen(row))}${row.live ? " · " + t("usageLive") : ""}</div>
+          </div>
+          ${row.runId ? `
+            <button class="primary" data-act="go-run-terminal" data-id="${esc(row.runId)}" style="font-size:11px; padding:3px 8px; white-space:nowrap;">
+              ${S.lang === "en" ? "Open Run Terminal ↗" : "打开此 Run 终端 ↗"}
+            </button>
+          ` : ""}
+        </div>
         <div class="usage-fields" style="margin-top:10px">${USAGE_FIELDS.map(([k]) => `
           <div class="usage-field"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${row[k] == null ? "—" : esc(fmtTok(row[k]))}</div></div>
         `).join("")}
@@ -3589,6 +3942,16 @@ v1 桌面壳是否坚持 Tauri 2？
       }
       if (p.get("sheet") === "1") S.usageSheet = true;
       if (p.get("iw") === "1") S.issueWide = true;
+      const telSc = p.get("telemetry_scenario") || p.get("telemetry");
+      if (["multi-model", "switched-model", "jitter", "sparse", "missing"].includes(telSc)) {
+        S.telemetryScenario = telSc;
+      }
+      if (p.get("telemetry_expanded") === "1" || p.get("expanded") === "1") {
+        S.telemetryExpanded = true;
+      }
+      if (p.get("telemetry_side") === "1" || p.get("side") === "1") {
+        S.telemetrySideOpen = true;
+      }
     }
 
     function host(id) { return HOSTS.find(h => h.id === id); }
@@ -3982,6 +4345,9 @@ v1 桌面壳是否坚持 Tauri 2？
         </div>
         <div class="lab">${esc(cur.note)}</div>
         <button data-act="next" title="下一个用量方案">→</button>
+        <select data-act="telemetry-scenario" aria-label="Run遥测场景" title="切换当前 Run 的多模型与网络状态">
+          ${TELEMETRY_SCENARIOS.map(([id, label]) => `<option value="${id}" ${S.telemetryScenario === id ? "selected" : ""}>${esc(label)}</option>`).join("")}
+        </select>
         <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
         <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
         <select data-act="usage-state" aria-label="用量边界状态">
@@ -3995,11 +4361,13 @@ v1 桌面壳是否坚持 Tauri 2？
       const r = run(S.runId);
       const lines = [
         `用量层级 ${S.variant} · ${variantOf(S.variant).name}`,
+        `Run 遥测场景 ${S.telemetryScenario}`,
         `用量边界 ${S.usageState} · 浮层 ${S.usageSheet ? "开" : "关"}`,
         `主壳：Codex 原貌映射 · 主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
         `中间: ${S.midMode === "graph" ? "依赖图" : S.midMode === "run" ? "Run 终端" : S.midMode === "overview" ? "总览" : S.midMode === "usage" ? "用量" : "看板"}`,
         `终端: ${S.termTheme}`,
         `底栏: ${dockFolded() ? "折起" : "拉开"}`,
+        `遥测展开: ${S.telemetryExpanded ? "开" : "关"} · 侧栏 ${S.telemetrySideOpen ? "开" : "关"}`,
         `Host: ${h ? h.name : "（无）"}`,
         `Project: ${p ? p.name : "（无）"}`,
         `Issue: ${i ? issueLabel(i) : "（无）"}`,
@@ -4551,11 +4919,369 @@ v1 桌面壳是否坚持 Tauri 2？
         <span class="muted">· ${esc(r.agent)}${r.isolation ? " · 隔离" : ""}</span>`;
     }
 
+    function runModels(r) {
+      if (!r) return [];
+      const scenario = S.telemetryScenario || "multi-model";
+      if (scenario === "sparse") {
+        return [
+          {
+            model: "grok-4",
+            role: "main",
+            roleLabel: "主会话",
+            roleLabelEn: "Main session",
+            status: "active",
+            input: 12000,
+            output: 2400,
+            cacheRead: 45000,
+            cacheWrite: 1200,
+            reasoning: 800,
+            total: 61400,
+            recentCalls: [
+              { id: 1, ttft: 380, tps: 52, status: "ok" }
+            ]
+          }
+        ];
+      }
+      if (scenario === "switched-model") {
+        return [
+          {
+            model: "gpt-5",
+            role: "main",
+            roleLabel: "主会话 (当前)",
+            roleLabelEn: "Main session (current)",
+            status: "active",
+            input: 96400,
+            output: 18200,
+            cacheRead: 410000,
+            cacheWrite: null,
+            reasoning: null,
+            total: 524600,
+            recentCalls: [
+              { id: 1, ttft: 390, tps: 52, status: "ok" },
+              { id: 2, ttft: 410, tps: 50, status: "ok" },
+              { id: 3, ttft: 420, tps: 48, status: "ok" },
+              { id: 4, ttft: 400, tps: 51, status: "ok" },
+              { id: 5, ttft: 430, tps: 49, status: "ok" }
+            ]
+          },
+          {
+            model: "gpt-5-mini",
+            role: "subagent",
+            roleLabel: "子代理: reviewer",
+            roleLabelEn: "Subagent: reviewer",
+            status: "active",
+            input: 68000,
+            output: 8900,
+            cacheRead: 190000,
+            cacheWrite: null,
+            reasoning: null,
+            total: 266900,
+            recentCalls: [
+              { id: 1, ttft: 220, tps: 78, status: "ok" },
+              { id: 2, ttft: 240, tps: 75, status: "ok" },
+              { id: 3, ttft: 210, tps: 80, status: "ok" }
+            ]
+          },
+          {
+            model: "o3-mini",
+            role: "history",
+            roleLabel: "已停用 (切换前)",
+            roleLabelEn: "Inactive (before switch)",
+            status: "inactive",
+            input: 24000,
+            output: 4200,
+            cacheRead: 48000,
+            cacheWrite: null,
+            reasoning: 18000,
+            total: 94200,
+            recentCalls: [
+              { id: 1, ttft: 850, tps: 22, status: "ok" },
+              { id: 2, ttft: 920, tps: 20, status: "ok" }
+            ]
+          }
+        ];
+      }
+      if (scenario === "jitter") {
+        return [
+          {
+            model: "claude-opus-4",
+            role: "main",
+            roleLabel: "主会话",
+            roleLabelEn: "Main session",
+            status: "active",
+            input: 128000,
+            output: 33400,
+            cacheRead: 256000,
+            cacheWrite: 18000,
+            reasoning: null,
+            total: 435400,
+            hasJitter: true,
+            jitterNote: "检测到 2 次调用首字显著偏慢（最慢 3.4s），生成速率降至 7 tok/s。可能由于本机代理（如 Clash Verge）节点拥堵；看板不管理、不切换节点。",
+            recentCalls: [
+              { id: 1, ttft: 420, tps: 46, status: "ok" },
+              { id: 2, ttft: 390, tps: 48, status: "ok" },
+              { id: 3, ttft: 450, tps: 45, status: "ok" },
+              { id: 4, ttft: 3400, tps: 7, status: "slow", jitter: true, note: "Call #4: 首字 3.4s · 7 tok/s (偏慢)" },
+              { id: 5, ttft: 480, tps: 44, status: "ok" },
+              { id: 6, ttft: 410, tps: 47, status: "ok" },
+              { id: 7, ttft: 2900, tps: 9, status: "slow", jitter: true, note: "Call #7: 首字 2.9s · 9 tok/s (偏慢)" },
+              { id: 8, ttft: 460, tps: 45, status: "ok" },
+              { id: 9, ttft: 430, tps: 48, status: "ok" },
+              { id: 10, ttft: 400, tps: 49, status: "ok" }
+            ]
+          },
+          {
+            model: "claude-sonnet-4",
+            role: "subagent",
+            roleLabel: "子代理: test-runner",
+            roleLabelEn: "Subagent: test-runner",
+            status: "active",
+            input: 84000,
+            output: 12100,
+            cacheRead: 110000,
+            cacheWrite: 6000,
+            reasoning: null,
+            total: 212100,
+            recentCalls: [
+              { id: 1, ttft: 410, tps: 48, status: "ok" },
+              { id: 2, ttft: 430, tps: 46, status: "ok" },
+              { id: 3, ttft: 390, tps: 50, status: "ok" }
+            ]
+          }
+        ];
+      }
+      if (scenario === "missing") {
+        return [
+          {
+            model: "gpt-5",
+            role: "main",
+            roleLabel: "主会话",
+            roleLabelEn: "Main session",
+            status: "active",
+            input: 96400,
+            output: 18200,
+            cacheRead: 410000,
+            cacheWrite: null,
+            reasoning: null,
+            total: 524600,
+            missingNote: "Codex 未提供 reasoning 与 cacheWrite 字段，均以 — 显示，不拿 0 冒充。",
+            recentCalls: [
+              { id: 1, ttft: 420, tps: 48, status: "ok" },
+              { id: 2, ttft: 450, tps: 46, status: "ok" }
+            ]
+          }
+        ];
+      }
+      const custom = RUN_MODELS[r.id];
+      if (custom) return custom;
+      return [
+        {
+          model: "grok-4",
+          role: "main",
+          roleLabel: "主会话",
+          roleLabelEn: "Main session",
+          status: "active",
+          input: 182400,
+          output: 24100,
+          cacheRead: 880000,
+          cacheWrite: 42000,
+          reasoning: 8600,
+          total: 1137100,
+          recentCalls: [
+            { id: 1, ttft: 420, tps: 48, status: "ok" },
+            { id: 2, ttft: 510, tps: 45, status: "ok" },
+            { id: 3, ttft: 480, tps: 47, status: "ok" },
+            { id: 4, ttft: 2800, tps: 8, status: "slow", jitter: true, note: "Call #4: 首字 2.8s · 8 tok/s" },
+            { id: 5, ttft: 490, tps: 46, status: "ok" },
+            { id: 6, ttft: 430, tps: 50, status: "ok" },
+            { id: 7, ttft: 410, tps: 48, status: "ok" },
+            { id: 8, ttft: 450, tps: 49, status: "ok" }
+          ]
+        },
+        {
+          model: "grok-4-mini",
+          role: "subagent",
+          roleLabel: "子代理: researcher",
+          roleLabelEn: "Subagent: researcher",
+          status: "active",
+          input: 320000,
+          output: 14200,
+          cacheRead: 560000,
+          cacheWrite: 12000,
+          reasoning: 3400,
+          total: 909600,
+          recentCalls: [
+            { id: 1, ttft: 280, tps: 62, status: "ok" },
+            { id: 2, ttft: 310, tps: 59, status: "ok" },
+            { id: 3, ttft: 290, tps: 65, status: "ok" },
+            { id: 4, ttft: 300, tps: 60, status: "ok" }
+          ]
+        }
+      ];
+    }
+
+    function renderModelTrackCard(m, r) {
+      const calls = m.recentCalls || [];
+      const latestCall = calls[calls.length - 1] || {};
+      const hasSlow = calls.some(c => c.status === "slow" || c.jitter);
+      return `
+        <div class="track-card ${m.status === "inactive" ? "history-card" : ""}">
+          <div class="track-card-hd">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <span class="role-badge ${m.role}">${esc(S.lang === "en" ? m.roleLabelEn : m.roleLabel)}</span>
+              <span class="telemetry-model-name">${esc(m.model)}</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+              ${latestCall.ttft != null ? `<span class="telemetry-speed-tag ${latestCall.status === "slow" ? "slow" : "ok"}">${latestCall.ttft}ms</span>` : ""}
+              ${latestCall.tps != null ? `<span class="telemetry-speed-tag ${latestCall.status === "slow" ? "slow" : "ok"}">${latestCall.tps} t/s</span>` : ""}
+            </div>
+          </div>
+          <div class="track-fields">
+            <div class="track-field"><div class="k">输入</div><div class="v">${m.input == null ? "—" : fmtTok(m.input)}</div></div>
+            <div class="track-field"><div class="k">输出</div><div class="v">${m.output == null ? "—" : fmtTok(m.output)}</div></div>
+            <div class="track-field"><div class="k">缓存读</div><div class="v">${m.cacheRead == null ? "—" : fmtTok(m.cacheRead)}</div></div>
+            <div class="track-field"><div class="k">缓存写</div><div class="v">${m.cacheWrite == null ? "—" : fmtTok(m.cacheWrite)}</div></div>
+            <div class="track-field"><div class="k">推理</div><div class="v">${m.reasoning == null ? "—" : fmtTok(m.reasoning)}</div></div>
+            <div class="track-field"><div class="k">合计 (自报)</div><div class="v">${m.total == null ? "—" : fmtTok(m.total)}</div></div>
+          </div>
+          ${calls.length ? `
+            <div class="track-sparkline-wrap">
+              <div class="track-sparkline-hd">
+                <span>最近 ${calls.length} 次请求首字 (TTFT) 与速率</span>
+                <span>${hasSlow ? '<b style="color:var(--stop)">发现抖动/偏慢</b>' : '通路稳定'}</span>
+              </div>
+              <div class="track-sparkline">
+                ${calls.map((c, idx) => {
+                  const h = Math.max(18, Math.min(100, Math.round((c.ttft / 3500) * 100)));
+                  return `<div class="spark-bar ${c.status === "slow" || c.jitter ? "slow" : ""}" style="height:${h}%" title="Call #${c.id || idx+1}: 首字 ${c.ttft}ms · ${c.tps} tok/s${c.note ? ' · ' + c.note : ''}"></div>`;
+                }).join("")}
+              </div>
+            </div>
+          ` : ""}
+          ${m.hasJitter || hasSlow ? `
+            <div class="telemetry-jitter-banner">
+              ⚠️ ${esc(m.jitterNote || "检测到首字耗时突增或速率下降，可能为本机网络代理（如 Clash Verge）抖动。")}
+            </div>
+          ` : ""}
+          ${m.missingNote ? `
+            <div class="tiny muted" style="margin-top:2px;">${esc(m.missingNote)}</div>
+          ` : ""}
+        </div>`;
+    }
+
+    function runTelemetryPanel(r) {
+      if (!r) return "";
+      const models = runModels(r);
+      return `
+        <div class="telemetry-panel">
+          <div class="telemetry-panel-hd">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <h4>${S.lang === "en" ? "Multi-Model Telemetry & Latency" : "多模型用量与通路快慢"}</h4>
+              <span class="tiny muted">${models.length} 个模型分轨 · 不做跨模型混算</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <button class="ghost" data-act="go-host-usage" data-id="${r.id}" title="跳到这台 Host 的用量页">${S.lang === "en" ? "Host Usage ↗" : "Host 用量 ↗"}</button>
+              ${foldHit("toggle-telemetry-expand", "收起", "×")}
+            </div>
+          </div>
+          <div class="telemetry-tracks">
+            ${models.map(m => renderModelTrackCard(m, r)).join("")}
+          </div>
+          <div class="tiny muted" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>各模型独立核算，缺失字段显示 —；抖动告警供判断本机代理（如 Clash Verge）通路稳不稳，看板不管理节点。</span>
+          </div>
+        </div>`;
+    }
+
+    function runTelemetryTop(r) {
+      if (!r) return "";
+      const models = runModels(r);
+      if (!models.length) return "";
+      return `
+        <div class="run-telemetry-top">
+          <span class="tiny muted" style="font-weight:600;">用量与通路:</span>
+          ${models.map(m => {
+            const last = (m.recentCalls && m.recentCalls[m.recentCalls.length - 1]) || {};
+            const isSlow = last.status === "slow" || (m.recentCalls || []).some(c => c.status === "slow");
+            return `
+              <div class="telemetry-capsule ${S.telemetryExpanded ? "sel" : ""}" data-act="telemetry-capsule" title="点击展开多模型详细分轨与 Sparkline">
+                <span class="role-badge ${m.role}">${esc(S.lang === "en" ? m.roleLabelEn : m.roleLabel)}</span>
+                <span class="telemetry-model-name">${esc(m.model)}</span>
+                <span class="telemetry-metric">${fmtTok(m.total)} tok</span>
+                ${last.ttft != null ? `<span class="telemetry-speed-tag ${last.status === "slow" ? "slow" : "ok"}">${last.ttft}ms</span>` : ""}
+                ${last.tps != null ? `<span class="telemetry-speed-tag ${last.status === "slow" ? "slow" : "ok"}">${last.tps} t/s</span>` : ""}
+              </div>`;
+          }).join("")}
+          <span class="grow"></span>
+          <button data-act="toggle-telemetry-expand" class="ghost" style="padding:2px 6px; font-size:10.5px;">
+            ${S.telemetryExpanded ? "收起遥测 ⌃" : "展开详情 ⌄"}
+          </button>
+          <button data-act="go-host-usage" data-id="${r.id}" class="ghost" style="padding:2px 6px; font-size:10.5px;" title="跳到这台 Host 的用量统计页">
+            Host 用量 ↗
+          </button>
+        </div>
+        ${S.telemetryExpanded ? runTelemetryPanel(r) : ""}`;
+    }
+
+    function telemetrySidePanel(r) {
+      if (!r) return `<div class="empty">未选中 Run</div>`;
+      const models = runModels(r);
+      return `
+        <div class="telemetry-side-panel">
+          <div class="hd" style="display:flex; justify-content:space-between; align-items:center;">
+            <b>${S.lang === "en" ? "Telemetry & Usage" : "用量与通路遥测"}</b>
+            <div style="display:flex; gap:6px;">
+              <button class="ghost" data-act="go-host-usage" data-id="${r.id}">Host 用量 ↗</button>
+              ${foldHit("toggle-telemetry-side", t("collapse"), "×")}
+            </div>
+          </div>
+          <div class="stack" style="gap:10px; flex:1; overflow:auto;">
+            ${models.map(m => renderModelTrackCard(m, r)).join("")}
+          </div>
+        </div>`;
+    }
+
+    function runTelemetryBottom(r) {
+      if (!r) return "";
+      const models = runModels(r);
+      if (!models.length) return "";
+      return `
+        <div class="telemetry-bottom-bar">
+          <span class="tiny muted" style="font-weight:600;">通路状态:</span>
+          ${models.map(m => {
+            const last = (m.recentCalls && m.recentCalls[m.recentCalls.length - 1]) || {};
+            return `
+              <div class="telemetry-capsule" data-act="toggle-telemetry-popover">
+                <span class="role-badge ${m.role}">${esc(m.roleLabel)}</span>
+                <span class="telemetry-model-name">${esc(m.model)}</span>
+                <span class="telemetry-metric">${fmtTok(m.total)} tok</span>
+                ${last.ttft != null ? `<span class="telemetry-speed-tag ${last.status === "slow" ? "slow" : "ok"}">${last.ttft}ms</span>` : ""}
+              </div>`;
+          }).join("")}
+          <span class="grow"></span>
+          <button data-act="toggle-telemetry-popover" class="ghost" style="padding:2px 6px; font-size:10.5px;">
+            ${S.telemetryPopoverOpen ? "关闭浮层 ×" : "多模型明细 ⌃"}
+          </button>
+          <button data-act="go-host-usage" data-id="${r.id}" class="ghost" style="padding:2px 6px; font-size:10.5px;">
+            Host 用量 ↗
+          </button>
+        </div>
+        ${S.telemetryPopoverOpen ? `<div class="telemetry-popover">${runTelemetryPanel(r)}</div>` : ""}`;
+    }
+
     function termChrome(r) {
+      const models = runModels(r);
+      const isSlow = models.some(m => (m.recentCalls || []).some(c => c.status === "slow" || c.jitter));
+      const modelSummary = models.length > 1 ? `${models.length} 模型` : (models[0] ? models[0].model : "");
       return `
         <div class="ident ${termSkin()}">
           ${runIdentity(r)}
           <span class="grow"></span>
+          ${models.length ? `
+            <button data-act="toggle-telemetry-expand" class="telemetry-btn ${S.telemetryExpanded || S.telemetrySideOpen ? "active" : ""}" title="查看多模型用量与通路快慢">
+              📊 遥测: ${esc(modelSummary)}${isSlow ? ` <span class="telemetry-speed-tag slow" style="margin-left:4px">偏慢</span>` : ""}
+            </button>
+          ` : ""}
           <button data-act="swap-run" title="${esc(t("swapRun"))}">${t("swapRun")}</button>
           ${r && r.status === "active" ? `<button data-act="ask-stop">${t("stopRun")}</button>` : ""}
           <button data-act="all-runs">${t("allRuns")}</button>
@@ -4636,13 +5362,34 @@ v1 桌面壳是否坚持 Tauri 2？
     }
 
     function termSplit(r) {
-      if (!S.viewChangesOpen) return `<div class="term-wrap"><div class="term ${termSkin()}">${termText(r)}</div></div>`;
-      return `
-        <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px ${S.vcPct}%">
-          <div class="term-wrap"><div class="term ${termSkin()}">${termText(r)}</div></div>
-          <div class="splitter" data-act="drag-vc"></div>
-          <div class="pane">${viewChangesPanel(r)}</div>
+      const showTop = (S.variant === "A" || (!S.viewChangesOpen && !S.telemetrySideOpen && S.variant !== "B" && S.variant !== "C"));
+      const showBottom = (S.variant === "C");
+      const showSideTelemetry = (S.variant === "B" || S.telemetrySideOpen);
+
+      const termMain = `
+        <div class="term-wrap" style="display:flex; flex-direction:column; min-height:0; position:relative; flex:1;">
+          ${showTop ? runTelemetryTop(r) : ""}
+          <div class="term ${termSkin()}" style="flex:1; min-height:0; overflow:auto;">${termText(r)}</div>
+          ${showBottom ? runTelemetryBottom(r) : ""}
         </div>`;
+
+      if (S.viewChangesOpen) {
+        return `
+          <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px ${S.vcPct}%">
+            ${termMain}
+            <div class="splitter" data-act="drag-vc"></div>
+            <div class="pane">${viewChangesPanel(r)}</div>
+          </div>`;
+      }
+      if (showSideTelemetry) {
+        return `
+          <div class="split" style="grid-template-columns:minmax(160px,1fr) 6px 340px">
+            ${termMain}
+            <div class="splitter"></div>
+            <div class="pane">${telemetrySidePanel(r)}</div>
+          </div>`;
+      }
+      return termMain;
     }
 
     function termZoomStage(r) {
@@ -4960,8 +5707,20 @@ v1 桌面壳是否坚持 Tauri 2？
             ${i && !i.closed ? `<button class="primary" data-act="fake-start" ${refreshMeta().blocksTrackerWrites ? `disabled title="${S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project"}"` : ""}>${t("start")}</button>` : ""}
           </div>`;
       }
+      const models = runModels(r);
+      const mainModel = models[0];
       return `
         <div class="hd">Run · ${i ? "#" + i.id : t("free")}</div>
+        ${mainModel ? `
+          <div class="pad" style="padding-bottom:0;">
+            <div class="telemetry-capsule" style="width:100%; justify-content:space-between;">
+              <span class="role-badge ${mainModel.role}">${esc(mainModel.roleLabel)}</span>
+              <span class="telemetry-model-name">${esc(mainModel.model)}</span>
+              <span class="telemetry-metric">${fmtTok(mainModel.total)} tok</span>
+            </div>
+            <div class="tiny muted" style="margin-top:4px;">手机只保留当前模型概览；多模型分轨与抖动请在电脑查看。</div>
+          </div>
+        ` : ""}
         ${r.status === "active" ? `<div class="pad"><button data-act="ask-stop">${t("stopRun")}</button></div>` : ""}
         <div class="term" style="min-height:220px">${termText(r)}</div>
         <div class="banner">${t("phoneNote")}</div>`;
@@ -4990,6 +5749,10 @@ v1 桌面壳是否坚持 Tauri 2？
         }
       };
       sw.onchange = (e) => {
+        if (e.target.dataset.act === "telemetry-scenario") {
+          S.telemetryScenario = e.target.value;
+          render();
+        }
         if (e.target.dataset.act === "refresh-state") {
           S.refreshState = e.target.value;
           S.refreshOpen = false;
@@ -5020,6 +5783,59 @@ v1 桌面壳是否坚持 Tauri 2？
         if (!b) return;
         const act = b.dataset.act;
         const id = b.dataset.id;
+        if (act === "go-host-usage") {
+          S.midMode = "usage";
+          S.usageRunId = id ? `u-${id}` : null;
+          S.usageTab = "runs";
+          S.usageSheet = false;
+          render();
+          return;
+        }
+        if (act === "go-run-terminal") {
+          const uRow = usageRow(id) || USAGE_ROWS.find(r => r.runId === id);
+          const targetRun = RUNS.find(r => r.id === id) || (uRow ? {
+            id,
+            hostId: uRow.hostId,
+            projectId: uRow.projectId,
+            issueId: uRow.issueId,
+            agent: uRow.agent,
+            status: uRow.live ? "active" : "ended"
+          } : null);
+          if (targetRun) {
+            S.hostId = targetRun.hostId;
+            S.projectId = targetRun.projectId;
+            S.issueId = targetRun.issueId;
+            S.runId = targetRun.id;
+            setMidMode("board");
+            S.dockFolded.board = false;
+            S.telemetryExpanded = true;
+            S.telemetrySideOpen = true;
+            render();
+          }
+          return;
+        }
+        if (act === "toggle-telemetry-expand") {
+          S.telemetryExpanded = !S.telemetryExpanded;
+          render();
+          return;
+        }
+        if (act === "toggle-telemetry-side") {
+          S.telemetrySideOpen = !S.telemetrySideOpen;
+          render();
+          return;
+        }
+        if (act === "toggle-telemetry-popover") {
+          S.telemetryPopoverOpen = !S.telemetryPopoverOpen;
+          render();
+          return;
+        }
+        if (act === "telemetry-capsule") {
+          if (S.variant === "B") S.telemetrySideOpen = true;
+          else if (S.variant === "C") S.telemetryPopoverOpen = !S.telemetryPopoverOpen;
+          else S.telemetryExpanded = !S.telemetryExpanded;
+          render();
+          return;
+        }
         if (act === "refresh-toggle") { S.refreshOpen = !S.refreshOpen; render(); return; }
         if (act === "refresh-now") { startManualRefresh(); return; }
         if (act === "refresh-settings") { S.refreshOpen = false; S.settingsOpen = true; render(); return; }

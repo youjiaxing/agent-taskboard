@@ -22,7 +22,7 @@ test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
   await expect(page.locator(".usage-sheet")).toBeVisible();
   await expect(page.locator(".usage-prompt")).toContainText("先选时间范围");
 
-  await page.getByRole("button", { name: /C · 总览里的账本/ }).click();
+  await page.getByRole("button", { name: /C · 总览/ }).click();
   await expect(page).toHaveURL(/variant=C/);
   await expect(page.locator(".usage-pane")).toBeVisible();
   await expect(page.locator(".usage-ledger").first()).toBeVisible();
@@ -129,3 +129,57 @@ test("手机只留合计，丢掉拆分表和六字段明细", async ({ page }) 
   await expect(page.locator(".usage-split")).toHaveCount(0);
   await expect(page.locator("[data-usage-detail]")).toHaveCount(0);
 });
+
+test("Run 遥测 A：顶栏展示多模型胶囊，展开看分轨卡片、6字段与 Sparkline，可跳 Host 用量", async ({ page }) => {
+  await open(page, "&variant=A&mid=board");
+
+  await expect(page.locator(".run-telemetry-top")).toBeVisible();
+  await expect(page.locator(".telemetry-capsule").filter({ hasText: "主会话" })).toBeVisible();
+  await expect(page.locator(".telemetry-capsule").filter({ hasText: "grok-4-mini" })).toBeVisible();
+
+  await page.locator('.run-telemetry-top [data-act="toggle-telemetry-expand"]').click();
+  await expect(page.locator(".telemetry-panel")).toBeVisible();
+  await expect(page.locator(".track-card")).toHaveCount(2);
+  await expect(page.locator(".track-card").first()).toContainText("输入");
+  await expect(page.locator(".track-card").first()).toContainText("合计 (自报)");
+  await expect(page.locator(".track-sparkline").first()).toBeVisible();
+
+  await page.locator('.telemetry-panel [data-act="go-host-usage"]').first().click();
+  await expect(page.locator(".usage-pane")).toBeVisible();
+  await expect(page).toHaveURL(/mid=usage/);
+});
+
+test("Run 遥测 B：侧栏抽屉展示多模型，支持中途切模型（含已停用模型）", async ({ page }) => {
+  await open(page, "&variant=B&mid=board&telemetry_scenario=switched-model");
+
+  await expect(page.locator(".telemetry-side-panel")).toBeVisible();
+  await expect(page.locator(".telemetry-side-panel")).toContainText("gpt-5");
+  await expect(page.locator(".telemetry-side-panel")).toContainText("gpt-5-mini");
+  await expect(page.locator(".telemetry-side-panel")).toContainText("o3-mini");
+  await expect(page.locator(".track-card.history-card")).toBeVisible();
+  await expect(page.locator(".track-card.history-card")).toContainText("已停用 (切换前)");
+});
+
+test("Run 遥测通路快慢：网络抖动标红告警，Sparkline 显示偏慢调用与 Clash 提示", async ({ page }) => {
+  await open(page, "&variant=A&mid=board&telemetry_scenario=jitter&expanded=1");
+
+  await expect(page.locator(".telemetry-panel")).toBeVisible();
+  await expect(page.locator(".spark-bar.slow").first()).toBeVisible();
+  await expect(page.locator(".telemetry-jitter-banner").first()).toBeVisible();
+  await expect(page.locator(".telemetry-jitter-banner").first()).toContainText("Clash Verge");
+  await expect(page.locator(".telemetry-panel")).toContainText("看板不管理节点");
+});
+
+test("从 Host 用量页可一键跳回 Run 终端与遥测", async ({ page }) => {
+  await open(page, "&variant=A&mid=usage");
+
+  await expect(page.locator(".usage-pane")).toBeVisible();
+  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
+  await expect(page.locator("[data-usage-detail]")).toBeVisible();
+  await expect(page.locator('[data-act="go-run-terminal"]').first()).toBeVisible();
+
+  await page.locator('[data-act="go-run-terminal"]').first().click();
+  await expect(page.locator(".lanes")).toBeVisible();
+  await expect(page.locator(".run-telemetry-top, .telemetry-side-panel, .telemetry-panel").first()).toBeVisible();
+});
+

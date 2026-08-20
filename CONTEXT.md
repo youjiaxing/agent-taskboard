@@ -124,6 +124,10 @@ _Avoid_: Server（易理解成我们提供的云）, 后台（过糊）, 把 Hos
 某台 Host 上的独立观察页：该 Host 全部 Project 的 token 消耗，以及通路的首字与生成速率。只显示 token，不估美元、不管账号额度。按时间、Project、Agent、模型筛。
 _Avoid_: 费用, 账单, 额度, 代理节点（Clash 等是用户自己的本机工具，不是产品对象）
 
+**遥测**:
+单次 Run 现场（Embedded Terminal 旁）对涉及模型的 token 用量与通路快慢（首字 TTFT、生成速率、抖动走势）的独立分轨观察。区分主会话、并发子代理与中途切换模型，缺失字段显示 `—`，绝不做跨模型混算。
+_Avoid_: Run 合计（把不同模型糊在一起）, 实时监控（过重）
+
 **Client**:
 连上 Host、用来看板数据、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。一个 Client 窗口可以同时连本机 Host 和已配对的远程 Host。手机只当 Client，不在手机上起 Host。关掉 Client 不等于停掉 Host 上的 Run。
 _Avoid_: 只把 Client 说成浏览器, 前端（只说技术层）, 把看板数据叫态势
