@@ -120,6 +120,10 @@ _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 /
 跑 Issue Tracker 访问、Agent CLI 和 Run 的常驻进程。PTY 只存在于 Host 上。它所在的电脑就说「跑 Host 的那台电脑」。
 _Avoid_: Server（易理解成我们提供的云）, 后台（过糊）, 把 Host 说成那台机器
 
+**用量**:
+某台 Host 上的独立观察页：该 Host 全部 Project 的 token 消耗，以及通路的首字与生成速率。只显示 token，不估美元、不管账号额度。按时间、Project、Agent、模型筛。
+_Avoid_: 费用, 账单, 额度, 代理节点（Clash 等是用户自己的本机工具，不是产品对象）
+
 **Client**:
 连上 Host、用来看板数据、开停 Run、向 Run 注入输入、看终端的界面。v1 有两类一等 Client：桌面应用，以及浏览器（含手机）。一个 Client 窗口可以同时连本机 Host 和已配对的远程 Host。手机只当 Client，不在手机上起 Host。关掉 Client 不等于停掉 Host 上的 Run。
 _Avoid_: 只把 Client 说成浏览器, 前端（只说技术层）, 把看板数据叫态势
