@@ -466,14 +466,79 @@
       flex-direction: column;
       box-shadow: var(--shadow);
     }
-    .phone-bar { padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
-    .phone-body { flex: 1; overflow: auto; }
+    .phone-bar { padding: 11px 12px 9px; border-bottom: 1px solid var(--line); background: var(--paper); }
+    .phone-body { flex: 1; overflow: auto; background: #f6f6f4; }
+    .theme-plain-dark .phone-body { background: #171716; }
     .phone-tabbar { display: grid; grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--line); }
     .phone-tabbar button { border: 0; border-radius: 0; padding: 12px 4px; background: var(--paper); }
-    .phone-tabbar button.active { background: var(--sel); font-weight: 620; }
+    .phone-tabbar button.active { background: var(--sel); font-weight: 680; }
     .phone-sec { padding: 12px 14px 4px; font-size: 11px; color: var(--muted); }
     .phone .item { width: calc(100% - 16px); margin: 4px 8px; text-align: left; padding: 10px 12px; }
     .phone-bar .row { align-items: center; }
+    .phone-current {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .phone-current-copy { flex: 1; min-width: 0; }
+    .phone-current-copy b,
+    .phone-current-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .phone-current-copy b { font-size: 15px; letter-spacing: -.01em; }
+    .phone-current-copy span { color: var(--muted); font-size: 10px; margin-top: 1px; }
+    .phone-context-panel {
+      margin: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      box-shadow: 0 8px 26px rgba(0, 0, 0, .07);
+    }
+    .phone-context-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .phone-context-group + .phone-context-group { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+    .phone-context-label { color: var(--muted); font-size: 10px; margin-bottom: 5px; }
+    .phone-context-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .phone-context-grid button { min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .phone-context-grid button.active { background: var(--sel); border-color: var(--line-strong); font-weight: 650; }
+    .phone-home-actions { display: flex; gap: 7px; padding: 2px 10px 8px; }
+    .phone-board { padding: 2px 10px 18px; display: flex; flex-direction: column; gap: 12px; }
+    .phone-board-section {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+    }
+    .phone-board-section.running { border-color: #c8d9ce; box-shadow: 0 8px 24px rgba(36, 92, 57, .08); }
+    .theme-plain-dark .phone-board-section.running { border-color: #365440; }
+    .phone-board-head {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 10px 11px 8px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper-2);
+    }
+    .phone-board-section.running .phone-board-head { background: #f2f8f3; }
+    .theme-plain-dark .phone-board-section.running .phone-board-head { background: #1c291f; }
+    .phone-board-head b { font-size: 13px; }
+    .phone-board-head span { color: var(--muted); font-size: 10px; }
+    .phone-run-card { padding: 10px 11px; }
+    .phone-run-card + .phone-run-card { border-top: 1px solid var(--line); }
+    .phone-run-main {
+      width: 100%;
+      display: block;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+    .phone-run-main:hover { background: transparent; }
+    .phone-run-title { font-weight: 650; margin: 3px 0 6px; }
+    .phone-run-meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+    .phone-run-actions { display: flex; gap: 6px; margin-top: 9px; }
+    .phone-run-actions .primary { flex: 1; }
+    .phone-frontier-list .issue-card { width: calc(100% - 14px); margin: 7px; }
+    .phone-empty-section { padding: 16px 11px; color: var(--muted); font-size: 11px; }
     .banner {
       margin: 8px 10px;
       padding: 8px 10px;
@@ -1111,7 +1176,7 @@
       grid-template-columns: minmax(0, 1fr) minmax(360px, 46%);
     }
     .shell-codex-map .map-cols.run-read {
-      grid-template-columns: minmax(0, 1fr) minmax(380px, 46%);
+      grid-template-columns: minmax(0, 1fr) minmax(380px, 34%);
     }
     .shell-codex-map .map-cols.issue-wide {
       grid-template-columns: minmax(0, 1fr) minmax(520px, 56%);
@@ -1567,7 +1632,7 @@
       .shell-codex-map { --side-w: 220px; }
       .shell-codex-map .map-side { flex-basis: var(--side-w); width: var(--side-w); }
       .shell-codex-map .map-cols { grid-template-columns: minmax(0, 1fr) minmax(280px, 36%); }
-      .shell-codex-map .map-cols.run-read,
+      .shell-codex-map .map-cols.run-read { grid-template-columns: minmax(0, 1fr) minmax(340px, 42%); }
       .shell-codex-map .map-cols.issue-wide { grid-template-columns: minmax(0, 1fr) minmax(300px, 48%); }
     }
     @media (max-width: 900px) {
@@ -1903,6 +1968,8 @@ v1 桌面壳是否坚持 Tauri 2？
       projAuto: {},
       cam: { x: 0, y: 0, k: 1, user: false },
       phone: "home",
+      phoneContextOpen: false,
+      autoFoldedForRun: false,
       frontierWhy: "blocked"
     };
 
@@ -2621,6 +2688,8 @@ v1 桌面壳是否坚持 Tauri 2？
       S.recentMore = false;
       S.sideFolded = false;
       S.detailFolded = false;
+      S.phoneContextOpen = false;
+      S.autoFoldedForRun = false;
       S.issueWide = false;
       S.ovFilter = [];
       S.ovShowEnded = false;
@@ -2718,6 +2787,10 @@ v1 桌面壳是否坚持 Tauri 2？
         return;
       }
       restoreMidForProject(S.projectId);
+      if (S.autoFoldedForRun) {
+        S.sideFolded = false;
+        S.autoFoldedForRun = false;
+      }
     }
     function overviewCursor() {
       const list = overviewRuns();
@@ -2993,7 +3066,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `.scratch/notes/issues/${i.id}-${i.title.slice(0, 12)}.md`;
     }
 
-    function setIssue(id) {
+    function setIssue(id, focusRun) {
       const i = issue(id);
       if (!i) return;
       S.issueId = id;
@@ -3003,12 +3076,21 @@ v1 桌面壳是否坚持 Tauri 2？
       const live = issueRun(i);
       if (live) {
         setRun(live.id, true);
-        if (S.midMode === "board") S.dockFolded.board = false;
+        if (S.viewport === "phone") {
+          S.phone = "issue";
+        } else if (S.direction === "codex-map" && focusRun) {
+          if (S.midMode !== "run" && !S.sideFolded) S.autoFoldedForRun = true;
+          S.sideFolded = true;
+          S.detailFolded = false;
+          S.issueWide = false;
+          S.termZoom = null;
+          setMidMode("run");
+        }
       } else {
         S.runId = null;
         if (S.midMode === "run") restoreFromRun();
+        if (S.viewport === "phone") S.phone = "issue";
       }
-      S.phone = "issue";
       render();
     }
     function setRun(id, quiet) {
@@ -3230,15 +3312,20 @@ v1 桌面壳是否坚持 Tauri 2？
       const cur = S.midMode === "run" && S.ovReturn ? overviewCursor() : null;
       return `
         <div class="mid-bar">
-          ${S.ovReturn && S.midMode === "run" ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>` : ""}
-          <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
-          <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
-          ${S.midMode === "run" && !S.ovReturn ? foldHit("restore-dock", t("restoreDock"), "↓") : ""}
-          ${cur ? `
-            <button class="ov-step" data-act="ov-step" data-id="prev" ${cur.prev ? "" : "disabled"}>${esc(t("ovPrev"))}</button>
-            <span class="tiny">${cur.idx + 1} / ${cur.list.length}</span>
-            <button class="ov-step" data-act="ov-step" data-id="next" ${cur.next ? "" : "disabled"}>${esc(t("ovNext"))}</button>
-          ` : `<span class="tiny">${esc(S.midMode === "run" ? t("runFocusHint") : S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>`}
+          ${S.midMode === "run" ? `
+            ${S.ovReturn
+              ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>`
+              : `<button class="nav-back" data-act="restore-dock">← ${S.lang === "en" ? "Back to board" : "返回看板"}</button>`}
+            ${cur ? `
+              <button class="ov-step" data-act="ov-step" data-id="prev" ${cur.prev ? "" : "disabled"}>${esc(t("ovPrev"))}</button>
+              <span class="tiny">${cur.idx + 1} / ${cur.list.length}</span>
+              <button class="ov-step" data-act="ov-step" data-id="next" ${cur.next ? "" : "disabled"}>${esc(t("ovNext"))}</button>
+            ` : `<span class="tiny">${esc(t("runFocusHint"))}</span>`}
+          ` : `
+            <button data-act="mid-mode" data-id="board" class="${S.midMode === "board" ? "active" : ""}">${esc(t("boardView"))}</button>
+            <button data-act="mid-mode" data-id="graph" class="${S.midMode === "graph" ? "active" : ""}">${esc(t("depGraph"))}</button>
+            <span class="tiny">${esc(S.midMode === "overview" ? t("overviewHint") : t("graphEntry"))}</span>
+          `}
           <span class="grow"></span>
           ${(S.midMode === "board" || S.midMode === "graph") && (S.variant === "A" || (S.variant === "B" && S.sideFolded)) && S.projectId ? refreshCompact() : ""}
           ${h ? `<span class="chip">${esc(hostName(h))}${p ? " · " + esc(p.name) : ""}</span>` : ""}
@@ -3867,16 +3954,30 @@ v1 桌面壳是否坚持 Tauri 2？
       const tab = S.phone === "issue" || S.phone === "run" || S.phone === "overview" ? S.phone : "home";
       const body = tab === "issue" ? phoneIssue() : tab === "run" ? phoneRun() : tab === "overview" ? phoneOverview() : phoneHome();
       const h = host(S.hostId);
+      const p = project(S.projectId);
+      const tabLabel = tab === "issue" ? "Issue" : tab === "run" ? "Run" : S.lang === "en" ? "Run overview" : "Run 总览";
       return `
         <div class="phone-stage">
           <div class="phone">
             <div class="phone-bar">
-              <div class="row">
-                ${tab !== "home" ? `<button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回"}</button>` : `<b>${h ? esc(hostName(h)) : "Client"}</b>`}
-                <span class="grow"></span>
-                ${settingsBtn()}
-              </div>
-              ${tab === "home" && S.projectId && S.variant === "A" ? refreshCompact() : ""}
+              ${tab === "home" ? `
+                <div class="phone-current">
+                  <div class="phone-current-copy">
+                    <b>${p ? esc(p.name) : h ? esc(hostName(h)) : "Client"}</b>
+                    <span>${h ? esc(hostName(h)) : ""}${p ? ` · ${esc(p.tracker)}` : ""}</span>
+                  </div>
+                  <button data-act="phone-context">${S.phoneContextOpen ? (S.lang === "en" ? "Hide" : "收起") : (S.lang === "en" ? "Switch" : "切换")}</button>
+                  ${settingsBtn()}
+                </div>
+                ${S.projectId && S.variant === "A" ? refreshCompact() : ""}
+              ` : `
+                <div class="row">
+                  <button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回"}</button>
+                  <b>${tabLabel}</b>
+                  <span class="grow"></span>
+                  ${settingsBtn()}
+                </div>
+              `}
             </div>
             <div class="phone-body">${body}</div>
             <div class="phone-tabbar">
@@ -3890,18 +3991,57 @@ v1 桌面壳是否坚持 Tauri 2？
           ${S.refreshOpen ? refreshPopover() : ""}
         </div>`;
     }
-    function phoneHome() {
+    function phoneContextPanel() {
       const hs = visibleHosts();
       const plist = hostProjects();
-      const live = S.projectId ? boardIssues().filter(i => sectionOf(i) === "frontier" || sectionOf(i) === "in-run") : [];
+      return `
+        <div class="phone-context-panel">
+          <div class="phone-context-head">
+            <b>${S.lang === "en" ? "Switch context" : "切换范围"}</b>
+            <span class="grow"></span>
+            <button data-act="pair">+ ${esc(t("pair"))}</button>
+            <button data-act="register">+ ${S.lang === "en" ? "Project" : "登记"}</button>
+          </div>
+          <div class="phone-context-group">
+            <div class="phone-context-label">Host</div>
+            <div class="phone-context-grid">
+              ${hs.map(hh => `<button class="${S.hostId === hh.id ? "active" : ""}" data-act="host" data-id="${hh.id}"><span class="dot ${hh.online ? "on" : "off"}"></span> ${esc(hostName(hh))}</button>`).join("")}
+            </div>
+          </div>
+          <div class="phone-context-group">
+            <div class="phone-context-label">${esc(t("thisHostProjects"))}</div>
+            <div class="phone-context-grid">
+              ${plist.map(pp => `<button class="${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>`).join("") || `<span class="muted">${esc(t("noProjectTitle"))}</span>`}
+            </div>
+          </div>
+        </div>`;
+    }
+    function phoneRunCard(i) {
+      const r = issueRun(i);
+      const status = !r ? (S.lang === "en" ? "Claimed" : "已认领")
+        : r.status === "stopped" ? t("stopped")
+        : r.wait ? (S.lang === "en" ? "Waiting for action" : "等待操作")
+        : (S.lang === "en" ? "Run active" : "Run 进行中");
+      const action = r && r.status === "stopped" ? (S.lang === "en" ? "Open and continue" : "打开并继续") : (S.lang === "en" ? "Open Run" : "打开 Run");
+      return `
+        <div class="phone-run-card">
+          <button class="phone-run-main" data-act="issue" data-id="${i.id}">
+            <div class="phone-run-meta"><b class="mono">#${i.id}</b><span class="tag ${r && r.status === "stopped" ? "stop" : "run"}">${esc(status)}</span></div>
+            <div class="phone-run-title">${esc(shortTitle(i.title, 32))}</div>
+            <div class="phone-run-meta">${r ? `${esc(r.agent)} · ${r.isolation ? (S.lang === "en" ? "isolated" : "隔离执行目录") : (S.lang === "en" ? "Project directory" : "Project 主目录")}` : ""}</div>
+          </button>
+          <div class="phone-run-actions">
+            ${r ? `<button class="primary" data-act="focus-run" data-id="${r.id}">${esc(action)}</button>` : ""}
+            <button data-act="issue" data-id="${i.id}">${S.lang === "en" ? "Read Issue" : "读 Issue"}</button>
+          </div>
+        </div>`;
+    }
+    function phoneHome() {
+      const all = S.projectId ? boardIssues() : [];
+      const running = all.filter(i => sectionOf(i) === "in-run");
+      const frontier = all.filter(i => sectionOf(i) === "frontier");
       if (!S.projectId) {
-        return `
-          <div class="phone-sec">${esc(t("hosts"))}</div>
-          ${hs.map(hh => `
-            <button class="item ${S.hostId === hh.id ? "sel" : ""}" data-act="host" data-id="${hh.id}">
-              <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
-            </button>`).join("")}
-          <div class="pad"><button data-act="pair">+ ${esc(t("pair"))}</button></div>
+        return `${phoneContextPanel()}
           <div class="cta stack">
             <b>${t("noProjectTitle")}</b>
             <div class="muted">${t("noProjectBody")}</div>
@@ -3909,22 +4049,24 @@ v1 桌面壳是否坚持 Tauri 2？
           </div>`;
       }
       return `
-        <div class="phone-sec">${esc(t("hosts"))}</div>
-        ${hs.map(hh => `
-          <button class="item ${S.hostId === hh.id ? "sel" : ""}" data-act="host" data-id="${hh.id}">
-            <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
-          </button>`).join("")}
-        <div class="pad"><button data-act="pair">+ ${esc(t("pair"))}</button></div>
-        <div class="phone-sec">${esc(t("thisHostProjects"))}</div>
-        ${plist.map(pp => `
-          <button class="item ${S.projectId === pp.id ? "sel" : ""}" data-act="project" data-id="${pp.id}">${esc(pp.name)}</button>
-          ${S.variant === "B" && S.projectId === pp.id ? refreshPhoneProjectRow() : ""}
-        `).join("")}
+        ${S.phoneContextOpen ? phoneContextPanel() : ""}
+        ${S.variant === "B" ? refreshPhoneProjectRow() : ""}
         ${S.variant === "C" ? refreshPhoneCard() : ""}
-        <div class="pad"><button data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button></div>
+        <div class="phone-home-actions">
+          <button data-act="mid-mode" data-id="overview">${S.lang === "en" ? "Run overview" : "Run 总览"}</button>
+          <button data-act="refresh-toggle">${S.lang === "en" ? "Refresh details" : "刷新详情"}</button>
+        </div>
         ${!refreshMeta().hasSnapshot ? refreshEmptyState() : `
-          <div class="hd">${esc(t("frontier"))} / ${esc(t("inRun"))}</div>
-          ${live.map(i => issueCard(i)).join("") || `<div class="empty">${esc(t("noItems"))}</div>`}
+          <div class="phone-board">
+            <section class="phone-board-section running">
+              <div class="phone-board-head"><b>${esc(t("inRun"))}</b><span>${running.length} · ${S.lang === "en" ? "Open a Run to continue" : "直接进入正在处理的工作"}</span></div>
+              ${running.map(phoneRunCard).join("") || `<div class="phone-empty-section">${S.lang === "en" ? "No active or stopped Runs" : "没有进行中或执行已停的 Run"}</div>`}
+            </section>
+            <section class="phone-board-section">
+              <div class="phone-board-head"><b>${esc(t("frontier"))}</b><span>${frontier.length} · ${S.lang === "en" ? "Ready to claim" : "现在可以开始"}</span></div>
+              <div class="phone-frontier-list">${frontier.map(i => issueCard(i)).join("") || `<div class="phone-empty-section">${esc(frontierEmptyText())}</div>`}</div>
+            </section>
+          </div>
         `}`;
     }
     function phoneOverview() {
@@ -3992,10 +4134,12 @@ v1 桌面壳是否坚持 Tauri 2？
         if (act === "refresh-toggle") { S.refreshOpen = !S.refreshOpen; render(); return; }
         if (act === "refresh-now") { startManualRefresh(); return; }
         if (act === "refresh-settings") { S.refreshOpen = false; S.settingsOpen = true; render(); return; }
+        if (act === "phone-context") { S.phoneContextOpen = !S.phoneContextOpen; render(); return; }
         if (act === "host") {
           S.hostId = id;
           S.mapDetailOpen = false;
           S.mapHostOpen = false;
+          S.phoneContextOpen = false;
           const first = visibleProjects().find(p => p.hostId === id);
           S.projectId = first ? first.id : null;
           if (S.projectId) restoreMidForProject(S.projectId);
@@ -4007,14 +4151,14 @@ v1 桌面壳是否坚持 Tauri 2？
           render();
         }
         if (act === "project") {
-          S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; S.mapDetailOpen = false;
+          S.projectId = id; S.hostId = project(id).hostId; S.childFilter = null; S.mapDetailOpen = false; S.phoneContextOpen = false;
           if (S.midMode === "run") setMidMode("board");
           else restoreMidForProject(id);
           const cur = issue(S.issueId);
           if (!cur || cur.projectId !== id) S.issueId = null;
           render();
         }
-        if (act === "issue") setIssue(Number(id));
+        if (act === "issue") setIssue(Number(id), S.viewport !== "phone" && !!b.closest(".lanes"));
         if (act === "focus-run") {
           if (S.midMode === "overview" || S.ovReturn) openRunFromOverview(id);
           else {
@@ -4026,7 +4170,11 @@ v1 桌面壳是否坚持 Tauri 2？
           }
           render();
         }
-        if (act === "toggle-side") { S.sideFolded = !S.sideFolded; render(); }
+        if (act === "toggle-side") {
+          S.sideFolded = !S.sideFolded;
+          if (S.midMode === "run") S.autoFoldedForRun = false;
+          render();
+        }
         if (act === "toggle-detail") {
           S.detailFolded = !S.detailFolded;
           if (!S.detailFolded && S.termZoom === "right") S.termZoom = null;
@@ -4117,7 +4265,8 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (act === "mid-mode") {
           if (id === "overview") S.termZoom = null;
-          setMidMode(id);
+          if (id === "board" && S.midMode === "run" && !S.ovReturn) restoreFromRun();
+          else setMidMode(id);
           if (S.viewport === "phone") S.phone = id === "overview" ? "overview" : "home";
           render();
         }

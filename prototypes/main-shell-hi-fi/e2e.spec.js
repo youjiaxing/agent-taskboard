@@ -83,13 +83,19 @@ test("离线但有上次数据：四列保留，Tracker 写动作暂停，已有
   await expect(page.getByText(/认领、放领和自动推进暂停/)).toBeVisible();
 
   await page.locator('[data-act="issue"][data-id="24"]').first().click();
+  await expect(page.locator(".run-stage")).toHaveCount(0);
   await expect(page.locator('[data-act="fake-start"]:disabled').first()).toBeVisible();
   await expect(page.locator('[data-act="fake-claim"]:disabled').first()).toBeVisible();
 
-  await page.locator('[data-act="issue"][data-id="50"]').first().click();
-  await page.locator('.issue-hd [data-act="focus-run"]').click();
+  await page.locator('.lanes [data-act="issue"][data-id="50"]').click();
   await expect(page.locator(".run-stage")).toBeVisible();
   await expect(page.locator(".term")).toBeVisible();
+  await expect(page.locator(".map-side")).toHaveCount(0);
+  await expect(page.locator(".map-detail-col")).toBeVisible();
+  await expect(page.locator(".issue-title")).toHaveText("#50 实现：详情挡住名单");
+  await page.getByRole("button", { name: /返回看板/ }).click();
+  await expect(page.locator(".lanes")).toBeVisible();
+  await expect(page.locator(".map-side")).toBeVisible();
 });
 
 test("离线且没有上次数据：看板、依赖图、Issue 和底栏都不伪造数据", async ({ page }) => {
@@ -138,6 +144,10 @@ test("看板与依赖图共享 Project 刷新状态；Host 总览和 Run 不误�
   await page.getByRole("button", { name: "依赖图", exact: true }).click();
   await expect(page.locator(".graph-canvas")).toBeVisible();
   await expect(page.locator('[data-refresh-placement="rail"]')).toContainText("Project 离线");
+  await page.locator('[data-act="graph-node"][data-id="51"]').click();
+  await expect(page.locator(".graph-canvas")).toBeVisible();
+  await expect(page.locator(".run-stage")).toHaveCount(0);
+  await expect(page.locator(".issue-title")).toHaveText("#51 实现：依赖图");
 
   await page.getByRole("button", { name: "总览", exact: true }).first().click();
   await expect(page.locator(".ov")).toBeVisible();
@@ -169,13 +179,41 @@ test("390px 手机：三个摆位都可读，离线空状态不画真实 Issue",
   await expect(page.locator(".phone-body .issue-card")).toHaveCount(0);
 });
 
+test("390px 手机默认突出当前 Project、刷新状态、进行中和 Frontier", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, "&viewport=phone&variant=C&refresh=normal");
+
+  await expect(page.locator(".phone-current-copy")).toContainText("agent-taskboard");
+  await expect(page.locator(".phone-current-copy")).toContainText("本机 · MacBook · GitHub");
+  await expect(page.locator('[data-refresh-placement="phone-card"]')).toBeVisible();
+  await expect(page.locator(".phone-board-section.running")).toBeVisible();
+  await expect(page.locator(".phone-board-section").filter({ hasText: "Frontier" })).toBeVisible();
+  await expect(page.locator(".phone-run-card")).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "书房 Mini" })).toHaveCount(0);
+
+  const runningBox = await page.locator(".phone-board-section.running").boundingBox();
+  const frontierBox = await page.locator(".phone-board-section").filter({ hasText: "Frontier" }).boundingBox();
+  expect(runningBox.y).toBeLessThan(frontierBox.y);
+
+  await page.getByRole("button", { name: "切换", exact: true }).click();
+  await expect(page.getByRole("button", { name: "书房 Mini" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "garden-notes", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "收起", exact: true }).click();
+  await expect(page.getByRole("button", { name: "书房 Mini" })).toHaveCount(0);
+
+  await page.locator('.phone-run-actions [data-act="focus-run"][data-id="r1"]').click();
+  await expect(page.locator(".phone-tabbar").getByRole("button", { name: "Run", exact: true })).toHaveClass(/active/);
+  await expect(page.locator(".term")).toBeVisible();
+});
+
 test("390px 手机周边流程：切 Host、读 Issue、打开和停止已有 Run", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, "&viewport=phone&variant=A&refresh=normal");
 
+  await page.getByRole("button", { name: "切换", exact: true }).click();
   await page.getByRole("button", { name: "书房 Mini" }).click();
-  await expect(page.getByRole("button", { name: "shop-api" })).toBeVisible();
-  await page.getByRole("button", { name: /#30 修支付超时/ }).click();
+  await expect(page.locator(".phone-current-copy")).toContainText("shop-api");
+  await page.locator('.phone-run-main[data-id="30"]').click();
   await expect(page.locator(".issue-body")).toContainText("支付回调超过 8 秒");
 
   await page.getByRole("button", { name: "Run", exact: true }).click();
