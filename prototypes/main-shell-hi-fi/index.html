@@ -1392,6 +1392,51 @@
       padding: 3px 8px;
       background: var(--field);
     }
+    .usage-health {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(160px, .7fr);
+      gap: 10px;
+    }
+    .usage-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+      padding: 10px 12px;
+      min-width: 0;
+    }
+    .usage-card .k { font-size: 11px; color: var(--muted); }
+    .usage-trend {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 64px;
+      margin-top: 10px;
+    }
+    .usage-trend button {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: stretch;
+      gap: 4px;
+    }
+    .usage-trend i {
+      display: block;
+      background: var(--sel);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px 4px 0 0;
+      min-height: 3px;
+    }
+    .usage-trend span { font-size: 10px; color: var(--muted); text-align: center; }
+    .usage-recent { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+    .usage-recent th, .usage-recent td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    .usage-recent th { color: var(--muted); font-weight: 600; font-size: 11px; }
+    .usage-slow { color: var(--stop); font-weight: 650; }
     .usage-prompt {
       padding: 28px 12px;
       text-align: center;
@@ -2043,20 +2088,20 @@ v1 桌面壳是否坚持 Tauri 2？
     };
     const USAGE_NOW = new Date(2026, 7, 20, 14, 32, 0);
     const USAGE_ROWS = [
-      { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, ts: "2026-08-20T11:20:00", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true },
-      { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, ts: "2026-08-20T10:04:00", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true },
-      { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, ts: "2026-08-20T09:18:00", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true },
-      { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, ts: "2026-08-19T21:40:00", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false },
-      { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, ts: "2026-08-19T16:12:00", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false },
-      { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, ts: "2026-08-19T14:02:00", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false },
-      { id: "u-h2", runId: "rh2", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 15, ts: "2026-08-17T11:00:00", input: 54000, output: 9000, cacheRead: 80000, cacheWrite: null, reasoning: null, total: 143000, live: false },
-      { id: "u-h3", runId: "rh3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, ts: "2026-08-15T16:40:00", input: 91000, output: 16000, cacheRead: 140000, cacheWrite: 9000, reasoning: 2100, total: 258100, live: false },
-      { id: "u-h4", runId: "rh4", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, ts: "2026-08-12T09:10:00", input: 12000, output: 2200, cacheRead: null, cacheWrite: null, reasoning: null, total: 14200, live: false },
-      { id: "u-h5", runId: "rh5", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 14, ts: "2026-08-08T13:22:00", input: 330000, output: 58000, cacheRead: 1200000, cacheWrite: 44000, reasoning: 19000, total: 1651000, live: false },
-      { id: "u-h6", runId: "rh6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 11, ts: "2026-08-02T10:05:00", input: 47000, output: 8800, cacheRead: 62000, cacheWrite: 3000, reasoning: null, total: 120800, live: false },
-      { id: "u-h7", runId: "rh7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 8, ts: "2026-07-11T18:00:00", input: 88000, output: 15000, cacheRead: 210000, cacheWrite: 11000, reasoning: 4000, total: 328000, live: false },
-      { id: "u-m1", runId: "rm1", hostId: "mini", projectId: "shop", agent: "Codex", model: "gpt-5", issueId: 30, ts: "2026-08-20T08:40:00", input: 41000, output: 7600, cacheRead: 90000, cacheWrite: null, reasoning: null, total: 138600, live: false },
-      { id: "u-m2", runId: "rm2", hostId: "mini", projectId: "shop", agent: "Grok Build", model: "grok-4", issueId: 31, ts: "2026-08-19T19:10:00", input: 26000, output: 5100, cacheRead: 14000, cacheWrite: 800, reasoning: 600, total: 46500, live: false }
+      { id: "u-r1", runId: "r1", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 50, ts: "2026-08-20T11:20:00", input: 182400, output: 24100, cacheRead: 880000, cacheWrite: 42000, reasoning: 8600, total: 1137100, live: true, ttftMs: 1860, tokPerSec: 19 },
+      { id: "u-r5", runId: "r5", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 90, ts: "2026-08-20T10:04:00", input: 96400, output: 18200, cacheRead: 410000, cacheWrite: null, reasoning: null, total: 524600, live: true, ttftMs: 420, tokPerSec: 48 },
+      { id: "u-r3", runId: "r3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: null, ts: "2026-08-20T09:18:00", input: 128000, output: 33400, cacheRead: 256000, cacheWrite: 18000, reasoning: null, total: 435400, live: true, ttftMs: 890, tokPerSec: 33 },
+      { id: "u-r6", runId: "r6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 1, ts: "2026-08-19T21:40:00", input: 64000, output: 12800, cacheRead: 120000, cacheWrite: 8000, reasoning: 4200, total: 209000, live: false, ttftMs: 2100, tokPerSec: 14 },
+      { id: "u-r4", runId: "r4", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 12, ts: "2026-08-19T16:12:00", input: 210000, output: 41000, cacheRead: 640000, cacheWrite: 22000, reasoning: 12000, total: 925000, live: false, ttftMs: 1740, tokPerSec: 21 },
+      { id: "u-h1", runId: "rh1", hostId: "local", projectId: "notes", agent: "Grok Build", model: "grok-4", issueId: 41, ts: "2026-08-19T14:02:00", input: 22000, output: 4100, cacheRead: 18000, cacheWrite: 1200, reasoning: 800, total: 46100, live: false, ttftMs: 640, tokPerSec: 41 },
+      { id: "u-h2", runId: "rh2", hostId: "local", projectId: "tb", agent: "Codex", model: "gpt-5", issueId: 15, ts: "2026-08-17T11:00:00", input: 54000, output: 9000, cacheRead: 80000, cacheWrite: null, reasoning: null, total: 143000, live: false, ttftMs: 380, tokPerSec: 52 },
+      { id: "u-h3", runId: "rh3", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-opus-4", issueId: 22, ts: "2026-08-15T16:40:00", input: 91000, output: 16000, cacheRead: 140000, cacheWrite: 9000, reasoning: 2100, total: 258100, live: false, ttftMs: 910, tokPerSec: 29 },
+      { id: "u-h4", runId: "rh4", hostId: "local", projectId: "notes", agent: "Codex", model: "gpt-5-mini", issueId: 40, ts: "2026-08-12T09:10:00", input: 12000, output: 2200, cacheRead: null, cacheWrite: null, reasoning: null, total: 14200, live: false, ttftMs: null, tokPerSec: null },
+      { id: "u-h5", runId: "rh5", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 14, ts: "2026-08-08T13:22:00", input: 330000, output: 58000, cacheRead: 1200000, cacheWrite: 44000, reasoning: 19000, total: 1651000, live: false, ttftMs: 2400, tokPerSec: 11 },
+      { id: "u-h6", runId: "rh6", hostId: "local", projectId: "tb", agent: "Claude Code", model: "claude-sonnet-4", issueId: 11, ts: "2026-08-02T10:05:00", input: 47000, output: 8800, cacheRead: 62000, cacheWrite: 3000, reasoning: null, total: 120800, live: false, ttftMs: 720, tokPerSec: 36 },
+      { id: "u-h7", runId: "rh7", hostId: "local", projectId: "tb", agent: "Grok Build", model: "grok-4", issueId: 8, ts: "2026-07-11T18:00:00", input: 88000, output: 15000, cacheRead: 210000, cacheWrite: 11000, reasoning: 4000, total: 328000, live: false, ttftMs: 540, tokPerSec: 44 },
+      { id: "u-m1", runId: "rm1", hostId: "mini", projectId: "shop", agent: "Codex", model: "gpt-5", issueId: 30, ts: "2026-08-20T08:40:00", input: 41000, output: 7600, cacheRead: 90000, cacheWrite: null, reasoning: null, total: 138600, live: false, ttftMs: 510, tokPerSec: 39 },
+      { id: "u-m2", runId: "rm2", hostId: "mini", projectId: "shop", agent: "Grok Build", model: "grok-4", issueId: 31, ts: "2026-08-19T19:10:00", input: 26000, output: 5100, cacheRead: 14000, cacheWrite: 800, reasoning: 600, total: 46500, live: false, ttftMs: 1680, tokPerSec: 17 }
     ];
     const USAGE_STATES = [
       ["mixed", "混合口径 · 大量历史"],
@@ -2332,6 +2377,14 @@ v1 桌面壳是否坚持 Tauri 2？
         usageAllAgents: "全部 Agent",
         usageAllModels: "全部模型",
         usageNoSlice: "点左边一行，过滤下面的 Run。",
+        usageHit: "缓存命中率",
+        usageHitHelp: "缓存读 ÷（缓存读 + 输入）。只拿给了缓存读的 Run 算；没给的不把 0 算进去。",
+        usageTrend: "用量趋势",
+        usageRecent: "最近请求",
+        usageRecentHelp: "看通路快慢，用来判断要不要换网络通路。不是 token 账。Agent 没给的字段是 —。看板不管理代理节点。",
+        usageTtft: "首字",
+        usageRate: "生成速率",
+        usageSlow: "偏慢",
         usagePhoneKeep: "手机只保留合计和当前这一刀。拆分表、完整流水和单次六字段请到电脑。",
         usageLive: "进行中，数字还会变",
         usageFree: "未绑定 Issue",
@@ -2531,6 +2584,14 @@ v1 桌面壳是否坚持 Tauri 2？
         usageAllAgents: "All Agents",
         usageAllModels: "All models",
         usageNoSlice: "Pick a row on the left to filter Runs.",
+        usageHit: "Cache hit rate",
+        usageHitHelp: "Cache read ÷ (cache read + input). Only Runs that reported cache read. Missing is not treated as 0.",
+        usageTrend: "Usage trend",
+        usageRecent: "Recent requests",
+        usageRecentHelp: "Path speed, to decide whether the network path is slow. Not the token ledger. Missing fields are —. Taskboard does not manage proxy nodes.",
+        usageTtft: "Time to first token",
+        usageRate: "Token rate",
+        usageSlow: "Slow",
         usagePhoneKeep: "Phone keeps the total for the current slice. Breakdowns, the full ledger and six-field detail stay on a computer.",
         usageLive: "Still running; numbers may change",
         usageFree: "Unbound Issue",
@@ -2840,6 +2901,79 @@ v1 桌面壳是否坚持 Tauri 2？
         return `<div class="usage-kpi ${v == null ? "missing" : ""}"><div class="k">${esc(usageFieldLabel(k))}</div><div class="v">${v == null ? "—" : esc(fmtTok(v))}</div></div>`;
       }).join("")}</div>`;
     }
+    function usageCacheHit(rows) {
+      const ok = rows.filter(r => r.cacheRead != null && r.input != null);
+      if (!ok.length) return null;
+      const cr = ok.reduce((n, r) => n + r.cacheRead, 0);
+      const inp = ok.reduce((n, r) => n + r.input, 0);
+      if (cr + inp === 0) return null;
+      return cr / (cr + inp);
+    }
+    function usageFmtPct(n) {
+      if (n == null) return "—";
+      return Math.round(n * 100) + "%";
+    }
+    function usageFmtTtft(ms) {
+      if (ms == null) return "—";
+      return ms >= 1000 ? (ms / 1000).toFixed(1).replace(/\.0$/, "") + "s" : ms + "ms";
+    }
+    function usageFmtRate(n) {
+      if (n == null) return "—";
+      return n + "/s";
+    }
+    function usageIsSlow(row) {
+      return (row.ttftMs != null && row.ttftMs >= 1500) || (row.tokPerSec != null && row.tokPerSec < 20);
+    }
+    function usageTrend(rows) {
+      const map = new Map();
+      for (const r of rows) {
+        const k = usageDayKey(r);
+        map.set(k, (map.get(k) || 0) + (r.total || 0));
+      }
+      const keys = [...map.keys()];
+      const max = Math.max(1, ...keys.map(k => map.get(k)));
+      if (!keys.length) return `<div class="tiny">${esc(t("ovEmpty"))}</div>`;
+      return `<div class="usage-trend">${keys.map(k => {
+        const v = map.get(k);
+        const h = Math.max(4, Math.round((v / max) * 56));
+        return `<button type="button" title="${esc(k + " · " + fmtTok(v))}"><i style="height:${h}px"></i><span>${esc(k)}</span></button>`;
+      }).join("")}</div>`;
+    }
+    function usageHealth(rows) {
+      const hit = usageCacheHit(rows);
+      const miss = rows.some(r => r.cacheRead == null);
+      return `<div class="usage-health">
+        <div class="usage-card"><div class="k">${esc(t("usageTrend"))}</div>${usageTrend(rows)}</div>
+        <div class="usage-card">
+          <div class="k">${esc(t("usageHit"))}</div>
+          <div class="usage-kpi ${hit == null ? "missing" : ""}" style="border:0;padding:8px 0 0;background:transparent"><div class="v">${esc(usageFmtPct(hit))}</div></div>
+          <div class="tiny">${esc(t("usageHitHelp"))}${miss ? (S.lang === "en" ? " Some Runs omitted." : " 有的 Run 没给缓存读，已排除。") : ""}</div>
+        </div>
+      </div>`;
+    }
+    function usageRecent(rows) {
+      const list = rows.slice(0, 5);
+      if (!list.length) return "";
+      return `<div class="usage-card">
+        <div class="k">${esc(t("usageRecent"))}</div>
+        <div class="tiny" style="margin-top:4px">${esc(t("usageRecentHelp"))}</div>
+        <table class="usage-recent">
+          <thead><tr><th>Run</th><th>${S.lang === "en" ? "Model" : "模型"}</th><th>${esc(t("usageTtft"))}</th><th>${esc(t("usageRate"))}</th><th></th></tr></thead>
+          <tbody>${list.map(r => {
+            const i = r.issueId ? issue(r.issueId) : null;
+            const title = i ? `#${i.id}` : t("usageFree");
+            const slow = usageIsSlow(r);
+            return `<tr data-act="usage-run" data-id="${r.id}">
+              <td><b>${esc(title)}</b><div class="tiny">${esc(usageWhen(r))}</div></td>
+              <td>${esc(r.model)}</td>
+              <td class="${slow && r.ttftMs >= 1500 ? "usage-slow" : ""}">${esc(usageFmtTtft(r.ttftMs))}</td>
+              <td class="${slow && r.tokPerSec != null && r.tokPerSec < 20 ? "usage-slow" : ""}">${esc(usageFmtRate(r.tokPerSec))}</td>
+              <td class="tiny">${slow ? esc(t("usageSlow")) : ""}</td>
+            </tr>`;
+          }).join("")}</tbody>
+        </table>
+      </div>`;
+    }
     function usageAcctBox(agent) {
       const rec = AGENT_ACCT[agent];
       if (!rec) return "";
@@ -2966,21 +3100,31 @@ v1 桌面壳是否坚持 Tauri 2？
       const run = usageRow(S.usageRunId);
       const plist = hostProjects();
       const agents = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.agent))];
+      const models = [...new Set(USAGE_ROWS.filter(r => r.hostId === S.hostId).map(r => r.model))];
       return `
         <div class="row"><b>${esc(totalLabel || t("usageTotal"))}</b><span class="grow"></span></div>
         <div class="usage-filters">${usageRangeBtns(S.usageRange, "usage-range")}</div>
         <div class="tiny">${esc(t("usageHint"))} · ${S.lang === "en" ? "Prototype clock 20 Aug 14:32" : "原型时钟 8 月 20 日 14:32"}</div>
         ${usageKpis(rows)}
         ${usageMixedNote(rows)}
+        ${usageHealth(rows)}
+        ${usageRecent(rows)}
         <div class="usage-filters">
           <button data-act="usage-slice" data-kind="project" data-id="all" class="${!S.usageSlice ? "active" : ""}">${esc(t("usageAllProjects"))}</button>
-          ${plist.map(p => `<button data-act="usage-slice" data-kind="project" data-id="${p.id}" class="${S.usageSlice && S.usageSlice.id === p.id ? "active" : ""}">${esc(p.name)}</button>`).join("")}
-          ${agents.map(a => `<button data-act="usage-slice" data-kind="agent" data-id="${esc(a)}" class="${S.usageSlice && S.usageSlice.id === a ? "active" : ""}">${esc(a)}</button>`).join("")}
+          ${plist.map(p => `<button data-act="usage-slice" data-kind="project" data-id="${p.id}" class="${S.usageSlice && S.usageSlice.kind === "project" && S.usageSlice.id === p.id ? "active" : ""}">${esc(p.name)}</button>`).join("")}
+        </div>
+        <div class="usage-filters">
+          <button data-act="usage-slice" data-kind="agent" data-id="all" class="${!S.usageSlice || S.usageSlice.kind !== "agent" ? (!S.usageSlice ? "active" : "") : ""}">${esc(t("usageAllAgents"))}</button>
+          ${agents.map(a => `<button data-act="usage-slice" data-kind="agent" data-id="${esc(a)}" class="${S.usageSlice && S.usageSlice.kind === "agent" && S.usageSlice.id === a ? "active" : ""}">${esc(a)}</button>`).join("")}
+        </div>
+        <div class="usage-filters">
+          <button data-act="usage-slice" data-kind="model" data-id="all" class="${!S.usageSlice || S.usageSlice.kind !== "model" ? (!S.usageSlice ? "active" : "") : ""}">${esc(t("usageAllModels"))}</button>
+          ${models.map(m => `<button data-act="usage-slice" data-kind="model" data-id="${esc(m)}" class="${S.usageSlice && S.usageSlice.kind === "model" && S.usageSlice.id === m ? "active" : ""}">${esc(m)}</button>`).join("")}
         </div>
         ${days.map(d => `
           <div class="usage-day">${esc(d)}</div>
           <table class="usage-ledger">
-            <thead><tr><th>Run</th><th>Agent</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th></tr></thead>
+            <thead><tr><th>Run</th><th>${S.lang === "en" ? "Agent / model" : "Agent / 模型"}</th><th>输入</th><th>输出</th><th>缓存读</th><th>合计</th></tr></thead>
             <tbody>${shown.filter(r => usageDayKey(r) === d).map(r => {
               const i = r.issueId ? issue(r.issueId) : null;
               const title = i ? `#${i.id} ${shortTitle(i.title, 22)}` : t("usageFree");
@@ -2988,7 +3132,7 @@ v1 桌面壳是否坚持 Tauri 2？
               const open = S.usageRunId === r.id;
               return `<tr data-act="usage-run" data-id="${r.id}" class="${open ? "sel" : ""}">
                 <td><b>${esc(title)}</b><div class="tiny">${esc(p ? p.name : "")} · ${esc(usageWhen(r))}${r.live ? " · " + t("usageLive") : ""}</div></td>
-                <td>${esc(r.agent)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}">i</button></td>
+                <td>${esc(r.agent)} · ${esc(r.model)} <button class="usage-mark" data-act="usage-acct" data-id="${esc(r.agent)}">i</button></td>
                 <td>${usageTokCell(r.input)}</td>
                 <td>${usageTokCell(r.output)}</td>
                 <td>${usageTokCell(r.cacheRead)}</td>
