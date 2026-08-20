@@ -28,7 +28,7 @@ test("三种摆位在同一主壳切换，URL 与键盘稳定", async ({ page })
   await expect(page.locator(".map-side")).toHaveCount(0);
   await expect(page.locator(".mid-bar .refresh-compact")).toBeVisible();
 
-  await page.getByRole("button", { name: /C · 态势时间轴/ }).click();
+  await page.getByRole("button", { name: /C · 刷新状态栏/ }).click();
   await expect(page).toHaveURL(/variant=C/);
   await expect(page.locator('[data-refresh-placement="rail"]')).toBeVisible();
   await expect(page.locator(".mid-bar .refresh-compact")).toHaveCount(0);
@@ -45,7 +45,7 @@ test("正常轮询可手动刷新，完成后按设置间隔重新倒计时", as
   await page.locator(".mid-bar .refresh-compact").click();
   const details = page.getByRole("dialog", { name: "Tracker 刷新详情" });
   await expect(details).toContainText("42 秒后自动刷新");
-  await expect(details).toContainText("态势截至 今天 14:32");
+  await expect(details).toContainText("数据截至 今天 14:32");
   await details.getByRole("button", { name: "刷新设置" }).click();
 
   const interval = page.getByRole("combobox", { name: "Tracker 刷新间隔" });
@@ -63,7 +63,7 @@ test("正常轮询可手动刷新，完成后按设置间隔重新倒计时", as
   await expect(page.locator(".mid-bar .refresh-compact")).toContainText("120 秒", { timeout: 3000 });
 });
 
-test("慢刷新继续画上次态势，不重复出现刷新按钮", async ({ page }) => {
+test("慢刷新继续画上次数据，不重复出现刷新按钮", async ({ page }) => {
   await open(page, "&variant=C&refresh=slow");
 
   const rail = page.locator('[data-refresh-placement="rail"]');
@@ -73,7 +73,7 @@ test("慢刷新继续画上次态势，不重复出现刷新按钮", async ({ pa
   await expect(page.locator(".lanes")).toBeVisible();
 });
 
-test("离线但有上次态势：四列保留，Tracker 写动作暂停，已有 Run 仍可打开", async ({ page }) => {
+test("离线但有上次数据：四列保留，Tracker 写动作暂停，已有 Run 仍可打开", async ({ page }) => {
   await open(page, "&variant=A&refresh=offline-cached");
 
   const alert = page.locator('[data-refresh-placement="alert"]');
@@ -92,10 +92,10 @@ test("离线但有上次态势：四列保留，Tracker 写动作暂停，已有
   await expect(page.locator(".term")).toBeVisible();
 });
 
-test("离线且没有上次态势：看板、依赖图、Issue 和底栏都不伪造数据", async ({ page }) => {
+test("离线且没有上次数据：看板、依赖图、Issue 和底栏都不伪造数据", async ({ page }) => {
   await open(page, "&variant=C&refresh=offline-empty");
 
-  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的态势");
+  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的数据");
   await expect(page.locator(".lanes")).toHaveCount(0);
   await expect(page.locator(".map-detail-col")).toHaveCount(0);
   await expect(page.locator(".dock")).toHaveCount(0);
@@ -165,7 +165,7 @@ test("390px 手机：三个摆位都可读，离线空状态不画真实 Issue",
   await expect(page.locator('[data-refresh-placement="phone-card"]')).toContainText("约 15:10 恢复");
 
   await setRefresh(page, "offline-empty");
-  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的态势");
+  await expect(page.locator('[data-refresh-empty="true"]')).toContainText("还没有可显示的数据");
   await expect(page.locator(".phone-body .issue-card")).toHaveCount(0);
 });
 

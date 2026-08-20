@@ -12,7 +12,7 @@
     三种摆位，共用选定的 Codex 原貌映射主壳：
       A  顶栏脉冲：日常状态收进顶栏，异常在看板上方展开。
       B  Project 行：状态跟着左侧当前 Project，异常才进入主区。
-      C  态势时间轴：看板上方常驻一条完整刷新轨道。
+      C  刷新状态栏：看板上方常驻一条完整刷新轨道。
     ?variant=A|B|C  &refresh=normal|manual|slow|offline-cached|offline-empty|limited-until|limited-unknown|auth
   -->
   <style>
@@ -1940,11 +1940,11 @@ v1 桌面壳是否坚持 Tauri 2？
       {
         id: "B",
         name: "Project 行",
-        note: "刷新状态跟着左侧当前 Project；主区只在没有态势或需要处理时打断。"
+        note: "刷新状态跟着左侧当前 Project；主区只在没有数据或需要处理时打断。"
       },
       {
         id: "C",
-        name: "态势时间轴",
+        name: "刷新状态栏",
         note: "看板上方常驻完整刷新轨道，倒计时、截至时间和异常始终在同一位置。"
       }
     ];
@@ -1953,7 +1953,7 @@ v1 桌面壳是否坚持 Tauri 2？
       ["normal", "正常轮询"],
       ["manual", "手动刷新中"],
       ["slow", "慢刷新"],
-      ["offline-cached", "离线 · 有上次态势"],
+      ["offline-cached", "离线 · 有上次数据"],
       ["offline-empty", "离线 · 从未拉成功"],
       ["limited-until", "限流 · 有恢复时间"],
       ["limited-unknown", "限流 · 无恢复时间"],
@@ -2069,13 +2069,13 @@ v1 桌面壳是否坚持 Tauri 2？
         pairFake: "假装已连上",
         cancel: "取消",
         phoneIssueTab: "票",
-        phoneHome: "态势",
+        phoneHome: "看板",
         noIssueShort: "还没点票",
         noProjectTitle: "这台 Host 上还没有 Project",
         noProjectBody: "先登记一个本地目录，并选好 Issue Tracker。",
         recentN: "最近完成列张数",
         recentNHelp: "默认 5。只影响最右那一列。不能拖进这一列来关票。",
-        phoneNote: "手机只看态势和开停。查看改动请到电脑。",
+        phoneNote: "手机可看板、读票和开停 Run。查看改动请到电脑。",
         pickIssue: "点一张 Issue",
         filterProject: "点 Project 只过滤本板。",
         ended: "已结束",
@@ -2342,7 +2342,7 @@ v1 桌面壳是否坚持 Tauri 2？
         normal: {
           tone: "ok",
           primary: zh ? `${S.refreshSeconds} 秒后自动刷新` : `Auto refresh in ${S.refreshSeconds}s`,
-          secondary: zh ? "态势截至 今天 14:32" : "Snapshot as of 14:32 today",
+          secondary: zh ? "数据截至 今天 14:32" : "Snapshot as of 14:32 today",
           short: zh ? `${S.refreshSeconds} 秒 · 截至 14:32` : `${S.refreshSeconds}s · as of 14:32`,
           canRefresh: true,
           hasSnapshot: true
@@ -2350,7 +2350,7 @@ v1 桌面壳是否坚持 Tauri 2？
         manual: {
           tone: "busy",
           primary: zh ? "正在刷新…" : "Refreshing…",
-          secondary: zh ? "手动刷新 · 继续显示截至 14:32 的态势" : "Manual refresh · still showing the 14:32 snapshot",
+          secondary: zh ? "手动刷新 · 继续显示截至 14:32 的数据" : "Manual refresh · still showing the 14:32 snapshot",
           short: zh ? "正在刷新 · 截至 14:32" : "Refreshing · as of 14:32",
           canRefresh: false,
           hasSnapshot: true
@@ -2358,7 +2358,7 @@ v1 桌面壳是否坚持 Tauri 2？
         slow: {
           tone: "busy",
           primary: zh ? "刷新还在继续" : "Refresh is taking longer",
-          secondary: zh ? "已等待 18 秒 · 继续显示截至 14:32 的态势" : "18s elapsed · still showing the 14:32 snapshot",
+          secondary: zh ? "已等待 18 秒 · 继续显示截至 14:32 的数据" : "18s elapsed · still showing the 14:32 snapshot",
           short: zh ? "刷新 18 秒 · 截至 14:32" : "Refreshing 18s · as of 14:32",
           canRefresh: false,
           hasSnapshot: true
@@ -2366,7 +2366,7 @@ v1 桌面壳是否坚持 Tauri 2？
         "offline-cached": {
           tone: "warn",
           primary: zh ? "Project 离线" : "Project offline",
-          secondary: zh ? "正在显示截至 今天 14:32 的上次态势" : "Showing the last snapshot from 14:32 today",
+          secondary: zh ? "正在显示截至 今天 14:32 的上次数据" : "Showing the last snapshot from 14:32 today",
           short: zh ? "离线 · 截至 14:32" : "Offline · as of 14:32",
           canRefresh: true,
           hasSnapshot: true,
@@ -2375,8 +2375,8 @@ v1 桌面壳是否坚持 Tauri 2？
         "offline-empty": {
           tone: "danger",
           primary: zh ? "Project 离线" : "Project offline",
-          secondary: zh ? "从未成功拉取，当前没有可显示的态势" : "No successful refresh yet; there is no snapshot to show",
-          short: zh ? "离线 · 尚无态势" : "Offline · no snapshot",
+          secondary: zh ? "从未成功拉取，当前没有可显示的数据" : "No successful refresh yet; there is no snapshot to show",
+          short: zh ? "离线 · 尚无数据" : "Offline · no snapshot",
           canRefresh: true,
           hasSnapshot: false,
           blocksTrackerWrites: true
@@ -2484,7 +2484,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `<div class="refresh-empty" data-refresh-empty="true">
         <div class="refresh-empty-card">
           <div class="empty-mark">!</div>
-          <h2>${S.lang === "en" ? "No board data yet" : "还没有可显示的态势"}</h2>
+          <h2>${S.lang === "en" ? "No board data yet" : "还没有可显示的数据"}</h2>
           <p>${esc(meta.secondary)}${S.lang === "en" ? ". The four columns will appear after the first successful refresh." : "。第一次刷新成功后才会显示四列，避免把示例画得像真实 Issue。"}</p>
           <div class="row">${refreshAction(meta, false)}<button data-act="refresh-settings">${S.lang === "en" ? "Project settings" : "Project 设置"}</button></div>
         </div>
@@ -3452,7 +3452,7 @@ v1 桌面壳是否坚持 Tauri 2？
         ${!meta.hasSnapshot ? refreshEmptyState() : `
           <div class="tiny pad">${esc(hint)}
             ${S.childFilter ? `<button data-act="clear-filter">${t("clearFilter")}</button>` : ""}
-            ${meta.blocksTrackerWrites ? `<div class="refresh-disabled-note">${S.lang === "en" ? "Tracker writes and auto advance are paused until refresh succeeds." : "刷新成功前，认领、放领和自动推进暂停；上次态势只供查看。"}</div>` : ""}
+            ${meta.blocksTrackerWrites ? `<div class="refresh-disabled-note">${S.lang === "en" ? "Tracker writes and auto advance are paused until refresh succeeds." : "刷新成功前，认领、放领和自动推进暂停；上次数据只供查看。"}</div>` : ""}
           </div>
           <div class="lanes">
             ${cols.map(([key, name, items]) => `
@@ -3928,7 +3928,7 @@ v1 桌面壳是否坚持 Tauri 2？
         `}`;
     }
     function phoneOverview() {
-      return `<div class="pad"><button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回态势"}</button></div>${overviewPane()}`;
+      return `<div class="pad"><button data-act="phone" data-id="home">${S.lang === "en" ? "Back" : "返回看板"}</button></div>${overviewPane()}`;
     }
     function phoneIssue() {
       const i = issue(S.issueId);
