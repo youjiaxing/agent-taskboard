@@ -2570,7 +2570,8 @@ v1 桌面壳是否坚持 Tauri 2？
       telemetryExpanded: false,
       telemetrySideOpen: false,
       telemetryPopoverOpen: false,
-      telemetryScenario: "multi-model"
+      telemetryScenario: "multi-model",
+      phoneModelListOpen: false
     };
 
     const DIRECTIONS = [
@@ -5711,14 +5712,32 @@ v1 桌面壳是否坚持 Tauri 2？
       const mainModel = models[0];
       return `
         <div class="hd">Run · ${i ? "#" + i.id : t("free")}</div>
-        ${mainModel ? `
+        ${models.length ? `
           <div class="pad" style="padding-bottom:0;">
-            <div class="telemetry-capsule" style="width:100%; justify-content:space-between;">
-              <span class="role-badge ${mainModel.role}">${esc(mainModel.roleLabel)}</span>
-              <span class="telemetry-model-name">${esc(mainModel.model)}</span>
-              <span class="telemetry-metric">${fmtTok(mainModel.total)} tok</span>
+            <div class="telemetry-capsule" data-act="toggle-phone-models" style="width:100%; justify-content:space-between; cursor:pointer;" title="点击展开/收起全部模型列表">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="role-badge ${mainModel.role}">${esc(mainModel.roleLabel)}</span>
+                <span class="telemetry-model-name">${esc(mainModel.model)}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="telemetry-metric">${fmtTok(mainModel.total)} tok</span>
+                ${models.length > 1 ? `<span class="tiny" style="color:var(--accent); font-weight:600;">+${models.length - 1} 模型 ${S.phoneModelListOpen ? "▴" : "▾"}</span>` : ""}
+              </div>
             </div>
-            <div class="tiny muted" style="margin-top:4px;">手机只保留当前模型概览；多模型分轨与抖动请在电脑查看。</div>
+            ${S.phoneModelListOpen && models.length > 1 ? `
+              <div class="stack phone-models-list" style="margin-top:6px; gap:5px; padding:8px; background:var(--card-bg); border-radius:6px; border:1px solid var(--border);">
+                ${models.map(m => `
+                  <div class="phone-model-item" style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+                    <div style="display:flex; align-items:center; gap:5px;">
+                      <span class="role-badge ${m.role}" style="font-size:9.5px; padding:1px 5px;">${esc(m.roleLabel)}</span>
+                      <span class="mono" style="font-weight:600;">${esc(m.model)}</span>
+                    </div>
+                    <span class="mono">${fmtTok(m.total)} tok</span>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+            <div class="tiny muted" style="margin-top:4px;">手机支持查看多模型 Token 列表；Sparkline 走势图请在电脑端查看。</div>
           </div>
         ` : ""}
         ${r.status === "active" ? `<div class="pad"><button data-act="ask-stop">${t("stopRun")}</button></div>` : ""}
@@ -5833,6 +5852,11 @@ v1 桌面壳是否坚持 Tauri 2？
           if (S.variant === "B") S.telemetrySideOpen = true;
           else if (S.variant === "C") S.telemetryPopoverOpen = !S.telemetryPopoverOpen;
           else S.telemetryExpanded = !S.telemetryExpanded;
+          render();
+          return;
+        }
+        if (act === "toggle-phone-models") {
+          S.phoneModelListOpen = !S.phoneModelListOpen;
           render();
           return;
         }

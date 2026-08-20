@@ -130,6 +130,21 @@ test("手机只留合计，丢掉拆分表和六字段明细", async ({ page }) 
   await expect(page.locator("[data-usage-detail]")).toHaveCount(0);
 });
 
+test("手机端 Run 界面支持展开查看多模型列表", async ({ page }) => {
+  await open(page, "&viewport=phone");
+
+  await page.locator('.phone-tabbar button[data-id="run"]').click();
+  await expect(page.locator(".telemetry-capsule")).toBeVisible();
+  await expect(page.locator(".telemetry-capsule")).toContainText("+1 模型");
+
+  await page.locator('[data-act="toggle-phone-models"]').click();
+  await expect(page.locator(".phone-models-list")).toBeVisible();
+  await expect(page.locator(".phone-model-item")).toHaveCount(2);
+  await expect(page.locator(".phone-models-list")).toContainText("grok-4");
+  await expect(page.locator(".phone-models-list")).toContainText("grok-4-mini");
+});
+
+
 test("Run 遥测 A：顶栏展示多模型胶囊，展开看分轨卡片、6字段与 Sparkline，可跳 Host 用量", async ({ page }) => {
   await open(page, "&variant=A&mid=board");
 
