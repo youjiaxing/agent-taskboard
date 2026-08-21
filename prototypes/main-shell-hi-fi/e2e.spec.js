@@ -100,7 +100,7 @@ test("C：每次都先选 Agent；不绑票也从 Project 下方进", async ({ p
 
   await page.getByRole("button", { name: "×" }).click();
   await page.locator('.map-side [data-act=open-launch][data-kind=free]').click();
-  await expect(page.locator(".launch-palette")).toContainText("不绑票开 Run");
+  await expect(page.locator(".launch-palette")).toContainText("打开 Agent");
 });
 
 test("字段校验与启动失败夹具", async ({ page }) => {

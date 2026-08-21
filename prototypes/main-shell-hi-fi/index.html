@@ -4517,7 +4517,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `
         <div class="launch-palette" data-launch="C-picker">
           <div class="launch-palette-card">
-            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("不绑票开 Run · 选 Agent", "Start without an issue · pick Agent") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
+            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("打开 Agent · 选哪家", "Open Agent · pick which") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
             ${S.launch.kind === "free" ? launchKindBanner() : `<div class="tiny">${esc(issue(S.launch.issueId) ? issueLabel(issue(S.launch.issueId)) : "")}</div>`}
             ${agentList()}
           </div>
@@ -4551,7 +4551,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return S.launch.step === "picker" ? launchPickerC() : launchModalC();
     }
     function freeLaunchLabel() {
-      return lt("不绑票开 Run", "Start without an issue");
+      return lt("打开 Agent", "Open Agent");
     }
     function launchOpenButton(kind, extra = "") {
       const blocked = refreshMeta().blocksTrackerWrites;
