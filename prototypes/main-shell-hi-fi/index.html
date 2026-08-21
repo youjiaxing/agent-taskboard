@@ -1135,6 +1135,33 @@
     }
     .shell-codex-map .ms-nested:hover,
     .shell-codex-map .ms-nested.active { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .ms-proj {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      border-radius: 8px;
+    }
+    .shell-codex-map .ms-proj .ms-item {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+    }
+    .shell-codex-map .ms-new {
+      flex: 0 0 26px;
+      width: 26px;
+      height: 26px;
+      margin-right: 4px;
+      border: 0;
+      background: transparent;
+      border-radius: 7px;
+      padding: 0;
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .shell-codex-map .ms-new:hover { background: var(--sel); color: var(--ink); }
+    .shell-codex-map .ms-new:disabled { opacity: .35; }
     .shell-codex-map .ms-user {
       display: flex;
       align-items: center;
@@ -4553,6 +4580,17 @@ v1 桌面壳是否坚持 Tauri 2？
     function freeLaunchLabel() {
       return lt("新建", "New");
     }
+    function newLaunchIcon(projectId) {
+      const blocked = refreshMeta().blocksTrackerWrites;
+      const title = blocked
+        ? (S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project")
+        : freeLaunchLabel();
+      return `<button type="button" class="ms-new" data-act="open-launch" data-kind="free" data-id="${esc(projectId)}" title="${esc(title)}" aria-label="${esc(freeLaunchLabel())}" ${blocked ? "disabled" : ""}>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M7 2.5v9M2.5 7h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </button>`;
+    }
     function launchOpenButton(kind, extra = "") {
       const blocked = refreshMeta().blocksTrackerWrites;
       const title = blocked ? (S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project") : "";
@@ -5105,9 +5143,12 @@ v1 桌面壳是否坚持 Tauri 2？
               ${plist.map(pp => {
                 const runs = projectDockRuns(pp.id);
                 return `
-                  <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">
-                    ${esc(pp.name)}<span class="ms-tag">${esc(pp.tracker)}</span>
-                  </button>
+                  <div class="ms-proj">
+                    <button class="ms-item ${S.projectId === pp.id ? "active" : ""}" data-act="project" data-id="${pp.id}">
+                      ${esc(pp.name)}<span class="ms-tag">${esc(pp.tracker)}</span>
+                    </button>
+                    ${newLaunchIcon(pp.id)}
+                  </div>
                   ${S.projectId === pp.id ? refreshProjectRow() : ""}
                   ${runs.map(rr => {
                     const ii = rr.issueId ? issue(rr.issueId) : null;
@@ -5115,8 +5156,7 @@ v1 桌面壳是否坚持 Tauri 2？
                     return `<button class="ms-nested ${S.runId === rr.id ? "active" : ""}" data-act="focus-run" data-id="${rr.id}">
                       <span class="dot ${rr.status === "active" ? "busy" : rr.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
                     </button>`;
-                  }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}
-                  ${S.projectId === pp.id ? `<button class="ms-nested" data-act="open-launch" data-kind="free">${esc(freeLaunchLabel())}</button>` : ""}`;
+                  }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}`;
               }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
               <button class="ms-item" data-act="register">+ ${esc(plist.length ? t("registerAgain") : t("register"))}</button>
             </div>
@@ -6206,6 +6246,7 @@ v1 桌面壳是否坚持 Tauri 2？
                     <b>${p ? esc(p.name) : h ? esc(hostName(h)) : "Client"}</b>
                     <span>${h ? esc(hostName(h)) : ""}${p ? ` · ${esc(p.tracker)}` : ""}</span>
                   </div>
+                  ${p ? newLaunchIcon(p.id) : ""}
                   <button data-act="phone-context">${S.phoneContextOpen ? (S.lang === "en" ? "Hide" : "收起") : (S.lang === "en" ? "Switch" : "切换")}</button>
                   ${settingsBtn()}
                 </div>
@@ -6294,7 +6335,6 @@ v1 桌面壳是否坚持 Tauri 2？
         ${refreshPhoneCard()}
         <div class="phone-home-actions">
           <button data-act="mid-mode" data-id="overview">${S.lang === "en" ? "Run overview" : "Run 总览"}</button>
-          ${S.projectId ? `<button data-act="open-launch" data-kind="free">${esc(freeLaunchLabel())}</button>` : ""}
           <button data-act="${S.variant === "C" ? "usage-tab" : S.variant === "B" ? "usage-open" : "mid-mode"}" data-id="${S.variant === "A" ? "usage" : "usage"}">${esc(t("usage"))}</button>
           <button data-act="refresh-toggle">${S.lang === "en" ? "Refresh details" : "刷新详情"}</button>
         </div>
@@ -6720,7 +6760,16 @@ v1 桌面壳是否坚持 Tauri 2？
         }
         if (act === "register") { alert("原型：登记入口在这里。不真的加 Project。"); }
         if (act === "open-launch") {
-          openLaunch(b.dataset.kind === "free" ? "free" : "issue", S.issueId);
+          if (b.dataset.kind === "free") {
+            const p = project(id || S.projectId);
+            if (p) {
+              S.projectId = p.id;
+              S.hostId = p.hostId;
+            }
+            openLaunch("free", null);
+          } else {
+            openLaunch("issue", S.issueId);
+          }
         }
         if (act === "launch-cancel") { closeLaunch(); render(); }
         if (act === "launch-agent") { applyLaunchAgent(id); render(); }

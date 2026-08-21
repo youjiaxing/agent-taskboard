@@ -74,10 +74,10 @@ test("点已有 Run 的票直接进中间终端，不打开配置表", async ({ 
   await expect(page.getByRole("button", { name: "返回看板" })).toBeVisible();
 });
 
-test("不绑票入口在当前 Project 下方；默认开场白是空的；不认领", async ({ page }) => {
+test("不绑票入口在 Project 行右侧图标；默认开场白是空的；不认领", async ({ page }) => {
   await open(page, "&variant=A");
 
-  await page.locator('.map-side [data-act=open-launch][data-kind=free]').click();
+  await page.locator('.map-side [data-act=open-launch][data-kind=free][data-id=tb]').click();
   await expect(page.locator(".launch-modal-card")).toBeVisible();
   await expect(page.locator(".launch-modal-card")).toContainText("未绑定 Issue");
   await expect(page.locator("textarea[data-act=launch-prompt]")).toHaveValue("");
@@ -99,7 +99,7 @@ test("C：每次都先选 Agent；不绑票也从 Project 下方进", async ({ p
   await expect(page.locator(".launch-palette")).toBeVisible();
 
   await page.getByRole("button", { name: "×" }).click();
-  await page.locator('.map-side [data-act=open-launch][data-kind=free]').click();
+  await page.locator('.map-side [data-act=open-launch][data-kind=free][data-id=tb]').click();
   await expect(page.locator(".launch-palette")).toContainText("新建");
 });
 
