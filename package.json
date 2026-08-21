@@ -3,8 +3,10 @@
   "private": true,
   "scripts": {
     "serve:main-shell": "./prototypes/main-shell-hi-fi/serve.sh",
-    "test": "playwright test prototypes/main-shell-hi-fi/e2e.spec.js",
-    "test:main-shell": "playwright test prototypes/main-shell-hi-fi/e2e.spec.js"
+    "serve:project-management": "./prototypes/project-registration-management/serve.sh",
+    "test": "npm run test:main-shell && npm run test:project-management",
+    "test:main-shell": "playwright test prototypes/main-shell-hi-fi/e2e.spec.js",
+    "test:project-management": "playwright test --config prototypes/project-registration-management/playwright.config.js"
   },
   "devDependencies": {
     "@playwright/test": "1.55.0"
