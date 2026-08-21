@@ -6,26 +6,23 @@ async function open(page, params = "") {
   await page.goto(`${prototypeUrl}/?direction=codex-map&scenario=daily${params}`);
 }
 
-test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
+async function startFromIssue(page) {
+  await page.locator(".issue-hd [data-act=open-launch]").click();
+}
+
+test("三种开 Run 结构切换，URL 与键盘稳定", async ({ page }) => {
   await open(page, "&variant=A");
 
   await expect(page.locator(".map-side")).toBeVisible();
-  await expect(page.getByRole("button", { name: "用量", exact: true }).first()).toBeVisible();
-  await expect(page.locator(".usage-pane")).toBeVisible();
-  await expect(page.locator(".usage-ledger").first()).toBeVisible();
-  await expect(page).toHaveURL(/variant=A/);
-  await expect(page).toHaveURL(/mid=usage/);
-
-  await page.getByRole("button", { name: /B · 浮层/ }).click();
-  await expect(page).toHaveURL(/variant=B/);
   await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".usage-sheet")).toBeVisible();
-  await expect(page.locator(".usage-prompt")).toContainText("先选时间范围");
+  await expect(page.getByRole("button", { name: "开 Run" }).first()).toBeVisible();
+  await expect(page).toHaveURL(/variant=A/);
 
-  await page.getByRole("button", { name: /C · 总览/ }).click();
+  await page.getByRole("button", { name: /B · 票内/ }).click();
+  await expect(page).toHaveURL(/variant=B/);
+
+  await page.getByRole("button", { name: /C · 先选/ }).click();
   await expect(page).toHaveURL(/variant=C/);
-  await expect(page.locator(".usage-pane")).toBeVisible();
-  await expect(page.locator(".usage-ledger").first()).toBeVisible();
 
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/variant=A/);
@@ -33,168 +30,96 @@ test("三种用量层级切换，URL 与键盘稳定", async ({ page }) => {
   await expect(page).toHaveURL(/variant=C/);
 });
 
-test("A：左侧入口 + 流水；今天与 24 小时不同；缺字段是 —；可自定义范围", async ({ page }) => {
-  await open(page, "&variant=A&mid=board");
+test("A：底栏配置台；切 Agent 换字段；Claude 未安装不能启动；预填可改", async ({ page }) => {
+  await open(page, "&variant=A");
+  await startFromIssue(page);
 
-  await expect(page.locator(".lanes")).toBeVisible();
-  await page.locator('.map-side [data-act="mid-mode"][data-id="usage"]').click();
-  await expect(page.locator(".usage-pane")).toBeVisible();
-  await expect(page.getByText("这台 Host 合计")).toBeVisible();
-  await expect(page.getByRole("button", { name: "全部模型" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "grok-4" })).toBeVisible();
-  await expect(page.getByText("缓存命中率")).toBeVisible();
-  await expect(page.getByText("首字趋势")).toBeVisible();
-  await expect(page.getByText("速率趋势")).toBeVisible();
-  await expect(page.locator('[data-act="usage-range"][data-id="today"]')).toHaveClass(/active/);
-  await expect(page.locator(".usage-pane")).toContainText("今天 11:20");
-  await expect(page.locator(".usage-pane")).not.toContainText("昨天 21:40");
+  await expect(page.locator(".launch-dock")).toBeVisible();
+  await expect(page.locator(".launch-banner").first()).toContainText("预填自这个 Project");
+  await expect(page.locator(".launch-dock")).toContainText("权限模式");
+  await expect(page.locator(".launch-dock")).toContainText("alwaysApprove");
 
-  await page.getByRole("button", { name: "最近 24 小时" }).click();
-  await expect(page.locator(".usage-pane")).toContainText("昨天 21:40");
-  await expect(page.locator(".usage-pane")).not.toContainText("昨天 14:02");
+  await page.locator('.agent-seg [data-id="agy"]').click();
+  await expect(page.locator(".launch-banner").first()).toContainText("第一次用 Antigravity CLI");
+  await expect(page.locator(".launch-dock")).toContainText("执行模式");
+  await expect(page.locator(".launch-dock")).toContainText("跳过权限确认");
+  await expect(page.locator(".launch-dock")).toContainText("子 Agent");
+  await expect(page.locator(".launch-dock")).toContainText("没有原生建隔离执行目录");
 
-  await page.getByRole("button", { name: "Codex", exact: true }).click();
-  await expect(page.locator(".usage-kpi.missing .v").first()).toHaveText("—");
+  await page.locator('.agent-seg [data-id="claude"]').click();
+  await expect(page.locator(".launch-dock")).toContainText("未安装");
+  await expect(page.locator('[data-act=launch-commit]').first()).toBeDisabled();
 
-  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
-  await expect(page.locator("[data-usage-detail]")).toBeVisible();
-  await expect(page.locator("[data-usage-detail]")).toContainText("这家怎么记账");
-  await expect(page.locator("[data-usage-detail]")).toContainText("合计是 Agent 自己报的");
+  await page.locator('.agent-seg [data-id="codex"]').click();
+  await expect(page.locator(".launch-dock")).toContainText("approval");
+  await expect(page.locator('[data-act=launch-iso]')).toBeDisabled();
 
-  await page.getByRole("button", { name: "自定义" }).click();
-  await expect(page.locator('input[data-act="usage-from"]')).toBeVisible();
-  await expect(page.locator('input[data-act="usage-to"]')).toBeVisible();
-  await page.locator('input[data-act="usage-from"]').fill("2026-08-01");
-  await page.locator('input[data-act="usage-to"]').fill("2026-08-20");
-  await expect(page.locator(".usage-ledger").first()).toBeVisible();
-
-  await page.getByRole("button", { name: "返回看板" }).click();
-  await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".usage-pane")).toHaveCount(0);
+  await page.locator('.agent-seg [data-id="grok"]').click();
+  await expect(page.locator(".cmd-preview")).toContainText("grok --model");
+  await page.locator('[data-act=launch-commit]').first().click();
+  await expect(page.locator(".run-stage, .term").first()).toBeVisible();
+  await expect(page.locator(".launch-dock")).toHaveCount(0);
 });
 
-test("B：浮层不拆掉看板，关掉回到原工作面；没筛选不出总量", async ({ page }) => {
-  await open(page, "&variant=B&mid=board");
+test("点已有 Run 的票直接进中间终端，不打开配置表", async ({ page }) => {
+  await open(page, "&variant=A");
 
-  await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".usage-sheet")).toBeVisible();
-  await expect(page.locator(".usage-prompt")).toContainText("先选时间范围");
-  await expect(page.locator(".usage-kpis")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "近 7 天" }).click();
-  await expect(page.locator(".usage-kpis")).toBeVisible();
-  await expect(page.locator(".usage-caveat, .usage-note").first()).toBeVisible();
-
-  await page.locator(".usage-sheet-hd [data-act='usage-close']").click();
-  await expect(page.locator(".usage-sheet")).toHaveCount(0);
-  await expect(page.locator(".lanes")).toBeVisible();
-
-  await page.locator('.map-chrome-lead [data-act="usage-open"]').click();
-  await expect(page.locator(".usage-sheet")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".usage-sheet")).toHaveCount(0);
+  await page.locator('.lanes [data-act=issue][data-id="50"]').click();
+  await expect(page.locator(".run-stage")).toBeVisible();
+  await expect(page.locator(".launch-dock, .launch-drawer, .launch-palette")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "返回看板" })).toBeVisible();
 });
 
-test("C：总览切到用量账本，点一行看六个字段", async ({ page }) => {
+test("B：表单在票详情；游离挂在 Host 区且不认领", async ({ page }) => {
+  await open(page, "&variant=B");
+  await startFromIssue(page);
+
+  await expect(page.locator(".map-detail-col .launch-drawer")).toBeVisible();
+  await expect(page.locator(".agent-list")).toBeVisible();
+  await page.getByRole("button", { name: "×" }).first().click();
+  await expect(page.locator(".launch-drawer")).toHaveCount(0);
+
+  await page.locator('.map-side [data-act=open-launch][data-kind=free]').click();
+  await expect(page.locator(".launch-free-sheet")).toBeVisible();
+  await expect(page.locator(".launch-free-sheet")).toContainText("未绑定 Issue");
+  await page.locator('.launch-free-sheet [data-act=launch-commit]').first().click();
+  await expect(page.locator(".run-stage, .term").first()).toBeVisible();
+  await expect(page.locator(".tag").filter({ hasText: "未绑定 Issue" }).first()).toBeVisible();
+});
+
+test("C：先命令面板选 Agent，再居中表单；游离共用面板", async ({ page }) => {
   await open(page, "&variant=C");
+  await startFromIssue(page);
 
-  await expect(page.locator('.mid-bar [data-act="usage-tab"][data-id="usage"]')).toHaveClass(/active/);
-  await page.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.locator(".ov")).toBeVisible();
+  await expect(page.locator(".launch-palette")).toBeVisible();
+  await expect(page.locator(".launch-palette")).toContainText("选 Agent");
+  await page.locator('.launch-palette .agent-row[data-id="grok"]').click();
+  await expect(page.locator(".launch-modal-card")).toBeVisible();
+  await expect(page.locator(".launch-palette")).toHaveCount(0);
+  await page.getByRole("button", { name: "换一家" }).click();
+  await expect(page.locator(".launch-palette")).toBeVisible();
 
-  await page.locator('.mid-bar [data-act="usage-tab"][data-id="usage"]').click();
-  await expect(page.locator(".usage-ledger").first()).toBeVisible();
-  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
-  await expect(page.locator("[data-usage-detail]")).toBeVisible();
-  await expect(page.locator("[data-usage-detail]")).toContainText("输入");
-  await expect(page.locator("[data-usage-detail]")).toContainText("合计（Agent 自报）");
+  await page.getByRole("button", { name: "×" }).click();
+  await page.locator('.map-chrome-trail [data-act=open-launch][data-kind=free]').click();
+  await expect(page.locator(".launch-palette")).toContainText("开游离 Run");
 });
 
-test("空数据和远程 Host 不可达不画假数字", async ({ page }) => {
-  await open(page, "&variant=A&usage=empty");
-  await expect(page.locator(".usage-empty")).toContainText("还没有可统计的 Run");
-  await expect(page.locator(".usage-kpis")).toHaveCount(0);
-
-  await page.locator('select[data-act="usage-state"]').selectOption("unreachable");
-  await expect(page.locator(".usage-empty")).toContainText("暂时连不上");
-  await expect(page.getByText("不画上次数字")).toBeVisible();
+test("字段校验与启动失败夹具", async ({ page }) => {
+  await open(page, "&variant=A");
+  await page.getByRole("button", { name: "失败夹具" }).click();
+  await startFromIssue(page);
+  await page.locator('[data-act=launch-commit]').first().click();
+  await expect(page.locator(".launch-banner.bad")).toContainText("启动失败");
+  await expect(page.locator(".launch-dock")).toBeVisible();
 });
 
-test("手机只留合计，丢掉拆分表和六字段明细", async ({ page }) => {
+test("手机：Run 页收敛成配置表，仍可开停", async ({ page }) => {
   await open(page, "&variant=A&viewport=phone");
 
   await expect(page.locator(".phone")).toBeVisible();
-  await expect(page.locator(".phone-usage")).toBeVisible();
-  await expect(page.locator(".phone-usage")).toContainText("手机只保留合计");
-  await expect(page.locator(".usage-split")).toHaveCount(0);
-  await expect(page.locator("[data-usage-detail]")).toHaveCount(0);
+  await page.getByRole("button", { name: "票" }).click();
+  await expect(page.getByRole("button", { name: "开 Run" }).first()).toBeVisible();
+  await page.getByRole("button", { name: "开 Run" }).first().click();
+  await expect(page.locator(".launch-dock, .launch-form").first()).toBeVisible();
+  await expect(page.locator(".agent-seg")).toBeVisible();
 });
-
-test("手机端 Run 界面支持展开查看多模型列表", async ({ page }) => {
-  await open(page, "&viewport=phone");
-
-  await page.locator('.phone-tabbar button[data-id="run"]').click();
-  await expect(page.locator(".telemetry-capsule")).toBeVisible();
-  await expect(page.locator(".telemetry-capsule")).toContainText("+1 模型");
-
-  await page.locator('[data-act="toggle-phone-models"]').click();
-  await expect(page.locator(".phone-models-list")).toBeVisible();
-  await expect(page.locator(".phone-model-item")).toHaveCount(2);
-  await expect(page.locator(".phone-models-list")).toContainText("grok-4");
-  await expect(page.locator(".phone-models-list")).toContainText("grok-4-mini");
-});
-
-
-test("Run 遥测 A：顶栏展示多模型胶囊，展开看分轨卡片、6字段与 Sparkline，可跳 Host 用量", async ({ page }) => {
-  await open(page, "&variant=A&mid=board");
-
-  await expect(page.locator(".run-telemetry-top")).toBeVisible();
-  await expect(page.locator(".telemetry-capsule").filter({ hasText: "主会话" })).toBeVisible();
-  await expect(page.locator(".telemetry-capsule").filter({ hasText: "grok-4-mini" })).toBeVisible();
-
-  await page.locator('.run-telemetry-top [data-act="toggle-telemetry-expand"]').click();
-  await expect(page.locator(".telemetry-panel")).toBeVisible();
-  await expect(page.locator(".track-card")).toHaveCount(2);
-  await expect(page.locator(".track-card").first()).toContainText("输入");
-  await expect(page.locator(".track-card").first()).toContainText("合计 (自报)");
-  await expect(page.locator(".track-sparkline").first()).toBeVisible();
-
-  await page.locator('.telemetry-panel [data-act="go-host-usage"]').first().click();
-  await expect(page.locator(".usage-pane")).toBeVisible();
-  await expect(page).toHaveURL(/mid=usage/);
-});
-
-test("Run 遥测 B：侧栏抽屉展示多模型，支持中途切模型（含已停用模型）", async ({ page }) => {
-  await open(page, "&variant=B&mid=board&telemetry_scenario=switched-model");
-
-  await expect(page.locator(".telemetry-side-panel")).toBeVisible();
-  await expect(page.locator(".telemetry-side-panel")).toContainText("gpt-5");
-  await expect(page.locator(".telemetry-side-panel")).toContainText("gpt-5-mini");
-  await expect(page.locator(".telemetry-side-panel")).toContainText("o3-mini");
-  await expect(page.locator(".track-card.history-card")).toBeVisible();
-  await expect(page.locator(".track-card.history-card")).toContainText("已停用 (切换前)");
-});
-
-test("Run 遥测通路快慢：网络抖动标红告警，Sparkline 显示偏慢调用与 Clash 提示", async ({ page }) => {
-  await open(page, "&variant=A&mid=board&telemetry_scenario=jitter&expanded=1");
-
-  await expect(page.locator(".telemetry-panel")).toBeVisible();
-  await expect(page.locator(".spark-bar.slow").first()).toBeVisible();
-  await expect(page.locator(".telemetry-jitter-banner").first()).toBeVisible();
-  await expect(page.locator(".telemetry-jitter-banner").first()).toContainText("Clash Verge");
-  await expect(page.locator(".telemetry-panel")).toContainText("看板不管理节点");
-});
-
-test("从 Host 用量页可一键跳回 Run 终端与遥测", async ({ page }) => {
-  await open(page, "&variant=A&mid=usage");
-
-  await expect(page.locator(".usage-pane")).toBeVisible();
-  await page.locator('.usage-ledger tr[data-act="usage-run"]').first().click();
-  await expect(page.locator("[data-usage-detail]")).toBeVisible();
-  await expect(page.locator('[data-act="go-run-terminal"]').first()).toBeVisible();
-
-  await page.locator('[data-act="go-run-terminal"]').first().click();
-  await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.locator(".run-telemetry-top, .telemetry-side-panel, .telemetry-panel").first()).toBeVisible();
-});
-

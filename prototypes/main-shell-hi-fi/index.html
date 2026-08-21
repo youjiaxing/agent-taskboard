@@ -4,17 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:," />
-  <title>原型 · Host 用量统计页面的信息层级</title>
+  <title>原型 · 开 Run 配置与游离 Run 入口</title>
   <!--
-    PROTOTYPE — 一次性原型，不是产品。Issue #34：
-    「Host 级用量页面怎样组织信息，才能看清 token 消耗而不挤占主看板，也不把不完整的数据伪装成精确统计？」
+    PROTOTYPE — 一次性原型，不是产品。Issue #38：
+    「在已定主壳中，从绑定 Issue 或 Project 级入口开 Run 时，怎样选 Agent、填这家自己的启动配置；游离 Run 的入口放在哪里，才不会把 Run 变成第二套工作单元？」
 
-    三种结构不同的信息层级，共用选定的 Codex 原貌映射主壳。
-    刷新状态栏按 #33 已钉的 C 方案常驻，本票不再对照刷新摆位。
-      A  独立页 · 流水：左侧 Host 区进「用量」；主表面是 Run 流水。时间含 24 小时 / 今天 / 自定义。
-      B  浮层 · 先筛后看：顶栏齿轮旁打开，看板还在下面；没筛选不出 Host 总量。
-      C  总览里的账本：总览顶栏「Run | 用量」，主表面是 Run 流水。
-    ?variant=A|B|C  &usage=mixed|sparse|empty|unreachable  &mid=usage|overview|board
+    三种结构不同的入口，共用已钉的 Codex 原貌映射主壳。用量层级冻结为 A（独立页）。
+      A  终端位配置台：开 Run 后，底栏/手机 Run 页变成配置表。Agent 是顶部分段。游离挂在当前 Project 侧栏。
+      B  票内配置抽屉：表单铺在右侧票详情。Agent 是纵向名单。游离挂在 Host 区，不跟任何票。
+      C  先选 Agent 再填表：命令面板选 Agent，再居中表单。游离与绑票共用面板，靠横幅区分。
+    ?variant=A|B|C  &viewport=desktop|phone
   -->
   <style>
     :root {
@@ -194,7 +193,7 @@
     #app { height: 100%; }
     .stage {
       height: 100%;
-      padding: 14px 14px 78px;
+      padding: 14px 14px 96px;
     }
     
     .win {
@@ -2036,6 +2035,97 @@
       .phone-stage { padding: 12px 12px 80px; }
       .phone { width: 100%; height: calc(100vh - 96px); }
     }
+
+    /* PROTOTYPE #38 — 开 Run 配置三种结构 */
+    .launch-form { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .launch-form h3 { margin: 0; font-size: 13px; }
+    .launch-banner {
+      font-size: 12px;
+      padding: 7px 9px;
+      border-radius: 8px;
+      background: var(--sel);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+    }
+    .launch-banner.warn { background: color-mix(in srgb, var(--block) 12%, var(--paper)); border-color: color-mix(in srgb, var(--block) 40%, var(--line)); }
+    .launch-banner.bad { background: color-mix(in srgb, var(--stop) 12%, var(--paper)); border-color: color-mix(in srgb, var(--stop) 40%, var(--line)); color: var(--stop); }
+    .launch-banner.free { background: var(--paper-2); }
+    .agent-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+    .agent-seg button { flex: 1 1 110px; text-align: left; padding: 6px 8px; }
+    .agent-seg button .sub { display: block; font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .agent-seg button.missing, .agent-row.missing { opacity: .7; }
+    .agent-list { display: flex; flex-direction: column; gap: 4px; }
+    .agent-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      text-align: left; padding: 8px 10px; width: 100%;
+    }
+    .agent-row .sub { margin-top: 2px; }
+    .launch-grid { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+    .launch-grid label { font-size: 12px; color: var(--muted); }
+    .launch-grid .span { grid-column: 1 / -1; }
+    .launch-grid textarea { width: 100%; min-height: 72px; resize: vertical; }
+    .launch-grid input[type="text"], .launch-grid select { width: 100%; }
+    .launch-check { display: flex; align-items: center; gap: 8px; }
+    .cmd-preview {
+      font: 11px/1.45 var(--mono);
+      background: var(--term);
+      color: var(--term-fg);
+      padding: 8px 10px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 88px;
+    }
+    .launch-dock {
+      border-top: 1px solid var(--line);
+      background: var(--paper);
+      max-height: 48vh;
+      overflow: auto;
+      padding: 10px 12px 64px;
+    }
+    .launch-drawer {
+      border: 1px solid var(--line);
+      background: var(--paper-2);
+      border-radius: 10px;
+      padding: 10px;
+      margin: 0 0 10px;
+    }
+    .launch-palette, .launch-modal-bg {
+      position: fixed; inset: 0;
+      background: rgba(20, 16, 12, .45);
+      z-index: 28;
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 12vh 16px 16px;
+    }
+    .launch-palette-card, .launch-modal-card {
+      width: min(560px, calc(100vw - 24px));
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      max-height: min(78vh, 720px);
+      overflow: auto;
+      padding: 14px;
+    }
+    .launch-palette-card { width: min(440px, calc(100vw - 24px)); }
+    .launch-kicker { font-size: 11px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+    .launch-free-sheet {
+      position: fixed; top: 48px; left: 16px;
+      width: min(380px, calc(100vw - 24px));
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      z-index: 26;
+      max-height: calc(100vh - 130px);
+      overflow: auto;
+      padding: 12px;
+    }
+    body.phone-vp .launch-dock { max-height: none; }
+    body.phone-vp .launch-grid { grid-template-columns: 1fr; }
+    body.phone-vp .launch-palette, body.phone-vp .launch-modal-bg { padding: 12px 12px 88px; align-items: stretch; }
+    body.phone-vp .launch-palette-card, body.phone-vp .launch-modal-card, body.phone-vp .launch-free-sheet {
+      width: 100%; max-height: none;
+    }
   </style>
 </head>
 <body class="theme-warm theme-warm-light">
@@ -2050,9 +2140,9 @@
       { id: "office", name: "公司台式机", nameEn: "Office PC", online: false }
     ];
     const PROJECTS = [
-      { id: "tb", hostId: "local", name: "agent-taskboard", tracker: "GitHub" },
-      { id: "notes", hostId: "local", name: "garden-notes", tracker: "local markdown" },
-      { id: "shop", hostId: "mini", name: "shop-api", tracker: "GitHub" }
+      { id: "tb", hostId: "local", name: "agent-taskboard", tracker: "GitHub", path: "/Users/youjiaxing/Code/youjiaxing/agent-taskboard" },
+      { id: "notes", hostId: "local", name: "garden-notes", tracker: "local markdown", path: "/Users/youjiaxing/Notes/garden-notes" },
+      { id: "shop", hostId: "mini", name: "shop-api", tracker: "GitHub", path: "/Users/youjiaxing/Code/shop-api" }
     ];
     const RAW = [
       { id: 1, projectId: "tb", title: "Map: Agent Taskboard v1 规格与关键决策", role: "ready-for-human", claimed: true, parentId: null, blockedBy: [] },
@@ -2503,6 +2593,24 @@ v1 桌面壳是否坚持 Tauri 2？
     const S = {
       direction: "codex-map",
       variant: "A",
+      launchVariant: "A",
+      launch: {
+        open: false,
+        step: "form",
+        kind: "issue",
+        issueId: null,
+        agentId: "grok",
+        values: {},
+        prompt: "",
+        isolation: false,
+        extraOpen: false,
+        intent: "",
+        error: null,
+        warn: null,
+        source: "cli-seed"
+      },
+      cmdPreview: true,
+      launchFailNext: false,
       refreshState: "normal",
       refreshSeconds: 42,
       refreshInterval: 60,
@@ -2515,8 +2623,8 @@ v1 桌面壳是否坚持 Tauri 2？
       lang: "zh",
       hostId: "local",
       projectId: "tb",
-      issueId: 50,
-      runId: "r1",
+      issueId: 24,
+      runId: null,
       lastRunId: "r3",
       viewChangesOpen: false,
       viewBase: "round",
@@ -2632,6 +2740,111 @@ v1 桌面壳是否坚持 Tauri 2？
         name: "总览账本 · 底栏状态条",
         note: "Host 用量在总览账本；Run 侧在终端底部展示状态条，点击弹出多模型浮层。"
       }
+    ];
+
+    const LAUNCH_VARIANTS = [
+      {
+        id: "A",
+        name: "终端位配置台",
+        note: "开 Run 后，底栏变成配置表——启动后这里就是官方 TUI。Agent 是顶部分段。游离挂在当前 Project 侧栏。"
+      },
+      {
+        id: "B",
+        name: "票内配置抽屉",
+        note: "表单铺在右侧票详情。Agent 是纵向名单。游离挂在 Host 区，不跟任何票。"
+      },
+      {
+        id: "C",
+        name: "先选 Agent 再填表",
+        note: "开 Run 先弹出命令面板选 Agent，再居中填表。游离与绑票共用面板，靠横幅区分。"
+      }
+    ];
+
+    const AGENTS = [
+      {
+        id: "grok",
+        name: "Grok Build",
+        bin: "grok",
+        installed: true,
+        worktree: true,
+        first: [
+          { key: "model", kind: "select", options: ["grok-4", "grok-3"] },
+          { key: "effort", kind: "select", options: ["low", "medium", "high"] },
+          { key: "permissionMode", kind: "select", label: "权限模式", options: ["default", "auto"] },
+          { key: "alwaysApprove", kind: "bool", label: "alwaysApprove" },
+          { key: "sandbox", kind: "select", options: ["off", "workspace"] }
+        ],
+        folded: [{ key: "extraArgs", kind: "text", label: "附加参数" }],
+        defaults: { model: "grok-4", effort: "medium", permissionMode: "default", alwaysApprove: false, sandbox: "off", extraArgs: "" }
+      },
+      {
+        id: "codex",
+        name: "Codex",
+        bin: "codex",
+        installed: true,
+        worktree: false,
+        worktreeWhy: "Codex CLI 还不能原生建隔离执行目录",
+        first: [
+          { key: "model", kind: "select", options: ["gpt-5", "gpt-5-mini", "o3-mini"] },
+          { key: "effort", kind: "select", options: ["minimal", "low", "medium", "high"] },
+          { key: "approval", kind: "select", label: "approval", options: ["untrusted", "on-request", "never"] },
+          { key: "sandbox", kind: "select", options: ["read-only", "workspace-write", "danger-full-access"] }
+        ],
+        folded: [
+          { key: "profile", kind: "text", label: "profile" },
+          { key: "extraArgs", kind: "text", label: "附加参数" }
+        ],
+        defaults: { model: "gpt-5", effort: "medium", approval: "on-request", sandbox: "workspace-write", profile: "default", extraArgs: "" }
+      },
+      {
+        id: "claude",
+        name: "Claude Code",
+        bin: "claude",
+        installed: false,
+        worktree: true,
+        first: [
+          { key: "model", kind: "select", options: ["claude-opus-4", "claude-sonnet-4"] },
+          { key: "effort", kind: "select", options: ["low", "medium", "high"] },
+          { key: "permissionMode", kind: "select", label: "权限模式", options: ["default", "acceptEdits", "bypassPermissions", "plan"] }
+        ],
+        folded: [{ key: "extraArgs", kind: "text", label: "附加参数" }],
+        defaults: { model: "claude-sonnet-4", effort: "medium", permissionMode: "default", extraArgs: "" }
+      },
+      {
+        id: "agy",
+        name: "Antigravity CLI",
+        bin: "agy",
+        installed: true,
+        worktree: false,
+        worktreeWhy: "Antigravity CLI 没有原生建隔离执行目录的能力",
+        first: [
+          { key: "model", kind: "select", options: ["gemini-3-pro", "gemini-3-flash"] },
+          { key: "effort", kind: "select", options: ["low", "medium", "high"] },
+          { key: "mode", kind: "select", label: "执行模式", options: ["default", "accept-edits", "plan"] },
+          { key: "skipPermissions", kind: "bool", label: "跳过权限确认" },
+          { key: "sandbox", kind: "bool", label: "sandbox" }
+        ],
+        folded: [
+          { key: "agent", kind: "text", label: "子 Agent（--agent）" },
+          { key: "addDirs", kind: "text", label: "额外目录" },
+          { key: "extraArgs", kind: "text", label: "附加参数" }
+        ],
+        defaults: { model: "gemini-3-pro", effort: "medium", mode: "default", skipPermissions: false, sandbox: false, agent: "", addDirs: "", extraArgs: "" }
+      }
+    ];
+
+    const LAST_OK = {
+      "tb:grok": { model: "grok-4", effort: "high", permissionMode: "auto", alwaysApprove: true, sandbox: "workspace", extraArgs: "--verbose" },
+      "tb:codex": { model: "gpt-5", effort: "medium", approval: "on-request", sandbox: "workspace-write", profile: "default", extraArgs: "" },
+      "shop:codex": { model: "gpt-5-mini", effort: "low", approval: "on-request", sandbox: "workspace-write", profile: "default", extraArgs: "" }
+    };
+
+    const INTENTS = [
+      ["", "不选", "None"],
+      ["modify", "修改", "Modify"],
+      ["continue", "继续", "Continue"],
+      ["answer", "只回答", "Answer only"],
+      ["review", "复查", "Review"]
     ];
 
     const REFRESH_STATES = [
@@ -3105,31 +3318,17 @@ v1 桌面壳是否坚持 Tauri 2？
     function directionOf(id) { return DIRECTIONS.find(direction => direction.id === id) || DIRECTIONS[0]; }
     function themeOf(id) { return THEMES.find(th => th.id === id) || THEMES[1]; }
     function variantOf(id) { return USAGE_VARIANTS.find(variant => variant.id === id) || USAGE_VARIANTS[0]; }
+    function launchVariantOf(id) { return LAUNCH_VARIANTS.find(variant => variant.id === id) || LAUNCH_VARIANTS[0]; }
     function setVariant(id) {
-      S.variant = variantOf(id).id;
-      S.refreshOpen = false;
-      S.usageRunId = null;
-      S.usageSlice = null;
-      S.usageAcct = null;
-      S.usageMore = false;
-      if (S.variant === "A") {
-        S.usageSheet = false;
-        S.midMode = "usage";
-        if (S.viewport === "phone") S.phone = "usage";
-      } else if (S.variant === "B") {
-        S.usageSheet = true;
-        if (S.midMode === "usage") S.midMode = "board";
-        if (S.viewport === "phone") S.phone = "usage";
-      } else {
-        S.usageSheet = false;
-        S.midMode = "overview";
-        S.usageTab = "usage";
-        if (S.viewport === "phone") S.phone = "overview";
+      S.launchVariant = launchVariantOf(id).id;
+      if (S.launch.open) {
+        S.launch.step = S.launchVariant === "C" && S.launch.step === "picker" ? "picker" : "form";
+        if (S.launchVariant !== "C" && S.launch.step === "picker") S.launch.step = "form";
       }
     }
     function stepVariant(step) {
-      const index = USAGE_VARIANTS.findIndex(variant => variant.id === S.variant);
-      setVariant(USAGE_VARIANTS[(index + step + USAGE_VARIANTS.length) % USAGE_VARIANTS.length].id);
+      const index = LAUNCH_VARIANTS.findIndex(variant => variant.id === S.launchVariant);
+      setVariant(LAUNCH_VARIANTS[(index + step + LAUNCH_VARIANTS.length) % LAUNCH_VARIANTS.length].id);
     }
     function fmtTok(n) {
       if (n == null) return "—";
@@ -3847,7 +4046,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const u = new URL(location.href);
       u.searchParams.set("direction", "codex-map");
       u.searchParams.delete("theme");
-      u.searchParams.set("variant", S.variant);
+      u.searchParams.set("variant", S.launchVariant);
       u.searchParams.set("refresh", S.refreshState);
       if (S.refreshInterval !== 60) u.searchParams.set("interval", String(S.refreshInterval));
       else u.searchParams.delete("interval");
@@ -3867,6 +4066,15 @@ v1 桌面壳是否坚持 Tauri 2？
       else u.searchParams.delete("sheet");
       if (S.issueWide) u.searchParams.set("iw", "1");
       else u.searchParams.delete("iw");
+      if (S.launch.open) {
+        u.searchParams.set("launch", "1");
+        u.searchParams.set("launch_kind", S.launch.kind);
+      } else {
+        u.searchParams.delete("launch");
+        u.searchParams.delete("launch_kind");
+      }
+      if (S.launchFailNext) u.searchParams.set("launch_fail", "1");
+      else u.searchParams.delete("launch_fail");
       history.replaceState({}, "", u);
     }
     function applyScenario(sc) {
@@ -3901,14 +4109,15 @@ v1 桌面壳是否坚持 Tauri 2？
       } else if (sc === "unpaired") {
         S.hostId = null; S.projectId = null; S.issueId = null; S.runId = null;
       } else {
-        S.hostId = "local"; S.projectId = "tb"; S.issueId = 50; S.runId = "r1";
+        S.hostId = "local"; S.projectId = "tb"; S.issueId = 24; S.runId = null;
       }
     }
     function loadQS() {
       const p = qs();
       setDirection("codex-map");
       const incomingVariant = (p.get("variant") || "A").toUpperCase();
-      S.variant = variantOf(incomingVariant).id;
+      S.launchVariant = launchVariantOf(incomingVariant).id;
+      S.variant = "A";
       const refresh = p.get("refresh");
       if (REFRESH_STATES.some(([id]) => id === refresh)) S.refreshState = refresh;
       const interval = Number(p.get("interval"));
@@ -3937,10 +4146,12 @@ v1 桌面壳是否坚持 Tauri 2？
       if (p.get("mid") === "graph" || p.get("mid") === "run" || p.get("mid") === "overview" || p.get("mid") === "usage" || p.get("mid") === "board") {
         S.midMode = p.get("mid") === "board" ? "board" : p.get("mid");
         if (S.projectId && S.midMode !== "run") S.midByProject[S.projectId] = S.midMode;
-        if (S.variant === "B" && p.get("sheet") !== "0") S.usageSheet = true;
-      } else {
-        setVariant(S.variant);
       }
+      if (p.get("launch") === "1") {
+        const kind = p.get("launch_kind") === "free" ? "free" : "issue";
+        openLaunch(kind, S.issueId, true);
+      }
+      if (p.get("launch_fail") === "1") S.launchFailNext = true;
       if (p.get("sheet") === "1") S.usageSheet = true;
       if (p.get("iw") === "1") S.issueWide = true;
       const telSc = p.get("telemetry_scenario") || p.get("telemetry");
@@ -3964,6 +4175,380 @@ v1 桌面壳是否坚持 Tauri 2？
       const i = issue(S.issueId);
       return i ? issueRun(i) : null;
     }
+    function lt(zh, en) { return S.lang === "en" ? en : zh; }
+    function launchAgent(id) { return AGENTS.find(a => a.id === (id || S.launch.agentId)) || AGENTS[0]; }
+    function firstInstalledAgent() { return AGENTS.find(a => a.installed) || AGENTS[0]; }
+    function projectPath(p) { return (p && p.path) || "/Users/youjiaxing/Code/project"; }
+    function memoryKey(projectId, agentId) { return `${projectId || ""}:${agentId || ""}`; }
+    function memoryFor(projectId, agentId) {
+      const direct = LAST_OK[memoryKey(projectId, agentId)];
+      if (direct) return { values: direct, source: "project-last" };
+      const other = Object.keys(LAST_OK).find(k => k.endsWith(":" + agentId));
+      if (other) return { values: LAST_OK[other], source: "other-project" };
+      return { values: { ...launchAgent(agentId).defaults }, source: "cli-seed" };
+    }
+    function defaultPrompt(kind, issueId) {
+      const i = issue(issueId);
+      const p = project(S.projectId);
+      if (kind === "free" || !i) {
+        return lt(
+          `在 Project ${p ? p.name : ""} 下开始一次未绑定 Issue 的 Run。`,
+          `Start an unbound Run in project ${p ? p.name : ""}.`
+        );
+      }
+      return lt(
+        `请处理 GitHub Issue「${i.title}」（https://github.com/youjiaxing/agent-taskboard/issues/${i.id}）。请自行读取 Tracker 上的最新正文、评论和依赖，不要依赖这段开场白里的摘要。`,
+        `Work on GitHub Issue "${i.title}" (https://github.com/youjiaxing/agent-taskboard/issues/${i.id}). Read the latest tracker body, comments, and dependencies yourself.`
+      );
+    }
+    function intentPrefix(intent) {
+      return {
+        modify: lt("这次只要改，不要扩范围。\n\n", "Only make the change. Do not expand scope.\n\n"),
+        continue: lt("接着上次停下来的地方做。\n\n", "Continue from where the last Run stopped.\n\n"),
+        answer: lt("只回答问题，不要改文件。\n\n", "Answer only. Do not edit files.\n\n"),
+        review: lt("复查现状，确认做完再关票。\n\n", "Review the current state. Close the issue only if the work is done.\n\n")
+      }[intent] || "";
+    }
+    function seedLaunch(kind, issueId, agentId) {
+      const agent = launchAgent(agentId || firstInstalledAgent().id);
+      const mem = memoryFor(S.projectId, agent.id);
+      S.launch.kind = kind;
+      S.launch.issueId = kind === "issue" ? issueId : null;
+      S.launch.agentId = agent.id;
+      S.launch.values = { ...agent.defaults, ...mem.values };
+      S.launch.prompt = defaultPrompt(kind, issueId);
+      S.launch.isolation = false;
+      S.launch.intent = "";
+      S.launch.error = null;
+      S.launch.warn = null;
+      S.launch.source = mem.source;
+      S.launch.extraOpen = agent.folded.length > 1 || !!(S.launch.values.extraArgs || S.launch.values.profile || S.launch.values.agent || S.launch.values.addDirs);
+    }
+    function openLaunch(kind, issueId, quiet) {
+      const i = issue(issueId);
+      if (kind === "issue") {
+        if (!i || i.closed || refreshMeta().blocksTrackerWrites) return;
+        if (issueRun(i)) return;
+      } else if (!S.projectId) return;
+      S.launch.open = true;
+      S.launch.step = S.launchVariant === "C" ? "picker" : "form";
+      seedLaunch(kind, issueId, firstInstalledAgent().id);
+      if (kind === "issue") {
+        S.issueId = i.id;
+        S.projectId = i.projectId;
+        S.hostId = project(i.projectId).hostId;
+      }
+      if (S.viewport === "phone") {
+        S.phone = S.launchVariant === "B" && kind === "issue" ? "issue" : "run";
+      }
+      if (!quiet) render();
+    }
+    function closeLaunch() {
+      S.launch.open = false;
+      S.launch.step = "form";
+      S.launch.error = null;
+    }
+    function applyLaunchAgent(id) {
+      const prevPrompt = S.launch.prompt;
+      const prevIntent = S.launch.intent;
+      seedLaunch(S.launch.kind, S.launch.issueId, id);
+      S.launch.prompt = prevPrompt;
+      S.launch.intent = prevIntent;
+      S.launch.step = "form";
+    }
+    function launchWarnings() {
+      const a = launchAgent();
+      const v = S.launch.values;
+      const warns = [];
+      if (v.model && a.first.find(f => f.key === "model") && !(a.first.find(f => f.key === "model").options || []).includes(v.model)) {
+        warns.push(lt(`未知 model「${v.model}」，仍可启动。`, `Unknown model "${v.model}", launch still allowed.`));
+      }
+      const extra = String(v.extraArgs || "");
+      const quotes = (extra.match(/"/g) || []).length;
+      if (quotes % 2) warns.push(lt("附加参数里的引号不成对。", "Unmatched quotes in extra args."));
+      return warns;
+    }
+    function commandPreview() {
+      const a = launchAgent();
+      const v = S.launch.values;
+      const p = project(S.projectId);
+      const bits = [`cd ${projectPath(p)} &&`, a.bin];
+      if (v.model) bits.push("--model", v.model);
+      if (v.effort) bits.push("--effort", v.effort);
+      if (a.id === "grok") {
+        if (v.permissionMode) bits.push("--permission-mode", v.permissionMode);
+        if (v.alwaysApprove) bits.push("--always-approve");
+        if (v.sandbox && v.sandbox !== "off") bits.push("--sandbox", v.sandbox);
+      } else if (a.id === "codex") {
+        if (v.approval) bits.push("--ask-for-approval", v.approval);
+        if (v.sandbox) bits.push("--sandbox", v.sandbox);
+        if (v.profile) bits.push("--profile", v.profile);
+      } else if (a.id === "claude") {
+        if (v.permissionMode) bits.push("--permission-mode", v.permissionMode);
+      } else if (a.id === "agy") {
+        if (v.mode) bits.push("--mode", v.mode);
+        if (v.skipPermissions) bits.push("--dangerously-skip-permissions");
+        if (v.sandbox) bits.push("--sandbox");
+        if (v.agent) bits.push("--agent", v.agent);
+        if (v.addDirs) bits.push("--add-dir", v.addDirs);
+      }
+      if (S.launch.isolation && a.worktree) bits.push("--worktree");
+      if (v.extraArgs) bits.push(v.extraArgs);
+      const prompt = intentPrefix(S.launch.intent) + (S.launch.prompt || "");
+      if (prompt) bits.push(a.id === "agy" ? "-i" : "--", JSON.stringify(prompt));
+      return bits.join(" ");
+    }
+    function commitLaunch() {
+      const a = launchAgent();
+      const i = S.launch.kind === "issue" ? issue(S.launch.issueId) : null;
+      S.launch.warn = launchWarnings().join(" ");
+      if (!a.installed) {
+        S.launch.error = lt("找不到可执行文件，不能启动。不管登录态。", "Executable not found. Cannot start. Login is not our job.");
+        return;
+      }
+      if (!String(S.launch.values.model || "").trim()) {
+        S.launch.error = lt("model 必填。", "model is required.");
+        return;
+      }
+      if (S.launch.kind === "issue") {
+        if (!i || i.closed) return;
+        if (issueRun(i)) {
+          S.launch.error = lt("这张票已有活跃 Run。点票进入终端，不要再开一条。", "This issue already has a live Run.");
+          return;
+        }
+        if (refreshMeta().blocksTrackerWrites) {
+          S.launch.error = lt("先刷新这个 Project。", "Refresh this Project first.");
+          return;
+        }
+        i.claimed = true;
+        i.stopped = false;
+      }
+      const fail = S.launchFailNext || String(S.launch.values.extraArgs || "").includes("--boom");
+      const r = {
+        id: "r-new-" + Date.now(),
+        issueId: S.launch.kind === "issue" ? i.id : null,
+        hostId: S.hostId,
+        projectId: S.projectId,
+        agent: a.name,
+        status: fail ? "ended" : "active",
+        isolation: !!(S.launch.isolation && a.worktree),
+        fail: !!fail,
+        config: { ...S.launch.values, prompt: S.launch.prompt, intent: S.launch.intent }
+      };
+      RUNS.push(r);
+      const p = project(S.projectId);
+      FILES[r.id] = [{
+        repo: p ? p.name : "project",
+        path: "README.md",
+        add: 1,
+        del: 0,
+        lines: [{ n: 1, t: fail ? "+ 原型：启动失败留下的记录" : "+ 原型：刚开的 Run", k: "add" }]
+      }];
+      LAST_OK[memoryKey(S.projectId, a.id)] = { ...S.launch.values };
+      if (fail) {
+        S.launchFailNext = false;
+        S.launch.error = lt("启动失败：进程没拉起来。这次 Run 记录留着，可改配置再开。", "Launch failed: process did not start. The Run record stays so you can retry.");
+        S.runId = r.id;
+        return;
+      }
+      closeLaunch();
+      setRun(r.id, true);
+      if (S.midMode === "board") S.dockFolded.board = false;
+      if (S.viewport === "phone") S.phone = "run";
+      else setMidMode("run");
+    }
+
+    function launchPrefillBanner() {
+      const a = launchAgent();
+      const src = S.launch.source === "project-last"
+        ? lt(`预填自这个 Project 上次用 ${a.name} 成功启动的值，本次可改。`, `Prefill from the last successful ${a.name} launch in this project. Editable this time.`)
+        : S.launch.source === "other-project"
+          ? lt(`这个 Project 第一次用 ${a.name}，预填自其它 Project 的记忆，本次可改。`, `First time ${a.name} in this project. Prefill from another project. Editable.`)
+          : lt(`这个 Project 第一次用 ${a.name}，预填自本机 CLI 配置，本次可改。`, `First time ${a.name} in this project. Prefill from the local CLI config. Editable.`);
+      return `<div class="launch-banner">${esc(src)}</div>`;
+    }
+    function launchKindBanner() {
+      if (S.launch.kind !== "free") return "";
+      return `<div class="launch-banner free"><b>${esc(t("free"))}</b> · ${esc(lt("不绑定、不认领任何 Issue。这仍是一次 Run，不是第二套工作单元。", "Unbound: does not claim any Issue. Still a Run, not a second work unit."))}</div>`;
+    }
+    function launchErrorBanner() {
+      const warns = launchWarnings();
+      S.launch.warn = warns.join(" ");
+      return `
+        ${S.launch.error ? `<div class="launch-banner bad">${esc(S.launch.error)}</div>` : ""}
+        ${warns.length ? `<div class="launch-banner warn">${esc(warns.join(" "))}</div>` : ""}`;
+    }
+    function fieldLabel(f) {
+      if (f.label) return f.label;
+      return f.key;
+    }
+    function launchFieldControl(f) {
+      const v = S.launch.values[f.key];
+      if (f.kind === "bool") {
+        return `<label class="launch-check"><input type="checkbox" data-act="launch-bool" data-key="${f.key}" ${v ? "checked" : ""}/> ${esc(fieldLabel(f))}</label>`;
+      }
+      if (f.kind === "select") {
+        const known = (f.options || []).includes(v);
+        const opts = (f.options || []).map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o)}</option>`).join("");
+        return `
+          <select data-act="launch-select" data-key="${f.key}">
+            ${opts}
+            <option value="__custom__" ${known ? "" : "selected"}>${esc(lt("其它…", "Custom…"))}</option>
+          </select>
+          ${known ? "" : `<input type="text" data-act="launch-text" data-key="${f.key}" value="${esc(v || "")}" placeholder="${esc(f.key)}"/>`}`;
+      }
+      return `<input type="text" data-act="launch-text" data-key="${f.key}" value="${esc(v || "")}" placeholder="${esc(fieldLabel(f))}"/>`;
+    }
+    function launchFields(which) {
+      const a = launchAgent();
+      const list = which === "folded" ? a.folded : a.first;
+      return list.map(f => {
+        if (f.kind === "bool") return `<div class="span">${launchFieldControl(f)}</div>`;
+        return `<label>${esc(fieldLabel(f))}</label><div>${launchFieldControl(f)}</div>`;
+      }).join("");
+    }
+    function launchDirRow() {
+      const a = launchAgent();
+      const p = project(S.projectId);
+      const disabled = !a.worktree;
+      const why = a.worktreeWhy || "";
+      return `
+        <label>${esc(lt("执行目录", "Working directory"))}</label>
+        <div>
+          <div class="tiny mono">${esc(projectPath(p))}</div>
+          <label class="launch-check" title="${esc(disabled ? why : lt("单次选择，不记住。", "Per-run. Not remembered."))}">
+            <input type="checkbox" data-act="launch-iso" ${S.launch.isolation ? "checked" : ""} ${disabled ? "disabled" : ""}/>
+            ${esc(lt("隔离执行目录（git worktree）", "Isolated directory (git worktree)"))}
+          </label>
+          ${disabled ? `<div class="tiny">${esc(why)}</div>` : `<div class="tiny">${esc(lt("默认关。不按 Project × Agent 记住。", "Off by default. Not remembered with the rest of the launch config."))}</div>`}
+        </div>`;
+    }
+    function launchPromptRow() {
+      const prefix = intentPrefix(S.launch.intent).trim();
+      return `
+        <label>${esc(lt("初始指令", "Opening prompt"))}</label>
+        <div>
+          <div class="row" style="margin-bottom:6px">
+            ${INTENTS.map(([id, zh, en]) => `<button type="button" data-act="launch-intent" data-id="${id}" class="${S.launch.intent === id ? "active" : ""}">${esc(S.lang === "en" ? en : zh)}</button>`).join("")}
+          </div>
+          ${prefix ? `<div class="launch-banner">${esc(prefix)}</div>` : ""}
+          <textarea data-act="launch-prompt">${esc(S.launch.prompt)}</textarea>
+          <div class="tiny">${esc(lt("意图只生成看得见的前缀；最终开场白以这框为准。不复制票正文。", "Intent only prefixes visible text. This box is the source of truth. The issue body is not copied."))}</div>
+        </div>`;
+    }
+    function launchFolded() {
+      const a = launchAgent();
+      if (!a.folded.length) return "";
+      return `
+        <div class="span">
+          <button type="button" class="ghost" data-act="launch-fold">${S.launch.extraOpen ? "▾" : "▸"} ${esc(lt("附加参数、命令预览", "Extra args and command preview"))}</button>
+        </div>
+        ${S.launch.extraOpen ? `
+          ${a.folded.map(f => `<label>${esc(fieldLabel(f))}</label><div>${launchFieldControl(f)}</div>`).join("")}
+          ${S.cmdPreview ? `<div class="span tiny">${esc(lt("命令预览（不是一等展示，设置里可关）", "Command preview (not first-class; can be hidden in settings)"))}</div>
+            <div class="span cmd-preview">${esc(commandPreview())}</div>` : `<div class="span tiny">${esc(lt("命令预览已在设置里关掉。", "Command preview is off in settings."))}</div>`}
+        ` : ""}`;
+    }
+    function launchActions() {
+      const a = launchAgent();
+      const blocked = !a.installed;
+      return `
+        <div class="row">
+          <button type="button" class="primary" data-act="launch-commit" ${blocked ? "disabled" : ""}>${esc(lt("启动", "Start"))}</button>
+          ${blocked ? `<span class="tiny">${esc(lt("未安装，不能启动。", "Not installed. Cannot start."))}</span>` : ""}
+        </div>`;
+    }
+    function launchFormBody() {
+      const a = launchAgent();
+      return `
+        <div class="launch-form">
+          ${launchKindBanner()}
+          ${launchPrefillBanner()}
+          ${launchErrorBanner()}
+          ${!a.installed ? `<div class="launch-banner warn">${esc(lt(`${a.name} 未安装（找不到 ${a.bin}）。不能启动，也不探测登录态。`, `${a.name} is not installed (${a.bin} missing). Cannot start. Login is not probed.`))}</div>` : ""}
+          <div class="launch-grid">
+            ${launchFields("first")}
+            ${launchDirRow()}
+            ${launchPromptRow()}
+            ${launchFolded()}
+          </div>
+        </div>`;
+    }
+    function agentInstalledNote(a) {
+      return a.installed ? lt("已安装", "Installed") : lt("未安装 · 不能启动", "Not installed · cannot start");
+    }
+    function agentSeg() {
+      return `<div class="agent-seg">${AGENTS.map(a => `
+        <button type="button" class="${S.launch.agentId === a.id ? "active" : ""} ${a.installed ? "" : "missing"}" data-act="launch-agent" data-id="${a.id}">
+          ${esc(a.name)}<span class="sub">${esc(agentInstalledNote(a))}</span>
+        </button>`).join("")}</div>`;
+    }
+    function agentList() {
+      return `<div class="agent-list">${AGENTS.map(a => `
+        <button type="button" class="agent-row ${S.launch.agentId === a.id ? "active" : ""} ${a.installed ? "" : "missing"}" data-act="launch-agent" data-id="${a.id}">
+          <span class="dot ${a.installed ? "on" : "off"}"></span>
+          <span><b>${esc(a.name)}</b><div class="sub">${esc(agentInstalledNote(a))} · ${esc(a.bin)}</div></span>
+        </button>`).join("")}</div>`;
+    }
+    function launchFormA() {
+      return `
+        <div class="launch-dock" data-launch="A">
+          <div class="row"><div class="launch-kicker">${esc(lt("启动配置", "Launch config"))}</div><span class="grow"></span>${launchActions()}<button class="ghost" data-act="launch-cancel">×</button></div>
+          ${agentSeg()}
+          ${launchFormBody()}
+        </div>`;
+    }
+    function launchFormB() {
+      return `
+        <div class="launch-drawer" data-launch="B">
+          <div class="row"><b>${esc(lt("开 Run", "Start Run"))}</b><span class="grow"></span>${launchActions()}<button class="ghost" data-act="launch-cancel">×</button></div>
+          ${agentList()}
+          ${launchFormBody()}
+        </div>`;
+    }
+    function launchPickerC() {
+      return `
+        <div class="launch-palette" data-launch="C-picker">
+          <div class="launch-palette-card">
+            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("开游离 Run · 选 Agent", "Unbound Run · pick Agent") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
+            ${S.launch.kind === "free" ? launchKindBanner() : `<div class="tiny">${esc(issue(S.launch.issueId) ? issueLabel(issue(S.launch.issueId)) : "")}</div>`}
+            ${agentList()}
+          </div>
+        </div>`;
+    }
+    function launchModalC() {
+      const a = launchAgent();
+      return `
+        <div class="launch-modal-bg" data-launch="C-form">
+          <div class="launch-modal-card">
+            <div class="row">
+              <div>
+                <div class="launch-kicker">${esc(a.name)}</div>
+                <div class="tiny">${esc(agentInstalledNote(a))}</div>
+              </div>
+              <span class="grow"></span>
+              ${launchActions()}
+              <button data-act="launch-back-picker">${esc(lt("换一家", "Change Agent"))}</button>
+              <button class="ghost" data-act="launch-cancel">×</button>
+            </div>
+            ${launchFormBody()}
+          </div>
+        </div>`;
+    }
+    function launchOverlay() {
+      if (!S.launch.open) return "";
+      if (S.launchVariant === "C") return S.launch.step === "picker" ? launchPickerC() : launchModalC();
+      if (S.launchVariant === "B" && S.launch.kind === "free") {
+        return `<div class="launch-free-sheet">${launchFormB()}</div>`;
+      }
+      return "";
+    }
+    function launchOpenButton(kind, extra = "") {
+      const blocked = refreshMeta().blocksTrackerWrites;
+      const title = blocked ? (S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project") : "";
+      return `<button class="primary" data-act="open-launch" data-kind="${kind}" ${extra} ${blocked ? `disabled title="${esc(title)}"` : ""}>${kind === "free" ? esc(lt("开游离 Run", "Unbound Run")) : t("start")}</button>`;
+    }
+
     function startRunOnIssue(i) {
       if (!i || i.closed || refreshMeta().blocksTrackerWrites) return;
       i.claimed = true;
@@ -4030,12 +4615,13 @@ v1 桌面壳是否坚持 Tauri 2？
       if (S.viewport === "phone") S.phone = "run";
     }
     function idleDock(i) {
+      if (S.launch.open && S.launchVariant === "A") return launchFormA();
       return `
         <div class="dock slim dock-idle">
           <div class="ident">
             <span class="muted">${i ? t("noIssueRun") : t("pickIssue")}</span>
             <span class="grow"></span>
-            ${i && !i.closed ? `<button class="primary" data-act="fake-start" ${refreshMeta().blocksTrackerWrites ? `disabled title="${S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project"}"` : ""}>${t("start")}</button>` : ""}
+            ${i && !i.closed ? launchOpenButton("issue") : ""}
             <button data-act="all-runs">${t("allRuns")}</button>
           </div>
         </div>`;
@@ -4287,6 +4873,7 @@ v1 桌面壳是否坚持 Tauri 2？
     function setIssue(id, focusRun) {
       const i = issue(id);
       if (!i) return;
+      if (S.launch.open && (S.launch.kind === "issue" && S.launch.issueId !== id || issueRun(i))) closeLaunch();
       S.issueId = id;
       if (S.direction === "codex-map") S.mapDetailOpen = true;
       S.projectId = i.projectId;
@@ -4338,30 +4925,29 @@ v1 桌面壳是否坚持 Tauri 2？
     }
 
     function renderSwitcher() {
-      const cur = variantOf(S.variant);
+      const cur = launchVariantOf(S.launchVariant);
       return `
-        <button data-act="prev" title="上一个用量方案">←</button>
-        <div class="direction-toggle" aria-label="用量信息层级">
-          ${USAGE_VARIANTS.map(variant => `<button data-act="refresh-variant" data-id="${variant.id}" class="${S.variant === variant.id ? "active" : ""}" title="${esc(variant.name)}">${S.viewport === "phone" ? variant.id : `${variant.id} · ${esc(variant.name)}`}</button>`).join("")}
+        <button data-act="prev" title="上一个开 Run 方案">←</button>
+        <div class="direction-toggle" aria-label="开 Run 配置结构">
+          ${LAUNCH_VARIANTS.map(variant => `<button data-act="launch-variant" data-id="${variant.id}" class="${S.launchVariant === variant.id ? "active" : ""}" title="${esc(variant.name)}">${S.viewport === "phone" ? variant.id : `${variant.id} · ${esc(variant.name)}`}</button>`).join("")}
         </div>
         <div class="lab">${esc(cur.note)}</div>
-        <button data-act="next" title="下一个用量方案">→</button>
-        <select data-act="telemetry-scenario" aria-label="Run遥测场景" title="切换当前 Run 的多模型与网络状态">
-          ${TELEMETRY_SCENARIOS.map(([id, label]) => `<option value="${id}" ${S.telemetryScenario === id ? "selected" : ""}>${esc(label)}</option>`).join("")}
-        </select>
+        <button data-act="next" title="下一个开 Run 方案">→</button>
         <button data-act="vp">${S.viewport === "desktop" ? "桌面" : "手机"}</button>
         <button data-act="inspect" class="${S.inspect ? "active" : ""}">状态</button>
-        <select data-act="usage-state" aria-label="用量边界状态">
-          ${USAGE_STATES.map(([id, label]) => `<option value="${id}" ${S.usageState === id ? "selected" : ""}>${esc(label)}</option>`).join("")}
-        </select>`;
+        <button data-act="launch-fail-toggle" class="${S.launchFailNext ? "active" : ""}" title="下次点启动必失败">${S.launchFailNext ? "下次失败" : "失败夹具"}</button>`;
     }
     function renderInspector() {
       const h = host(S.hostId);
       const p = project(S.projectId);
       const i = issue(S.issueId);
       const r = run(S.runId);
+      const a = launchAgent();
       const lines = [
-        `用量层级 ${S.variant} · ${variantOf(S.variant).name}`,
+        `开 Run 结构 ${S.launchVariant} · ${launchVariantOf(S.launchVariant).name}`,
+        `启动草稿: ${S.launch.open ? `${S.launch.kind} / ${a.name} / ${S.launch.step}` : "关"}`,
+        `预填来源: ${S.launch.source} · 隔离 ${S.launch.isolation ? "开" : "关"} · 意图 ${S.launch.intent || "无"}`,
+        `草稿值: ${JSON.stringify(S.launch.values)}`,
         `Run 遥测场景 ${S.telemetryScenario}`,
         `用量边界 ${S.usageState} · 浮层 ${S.usageSheet ? "开" : "关"}`,
         `主壳：Codex 原貌映射 · 主题 ${S.theme} · ${S.viewport} · ${S.scenario}`,
@@ -4461,7 +5047,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${S.variant === "B" && !empty ? usageBtn() : ""}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${empty ? "" : `${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${empty ? "" : `${S.launchVariant === "C" && S.projectId ? `<button class="chip" data-act="open-launch" data-kind="free">+ ${esc(lt("游离", "Unbound"))}</button>` : ""}${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -4483,7 +5069,8 @@ v1 桌面壳是否坚持 Tauri 2？
         ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
         ${S.settingsOpen ? settingsSheet() : ""}
         ${S.allRunsOpen ? allRunsSheet() : ""}
-        ${S.refreshOpen ? refreshPopover() : ""}`;
+        ${S.refreshOpen ? refreshPopover() : ""}
+        ${launchOverlay()}`;
     }
 
     function mapSidebar() {
@@ -4499,6 +5086,7 @@ v1 桌面壳是否坚持 Tauri 2？
                   <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
                 </button>`).join("") || `<div class="ms-nested">${esc(t("unpairedTitle"))}</div>`}
               <button class="ms-item" data-act="pair">+ ${esc(t("pair"))}</button>
+              ${S.launchVariant === "B" && S.projectId ? `<button class="ms-item" data-act="open-launch" data-kind="free">+ ${esc(lt("游离 Run", "Unbound Run"))}</button>` : ""}
               <button class="ms-item ${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>
               ${S.variant === "A" ? `<button class="ms-item ${S.midMode === "usage" ? "active" : ""}" data-act="mid-mode" data-id="usage">${esc(t("usage"))}</button>` : ""}
               ${S.variant === "B" ? `<button class="ms-item ${S.usageSheet ? "active" : ""}" data-act="usage-open">${esc(t("usage"))}</button>` : ""}
@@ -4518,7 +5106,8 @@ v1 桌面壳是否坚持 Tauri 2？
                     return `<button class="ms-nested ${S.runId === rr.id ? "active" : ""}" data-act="focus-run" data-id="${rr.id}">
                       <span class="dot ${rr.status === "active" ? "busy" : rr.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
                     </button>`;
-                  }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}`;
+                  }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}
+                  ${S.launchVariant === "A" && S.projectId === pp.id ? `<button class="ms-nested" data-act="open-launch" data-kind="free">+ ${esc(lt("游离 Run", "Unbound Run"))}</button>` : ""}`;
               }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
               <button class="ms-item" data-act="register">+ ${esc(plist.length ? t("registerAgain") : t("register"))}</button>
             </div>
@@ -4842,12 +5431,13 @@ v1 桌面壳是否坚持 Tauri 2？
                   ? `<button class="nav-back" data-act="back-overview" aria-label="${esc(t("backOverview"))}">← ${esc(t("backOverview"))}</button>`
                   : foldHit("restore-dock", t("restoreDock"), "↓"))
                 : r ? `<button class="primary" data-act="${S.direction === "codex-map" ? "focus-run" : "run"}" data-id="${r.id}">${t("seeRun")}</button>`
-                : `<button class="primary" data-act="fake-start" ${blockedAttr}>${t("start")}</button>`}
+                : launchOpenButton("issue", blockedAttr)}
               ${i.closed ? "" : i.claimed ? `<button data-act="fake-release" ${blockedAttr}>${t("release")}</button>` : `<button class="ghost" data-act="fake-claim" ${blockedAttr}>${t("claimOnly")}</button>`}
               ${i.stopped || (r && r.status === "stopped") ? `<button data-act="fake-continue">${t("continue")}</button>` : ""}
               ${trackerOpen(i)}
             </div>
           </header>
+          ${S.launch.open && S.launchVariant === "B" && S.launch.kind === "issue" && S.launch.issueId === i.id ? launchFormB() : ""}
           <div class="issue-body">${renderMd(issueBodyText(i))}</div>
           <div class="issue-rels">
             <details>
@@ -5521,6 +6111,9 @@ v1 桌面壳是否坚持 Tauri 2？
               <button data-act="term-theme" class="${S.termTheme === "light" ? "active" : ""}">${t("termLight")}</button>
             </div>
             <div class="tiny">${S.lang === "en" ? "This is the PTY canvas. Official TUI still paints itself." : "这是 PTY 画布底。官方 TUI 自己怎么画还是它自己的事。"}</div>
+            <b>${esc(lt("命令预览", "Command preview"))}</b>
+            <div class="tiny">${esc(lt("可以有，但不是一等展示。关掉后启动表单折叠区不再画命令行。", "Allowed, but not first-class. When off, the launch form hides the command line."))}</div>
+            ${onOff("cmd-preview", S.cmdPreview)}
             <div class="tiny">${t("thisHost")}</div>
             <b>${t("autoMaster")}</b>
             <div class="tiny">${t("autoMasterHelp")}</div>
@@ -5627,6 +6220,7 @@ v1 桌面壳是否坚持 Tauri 2？
           ${S.pairing ? pairingModal() : ""}${S.stopAsk ? stopModal() : ""}
           ${S.settingsOpen ? settingsSheet() : ""}
           ${S.refreshOpen ? refreshPopover() : ""}
+          ${launchOverlay()}
         </div>`;
     }
     function phoneContextPanel() {
@@ -5691,6 +6285,7 @@ v1 桌面壳是否坚持 Tauri 2？
         ${refreshPhoneCard()}
         <div class="phone-home-actions">
           <button data-act="mid-mode" data-id="overview">${S.lang === "en" ? "Run overview" : "Run 总览"}</button>
+          ${S.projectId ? `<button data-act="open-launch" data-kind="free">${esc(lt("开游离 Run", "Unbound Run"))}</button>` : ""}
           <button data-act="${S.variant === "C" ? "usage-tab" : S.variant === "B" ? "usage-open" : "mid-mode"}" data-id="${S.variant === "A" ? "usage" : "usage"}">${esc(t("usage"))}</button>
           <button data-act="refresh-toggle">${S.lang === "en" ? "Refresh details" : "刷新详情"}</button>
         </div>
@@ -5721,12 +6316,16 @@ v1 桌面壳是否坚持 Tauri 2？
     function phoneRun() {
       const i = issue(S.issueId);
       const r = selectedLiveRun() || run(S.runId);
+      if (S.launch.open && (S.launchVariant === "A" || (S.launchVariant === "B" && S.launch.kind === "free"))) {
+        return S.launchVariant === "A" ? launchFormA() : launchFormB();
+      }
       if (!r) {
         return `
           <div class="hd">Run</div>
           <div class="pad stack">
             <div class="muted">${i ? t("noIssueRun") : t("pickIssue")}</div>
-            ${i && !i.closed ? `<button class="primary" data-act="fake-start" ${refreshMeta().blocksTrackerWrites ? `disabled title="${S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project"}"` : ""}>${t("start")}</button>` : ""}
+            ${i && !i.closed ? launchOpenButton("issue") : ""}
+            ${S.projectId ? launchOpenButton("free") : ""}
           </div>`;
       }
       const models = runModels(r);
@@ -5775,8 +6374,12 @@ v1 桌面壳是否坚持 Tauri 2？
           stepVariant(b.dataset.act === "next" ? 1 : -1);
           render();
         }
-        if (b.dataset.act === "refresh-variant") {
+        if (b.dataset.act === "refresh-variant" || b.dataset.act === "launch-variant") {
           setVariant(b.dataset.id);
+          render();
+        }
+        if (b.dataset.act === "launch-fail-toggle") {
+          S.launchFailNext = !S.launchFailNext;
           render();
         }
         if (b.dataset.act === "vp") {
@@ -5819,6 +6422,11 @@ v1 桌面壳是否坚持 Tauri 2？
 
       const app = document.getElementById("app");
       app.onclick = (e) => {
+        if (e.target.classList && (e.target.classList.contains("launch-palette") || e.target.classList.contains("launch-modal-bg"))) {
+          closeLaunch();
+          render();
+          return;
+        }
         const b = e.target.closest("[data-act]");
         if (!b) return;
         const act = b.dataset.act;
@@ -5993,6 +6601,7 @@ v1 桌面壳是否坚持 Tauri 2？
         if (act === "theme") { setTheme(id); render(); }
         if (act === "appearance") { toggleAppearance(); render(); }
         if (act === "auto-master") { S.autoMaster = id === "on"; render(); }
+        if (act === "cmd-preview") { S.cmdPreview = id === "on"; render(); }
         if (act === "auto-advance") { if (S.autoMaster) patchProjAuto(S.projectId, { on: id === "on" }); render(); }
         if (act === "cold-resume") { if (S.autoMaster) patchProjAuto(S.projectId, { coldResume: id === "on" }); render(); }
         if (act === "all-runs") {
@@ -6104,9 +6713,19 @@ v1 桌面壳是否坚持 Tauri 2？
           return;
         }
         if (act === "register") { alert("原型：登记入口在这里。不真的加 Project。"); }
+        if (act === "open-launch") {
+          openLaunch(b.dataset.kind === "free" ? "free" : "issue", S.issueId);
+        }
+        if (act === "launch-cancel") { closeLaunch(); render(); }
+        if (act === "launch-agent") { applyLaunchAgent(id); render(); }
+        if (act === "launch-back-picker") { S.launch.step = "picker"; render(); }
+        if (act === "launch-fold") { S.launch.extraOpen = !S.launch.extraOpen; render(); }
+        if (act === "launch-intent") { S.launch.intent = id; render(); }
+        if (act === "launch-iso") { S.launch.isolation = b.checked; render(); }
+        if (act === "launch-bool") { S.launch.values[b.dataset.key] = b.checked; render(); }
+        if (act === "launch-commit") { commitLaunch(); render(); }
         if (act === "fake-start") {
-          startRunOnIssue(issue(S.issueId));
-          render();
+          openLaunch("issue", S.issueId);
         }
         if (act === "fake-claim") {
           const cur = issue(S.issueId);
@@ -6131,6 +6750,8 @@ v1 桌面壳是否坚持 Tauri 2？
       };
       app.oninput = (e) => {
         if (e.target.dataset.act === "note-draft") S.noteDraft = e.target.value;
+        if (e.target.dataset.act === "launch-prompt") S.launch.prompt = e.target.value;
+        if (e.target.dataset.act === "launch-text") S.launch.values[e.target.dataset.key] = e.target.value;
         if (e.target.dataset.act === "set-n") {
           S.recentN = Number(e.target.value);
           const label = app.querySelector("[data-role=n-val]");
@@ -6155,6 +6776,20 @@ v1 桌面壳是否坚持 Tauri 2？
         if (e.target.dataset.act === "set-cold-wait") {
           patchProjAuto(S.projectId, { coldWait: Number(e.target.value) });
           render();
+        }
+        if (e.target.dataset.act === "launch-select") {
+          const key = e.target.dataset.key;
+          if (e.target.value === "__custom__") {
+            const cur = S.launch.values[key];
+            const known = AGENTS.some(a => (a.first.concat(a.folded).find(f => f.key === key)?.options || []).includes(cur));
+            S.launch.values[key] = known ? "" : (cur || "");
+          } else {
+            S.launch.values[key] = e.target.value;
+          }
+          render();
+        }
+        if (e.target.dataset.act === "launch-text") {
+          S.launch.values[e.target.dataset.key] = e.target.value;
         }
         const act = e.target.dataset.act;
         if (act === "usage-from" || act === "usage-b-from") {
@@ -6239,6 +6874,11 @@ v1 桌面壳是否坚持 Tauri 2？
     document.addEventListener("keydown", (e) => {
       const el = e.target;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)) return;
+      if (e.key === "Escape" && S.launch.open) {
+        closeLaunch();
+        render();
+        return;
+      }
       if (e.key === "Escape" && S.usageSheet) {
         S.usageSheet = false;
         render();
