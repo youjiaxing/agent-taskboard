@@ -308,6 +308,16 @@
       white-space: nowrap;
     }
     .issue-card .run-line .dot { width: 6px; height: 6px; }
+    .issue-card .run-doing {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--ink);
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .muted { color: var(--muted); }
     .tiny { font-size: 11px; color: var(--muted); }
     .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -2382,11 +2392,11 @@ v1 桌面壳是否坚持 Tauri 2？
       }
     };
     const RUNS = [
-      { id: "r1", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false },
-      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false },
-      { id: "r5", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "active", isolation: true, wait: true },
+      { id: "r1", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "active", isolation: false, doing: "在改 src/ui/IssueDetail.tsx" },
+      { id: "r3", issueId: null, hostId: "local", projectId: "tb", agent: "Claude Code", status: "active", isolation: false, doing: "在想这周回顾怎么收束" },
+      { id: "r5", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "active", isolation: true, wait: true, doing: "等你确认要不要写入 src/settings.rs" },
       { id: "r4", issueId: 12, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
-      { id: "r6", issueId: 1, hostId: "local", projectId: "tb", agent: "Claude Code", status: "stopped", isolation: false },
+      { id: "r6", issueId: 1, hostId: "local", projectId: "tb", agent: "Claude Code", status: "stopped", isolation: false, doing: "停在跑 npm test 之前" },
       { id: "r2", issueId: 30, hostId: "mini", projectId: "shop", agent: "Codex", status: "stopped", isolation: true },
       { id: "r7", issueId: 50, hostId: "local", projectId: "tb", agent: "Grok Build", status: "ended", isolation: false },
       { id: "r8", issueId: 90, hostId: "local", projectId: "tb", agent: "Codex", status: "ended", isolation: false },
@@ -4381,6 +4391,7 @@ v1 桌面壳是否坚持 Tauri 2？
         status: fail ? "ended" : "active",
         isolation: !!(S.launch.isolation && a.worktree),
         fail: !!fail,
+        doing: fail ? lt("启动失败", "Launch failed") : lt("刚拉起官方界面", "Just opened the official TUI"),
         config: { ...S.launch.values, prompt: S.launch.prompt, intent: S.launch.intent }
       };
       RUNS.push(r);
@@ -5388,12 +5399,12 @@ v1 桌面壳是否坚持 Tauri 2？
         </button>`).join("");
     }
 
-    function runStatusLabel(r) {
+    function runDoingText(r) {
       if (!r) return "";
+      if (r.doing) return r.doing;
       if (r.status === "stopped") return t("stopped");
-      if (r.wait) return lt("等待操作", "Waiting");
-      if (r.status === "active") return lt("进行中", "Running");
-      if (r.status === "ended") return t("ended");
+      if (r.wait) return lt("等你确认权限或提问", "Waiting for approval or a question");
+      if (r.status === "active") return lt("在干活", "Working");
       return "";
     }
     function issueCard(i, col) {
@@ -5408,8 +5419,8 @@ v1 桌面壳是否坚持 Tauri 2？
         <div class="run-line">
           <span class="dot ${r.status === "active" ? (r.wait ? "busy" : "on") : r.status === "stopped" ? "stop" : "off"}"></span>
           <b>${esc(r.agent)}</b>
-          <span>${esc(runStatusLabel(r))}</span>
-        </div>` : "";
+        </div>
+        <div class="run-doing">${esc(runDoingText(r))}</div>` : "";
       return `
         <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
           <div class="t"><b class="mono">#${i.id}</b><span class="tiny">${esc(i.closedAgo || "")}</span></div>

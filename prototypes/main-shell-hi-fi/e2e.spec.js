@@ -70,11 +70,10 @@ test("进行中卡片展示 Agent 与简单执行状态", async ({ page }) => {
 
   const col = page.locator(".col.in-run");
   await expect(col).toContainText("Grok Build");
-  await expect(col).toContainText("进行中");
+  await expect(col).toContainText("在改 src/ui/IssueDetail.tsx");
   await expect(col).toContainText("Codex");
-  await expect(col).toContainText("等待操作");
-  await expect(col).toContainText("执行已停");
-  await expect(col).not.toContainText("Run");
+  await expect(col).toContainText("等你确认要不要写入 src/settings.rs");
+  await expect(col).toContainText("停在跑 npm test 之前");
 });
 
 test("点已有 Run 的票直接进中间终端，不打开配置表", async ({ page }) => {
