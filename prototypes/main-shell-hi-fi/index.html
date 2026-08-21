@@ -10,9 +10,9 @@
     「在已定主壳中，从绑定 Issue 或 Project 级入口开 Run 时，怎样选 Agent、填这家自己的启动配置；游离 Run 的入口放在哪里，才不会把 Run 变成第二套工作单元？」
 
     三种结构不同的入口，共用已钉的 Codex 原貌映射主壳。用量层级冻结为 A（独立页）。
-      A  终端位配置台：开 Run 后，底栏/手机 Run 页变成配置表。Agent 是顶部分段。游离挂在当前 Project 侧栏。
-      B  票内配置抽屉：表单铺在右侧票详情。Agent 是纵向名单。游离挂在 Host 区，不跟任何票。
-      C  先选 Agent 再填表：命令面板选 Agent，再居中表单。游离与绑票共用面板，靠横幅区分。
+      A  候选：不绑票入口在当前 Project 下方；先选 Agent 再居中填表；按 Project 记住上次启动的 Agent，下次直接进表。
+      B  票内配置抽屉（对照）。
+      C  每次都先选 Agent（对照，不跳过记忆）。
     ?variant=A|B|C  &viewport=desktop|phone
   -->
   <style>
@@ -2745,18 +2745,18 @@ v1 桌面壳是否坚持 Tauri 2？
     const LAUNCH_VARIANTS = [
       {
         id: "A",
-        name: "终端位配置台",
-        note: "开 Run 后，底栏变成配置表——启动后这里就是官方 TUI。Agent 是顶部分段。游离挂在当前 Project 侧栏。"
+        name: "记住 Agent · 再填表",
+        note: "不绑票入口在当前 Project 下方。先选 Agent 再居中填表；按 Project 记住上次启动的 Agent，下次直接进表，换一家可回名单。"
       },
       {
         id: "B",
         name: "票内配置抽屉",
-        note: "表单铺在右侧票详情。Agent 是纵向名单。游离挂在 Host 区，不跟任何票。"
+        note: "对照：表单铺在右侧票详情。Agent 是纵向名单。"
       },
       {
         id: "C",
-        name: "先选 Agent 再填表",
-        note: "开 Run 先弹出命令面板选 Agent，再居中填表。游离与绑票共用面板，靠横幅区分。"
+        name: "每次都先选 Agent",
+        note: "对照：每次开 Run 都先弹出 Agent 名单，不跳过记忆。"
       }
     ];
 
@@ -2838,6 +2838,7 @@ v1 桌面壳是否坚持 Tauri 2？
       "tb:codex": { model: "gpt-5", effort: "medium", approval: "on-request", sandbox: "workspace-write", profile: "default", extraArgs: "" },
       "shop:codex": { model: "gpt-5-mini", effort: "low", approval: "on-request", sandbox: "workspace-write", profile: "default", extraArgs: "" }
     };
+    const LAST_AGENT = { tb: "grok", shop: "codex", notes: "codex" };
 
     const INTENTS = [
       ["", "不选", "None"],
@@ -4187,15 +4188,15 @@ v1 桌面壳是否坚持 Tauri 2？
       if (other) return { values: LAST_OK[other], source: "other-project" };
       return { values: { ...launchAgent(agentId).defaults }, source: "cli-seed" };
     }
+    function rememberedAgent(projectId) {
+      const id = LAST_AGENT[projectId];
+      if (!id) return null;
+      const a = launchAgent(id);
+      return a && a.installed ? a : null;
+    }
     function defaultPrompt(kind, issueId) {
       const i = issue(issueId);
-      const p = project(S.projectId);
-      if (kind === "free" || !i) {
-        return lt(
-          `在 Project ${p ? p.name : ""} 下开始一次未绑定 Issue 的 Run。`,
-          `Start an unbound Run in project ${p ? p.name : ""}.`
-        );
-      }
+      if (kind === "free" || !i) return "";
       return lt(
         `请处理 GitHub Issue「${i.title}」（https://github.com/youjiaxing/agent-taskboard/issues/${i.id}）。请自行读取 Tracker 上的最新正文、评论和依赖，不要依赖这段开场白里的摘要。`,
         `Work on GitHub Issue "${i.title}" (https://github.com/youjiaxing/agent-taskboard/issues/${i.id}). Read the latest tracker body, comments, and dependencies yourself.`
@@ -4231,8 +4232,11 @@ v1 桌面壳是否坚持 Tauri 2？
         if (issueRun(i)) return;
       } else if (!S.projectId) return;
       S.launch.open = true;
-      S.launch.step = S.launchVariant === "C" ? "picker" : "form";
-      seedLaunch(kind, issueId, firstInstalledAgent().id);
+      const pid = kind === "issue" && i ? i.projectId : S.projectId;
+      const remembered = rememberedAgent(pid);
+      const skipPicker = S.launchVariant !== "C" && !!remembered;
+      S.launch.step = skipPicker || S.launchVariant === "B" ? "form" : "picker";
+      seedLaunch(kind, issueId, (remembered || firstInstalledAgent()).id);
       if (kind === "issue") {
         S.issueId = i.id;
         S.projectId = i.projectId;
@@ -4345,6 +4349,7 @@ v1 桌面壳是否坚持 Tauri 2？
         lines: [{ n: 1, t: fail ? "+ 原型：启动失败留下的记录" : "+ 原型：刚开的 Run", k: "add" }]
       }];
       LAST_OK[memoryKey(S.projectId, a.id)] = { ...S.launch.values };
+      if (S.projectId) LAST_AGENT[S.projectId] = a.id;
       if (fail) {
         S.launchFailNext = false;
         S.launch.error = lt("启动失败：进程没拉起来。这次 Run 记录留着，可改配置再开。", "Launch failed: process did not start. The Run record stays so you can retry.");
@@ -4432,8 +4437,10 @@ v1 桌面壳是否坚持 Tauri 2？
             ${INTENTS.map(([id, zh, en]) => `<button type="button" data-act="launch-intent" data-id="${id}" class="${S.launch.intent === id ? "active" : ""}">${esc(S.lang === "en" ? en : zh)}</button>`).join("")}
           </div>
           ${prefix ? `<div class="launch-banner">${esc(prefix)}</div>` : ""}
-          <textarea data-act="launch-prompt">${esc(S.launch.prompt)}</textarea>
-          <div class="tiny">${esc(lt("意图只生成看得见的前缀；最终开场白以这框为准。不复制票正文。", "Intent only prefixes visible text. This box is the source of truth. The issue body is not copied."))}</div>
+          <textarea data-act="launch-prompt" placeholder="${esc(S.launch.kind === "free" ? lt("要 Agent 做什么，写在这里。", "What should the agent do?") : "")}">${esc(S.launch.prompt)}</textarea>
+          <div class="tiny">${esc(S.launch.kind === "free"
+            ? lt("不绑票时没有 Issue 地址可塞，所以默认是空的。意图只加看得见的前缀。", "No issue to point at, so this starts empty. Intent only adds a visible prefix.")
+            : lt("只带票名和稳定地址，不复制正文。意图只生成看得见的前缀；最终开场白以这框为准。", "Issue title and a stable URL only. Intent prefixes visible text. This box is the source of truth."))}</div>
         </div>`;
     }
     function launchFolded() {
@@ -4510,7 +4517,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `
         <div class="launch-palette" data-launch="C-picker">
           <div class="launch-palette-card">
-            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("开游离 Run · 选 Agent", "Unbound Run · pick Agent") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
+            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("不绑票开 Run · 选 Agent", "Start without an issue · pick Agent") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
             ${S.launch.kind === "free" ? launchKindBanner() : `<div class="tiny">${esc(issue(S.launch.issueId) ? issueLabel(issue(S.launch.issueId)) : "")}</div>`}
             ${agentList()}
           </div>
@@ -4524,7 +4531,7 @@ v1 桌面壳是否坚持 Tauri 2？
             <div class="row">
               <div>
                 <div class="launch-kicker">${esc(a.name)}</div>
-                <div class="tiny">${esc(agentInstalledNote(a))}</div>
+                <div class="tiny">${esc(agentInstalledNote(a))}${rememberedAgent(S.projectId) && rememberedAgent(S.projectId).id === a.id ? esc(lt(" · 这个 Project 上次启动用的", " · last used in this project")) : ""}</div>
               </div>
               <span class="grow"></span>
               ${launchActions()}
@@ -4537,16 +4544,19 @@ v1 桌面壳是否坚持 Tauri 2？
     }
     function launchOverlay() {
       if (!S.launch.open) return "";
-      if (S.launchVariant === "C") return S.launch.step === "picker" ? launchPickerC() : launchModalC();
-      if (S.launchVariant === "B" && S.launch.kind === "free") {
-        return `<div class="launch-free-sheet">${launchFormB()}</div>`;
+      if (S.launchVariant === "B") {
+        if (S.launch.kind === "free") return S.launch.step === "picker" ? launchPickerC() : launchModalC();
+        return "";
       }
-      return "";
+      return S.launch.step === "picker" ? launchPickerC() : launchModalC();
+    }
+    function freeLaunchLabel() {
+      return lt("不绑票开 Run", "Start without an issue");
     }
     function launchOpenButton(kind, extra = "") {
       const blocked = refreshMeta().blocksTrackerWrites;
       const title = blocked ? (S.lang === "en" ? "Refresh this Project first" : "先刷新这个 Project") : "";
-      return `<button class="primary" data-act="open-launch" data-kind="${kind}" ${extra} ${blocked ? `disabled title="${esc(title)}"` : ""}>${kind === "free" ? esc(lt("开游离 Run", "Unbound Run")) : t("start")}</button>`;
+      return `<button class="primary" data-act="open-launch" data-kind="${kind}" ${extra} ${blocked ? `disabled title="${esc(title)}"` : ""}>${kind === "free" ? esc(freeLaunchLabel()) : t("start")}</button>`;
     }
 
     function startRunOnIssue(i) {
@@ -4615,7 +4625,6 @@ v1 桌面壳是否坚持 Tauri 2？
       if (S.viewport === "phone") S.phone = "run";
     }
     function idleDock(i) {
-      if (S.launch.open && S.launchVariant === "A") return launchFormA();
       return `
         <div class="dock slim dock-idle">
           <div class="ident">
@@ -4945,6 +4954,7 @@ v1 桌面壳是否坚持 Tauri 2？
       const a = launchAgent();
       const lines = [
         `开 Run 结构 ${S.launchVariant} · ${launchVariantOf(S.launchVariant).name}`,
+        `上次 Agent: ${S.projectId ? (LAST_AGENT[S.projectId] || "无") : "无"}`,
         `启动草稿: ${S.launch.open ? `${S.launch.kind} / ${a.name} / ${S.launch.step}` : "关"}`,
         `预填来源: ${S.launch.source} · 隔离 ${S.launch.isolation ? "开" : "关"} · 意图 ${S.launch.intent || "无"}`,
         `草稿值: ${JSON.stringify(S.launch.values)}`,
@@ -5047,7 +5057,7 @@ v1 桌面壳是否坚持 Tauri 2？
                 ${S.variant === "B" && !empty ? usageBtn() : ""}
               </div>
               <div class="map-chrome-main">${empty ? "" : midBar()}</div>
-              <div class="map-chrome-trail">${empty ? "" : `${S.launchVariant === "C" && S.projectId ? `<button class="chip" data-act="open-launch" data-kind="free">+ ${esc(lt("游离", "Unbound"))}</button>` : ""}${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") ? "" : detailToggle()}</div>
+              <div class="map-chrome-trail">${empty ? "" : `${overviewBtn()}${S.variant === "A" ? usageBtn() : ""}`}${autoArmed() ? `<button type="button" class="chip" data-act="settings" title="${esc(t("autoAdvanceHelp"))}">${esc(t("autoAdvanceOn"))}</button>` : ""}${appearanceBtn()}${empty || S.midMode === "usage" || (S.midMode === "overview" && S.variant === "C" && S.usageTab === "usage") ? "" : detailToggle()}</div>
             </div>
             <div class="map-body">
               ${S.sideFolded ? "" : mapSidebar()}
@@ -5086,7 +5096,6 @@ v1 桌面壳是否坚持 Tauri 2？
                   <span class="dot ${hh.online ? "on" : "off"}"></span>${esc(hostName(hh))}
                 </button>`).join("") || `<div class="ms-nested">${esc(t("unpairedTitle"))}</div>`}
               <button class="ms-item" data-act="pair">+ ${esc(t("pair"))}</button>
-              ${S.launchVariant === "B" && S.projectId ? `<button class="ms-item" data-act="open-launch" data-kind="free">+ ${esc(lt("游离 Run", "Unbound Run"))}</button>` : ""}
               <button class="ms-item ${S.midMode === "overview" ? "active" : ""}" data-act="mid-mode" data-id="overview">${esc(t("overview"))}</button>
               ${S.variant === "A" ? `<button class="ms-item ${S.midMode === "usage" ? "active" : ""}" data-act="mid-mode" data-id="usage">${esc(t("usage"))}</button>` : ""}
               ${S.variant === "B" ? `<button class="ms-item ${S.usageSheet ? "active" : ""}" data-act="usage-open">${esc(t("usage"))}</button>` : ""}
@@ -5107,7 +5116,7 @@ v1 桌面壳是否坚持 Tauri 2？
                       <span class="dot ${rr.status === "active" ? "busy" : rr.status === "stopped" ? "stop" : "off"}"></span>${esc(label)}
                     </button>`;
                   }).join("") || (S.projectId === pp.id ? `<div class="ms-nested">${esc(t("noDockRuns"))}</div>` : "")}
-                  ${S.launchVariant === "A" && S.projectId === pp.id ? `<button class="ms-nested" data-act="open-launch" data-kind="free">+ ${esc(lt("游离 Run", "Unbound Run"))}</button>` : ""}`;
+                  ${S.projectId === pp.id ? `<button class="ms-nested" data-act="open-launch" data-kind="free">${esc(freeLaunchLabel())}</button>` : ""}`;
               }).join("") || `<div class="ms-nested">${esc(t("noProjectTitle"))}</div>`}
               <button class="ms-item" data-act="register">+ ${esc(plist.length ? t("registerAgain") : t("register"))}</button>
             </div>
@@ -6285,7 +6294,7 @@ v1 桌面壳是否坚持 Tauri 2？
         ${refreshPhoneCard()}
         <div class="phone-home-actions">
           <button data-act="mid-mode" data-id="overview">${S.lang === "en" ? "Run overview" : "Run 总览"}</button>
-          ${S.projectId ? `<button data-act="open-launch" data-kind="free">${esc(lt("开游离 Run", "Unbound Run"))}</button>` : ""}
+          ${S.projectId ? `<button data-act="open-launch" data-kind="free">${esc(freeLaunchLabel())}</button>` : ""}
           <button data-act="${S.variant === "C" ? "usage-tab" : S.variant === "B" ? "usage-open" : "mid-mode"}" data-id="${S.variant === "A" ? "usage" : "usage"}">${esc(t("usage"))}</button>
           <button data-act="refresh-toggle">${S.lang === "en" ? "Refresh details" : "刷新详情"}</button>
         </div>
@@ -6316,9 +6325,6 @@ v1 桌面壳是否坚持 Tauri 2？
     function phoneRun() {
       const i = issue(S.issueId);
       const r = selectedLiveRun() || run(S.runId);
-      if (S.launch.open && (S.launchVariant === "A" || (S.launchVariant === "B" && S.launch.kind === "free"))) {
-        return S.launchVariant === "A" ? launchFormA() : launchFormB();
-      }
       if (!r) {
         return `
           <div class="hd">Run</div>
