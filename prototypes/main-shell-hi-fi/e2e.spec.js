@@ -65,6 +65,18 @@ test("A：记住上次 Agent 直接填表；换一家才回名单；Claude 未�
   await expect(page.locator(".launch-modal-card")).toHaveCount(0);
 });
 
+test("进行中卡片展示 Agent 与简单执行状态", async ({ page }) => {
+  await open(page, "&variant=A");
+
+  const col = page.locator(".col.in-run");
+  await expect(col).toContainText("Grok Build");
+  await expect(col).toContainText("进行中");
+  await expect(col).toContainText("Codex");
+  await expect(col).toContainText("等待操作");
+  await expect(col).toContainText("执行已停");
+  await expect(col).not.toContainText("Run");
+});
+
 test("点已有 Run 的票直接进中间终端，不打开配置表", async ({ page }) => {
   await open(page, "&variant=A");
 

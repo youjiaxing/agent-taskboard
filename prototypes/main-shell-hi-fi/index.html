@@ -291,6 +291,23 @@
     .item .t, .issue-card .t { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
     .item .t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .item .sub, .issue-card .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .issue-card .run-line {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .issue-card .run-line b {
+      color: var(--ink);
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .issue-card .run-line .dot { width: 6px; height: 6px; }
     .muted { color: var(--muted); }
     .tiny { font-size: 11px; color: var(--muted); }
     .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -5371,20 +5388,34 @@ v1 桌面壳是否坚持 Tauri 2？
         </button>`).join("");
     }
 
+    function runStatusLabel(r) {
+      if (!r) return "";
+      if (r.status === "stopped") return t("stopped");
+      if (r.wait) return lt("等待操作", "Waiting");
+      if (r.status === "active") return lt("进行中", "Running");
+      if (r.status === "ended") return t("ended");
+      return "";
+    }
     function issueCard(i, col) {
       const r = issueRun(i);
       const ended = RUNS.find(x => x.issueId === i.id && x.status === "ended" && S.runId === x.id);
       const tags = [];
       if (i.closed) tags.push(`<span class="tag">${t("closed")}</span>`);
       if (sectionOf(i) === "blocked") tags.push(`<span class="tag block">${t("blocked")}</span>`);
-      if (r && r.status === "active") tags.push(`<span class="tag run">Run</span>`);
-      if ((r && r.status === "stopped") || i.stopped) tags.push(`<span class="tag stop">${t("stopped")}</span>`);
+      if (!r && i.stopped) tags.push(`<span class="tag stop">${t("stopped")}</span>`);
       if (ended) tags.push(`<span class="tag">${t("ended")}</span>`);
+      const runLine = r ? `
+        <div class="run-line">
+          <span class="dot ${r.status === "active" ? (r.wait ? "busy" : "on") : r.status === "stopped" ? "stop" : "off"}"></span>
+          <b>${esc(r.agent)}</b>
+          <span>${esc(runStatusLabel(r))}</span>
+        </div>` : "";
       return `
         <button class="issue-card ${S.issueId === i.id ? "sel" : ""}" data-act="issue" data-id="${i.id}">
           <div class="t"><b class="mono">#${i.id}</b><span class="tiny">${esc(i.closedAgo || "")}</span></div>
           <div>${esc(shortTitle(i.title, 28))}</div>
-          <div class="sub">${tags.join(" ")}</div>
+          ${tags.length ? `<div class="sub">${tags.join(" ")}</div>` : ""}
+          ${runLine}
         </button>`;
     }
 
