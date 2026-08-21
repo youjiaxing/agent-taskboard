@@ -8,7 +8,7 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 
 **总览**跟 Host，不跟当前 Project：铺开这台 Host 上的 Run 缩略图，按终端状态分组，可按 Project 过滤。不是 Frontier 聚合板，也不是跨 Host 总览。入口在左侧 Host 区；侧栏收起后留在顶栏。
 
-**底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端，给出「开 Run」（一步认领并启动）。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
+**底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端。绑票开工走配置表，不再一步认领并启动，见 [ADR 0018](0018-run-launch-form.md)。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
 
 **进入 Run**时，从看板点击已有 Run 的 Issue 会直接把 Embedded Terminal 抬到中间，自动收起左侧，右侧保留完整 Issue；终端约占中间与详情区域的三分之二。「返回看板」恢复原看板和自动收起的左侧。依赖图节点仍只换 Issue 详情，不触发这条流转。
 
