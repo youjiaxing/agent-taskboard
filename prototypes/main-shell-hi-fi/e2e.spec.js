@@ -15,7 +15,7 @@ test("三种开 Run 结构切换，URL 与键盘稳定", async ({ page }) => {
 
   await expect(page.locator(".map-side")).toBeVisible();
   await expect(page.locator(".lanes")).toBeVisible();
-  await expect(page.getByRole("button", { name: "开 Run" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "执行" }).first()).toBeVisible();
   await expect(page).toHaveURL(/variant=A/);
 
   await page.getByRole("button", { name: /B · 票内/ }).click();

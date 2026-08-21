@@ -2995,7 +2995,7 @@ v1 桌面壳是否坚持 Tauri 2？
         blocking: "它挡住的",
         noneBlock: "无，可进 Frontier",
         none: "无",
-        start: "开 Run",
+        start: "执行",
         seeRun: "打开终端",
         claim: "认领",
         claimOnly: "只认领",
@@ -3204,7 +3204,7 @@ v1 桌面壳是否坚持 Tauri 2？
         blocking: "Blocking",
         noneBlock: "None — can enter Frontier",
         none: "None",
-        start: "Start Run",
+        start: "Run",
         seeRun: "Open terminal",
         claim: "Claim",
         claimOnly: "Claim only",
@@ -4508,7 +4508,7 @@ v1 桌面壳是否坚持 Tauri 2？
     function launchFormB() {
       return `
         <div class="launch-drawer" data-launch="B">
-          <div class="row"><b>${esc(lt("开 Run", "Start Run"))}</b><span class="grow"></span>${launchActions()}<button class="ghost" data-act="launch-cancel">×</button></div>
+          <div class="row"><b>${esc(lt("执行", "Run"))}</b><span class="grow"></span>${launchActions()}<button class="ghost" data-act="launch-cancel">×</button></div>
           ${agentList()}
           ${launchFormBody()}
         </div>`;
@@ -4517,7 +4517,7 @@ v1 桌面壳是否坚持 Tauri 2？
       return `
         <div class="launch-palette" data-launch="C-picker">
           <div class="launch-palette-card">
-            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("新建 · 选 Agent", "New · pick Agent") : lt("开 Run · 选 Agent", "Start Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
+            <div class="row"><div class="launch-kicker">${esc(S.launch.kind === "free" ? lt("新建 · 选 Agent", "New · pick Agent") : lt("执行 · 选 Agent", "Run · pick Agent"))}</div><span class="grow"></span><button class="ghost" data-act="launch-cancel">×</button></div>
             ${S.launch.kind === "free" ? launchKindBanner() : `<div class="tiny">${esc(issue(S.launch.issueId) ? issueLabel(issue(S.launch.issueId)) : "")}</div>`}
             ${agentList()}
           </div>
@@ -6263,7 +6263,7 @@ v1 桌面壳是否坚持 Tauri 2？
         : r.status === "stopped" ? t("stopped")
         : r.wait ? (S.lang === "en" ? "Waiting for action" : "等待操作")
         : (S.lang === "en" ? "Run active" : "Run 进行中");
-      const action = r && r.status === "stopped" ? (S.lang === "en" ? "Open and continue" : "打开并继续") : (S.lang === "en" ? "Open Run" : "打开 Run");
+      const action = r && r.status === "stopped" ? (S.lang === "en" ? "Open and continue" : "打开并继续") : (S.lang === "en" ? "Open terminal" : "打开终端");
       return `
         <div class="phone-run-card">
           <button class="phone-run-main" data-act="issue" data-id="${i.id}">
