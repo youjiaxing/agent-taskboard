@@ -1,7 +1,8 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use host_kernel::{
-    bind_local_rpc, spawn_local_rpc, BootRequest, Command, HostKernel, HostSnapshot, ProcessIntent,
+    BootRequest, Command, HostKernel, HostSnapshot, LoopbackAssets, LoopbackServer, ProcessIntent,
     SystemAppearance, LOCAL_RPC_PORT,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -12,25 +13,32 @@ use tauri::{AppHandle, Manager, WindowEvent};
 struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
     protocol_url: String,
+    _loopback: LoopbackServer,
 }
 
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let kernel = boot_kernel(app.handle())?;
-            let snapshot = kernel.snapshot();
             let kernel = Arc::new(Mutex::new(kernel));
-            let (listener, protocol_url) = bind_local_rpc(LOCAL_RPC_PORT)?;
             let app_handle = app.handle().clone();
-            spawn_local_rpc(listener, Arc::clone(&kernel), move |outcome| {
-                let _ = refresh_shell(&app_handle, &outcome.snapshot);
-                if outcome.process == ProcessIntent::Exit {
-                    app_handle.exit(0);
-                }
-            });
+            let loopback = LoopbackServer::attach_with(
+                Arc::clone(&kernel),
+                LOCAL_RPC_PORT,
+                loopback_assets(app.handle()),
+                move |outcome| {
+                    let _ = refresh_shell(&app_handle, &outcome.snapshot);
+                    if outcome.process == ProcessIntent::Exit {
+                        app_handle.exit(0);
+                    }
+                },
+            )?;
+            let protocol_url = loopback.protocol_url().to_string();
+            let snapshot = kernel.lock().map_err(|err| err.to_string())?.snapshot();
             app.manage(AppState {
                 kernel,
                 protocol_url: protocol_url.clone(),
+                _loopback: loopback,
             });
             build_tray(app.handle())?;
             refresh_shell(app.handle(), &snapshot)?;
@@ -73,6 +81,26 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+fn loopback_assets(app: &AppHandle) -> LoopbackAssets {
+    if cfg!(debug_assertions) {
+        return LoopbackAssets::DevProxy {
+            origin: "http://127.0.0.1:1420".into(),
+        };
+    }
+    let mut candidates = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.clone());
+        candidates.push(dir.join("dist"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist"));
+    for dir in candidates {
+        if dir.join("index.html").exists() {
+            return LoopbackAssets::Directory(dir);
+        }
+    }
+    LoopbackAssets::Builtin
 }
 
 fn inject_protocol_url(window: &tauri::WebviewWindow, url: &str) {
