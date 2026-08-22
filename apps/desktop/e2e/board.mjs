@@ -8,11 +8,25 @@ if (!url) {
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
+page.on("pageerror", (error) => {
+  console.error("pageerror", error);
+});
+page.on("console", (msg) => {
+  if (msg.type() === "error") {
+    console.error("console", msg.text());
+  }
+});
 await page.addInitScript((protocol) => {
   window.__HOST_PROTOCOL__ = protocol;
 }, url);
 await page.goto(url, { waitUntil: "networkidle" });
-await page.waitForSelector(".lanes");
+try {
+  await page.waitForSelector(".lanes");
+} catch (error) {
+  const html = await page.content();
+  console.error("page html", html.slice(0, 4000));
+  throw error;
+}
 await page.waitForSelector(".refresh-bar");
 const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")) {
@@ -103,6 +117,22 @@ const afterGraphFrontier = await page.$$eval('[data-lane="frontier"] .issue-card
 if (!afterGraphFrontier.includes("unparented ready")) {
   throw new Error("returning to the board should keep the unfiltered Frontier");
 }
+
+const newLabel = await page.$eval("button[data-act='new-run']", (node) => node.getAttribute("aria-label"));
+if (newLabel !== "新建" && newLabel !== "New") {
+  throw new Error(`project row plus should be New, got ${newLabel}`);
+}
+await page.click("button[data-act='new-run']");
+await page.waitForSelector(".run-dock");
+const dockText = await page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
+if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
+  throw new Error(`unbound Run dock missing identity, got ${dockText}`);
+}
+if (!(await page.$(".pty-slot"))) {
+  throw new Error("Embedded Terminal slot missing");
+}
+await page.click("button[data-act='stop-run']");
+await page.waitForFunction(() => document.querySelector("button[data-act='stop-run']")?.disabled);
 
 await page.click("button:has-text('设置')");
 await page.waitForSelector("#recent-limit");

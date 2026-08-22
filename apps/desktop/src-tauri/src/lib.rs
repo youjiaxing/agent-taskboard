@@ -240,12 +240,22 @@ fn show_main(app: &AppHandle) {
 fn quit_host(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut kernel) = state.kernel.lock() {
-            let outcome = kernel.dispatch(Command::QuitHost);
-            if !matches!(
-                outcome.as_ref().map(|value| value.process),
-                Ok(ProcessIntent::Exit)
-            ) {
-                return;
+            match kernel.dispatch(Command::QuitHost) {
+                Ok(outcome) if outcome.process == ProcessIntent::Exit => {
+                    drop(kernel);
+                    app.exit(0);
+                    return;
+                }
+                Ok(outcome) => {
+                    drop(kernel);
+                    show_main(app);
+                    let _ = refresh_shell(app, &outcome.snapshot);
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.eval("window.dispatchEvent(new Event('focus'));");
+                    }
+                    return;
+                }
+                Err(_) => return,
             }
         }
     }

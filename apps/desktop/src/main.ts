@@ -1,3 +1,6 @@
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
 
 type Language = "zh-CN" | "en";
@@ -110,6 +113,13 @@ type ShellCopy = {
   refreshRetry: string;
   refreshPaused: string;
   refreshAuth: string;
+  newRun: string;
+  unboundIssue: string;
+  stopRun: string;
+  quitActiveTitle: string;
+  quitActiveBody: string;
+  quitReturn: string;
+  quitStopAll: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -287,6 +297,27 @@ type Snapshot = {
   board: BoardSnapshot | null;
   recentCompletedLimit: number;
   centerView: CenterView;
+  runs: RunSummary[];
+  focusedRunId: string;
+  quitOffer: QuitOffer | null;
+};
+
+type RunStatus = "starting" | "running" | "ended";
+
+type RunSummary = {
+  id: string;
+  projectId: string;
+  agentId: string;
+  agentName: string;
+  issueId?: string | null;
+  unbound: boolean;
+  status: RunStatus;
+  recentAction?: string | null;
+  failure?: string | null;
+};
+
+type QuitOffer = {
+  activeRunCount: number;
 };
 
 type RpcResult = {
@@ -316,6 +347,12 @@ let formError = "";
 let removeProject: Project | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
+let term: Terminal | null = null;
+let fitAddon: FitAddon | null = null;
+let termHost: HTMLDivElement | null = null;
+let ptyOffset = 0;
+let ptyRunId = "";
+let ptyPumping = false;
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -379,6 +416,8 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     throw new Error(message);
   }
   const result = (await response.json()) as RpcResult;
+  result.snapshot.runs = result.snapshot.runs ?? [];
+  result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
   if (generation !== rpcGeneration && snapshot) {
     return { snapshot, process: "keep-running", inference: result.inference };
   }
@@ -459,12 +498,14 @@ function render(): void {
             </div>
             ${
               projects.length
-                ? projects.map((project) => projectRow(copy, project, snap.focusedProjectId)).join("")
+                ? projects
+                    .map((project) => projectBlock(copy, snap, project, snap.focusedProjectId))
+                    .join("")
                 : `<div class="nested">${escapeHtml(copy.noProjectTitle)}</div>`
             }
           </div>
         </aside>
-        <main class="workspace ${empty ? "" : "board-open"}">
+        <main class="workspace ${empty ? "" : "board-open"}${focusedRun(snap) ? " has-run" : ""}">
           ${
             empty
               ? `<div class="empty">
@@ -480,7 +521,7 @@ function render(): void {
                       .join("")}
                   </div>
                 </div>`
-              : projectMain(copy, snap)
+              : `${projectMain(copy, snap)}${runDock(copy, snap)}`
           }
         </main>
       </div>
@@ -572,8 +613,10 @@ function render(): void {
     }
     ${formOpen ? projectForm(copy) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
+    ${snap.quitOffer ? quitOfferDialog(copy) : ""}
   `;
   paintGraphEdges();
+  attachTerminal(snap);
 }
 
 function paintGraphEdges(): void {
@@ -613,6 +656,19 @@ function currentProject(snap: Snapshot): Project | undefined {
   );
 }
 
+function focusedRun(snap: Snapshot): RunSummary | undefined {
+  const runs = snap.runs ?? [];
+  return runs.find((run) => run.id === snap.focusedRunId) ?? runs.find((run) => run.status !== "ended");
+}
+
+function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
+  const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
+  return `<div class="project-block">
+    ${projectRow(copy, project, focusedId)}
+    ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
+  </div>`;
+}
+
 function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
   const active = project.id === focusedId;
   const degraded = project.connection.status !== "ready";
@@ -622,6 +678,7 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
       <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
     </button>
     ${degraded ? `<span class="dot warn" title="${escapeHtml(copy.authFailed)}"></span>` : ""}
+    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
       projectMenuId === project.id
@@ -631,6 +688,51 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
           </div>`
         : ""
     }
+  </div>`;
+}
+
+function runIdentity(copy: ShellCopy, run: RunSummary): string {
+  return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
+}
+
+function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
+  const identity = runIdentity(copy, run);
+  const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
+  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(run.status)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+    <b>${escapeHtml(run.agentName)}</b>
+    <span>${escapeHtml(identity)}</span>
+    ${action ? `<span class="run-action">${action}</span>` : ""}
+    ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
+  </button>`;
+}
+
+function runDock(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!run) return "";
+  const identity = runIdentity(copy, run);
+  return `<section class="run-dock">
+    <header class="run-dock-hd">
+      <div>
+        <b>${escapeHtml(run.agentName)}</b>
+        <span>${escapeHtml(identity)}</span>
+      </div>
+      <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+    </header>
+    ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
+    <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
+  </section>`;
+}
+
+function quitOfferDialog(copy: ShellCopy): string {
+  return `<div class="overlay modal" data-act="cancel-quit">
+    <div class="sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.quitActiveTitle)}</h2>
+      <p class="notice">${escapeHtml(copy.quitActiveBody)}</p>
+      <div class="actions">
+        <button type="button" data-act="cancel-quit">${escapeHtml(copy.quitReturn)}</button>
+        <button type="button" class="danger primary" data-act="confirm-quit">${escapeHtml(copy.quitStopAll)}</button>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -989,6 +1091,126 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
+  if (theme === "plain-night") {
+    return {
+      cursorBlink: true,
+      fontSize: 13,
+      theme: { background: "#181817", foreground: "#f4f2ee", cursor: "#e86a5c" },
+    };
+  }
+  return {
+    cursorBlink: true,
+    fontSize: 13,
+    theme: { background: "#1c1b19", foreground: "#f4f2ee", cursor: "#c45c26" },
+  };
+}
+
+function ensureTerminal(theme: Theme): void {
+  if (term && termHost && fitAddon) return;
+  fitAddon = new FitAddon();
+  term = new Terminal(termTheme(theme));
+  term.loadAddon(fitAddon);
+  termHost = document.createElement("div");
+  termHost.className = "pty-host";
+  term.open(termHost);
+  term.onData((data) => {
+    const runId = snapshot?.focusedRunId;
+    if (!runId) return;
+    void sendPtyInput(runId, data);
+  });
+}
+
+function attachTerminal(snap: Snapshot): void {
+  const run = focusedRun(snap);
+  const slot = app?.querySelector<HTMLElement>(".pty-slot");
+  if (!run || !slot) {
+    ptyPumping = false;
+    return;
+  }
+  ensureTerminal(snap.appearance.theme);
+  if (termHost && termHost.parentElement !== slot) {
+    slot.appendChild(termHost);
+  }
+  fitAddon?.fit();
+  void sendPtyResize(run.id);
+  if (ptyRunId !== run.id) {
+    ptyRunId = run.id;
+    ptyOffset = 0;
+    term?.reset();
+  }
+  if (run.status === "ended") {
+    ptyPumping = false;
+    return;
+  }
+  if (!ptyPumping) {
+    ptyPumping = true;
+    void pumpPty();
+  }
+}
+
+async function sendPtyInput(runId: string, data: string): Promise<void> {
+  try {
+    await fetch(`${await protocolBase()}/runs/${encodeURIComponent(runId)}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ data }),
+    });
+  } catch {
+    // Host may have stopped the Run.
+  }
+}
+
+async function sendPtyResize(runId: string): Promise<void> {
+  const cols = term?.cols ?? 80;
+  const rows = term?.rows ?? 24;
+  try {
+    await fetch(`${await protocolBase()}/runs/${encodeURIComponent(runId)}/resize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cols, rows }),
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function pumpPty(): Promise<void> {
+  while (ptyPumping && snapshot?.focusedRunId && ptyRunId === snapshot.focusedRunId) {
+    const runId = ptyRunId;
+    try {
+      const response = await fetch(
+        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ptyOffset}`,
+      );
+      if (response.ok) {
+        const json = (await response.json()) as {
+          offset: number;
+          data: string;
+          exited: number | null;
+        };
+        if (ptyRunId !== runId || snapshot?.focusedRunId !== runId) {
+          break;
+        }
+        if (json.data) {
+          const raw = atob(json.data);
+          const bytes = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+          term?.write(bytes);
+        }
+        ptyOffset = json.offset;
+        if (json.exited != null) {
+          await rpc("snapshot");
+          render();
+          break;
+        }
+      }
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+  ptyPumping = false;
+}
+
 app.addEventListener("click", async (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target || !snapshot) return;
@@ -1060,6 +1282,32 @@ app.addEventListener("click", async (event) => {
     projectMenuId = "";
     await rpc("focusProject", { projectId: target.dataset.id });
     await reportClientView();
+    render();
+    return;
+  }
+  if (act === "new-run" && target.dataset.id) {
+    projectMenuId = "";
+    await rpc("startUnboundRun", { projectId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "focus-run" && target.dataset.id) {
+    await rpc("focusRun", { runId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "stop-run" && target.dataset.id) {
+    await rpc("stopRun", { runId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "cancel-quit") {
+    await rpc("cancelQuit");
+    render();
+    return;
+  }
+  if (act === "confirm-quit") {
+    await rpc("confirmQuitStopAll");
     render();
     return;
   }
@@ -1213,7 +1461,10 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "quit") {
+    settingsOpen = false;
     await rpc("quitHost");
+    render();
+    return;
   }
   if (act === "center-view" && target.dataset.id) {
     await rpc("setCenterView", { view: target.dataset.id });
@@ -1325,6 +1576,12 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", () => {
   if (document.visibilityState !== "visible") return;
   rpc("refresh").then(render).catch(() => {});
+});
+
+window.addEventListener("resize", () => {
+  fitAddon?.fit();
+  const runId = snapshot?.focusedRunId;
+  if (runId) void sendPtyResize(runId);
 });
 
 rpc("snapshot")

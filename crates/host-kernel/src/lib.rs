@@ -1,28 +1,38 @@
 //! Host 内核：桌面窗口、浏览器和以后的远程 Client 都走这一条接缝。
 
+mod agent;
 mod board;
 mod issue;
+mod launch_env;
 mod local_rpc;
 mod owner;
 mod pairing;
 mod project;
 mod refresh;
+mod run;
+mod session;
 mod tracker;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+pub use agent::{
+    probe_binary, AgentPort, GrokAdapter, MemoryAgent, ProbeResult, GROK_BIN, GROK_BUILD_ID,
+    GROK_BUILD_NAME,
+};
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
     FrontierEmptyReason, GraphEdge, GraphNode, IssueCard, IssueDetail, IssueLink, RefreshStatus,
     DEFAULT_RECENT_LIMIT,
 };
 pub use issue::{IssueRecord, TriageRole};
+pub use launch_env::{LaunchEnvPort, LaunchEnvironment, MemoryLaunchEnv, ShellLaunchEnv};
 pub use local_rpc::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LoopbackAssets, LoopbackServer,
     LOCAL_RPC_PORT,
@@ -30,6 +40,11 @@ pub use local_rpc::{
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 pub use project::ProjectInference;
 pub use refresh::DEFAULT_REFRESH_INTERVAL_MS;
+pub use run::{QuitOffer, RunStatus, RunSummary};
+pub use session::{
+    AgentSession, MemorySession, MemorySessionFactory, PtyChunk, PtySessionFactory, SessionFactory,
+    SpawnRequest,
+};
 pub use tracker::{
     map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
     ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
@@ -165,10 +180,15 @@ pub enum Command {
     StopRun {
         run_id: String,
     },
+    FocusRun {
+        run_id: String,
+    },
     InjectRunInput {
         run_id: String,
         text: String,
     },
+    CancelQuit,
+    ConfirmQuitStopAll,
     SetRefreshInterval {
         interval_ms: u64,
     },
@@ -214,6 +234,11 @@ pub enum HostEvent {
     BoardUpdated {
         #[serde(rename = "projectId")]
         project_id: String,
+    },
+    RunStatusChanged {
+        #[serde(rename = "runId")]
+        run_id: String,
+        status: RunStatus,
     },
 }
 
@@ -474,6 +499,13 @@ pub struct ShellCopy {
     pub refresh_retry: String,
     pub refresh_paused: String,
     pub refresh_auth: String,
+    pub new_run: String,
+    pub unbound_issue: String,
+    pub stop_run: String,
+    pub quit_active_title: String,
+    pub quit_active_body: String,
+    pub quit_return: String,
+    pub quit_stop_all: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -495,6 +527,36 @@ pub struct HostSnapshot {
     pub board: Option<BoardSnapshot>,
     pub recent_completed_limit: u32,
     pub center_view: CenterView,
+    pub runs: Vec<RunSummary>,
+    pub focused_run_id: String,
+    pub quit_offer: Option<QuitOffer>,
+}
+
+pub struct KernelPorts {
+    pub tracker: Arc<dyn TrackerPort>,
+    pub agents: Vec<Arc<dyn AgentPort>>,
+    pub launch_env: Arc<dyn LaunchEnvPort>,
+    pub sessions: Arc<dyn SessionFactory>,
+}
+
+impl KernelPorts {
+    pub fn live() -> Self {
+        Self {
+            tracker: Arc::new(GitHubTracker::live()),
+            agents: vec![Arc::new(GrokAdapter)],
+            launch_env: Arc::new(ShellLaunchEnv::live()),
+            sessions: Arc::new(PtySessionFactory),
+        }
+    }
+
+    pub fn for_tests(tracker: Arc<dyn TrackerPort>) -> Self {
+        Self {
+            tracker,
+            agents: vec![Arc::new(MemoryAgent::installed_grok())],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")),
+            sessions: MemorySessionFactory::new(),
+        }
+    }
 }
 
 pub struct HostKernel {
@@ -505,8 +567,14 @@ pub struct HostKernel {
     appearance: AppearanceSelection,
     projects: Vec<ProjectRecord>,
     focused_project_id: Option<String>,
-    active_run_projects: BTreeSet<String>,
     tracker: Arc<dyn TrackerPort>,
+    agents: Vec<Arc<dyn AgentPort>>,
+    launch_env: Arc<dyn LaunchEnvPort>,
+    sessions: Arc<dyn SessionFactory>,
+    runs: Vec<RunSummary>,
+    live: BTreeMap<String, Arc<dyn AgentSession>>,
+    focused_run_id: Option<String>,
+    quit_offer: Option<QuitOffer>,
     loopback_kind: LoopbackKind,
     loopback_port: u16,
     pairing_offer: Option<pairing::ActiveOffer>,
@@ -566,17 +634,30 @@ struct RemoteView {
     focused_project_id: String,
     empty_actions: Vec<EmptyAction>,
     board: Option<BoardSnapshot>,
+    runs: Vec<RunSummary>,
+    focused_run_id: String,
+    quit_offer: Option<QuitOffer>,
 }
 
 impl HostKernel {
     pub fn boot(request: BootRequest) -> Result<Self, KernelError> {
-        Self::boot_with(request, Arc::new(GitHubTracker::live()))
+        Self::boot_with_ports(request, KernelPorts::live())
     }
 
     pub fn boot_with(
         request: BootRequest,
         tracker: Arc<dyn TrackerPort>,
     ) -> Result<Self, KernelError> {
+        Self::boot_with_ports(request, KernelPorts::for_tests(tracker))
+    }
+
+    pub fn boot_with_ports(request: BootRequest, ports: KernelPorts) -> Result<Self, KernelError> {
+        let KernelPorts {
+            tracker,
+            agents,
+            launch_env,
+            sessions,
+        } = ports;
         let data = DataLayout::prepare(&request.app_local_data_dir, &request.app_log_dir)?;
         let settings = load_or_init_host_settings(&data.host_settings_path)?;
         let host_id = settings.id;
@@ -628,8 +709,14 @@ impl HostKernel {
             appearance,
             projects,
             focused_project_id,
-            active_run_projects: BTreeSet::new(),
             tracker,
+            agents,
+            launch_env,
+            sessions,
+            runs: Vec::new(),
+            live: BTreeMap::new(),
+            focused_run_id: None,
+            quit_offer: None,
             loopback_kind: LoopbackKind::HostNotRunning,
             loopback_port: LOCAL_RPC_PORT,
             pairing_offer: None,
@@ -668,6 +755,7 @@ impl HostKernel {
     pub fn snapshot(&self) -> HostSnapshot {
         let (projects, focused_project_id, empty_actions) = self.board_for_focus();
         let board = self.current_board(&focused_project_id);
+        let (runs, focused_run_id, quit_offer) = self.runs_for_focus();
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
@@ -692,6 +780,9 @@ impl HostKernel {
             board,
             recent_completed_limit: self.recent_limit,
             center_view: self.center_view,
+            runs,
+            focused_run_id,
+            quit_offer,
         }
     }
 
@@ -717,19 +808,42 @@ impl HostKernel {
         }
     }
 
-    pub fn set_project_active_run(
-        &mut self,
-        project_id: &str,
-        active: bool,
-    ) -> Result<(), KernelError> {
-        if !self.projects.iter().any(|project| project.id == project_id) {
-            return Err(KernelError::Protocol("unknown project".into()));
-        }
-        if active {
-            self.active_run_projects.insert(project_id.to_string());
-        } else {
-            self.active_run_projects.remove(project_id);
-        }
+    pub fn pty_session(&self, run_id: &str) -> Result<Arc<dyn AgentSession>, KernelError> {
+        self.live
+            .get(run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))
+    }
+
+    pub fn pty_output(
+        &self,
+        run_id: &str,
+        after: usize,
+        wait: Duration,
+    ) -> Result<PtyChunk, KernelError> {
+        Ok(self.pty_session(run_id)?.read_after(after, wait))
+    }
+
+    pub fn note_run_exit(&mut self, run_id: &str, _code: i32) {
+        self.mark_run_ended(run_id);
+    }
+
+    pub fn write_pty(&self, run_id: &str, data: &[u8]) -> Result<(), KernelError> {
+        let session = self
+            .live
+            .get(run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        session.write(data).map_err(KernelError::Io)
+    }
+
+    pub fn resize_pty(&self, run_id: &str, cols: u16, rows: u16) -> Result<(), KernelError> {
+        let session = self
+            .live
+            .get(run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        session.resize(cols, rows);
         Ok(())
     }
 
@@ -754,6 +868,7 @@ impl HostKernel {
     }
 
     pub fn dispatch(&mut self, command: Command) -> Result<CommandOutcome, KernelError> {
+        self.reap_runs();
         match command {
             Command::HideWindow => self.window_visible = false,
             Command::ShowWindow => {
@@ -765,9 +880,15 @@ impl HostKernel {
                 }
             }
             Command::QuitHost => {
-                self.running = false;
-                self.window_visible = false;
-                self.loopback_kind = LoopbackKind::HostNotRunning;
+                if self.active_run_count() > 0 {
+                    self.quit_offer = Some(QuitOffer {
+                        active_run_count: self.active_run_count(),
+                    });
+                } else {
+                    self.running = false;
+                    self.window_visible = false;
+                    self.loopback_kind = LoopbackKind::HostNotRunning;
+                }
             }
             Command::SetLanguage(language) => {
                 let appearance = self.appearance.with_language(language);
@@ -880,12 +1001,31 @@ impl HostKernel {
                 self.require_live_tracker_for_issue(&issue_id)?;
             }
             Command::StartUnboundRun { project_id } => {
-                if !self.projects.iter().any(|project| project.id == project_id) {
-                    return Err(KernelError::Protocol("unknown project".into()));
-                }
+                self.start_unbound_run(&project_id)?;
             }
-            Command::StopRun { run_id: _ } => {}
-            Command::InjectRunInput { run_id: _, text: _ } => {}
+            Command::StopRun { run_id } => {
+                self.stop_run(&run_id)?;
+            }
+            Command::FocusRun { run_id } => {
+                self.focus_run(&run_id)?;
+            }
+            Command::InjectRunInput { run_id, text } => {
+                let mut data = text.into_bytes();
+                if !data.ends_with(&[b'\n']) {
+                    data.push(b'\n');
+                }
+                self.write_pty(&run_id, &data)?;
+            }
+            Command::CancelQuit => {
+                self.quit_offer = None;
+            }
+            Command::ConfirmQuitStopAll => {
+                self.stop_all_runs();
+                self.quit_offer = None;
+                self.running = false;
+                self.window_visible = false;
+                self.loopback_kind = LoopbackKind::HostNotRunning;
+            }
             Command::SetRefreshInterval { interval_ms } => {
                 self.refresh_interval_ms = refresh::clamp_refresh_interval_ms(interval_ms);
                 self.persist_host_settings()?;
@@ -900,7 +1040,10 @@ impl HostKernel {
             .and_then(|value| value.as_str())
             .unwrap_or("snapshot");
         match op {
-            "snapshot" => Ok(self.outcome()),
+            "snapshot" => {
+                self.reap_runs();
+                Ok(self.outcome())
+            }
             "hideWindow" => self.dispatch(Command::HideWindow),
             "showWindow" => self.dispatch(Command::ShowWindow),
             "quitHost" => self.dispatch(Command::QuitHost),
@@ -1150,6 +1293,14 @@ impl HostKernel {
                     run_id: required_string(&request, "runId")?,
                 })
             }
+            "focusRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
             "injectRunInput" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -1163,6 +1314,8 @@ impl HostKernel {
                         .to_string(),
                 })
             }
+            "cancelQuit" => self.dispatch(Command::CancelQuit),
+            "confirmQuitStopAll" => self.dispatch(Command::ConfirmQuitStopAll),
             "setRefreshInterval" => self.dispatch(Command::SetRefreshInterval {
                 interval_ms: request
                     .get("intervalMs")
@@ -1244,7 +1397,7 @@ impl HostKernel {
         let projects = self
             .projects
             .iter()
-            .map(|project| project.summary(self.active_run_projects.contains(&project.id)))
+            .map(|project| project.summary(self.project_has_active_run(&project.id)))
             .collect();
         let focused_project_id = self.focused_project_id.clone().unwrap_or_default();
         (projects, focused_project_id, empty_actions)
@@ -1297,14 +1450,153 @@ impl HostKernel {
             Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
             _ => None,
         };
+        let runs = snapshot
+            .get("runs")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let focused_run_id = snapshot
+            .get("focusedRunId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let quit_offer = match snapshot.get("quitOffer") {
+            Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+            _ => None,
+        };
         self.remote_view = Some(RemoteView {
             host_id: host_id.to_string(),
             projects,
             focused_project_id,
             empty_actions,
             board,
+            runs,
+            focused_run_id,
+            quit_offer,
         });
         Ok(())
+    }
+
+    fn runs_for_focus(&self) -> (Vec<RunSummary>, String, Option<QuitOffer>) {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            if let Some(view) = &self.remote_view {
+                if view.host_id == self.focused_host_id {
+                    return (
+                        view.runs.clone(),
+                        view.focused_run_id.clone(),
+                        view.quit_offer.clone(),
+                    );
+                }
+            }
+        }
+        (
+            self.runs.clone(),
+            self.focused_run_id.clone().unwrap_or_default(),
+            self.quit_offer.clone(),
+        )
+    }
+
+    fn start_unbound_run(&mut self, project_id: &str) -> Result<(), KernelError> {
+        let cwd = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.local_path.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let agent = self
+            .agents
+            .first()
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))?;
+        let result = run::start_unbound(
+            project_id,
+            &cwd,
+            agent.as_ref(),
+            self.launch_env.as_ref(),
+            self.sessions.as_ref(),
+            self.appearance.language,
+            &[],
+        );
+        self.focused_run_id = Some(result.record.id.clone());
+        self.pending_events.push(HostEvent::RunStatusChanged {
+            run_id: result.record.id.clone(),
+            status: result.record.status,
+        });
+        if let Some(session) = result.session {
+            self.live.insert(result.record.id.clone(), session);
+        }
+        self.runs.push(result.record);
+        Ok(())
+    }
+
+    fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        if let Some(session) = self.live.get(run_id).cloned() {
+            session.stop();
+        }
+        if self.runs.iter().any(|run| run.id == run_id) {
+            self.mark_run_ended(run_id);
+        }
+        Ok(())
+    }
+
+    fn focus_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        if !self.runs.iter().any(|run| run.id == run_id) {
+            return Err(KernelError::Protocol("unknown run".into()));
+        }
+        self.focused_run_id = Some(run_id.to_string());
+        Ok(())
+    }
+
+    fn stop_all_runs(&mut self) {
+        let ids = self
+            .runs
+            .iter()
+            .filter(|run| run.is_active())
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.stop_run(&id);
+        }
+    }
+
+    fn reap_runs(&mut self) {
+        let ended = self
+            .live
+            .iter()
+            .filter_map(|(id, session)| session.exit_code().map(|_| id.clone()))
+            .collect::<Vec<_>>();
+        for id in ended {
+            self.mark_run_ended(&id);
+        }
+    }
+
+    fn mark_run_ended(&mut self, run_id: &str) {
+        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+            if run.status != RunStatus::Ended {
+                run.status = RunStatus::Ended;
+                self.pending_events.push(HostEvent::RunStatusChanged {
+                    run_id: run_id.to_string(),
+                    status: RunStatus::Ended,
+                });
+            }
+        }
+        let active = self.active_run_count();
+        if active == 0 {
+            self.quit_offer = None;
+        } else if let Some(offer) = &mut self.quit_offer {
+            offer.active_run_count = active;
+        }
+    }
+
+    fn project_has_active_run(&self, project_id: &str) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.project_id == project_id && run.is_active())
+    }
+
+    fn active_run_count(&self) -> u32 {
+        self.runs.iter().filter(|run| run.is_active()).count() as u32
     }
 
     fn pair_remote_host(&mut self, address: &str, code: &str) -> Result<(), KernelError> {
@@ -1548,14 +1840,13 @@ impl HostKernel {
             .iter()
             .position(|project| project.id == project_id)
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        if self.active_run_projects.contains(project_id) {
+        if self.project_has_active_run(project_id) {
             return Err(KernelError::Denied(
                 "cannot remove a Project with an active Run".into(),
             ));
         }
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let _removed = self.projects.remove(index);
-        self.active_run_projects.remove(project_id);
         self.refresh.remove(project_id);
         self.loaded_issues.remove(project_id);
         refresh::remove_project_data(&self.data.host_dir, project_id);
@@ -2110,6 +2401,13 @@ impl ShellCopy {
                 refresh_retry: "大约可再刷新".into(),
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
+                new_run: "新建".into(),
+                unbound_issue: "未绑定 Issue".into(),
+                stop_run: "停止".into(),
+                quit_active_title: "还有活跃 Run".into(),
+                quit_active_body: "退出 Host 会停掉全部活跃 Run。选择返回则继续跑。".into(),
+                quit_return: "返回".into(),
+                quit_stop_all: "停掉全部".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -2218,6 +2516,13 @@ impl ShellCopy {
                 refresh_retry: "Can retry around".into(),
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
+                new_run: "New".into(),
+                unbound_issue: "Unbound Issue".into(),
+                stop_run: "Stop".into(),
+                quit_active_title: "Active Runs still running".into(),
+                quit_active_body: "Quitting Host will stop every active Run. Go back to keep them running.".into(),
+                quit_return: "Go back".into(),
+                quit_stop_all: "Stop all".into(),
             },
         }
     }
