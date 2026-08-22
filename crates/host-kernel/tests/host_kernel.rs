@@ -1,12 +1,13 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use host_kernel::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, BootRequest, Command,
-    EmptyAction, HostKernel, Language, ProcessIntent, SystemAppearance, Theme,
+    EmptyAction, HostKernel, Language, LoopbackAssets, LoopbackPage, LoopbackServer, ProcessIntent,
+    SystemAppearance, Theme, LOCAL_RPC_PORT,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -261,7 +262,36 @@ fn local_rpc_answers_json_on_loopback() {
 }
 
 #[test]
-fn local_rpc_rejects_a_remote_origin() {
+fn loopback_page_is_served_without_pairing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let (listener, url) = bind_local_rpc(0).unwrap();
+    let addr: SocketAddr = url.trim_start_matches("http://").parse().unwrap();
+    spawn_local_rpc(listener, kernel.clone(), |_| {});
+
+    let origin = format!("http://127.0.0.1:{}", addr.port());
+    let (status, headers, body) = http_get(addr, Some(&origin), "/");
+    assert_eq!(status, 200);
+    assert!(headers.to_ascii_lowercase().contains("text/html"));
+    assert!(!body.contains("配对码"));
+    assert!(!body.to_ascii_lowercase().contains("pairing code"));
+
+    let (status, rpc) = http_post(addr, &origin, r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&rpc).unwrap();
+    assert_eq!(value["snapshot"]["running"], true);
+    assert_eq!(
+        value["snapshot"]["emptyActions"],
+        serde_json::json!(["register-first-project", "pair-another-host"])
+    );
+    assert_eq!(
+        value["snapshot"]["copy"]["registerFirstProject"],
+        "登记第一个 Project"
+    );
+}
+
+#[test]
+fn non_loopback_access_is_not_pairing_exempt() {
     let tmp = tempfile::tempdir().unwrap();
     let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
     let (listener, url) = bind_local_rpc(0).unwrap();
@@ -270,7 +300,247 @@ fn local_rpc_rejects_a_remote_origin() {
 
     let (status, body) = http_post(addr, "https://evil.example", r#"{"op":"snapshot"}"#);
     assert_eq!(status, 403);
-    assert!(body.contains("origin not allowed"));
+    assert!(body.contains("pairing required"));
+    assert!(body.contains("长期令牌"));
+
+    let (status, _, body) = http_get(addr, Some("http://100.64.1.2:10529"), "/");
+    assert_eq!(status, 403);
+    assert!(body.contains("pairing required"));
+    assert!(body.contains("长期令牌"));
+}
+
+#[test]
+fn loopback_page_port_is_10529() {
+    assert_eq!(LOCAL_RPC_PORT, 10529);
+}
+
+#[test]
+fn occupied_loopback_port_explains_and_keeps_desktop_protocol() {
+    let occupier = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = occupier.local_addr().unwrap().port();
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let client = LoopbackServer::attach(Arc::clone(&kernel), port, |_| {}).unwrap();
+
+    let snap = kernel.lock().unwrap().snapshot();
+    match snap.loopback_page {
+        LoopbackPage::Occupied { url, reason } => {
+            assert_eq!(url, format!("http://127.0.0.1:{port}/"));
+            assert!(reason.contains(&port.to_string()));
+            assert!(reason.contains("占用"));
+            assert!(reason.contains("桌面窗口"));
+        }
+        other => panic!("expected occupied, got {other:?}"),
+    }
+    assert!(snap.running);
+
+    let protocol: SocketAddr = client
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+    assert_ne!(protocol.port(), port);
+    let (status, body) = http_post(protocol, "http://127.0.0.1:1420", r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["snapshot"]["running"], true);
+    assert_eq!(value["snapshot"]["loopbackPage"]["status"], "occupied");
+}
+
+#[test]
+fn loopback_page_is_absent_when_host_is_not_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    host.dispatch(Command::QuitHost).unwrap();
+    let kernel = Arc::new(Mutex::new(host));
+    let client = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+
+    assert_eq!(client.protocol_url(), "");
+    let page = kernel.lock().unwrap().snapshot().loopback_page;
+    match page {
+        LoopbackPage::HostNotRunning { url, reason } => {
+            assert_eq!(url, "http://127.0.0.1:10529/");
+            assert!(reason.contains("没有这份回环页") || reason.contains("没有在跑"));
+        }
+        other => panic!("expected host-not-running, got {other:?}"),
+    }
+}
+
+#[test]
+fn quitting_the_host_stops_the_loopback_page() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let client = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+    let addr: SocketAddr = client
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+
+    let (status, _, _) = http_get(
+        addr,
+        Some(&format!("http://127.0.0.1:{}", addr.port())),
+        "/",
+    );
+    assert_eq!(status, 200);
+
+    let (status, body) = http_post(
+        addr,
+        &format!("http://127.0.0.1:{}", addr.port()),
+        r#"{"op":"quitHost"}"#,
+    );
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["process"], "exit");
+    assert_eq!(
+        value["snapshot"]["loopbackPage"]["status"],
+        "host-not-running"
+    );
+
+    let mut last_ok = true;
+    for _ in 0..50 {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(50)) {
+            Ok(_) => {
+                last_ok = true;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => {
+                last_ok = false;
+                break;
+            }
+        }
+    }
+    assert!(
+        !last_ok,
+        "loopback page should be gone after the Host stops"
+    );
+}
+
+#[test]
+fn closing_a_browser_client_does_not_stop_the_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let client = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+    let addr: SocketAddr = client
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+    let origin = format!("http://127.0.0.1:{}", addr.port());
+
+    let (status, _, _) = http_get(addr, Some(&origin), "/");
+    assert_eq!(status, 200);
+    let (status, body) = http_post(addr, &origin, r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["snapshot"]["running"], true);
+
+    let (status, _, _) = http_get(addr, Some(&origin), "/");
+    assert_eq!(status, 200);
+    assert!(kernel.lock().unwrap().snapshot().running);
+    assert!(matches!(
+        kernel.lock().unwrap().snapshot().loopback_page,
+        LoopbackPage::Serving { .. }
+    ));
+}
+
+#[test]
+fn loopback_page_serves_the_client_shell_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let web = tmp.path().join("web");
+    std::fs::create_dir(&web).unwrap();
+    std::fs::write(
+        web.join("index.html"),
+        "<!doctype html><title>same-empty-shell</title><div id=\"app\"></div>",
+    )
+    .unwrap();
+    std::fs::create_dir(web.join("assets")).unwrap();
+    std::fs::write(web.join("assets").join("shell.css"), "/* shell */").unwrap();
+
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let client = LoopbackServer::attach_with(
+        Arc::clone(&kernel),
+        0,
+        LoopbackAssets::Directory(web),
+        |_| {},
+    )
+    .unwrap();
+    let addr: SocketAddr = client
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+    let origin = format!("http://127.0.0.1:{}", addr.port());
+
+    let (status, headers, body) = http_get(addr, Some(&origin), "/");
+    assert_eq!(status, 200);
+    assert!(headers.to_ascii_lowercase().contains("text/html"));
+    assert!(body.contains("same-empty-shell"));
+    assert!(body.contains("id=\"app\""));
+
+    let (status, headers, body) = http_get(addr, Some(&origin), "/assets/shell.css");
+    assert_eq!(status, 200);
+    assert!(headers.to_ascii_lowercase().contains("text/css"));
+    assert!(body.contains("shell"));
+
+    let (status, _, body) = http_get(addr, Some(&origin), "/../secrets.json");
+    assert_eq!(status, 404);
+    assert!(!body.contains("same-empty-shell"));
+}
+
+#[test]
+fn loopback_page_can_proxy_the_dev_client() {
+    let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+    let up_addr = upstream.local_addr().unwrap();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = upstream.accept() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let body = b"<title>dev-empty-shell</title>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let client = LoopbackServer::attach_with(
+        Arc::clone(&kernel),
+        0,
+        LoopbackAssets::DevProxy {
+            origin: format!("http://127.0.0.1:{}", up_addr.port()),
+        },
+        |_| {},
+    )
+    .unwrap();
+    let addr: SocketAddr = client
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+    let (status, _, body) = http_get(
+        addr,
+        Some(&format!("http://127.0.0.1:{}", addr.port())),
+        "/",
+    );
+    assert_eq!(status, 200);
+    assert!(body.contains("dev-empty-shell"));
+}
+
+fn http_get(addr: SocketAddr, origin: Option<&str>, path: &str) -> (u16, String, String) {
+    let origin_header = origin
+        .map(|origin| format!("Origin: {origin}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{origin_header}Connection: close\r\n\r\n",
+        addr.port()
+    );
+    let (status, headers, body) = http_exchange(addr, &request);
+    (status, headers, body)
 }
 
 fn http_post(addr: SocketAddr, origin: &str, body: &str) -> (u16, String) {
@@ -279,6 +549,11 @@ fn http_post(addr: SocketAddr, origin: &str, body: &str) -> (u16, String) {
         addr.port(),
         body.len()
     );
+    let (status, _, body) = http_exchange(addr, &request);
+    (status, body)
+}
+
+fn http_exchange(addr: SocketAddr, request: &str) -> (u16, String, String) {
     let mut last_err = None;
     for _ in 0..50 {
         match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
@@ -296,7 +571,7 @@ fn http_post(addr: SocketAddr, origin: &str, body: &str) -> (u16, String) {
                     .nth(1)
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(0);
-                return (status, body.to_string());
+                return (status, head.to_string(), body.to_string());
             }
             Err(err) => {
                 last_err = Some(err);

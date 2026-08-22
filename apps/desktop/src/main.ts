@@ -27,6 +27,11 @@ type ShellCopy = {
   editMenu: string;
 };
 
+type LoopbackPage =
+  | { status: "serving"; url: string }
+  | { status: "occupied"; url: string; reason: string }
+  | { status: "host-not-running"; url: string; reason: string };
+
 type Snapshot = {
   running: boolean;
   windowVisible: boolean;
@@ -42,6 +47,7 @@ type Snapshot = {
   };
   copy: ShellCopy;
   emptyActions: Array<"register-first-project" | "pair-another-host">;
+  loopbackPage: LoopbackPage;
 };
 
 type RpcResult = { snapshot: Snapshot; process: "keep-running" | "exit" };
@@ -54,7 +60,21 @@ if (!app) {
 let snapshot: Snapshot | null = null;
 let settingsOpen = false;
 
+function isLoopbackPage(): boolean {
+  const { hostname, port } = window.location;
+  return (
+    (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]") &&
+    port === "10529"
+  );
+}
+
 async function protocolBase(): Promise<string> {
+  if (window.__HOST_PROTOCOL__) {
+    return window.__HOST_PROTOCOL__;
+  }
+  if (isLoopbackPage()) {
+    return "";
+  }
   for (let i = 0; i < 50; i += 1) {
     if (window.__HOST_PROTOCOL__) {
       return window.__HOST_PROTOCOL__;
@@ -144,6 +164,7 @@ function render(): void {
           ${
             empty
               ? `<div class="empty">
+                  ${loopbackNotice(snapshot.loopbackPage)}
                   <h1>${escapeHtml(copy.noProjectTitle)}</h1>
                   <p>${escapeHtml(copy.noProjectBody)}</p>
                   <div class="actions">
@@ -155,7 +176,7 @@ function render(): void {
                       .join("")}
                   </div>
                 </div>`
-              : ""
+              : `${loopbackNotice(snapshot.loopbackPage)}`
           }
         </main>
       </div>
@@ -193,6 +214,11 @@ function render(): void {
         : ""
     }
   `;
+}
+
+function loopbackNotice(page: LoopbackPage): string {
+  if (page.status === "serving") return "";
+  return `<p class="notice">${escapeHtml(page.reason)}</p>`;
 }
 
 function escapeHtml(value: string): string {

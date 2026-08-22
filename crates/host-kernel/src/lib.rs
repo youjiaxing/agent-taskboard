@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub use local_rpc::{bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LOCAL_RPC_PORT};
+pub use local_rpc::{
+    bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LoopbackAssets, LoopbackServer,
+    LOCAL_RPC_PORT,
+};
 
 const LOCAL_HOST_ID: &str = "local";
 
@@ -65,6 +68,21 @@ pub enum ProcessIntent {
 pub enum EmptyAction {
     RegisterFirstProject,
     PairAnotherHost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopbackKind {
+    Serving,
+    Occupied,
+    HostNotRunning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum LoopbackPage {
+    Serving { url: String },
+    Occupied { url: String, reason: String },
+    HostNotRunning { url: String, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,6 +198,7 @@ pub struct ShellCopy {
     pub shade_light: String,
     pub shade_dark: String,
     pub edit_menu: String,
+    pub pairing_required: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,6 +213,7 @@ pub struct HostSnapshot {
     pub data: DataLayout,
     pub copy: ShellCopy,
     pub empty_actions: Vec<EmptyAction>,
+    pub loopback_page: LoopbackPage,
 }
 
 #[derive(Debug)]
@@ -204,6 +224,8 @@ pub struct HostKernel {
     data: DataLayout,
     appearance: AppearanceSelection,
     projects: Vec<ProjectSummary>,
+    loopback_kind: LoopbackKind,
+    loopback_port: u16,
 }
 
 impl HostKernel {
@@ -227,6 +249,8 @@ impl HostKernel {
             data,
             appearance,
             projects: Vec::new(),
+            loopback_kind: LoopbackKind::HostNotRunning,
+            loopback_port: LOCAL_RPC_PORT,
         })
     }
 
@@ -253,6 +277,27 @@ impl HostKernel {
             data: self.data.clone(),
             copy: ShellCopy::for_language(self.appearance.language),
             empty_actions,
+            loopback_page: self.loopback_page(),
+        }
+    }
+
+    pub(crate) fn note_loopback_page(&mut self, kind: LoopbackKind, port: u16) {
+        self.loopback_kind = kind;
+        self.loopback_port = if port == 0 { LOCAL_RPC_PORT } else { port };
+    }
+
+    fn loopback_page(&self) -> LoopbackPage {
+        let url = format!("http://127.0.0.1:{}/", self.loopback_port);
+        match self.loopback_kind {
+            LoopbackKind::Serving => LoopbackPage::Serving { url },
+            LoopbackKind::Occupied => LoopbackPage::Occupied {
+                url,
+                reason: occupied_reason(self.appearance.language, self.loopback_port),
+            },
+            LoopbackKind::HostNotRunning => LoopbackPage::HostNotRunning {
+                url,
+                reason: host_not_running_reason(self.appearance.language),
+            },
         }
     }
 
@@ -267,6 +312,7 @@ impl HostKernel {
             Command::QuitHost => {
                 self.running = false;
                 self.window_visible = false;
+                self.loopback_kind = LoopbackKind::HostNotRunning;
             }
             Command::SetLanguage(language) => {
                 let appearance = self.appearance.with_language(language);
@@ -372,6 +418,7 @@ impl ShellCopy {
                 shade_light: "浅".into(),
                 shade_dark: "深".into(),
                 edit_menu: "编辑".into(),
+                pairing_required: "经 Tailscale、局域网或其它站点访问需要长期令牌。本机回环页 http://127.0.0.1:10529/ 免配对。".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -395,6 +442,7 @@ impl ShellCopy {
                 shade_light: "Light".into(),
                 shade_dark: "Dark".into(),
                 edit_menu: "Edit".into(),
+                pairing_required: "Access via Tailscale, LAN, or another site needs a long-term token. The loopback page at http://127.0.0.1:10529/ does not require pairing.".into(),
             },
         }
     }
@@ -424,6 +472,26 @@ fn load_or_init_appearance(
     };
     write_json(path, &appearance)?;
     Ok(appearance)
+}
+
+fn occupied_reason(language: Language, port: u16) -> String {
+    match language {
+        Language::ZhCn => {
+            format!("本机网页入口没起来：端口 {port} 已被占用。桌面窗口可以继续用。")
+        }
+        Language::En => format!(
+            "The local web entry could not start: port {port} is already in use. The desktop window still works."
+        ),
+    }
+}
+
+fn host_not_running_reason(language: Language) -> String {
+    match language {
+        Language::ZhCn => "本机没有在跑 Host，所以没有这份回环页。".into(),
+        Language::En => {
+            "The local Host is not running, so this loopback page is not available.".into()
+        }
+    }
 }
 
 fn match_language(locale: &str) -> Language {
