@@ -123,7 +123,18 @@ if (newLabel !== "新建" && newLabel !== "New") {
   throw new Error(`project row plus should be New, got ${newLabel}`);
 }
 await page.click("button[data-act='new-run']");
+await page.waitForSelector(".launch-sheet");
+const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
+if (await pick.count()) {
+  await pick.click();
+  await page.waitForSelector("textarea[data-field='openingText']");
+}
+await page.fill("textarea[data-field='openingText']", "e2e unbound run");
+await page.click("button[type='submit']");
 await page.waitForSelector(".run-dock");
+if (await page.$(".launch-sheet")) {
+  await page.click("button[data-act='close-launch']");
+}
 const dockText = await page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
   throw new Error(`unbound Run dock missing identity, got ${dockText}`);

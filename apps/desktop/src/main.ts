@@ -114,6 +114,30 @@ type ShellCopy = {
   refreshPaused: string;
   refreshAuth: string;
   newRun: string;
+  executeRun: string;
+  startRun: string;
+  switchAgent: string;
+  pickAgent: string;
+  launchTitle: string;
+  prefillCurrent: string;
+  prefillOther: string;
+  prefillSeed: string;
+  isolation: string;
+  isolationOffReason: string;
+  isolationHint: string;
+  runIntent: string;
+  intentNone: string;
+  intentModify: string;
+  intentContinue: string;
+  intentAnswer: string;
+  intentReview: string;
+  intentCustom: string;
+  openingPlaceholder: string;
+  foldedOptions: string;
+  commandPreview: string;
+  showCommandPreview: string;
+  instructionRequired: string;
+  workingDirectory: string;
   unboundIssue: string;
   stopRun: string;
   quitActiveTitle: string;
@@ -300,6 +324,61 @@ type Snapshot = {
   runs: RunSummary[];
   focusedRunId: string;
   quitOffer: QuitOffer | null;
+  launchForm?: RunLaunchForm | null;
+  showCommandPreview?: boolean;
+};
+
+type AgentFieldKind = "text" | "select" | "boolean" | "multiline";
+
+type AgentField = {
+  id: string;
+  label: string;
+  kind: AgentFieldKind;
+  options?: string[];
+  required: boolean;
+  folded: boolean;
+};
+
+type AgentSummary = {
+  id: string;
+  name: string;
+  installed: boolean;
+  fields: AgentField[];
+};
+
+type IntentOption = {
+  id: string;
+  label: string;
+  prefix: string;
+};
+
+type RunLaunchForm = {
+  projectId: string;
+  issueId?: string | null;
+  agents: AgentSummary[];
+  selectedAgentId: string;
+  skipAgentPicker: boolean;
+  fields: AgentField[];
+  values: Record<string, string>;
+  prefillSource: "current-project" | "other-project" | "cli-seed";
+  workingDirectory: string;
+  isolationSupported: boolean;
+  isolationReason: string;
+  openingText: string;
+  commandPreview: string;
+  intents: IntentOption[];
+  warnings?: string[];
+  error?: string | null;
+};
+
+type LaunchDraft = {
+  projectId: string;
+  issueId?: string | null;
+  agentId: string;
+  values: Record<string, string>;
+  openingText: string;
+  intentId: string;
+  custom: boolean;
 };
 
 type RunStatus = "starting" | "running" | "ended";
@@ -353,6 +432,8 @@ let termHost: HTMLDivElement | null = null;
 let ptyOffset = 0;
 let ptyRunId = "";
 let ptyPumping = false;
+let launchDraft: LaunchDraft | null = null;
+let launchFolded = false;
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -369,6 +450,69 @@ function sessionClientId(): string {
 
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+}
+
+function syncLaunchDraft(snap: Snapshot): void {
+  const form = snap.launchForm;
+  if (!form) {
+    launchDraft = null;
+    return;
+  }
+  if (
+    !launchDraft
+    || launchDraft.projectId !== form.projectId
+    || launchDraft.agentId !== form.selectedAgentId
+  ) {
+    launchDraft = {
+      projectId: form.projectId,
+      issueId: form.issueId,
+      agentId: form.selectedAgentId,
+      values: { ...form.values },
+      openingText: form.openingText,
+      intentId: "",
+      custom: false,
+    };
+  }
+}
+
+function prefillHint(copy: ShellCopy, source: RunLaunchForm["prefillSource"]): string {
+  if (source === "current-project") return copy.prefillCurrent;
+  if (source === "other-project") return copy.prefillOther;
+  return copy.prefillSeed;
+}
+
+function liveEnumWarnings(form: RunLaunchForm, draft: LaunchDraft, language: Language): string[] {
+  const warnings: string[] = [];
+  for (const field of form.fields) {
+    if (field.kind !== "select" || !field.options?.length) continue;
+    const value = (draft.values[field.id] ?? "").trim();
+    if (!value || field.options.includes(value)) continue;
+    warnings.push(
+      language === "zh-CN"
+        ? `${value} 不是已知的 ${field.label}，仍可启动。`
+        : `${value} is not a known ${field.label}; launch is still allowed.`,
+    );
+  }
+  return warnings;
+}
+
+function refreshLaunchWarnings(): void {
+  const node = app?.querySelector<HTMLElement>(".launch-warnings");
+  if (!node || !snapshot?.launchForm || !launchDraft) return;
+  const warnings = liveEnumWarnings(
+    snapshot.launchForm,
+    launchDraft,
+    snapshot.appearance.language,
+  );
+  node.textContent = warnings.join(" ");
+  node.hidden = warnings.length === 0;
+}
+
+function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
+  const prefix = form.intents.find((intent) => intent.id === draft.intentId)?.prefix ?? "";
+  const body = (draft.values["initial-instruction"] ?? "").trim();
+  if (prefix && body) return `${prefix}\n${body}`;
+  return prefix || body;
 }
 
 function isLoopbackPage(): boolean {
@@ -418,6 +562,8 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   const result = (await response.json()) as RpcResult;
   result.snapshot.runs = result.snapshot.runs ?? [];
   result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
+  result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
+  syncLaunchDraft(result.snapshot);
   if (generation !== rpcGeneration && snapshot) {
     return { snapshot, process: "keep-running", inference: result.inference };
   }
@@ -558,6 +704,10 @@ function render(): void {
                 <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
                 <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
               </div>
+              <label class="graph-opt">
+                <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
+                ${escapeHtml(copy.showCommandPreview)}
+              </label>
               <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>
             </div>
           </div>`
@@ -612,6 +762,7 @@ function render(): void {
         : ""
     }
     ${formOpen ? projectForm(copy) : ""}
+    ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
   `;
@@ -888,11 +1039,19 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
   const claim = issue.claimedBy.length
     ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
     : copy.unclaimed;
+  const hasActive = (snapshot?.runs ?? []).some(
+    (run) => run.issueId === issue.id && run.status !== "ended",
+  );
   return `
     <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
     <div class="detail-meta">
       ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
       <span class="tag">${escapeHtml(claim)}</span>
+      ${
+        hasActive
+          ? ""
+          : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
+      }
     </div>
     <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
@@ -1007,6 +1166,114 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
       <li>${escapeHtml(copy.repairEnv)}：<code>${escapeHtml(repair.appEnv)}</code> / <code>${escapeHtml(repair.genericEnv)}</code></li>
     </ul>
     <p class="tiny">${escapeHtml(repair.suggestedScope)}</p>
+  </div>`;
+}
+
+function launchForm(copy: ShellCopy, snap: Snapshot): string {
+  const form = snap.launchForm;
+  if (!form || !launchDraft) return "";
+  const draft = launchDraft;
+  if (!form.skipAgentPicker) {
+    return `<div class="overlay modal" data-act="close-launch">
+      <div class="sheet form-sheet launch-sheet" data-act="form-noop">
+        <h2>${escapeHtml(copy.pickAgent)}</h2>
+        <div class="choices agent-picks">
+          ${form.agents
+            .map(
+              (agent) =>
+                `<button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>`,
+            )
+            .join("")}
+        </div>
+        <div class="actions">
+          <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
+  const folded = form.fields.filter((field) => field.folded);
+  const intentActive = draft.custom ? "" : draft.intentId;
+  return `<div class="overlay modal" data-act="close-launch">
+    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch">
+      <h2>${escapeHtml(copy.launchTitle)}</h2>
+      <div class="launch-agent">
+        <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
+        <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
+      </div>
+      <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
+      <div class="field">
+        <div class="label">${escapeHtml(copy.runIntent)}</div>
+        <div class="choices">
+          <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
+          ${form.intents
+            .map(
+              (intent) =>
+                `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
+            )
+            .join("")}
+          ${draft.custom ? `<button type="button" class="active" data-act="intent-custom">${escapeHtml(copy.intentCustom)}</button>` : ""}
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
+        <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
+      </div>
+      ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+      <div class="field">
+        <div class="label">${escapeHtml(copy.workingDirectory)}</div>
+        <input value="${escapeHtml(form.workingDirectory)}" readonly />
+      </div>
+      <label class="graph-opt isolation-off">
+        <input type="checkbox" disabled />
+        ${escapeHtml(copy.isolation)}
+      </label>
+      <p class="hint">${escapeHtml(form.isolationReason)} ${escapeHtml(copy.isolationHint)}</p>
+      <details class="folded" ${launchFolded ? "open" : ""}>
+        <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
+        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        ${
+          snap.showCommandPreview
+            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
+            : ""
+        }
+      </details>
+      <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
+      ${form.error ? `<p class="notice bad">${escapeHtml(form.error)}</p>` : ""}
+      <div class="actions">
+        <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary">${escapeHtml(copy.startRun)}</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function launchField(field: AgentField, value: string): string {
+  const id = `launch-${field.id}`;
+  if (field.kind === "boolean") {
+    return `<label class="graph-opt">
+      <input type="checkbox" data-launch="${escapeHtml(field.id)}" ${value === "true" ? "checked" : ""} />
+      ${escapeHtml(field.label)}
+    </label>`;
+  }
+  if (field.kind === "select") {
+    const options = field.options ?? [];
+    const listId = `${id}-list`;
+    return `<div class="field">
+      <label class="label" for="${id}">${escapeHtml(field.label)}</label>
+      <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
+      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+    </div>`;
+  }
+  if (field.kind === "multiline") {
+    return `<div class="field">
+      <label class="label" for="${id}">${escapeHtml(field.label)}</label>
+      <textarea id="${id}" data-launch="${escapeHtml(field.id)}" rows="3">${escapeHtml(value)}</textarea>
+    </div>`;
+  }
+  return `<div class="field">
+    <label class="label" for="${id}">${escapeHtml(field.label)}</label>
+    <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
   </div>`;
 }
 
@@ -1287,8 +1554,70 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "new-run" && target.dataset.id) {
     projectMenuId = "";
-    await rpc("startUnboundRun", { projectId: target.dataset.id });
+    settingsOpen = false;
+    pairingOpen = false;
+    formOpen = null;
+    launchDraft = null;
+    await rpc("prepareRunLaunch", { projectId: target.dataset.id });
     render();
+    return;
+  }
+  if (act === "execute-run" && target.dataset.id && snapshot.focusedProjectId) {
+    settingsOpen = false;
+    pairingOpen = false;
+    formOpen = null;
+    launchDraft = null;
+    await rpc("prepareRunLaunch", {
+      projectId: snapshot.focusedProjectId,
+      issueId: target.dataset.id,
+    });
+    render();
+    return;
+  }
+  if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
+    await rpc("cancelRunLaunch");
+    launchDraft = null;
+    render();
+    return;
+  }
+  if (act === "switch-agent") {
+    const form = snapshot.launchForm;
+    if (!form) return;
+    launchDraft = null;
+    await rpc("prepareRunLaunch", {
+      projectId: form.projectId,
+      issueId: form.issueId,
+      pickAgent: true,
+    });
+    render();
+    return;
+  }
+  if (act === "pick-agent" && target.dataset.id) {
+    const form = snapshot.launchForm;
+    if (!form) return;
+    launchDraft = null;
+    await rpc("prepareRunLaunch", {
+      projectId: form.projectId,
+      issueId: form.issueId,
+      agentId: target.dataset.id,
+    });
+    render();
+    return;
+  }
+  if (act === "intent") {
+    if (!launchDraft || !snapshot.launchForm) return;
+    const intentId = target.dataset.id ?? "";
+    launchDraft.intentId = intentId;
+    launchDraft.custom = false;
+    launchDraft.openingText = expectedOpening(snapshot.launchForm, launchDraft);
+    render();
+    return;
+  }
+  if (act === "intent-custom") {
+    return;
+  }
+  if (act === "toggle-folded") {
+    launchFolded = !launchFolded;
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
@@ -1502,6 +1831,21 @@ app.addEventListener("change", async (event) => {
     });
     render();
   }
+  if (target.getAttribute("data-field") === "commandPreview" && "checked" in target) {
+    await rpc("setShowCommandPreview", {
+      show: (target as HTMLInputElement).checked,
+    });
+    render();
+  }
+  const launchId = target.getAttribute("data-launch");
+  if (launchId && launchDraft) {
+    if (target instanceof HTMLInputElement && target.type === "checkbox") {
+      launchDraft.values[launchId] = target.checked ? "true" : "false";
+    } else if ("value" in target) {
+      launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
+    }
+    refreshLaunchWarnings();
+  }
 });
 
 app.addEventListener("input", (event) => {
@@ -1520,9 +1864,37 @@ app.addEventListener("input", (event) => {
   ) {
     formDraft = { ...formDraft, [field]: (target as HTMLInputElement).value };
   }
+  if (field === "openingText" && launchDraft && "value" in target) {
+    launchDraft.openingText = (target as HTMLTextAreaElement).value;
+    if (!launchDraft.intentId) {
+      launchDraft.values["initial-instruction"] = launchDraft.openingText;
+      launchDraft.custom = false;
+    } else if (snapshot?.launchForm) {
+      launchDraft.custom =
+        launchDraft.openingText.trim() !== expectedOpening(snapshot.launchForm, launchDraft).trim();
+    }
+  }
+  const launchId = target.getAttribute("data-launch");
+  if (launchId && launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
+    launchDraft.values[launchId] = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
+    refreshLaunchWarnings();
+  }
 });
 
 app.addEventListener("submit", async (event) => {
+  const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
+  if (launch && snapshot && launchDraft) {
+    event.preventDefault();
+    await rpc("startUnboundRun", {
+      projectId: launchDraft.projectId,
+      issueId: launchDraft.issueId,
+      agentId: launchDraft.agentId,
+      values: launchDraft.values,
+      openingText: launchDraft.openingText,
+    });
+    render();
+    return;
+  }
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");
   if (!form || !snapshot) return;
   event.preventDefault();

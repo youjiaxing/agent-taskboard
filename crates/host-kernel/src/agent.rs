@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -7,6 +8,124 @@ use crate::{Language, LaunchEnvironment};
 pub const GROK_BUILD_ID: &str = "grok-build";
 pub const GROK_BUILD_NAME: &str = "Grok Build";
 pub const GROK_BIN: &str = "grok";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentFieldKind {
+    Text,
+    Select,
+    Boolean,
+    Multiline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentField {
+    pub id: String,
+    pub label: String,
+    pub kind: AgentFieldKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    pub required: bool,
+    pub folded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RunLaunchConfig {
+    pub agent_id: String,
+    #[serde(default)]
+    pub values: BTreeMap<String, String>,
+    #[serde(default)]
+    pub opening_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSummary {
+    pub id: String,
+    pub name: String,
+    pub installed: bool,
+    pub fields: Vec<AgentField>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrefillSource {
+    CurrentProject,
+    OtherProject,
+    CliSeed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunLaunchForm {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue_id: Option<String>,
+    pub agents: Vec<AgentSummary>,
+    pub selected_agent_id: String,
+    pub skip_agent_picker: bool,
+    pub fields: Vec<AgentField>,
+    pub values: BTreeMap<String, String>,
+    pub prefill_source: PrefillSource,
+    pub working_directory: String,
+    pub isolation_supported: bool,
+    pub isolation_reason: String,
+    #[serde(default)]
+    pub opening_text: String,
+    #[serde(default)]
+    pub command_preview: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intents: Vec<IntentOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunIntent {
+    Modify,
+    Continue,
+    Answer,
+    Review,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntentOption {
+    pub id: String,
+    pub label: String,
+    pub prefix: String,
+}
+
+pub fn intent_prefix(intent: Option<RunIntent>, language: Language) -> String {
+    let Some(intent) = intent else {
+        return String::new();
+    };
+    match (language, intent) {
+        (Language::ZhCn, RunIntent::Modify) => "根据下面的说明修改实现。".into(),
+        (Language::ZhCn, RunIntent::Continue) => "继续当前工作。下面的说明是补充要求。".into(),
+        (Language::ZhCn, RunIntent::Answer) => "只回答下面的问题，不要修改文件。".into(),
+        (Language::ZhCn, RunIntent::Review) => "复查当前实现并报告你的发现，不要修改文件。".into(),
+        (Language::En, RunIntent::Modify) => {
+            "Modify the implementation according to the instructions below.".into()
+        }
+        (Language::En, RunIntent::Continue) => {
+            "Continue the current work. Treat the instructions below as additional requirements."
+                .into()
+        }
+        (Language::En, RunIntent::Answer) => {
+            "Only answer the questions below. Do not modify any files.".into()
+        }
+        (Language::En, RunIntent::Review) => {
+            "Review the current implementation and report your findings. Do not modify any files."
+                .into()
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeResult {
@@ -27,6 +146,19 @@ pub trait AgentPort: Send + Sync {
     fn known_install_locations(&self) -> Vec<PathBuf>;
     fn probe(&self, env: &LaunchEnvironment) -> ProbeResult;
     fn assemble_argv(&self, executable: &Path) -> Vec<String>;
+    fn config_fields(&self) -> Vec<AgentField> {
+        Vec::new()
+    }
+    fn seed_config(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+    fn assemble_argv_for(
+        &self,
+        executable: &Path,
+        _values: &BTreeMap<String, String>,
+    ) -> Vec<String> {
+        self.assemble_argv(executable)
+    }
     fn recent_action(&self) -> Option<String> {
         None
     }
@@ -65,6 +197,22 @@ impl AgentPort for GrokAdapter {
     fn assemble_argv(&self, executable: &Path) -> Vec<String> {
         vec![executable.to_string_lossy().into_owned()]
     }
+
+    fn config_fields(&self) -> Vec<AgentField> {
+        grok_fields()
+    }
+
+    fn seed_config(&self) -> BTreeMap<String, String> {
+        grok_seed()
+    }
+
+    fn assemble_argv_for(
+        &self,
+        executable: &Path,
+        values: &BTreeMap<String, String>,
+    ) -> Vec<String> {
+        grok_argv(executable, values)
+    }
 }
 
 #[derive(Debug)]
@@ -79,16 +227,25 @@ pub struct MemoryAgent {
 }
 
 impl MemoryAgent {
-    pub fn installed_grok() -> Self {
+    pub fn installed(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        bin: impl Into<String>,
+    ) -> Self {
+        let bin = bin.into();
         Self {
-            id: GROK_BUILD_ID.into(),
-            name: GROK_BUILD_NAME.into(),
-            bin: GROK_BIN.into(),
-            executable: PathBuf::from("/mem/grok"),
+            id: id.into(),
+            name: name.into(),
+            bin: bin.clone(),
+            executable: PathBuf::from(format!("/mem/{bin}")),
             known_locations: vec![PathBuf::from("/mem/.grok/bin")],
             installed: Mutex::new(true),
             recent_action: Mutex::new(None),
         }
+    }
+
+    pub fn installed_grok() -> Self {
+        Self::installed(GROK_BUILD_ID, GROK_BUILD_NAME, GROK_BIN)
     }
 
     pub fn missing_grok() -> Self {
@@ -141,8 +298,134 @@ impl AgentPort for MemoryAgent {
         vec![executable.to_string_lossy().into_owned()]
     }
 
+    fn config_fields(&self) -> Vec<AgentField> {
+        grok_fields()
+    }
+
+    fn seed_config(&self) -> BTreeMap<String, String> {
+        grok_seed()
+    }
+
+    fn assemble_argv_for(
+        &self,
+        executable: &Path,
+        values: &BTreeMap<String, String>,
+    ) -> Vec<String> {
+        grok_argv(executable, values)
+    }
+
     fn recent_action(&self) -> Option<String> {
         self.recent_action.lock().expect("memory agent").clone()
+    }
+}
+
+fn grok_fields() -> Vec<AgentField> {
+    vec![
+        AgentField {
+            id: "model".into(),
+            label: "model".into(),
+            kind: AgentFieldKind::Text,
+            options: Vec::new(),
+            required: true,
+            folded: false,
+        },
+        AgentField {
+            id: "effort".into(),
+            label: "effort".into(),
+            kind: AgentFieldKind::Select,
+            options: vec!["low".into(), "medium".into(), "high".into()],
+            required: true,
+            folded: false,
+        },
+        AgentField {
+            id: "permission-mode".into(),
+            label: "权限模式".into(),
+            kind: AgentFieldKind::Select,
+            options: vec![
+                "normal".into(),
+                "plan".into(),
+                "auto".into(),
+                "always-approve".into(),
+            ],
+            required: true,
+            folded: false,
+        },
+        AgentField {
+            id: "always-approve".into(),
+            label: "alwaysApprove".into(),
+            kind: AgentFieldKind::Boolean,
+            options: Vec::new(),
+            required: false,
+            folded: false,
+        },
+        AgentField {
+            id: "sandbox".into(),
+            label: "sandbox".into(),
+            kind: AgentFieldKind::Select,
+            options: vec![
+                "off".into(),
+                "workspace".into(),
+                "read-only".into(),
+                "strict".into(),
+            ],
+            required: true,
+            folded: false,
+        },
+        AgentField {
+            id: "initial-instruction".into(),
+            label: "初始指令".into(),
+            kind: AgentFieldKind::Multiline,
+            options: Vec::new(),
+            required: false,
+            folded: false,
+        },
+        AgentField {
+            id: "additional-args".into(),
+            label: "附加参数".into(),
+            kind: AgentFieldKind::Text,
+            options: Vec::new(),
+            required: false,
+            folded: true,
+        },
+    ]
+}
+
+fn grok_seed() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("model".into(), "grok-4.6".into()),
+        ("effort".into(), "high".into()),
+        ("permission-mode".into(), "normal".into()),
+        ("always-approve".into(), "false".into()),
+        ("sandbox".into(), "off".into()),
+        ("initial-instruction".into(), String::new()),
+        ("additional-args".into(), String::new()),
+    ])
+}
+
+fn grok_argv(executable: &Path, values: &BTreeMap<String, String>) -> Vec<String> {
+    let mut argv = vec![executable.to_string_lossy().into_owned()];
+    append_flag(&mut argv, "--model", values.get("model"));
+    append_flag(&mut argv, "--effort", values.get("effort"));
+    append_flag(&mut argv, "--sandbox", values.get("sandbox"));
+    if values
+        .get("always-approve")
+        .is_some_and(|value| value == "true")
+        || values
+            .get("permission-mode")
+            .is_some_and(|value| value == "always-approve")
+    {
+        argv.push("--always-approve".into());
+    }
+    if let Some(args) = values.get("additional-args") {
+        argv.extend(args.split_whitespace().map(ToOwned::to_owned));
+    }
+    argv
+}
+
+fn append_flag(argv: &mut Vec<String>, flag: &str, value: Option<&String>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        argv.push(flag.into());
+        argv.push(value.clone());
     }
 }
 
