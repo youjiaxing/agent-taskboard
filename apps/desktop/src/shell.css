@@ -421,7 +421,7 @@ html[data-theme="plain-night"] button.danger.primary {
   max-height: calc(100vh - 80px);
   overflow: auto;
 }
-.form-sheet input {
+.form-sheet input, .form-sheet textarea, .form-sheet select {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -431,7 +431,20 @@ html[data-theme="plain-night"] button.danger.primary {
   padding: 8px 10px;
   margin: 4px 0 8px;
 }
+.form-sheet textarea { resize: vertical; min-height: 88px; }
 .form-sheet .actions { justify-content: flex-end; }
+.launch-sheet { width: min(560px, calc(100% - 24px)); }
+.launch-agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.agent-picks { margin-bottom: 12px; }
+.folded { margin: 8px 0 12px; }
+.folded summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.isolation-off { margin: 4px 0; opacity: .7; }
 .item, .nested {
   display: flex;
   align-items: center;

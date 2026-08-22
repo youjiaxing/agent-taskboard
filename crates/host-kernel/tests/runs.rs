@@ -149,7 +149,23 @@ fn probe_and_start_share_one_launch_env_and_exec_absolute_path() {
 
     assert_eq!(h.launch_env.capture_count(), 1);
     let spawn = h.sessions.last_spawn().unwrap();
-    assert_eq!(spawn.argv, vec!["/mem/grok"]);
+    assert_eq!(spawn.argv[0], "/mem/grok");
+    assert!(spawn
+        .argv
+        .windows(2)
+        .any(|pair| pair == ["--model", "grok-4.6"]));
+    assert!(spawn
+        .argv
+        .windows(2)
+        .any(|pair| pair == ["--effort", "high"]));
+    assert!(spawn
+        .argv
+        .windows(2)
+        .any(|pair| pair == ["--sandbox", "off"]));
+    assert!(!spawn
+        .argv
+        .iter()
+        .any(|arg| arg == "-p" || arg == "--single"));
     assert!(std::path::Path::new(&spawn.argv[0]).is_absolute());
     assert_eq!(spawn.cwd, dir);
     assert_eq!(

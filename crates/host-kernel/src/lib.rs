@@ -3,6 +3,7 @@
 mod agent;
 mod board;
 mod issue;
+mod launch;
 mod launch_env;
 mod local_rpc;
 mod owner;
@@ -23,8 +24,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use agent::{
-    probe_binary, AgentPort, GrokAdapter, MemoryAgent, ProbeResult, GROK_BIN, GROK_BUILD_ID,
-    GROK_BUILD_NAME,
+    intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort, AgentSummary, GrokAdapter,
+    IntentOption, MemoryAgent, PrefillSource, ProbeResult, RunIntent, RunLaunchConfig,
+    RunLaunchForm, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -177,6 +179,13 @@ pub enum Command {
     StartUnboundRun {
         project_id: String,
     },
+    PrepareRunLaunch {
+        project_id: String,
+        issue_id: Option<String>,
+        agent_id: Option<String>,
+        pick_agent: bool,
+    },
+    CancelRunLaunch,
     StopRun {
         run_id: String,
     },
@@ -191,6 +200,14 @@ pub enum Command {
     ConfirmQuitStopAll,
     SetRefreshInterval {
         interval_ms: u64,
+    },
+    StartUnboundRunWithConfig {
+        project_id: String,
+        config: RunLaunchConfig,
+        issue_id: Option<String>,
+    },
+    SetShowCommandPreview {
+        show: bool,
     },
 }
 
@@ -500,6 +517,30 @@ pub struct ShellCopy {
     pub refresh_paused: String,
     pub refresh_auth: String,
     pub new_run: String,
+    pub execute_run: String,
+    pub start_run: String,
+    pub switch_agent: String,
+    pub pick_agent: String,
+    pub launch_title: String,
+    pub prefill_current: String,
+    pub prefill_other: String,
+    pub prefill_seed: String,
+    pub isolation: String,
+    pub isolation_off_reason: String,
+    pub isolation_hint: String,
+    pub run_intent: String,
+    pub intent_none: String,
+    pub intent_modify: String,
+    pub intent_continue: String,
+    pub intent_answer: String,
+    pub intent_review: String,
+    pub intent_custom: String,
+    pub opening_placeholder: String,
+    pub folded_options: String,
+    pub command_preview: String,
+    pub show_command_preview: String,
+    pub instruction_required: String,
+    pub working_directory: String,
     pub unbound_issue: String,
     pub stop_run: String,
     pub quit_active_title: String,
@@ -530,6 +571,9 @@ pub struct HostSnapshot {
     pub runs: Vec<RunSummary>,
     pub focused_run_id: String,
     pub quit_offer: Option<QuitOffer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_form: Option<RunLaunchForm>,
+    pub show_command_preview: bool,
 }
 
 pub struct KernelPorts {
@@ -594,6 +638,10 @@ pub struct HostKernel {
     recent_limit: u32,
     center_view: CenterView,
     show_closed_graph_context: bool,
+    launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    last_successful_agent: BTreeMap<String, String>,
+    launch_form: Option<RunLaunchForm>,
+    show_command_preview: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -637,6 +685,7 @@ struct RemoteView {
     runs: Vec<RunSummary>,
     focused_run_id: String,
     quit_offer: Option<QuitOffer>,
+    launch_form: Option<RunLaunchForm>,
 }
 
 impl HostKernel {
@@ -663,12 +712,18 @@ impl HostKernel {
         let host_id = settings.id;
         let paired_clients = load_paired_clients(&data.host_secrets_path)?;
 
-        let (appearance, focused_host_id, saved_remotes, recent_limit, center_view) =
-            load_or_init_appearance(
-                &data.desktop_client_settings_path,
-                &request.system_locale,
-                request.system_appearance,
-            )?;
+        let (
+            appearance,
+            focused_host_id,
+            saved_remotes,
+            recent_limit,
+            center_view,
+            show_command_preview,
+        ) = load_or_init_appearance(
+            &data.desktop_client_settings_path,
+            &request.system_locale,
+            request.system_appearance,
+        )?;
         let tokens = load_client_tokens(&data.desktop_client_secrets_path)?;
         let remote_hosts = saved_remotes
             .into_iter()
@@ -736,6 +791,10 @@ impl HostKernel {
             recent_limit,
             center_view,
             show_closed_graph_context: false,
+            launch_defaults: settings.agent_launch_defaults,
+            last_successful_agent: settings.last_successful_agent,
+            launch_form: None,
+            show_command_preview,
         };
         let project_ids: Vec<String> = host
             .projects
@@ -783,6 +842,8 @@ impl HostKernel {
             runs,
             focused_run_id,
             quit_offer,
+            launch_form: self.launch_form_for_focus(),
+            show_command_preview: self.show_command_preview,
         }
     }
 
@@ -1000,8 +1061,44 @@ impl HostKernel {
             Command::StartBoundRun { issue_id } => {
                 self.require_live_tracker_for_issue(&issue_id)?;
             }
+            Command::PrepareRunLaunch {
+                project_id,
+                issue_id,
+                agent_id,
+                pick_agent,
+            } => {
+                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent)?;
+            }
+            Command::CancelRunLaunch => {
+                self.launch_form = None;
+            }
             Command::StartUnboundRun { project_id } => {
-                self.start_unbound_run(&project_id)?;
+                let agent = self
+                    .agents
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))?;
+                self.start_unbound_run(
+                    &project_id,
+                    RunLaunchConfig {
+                        agent_id: agent.id().to_string(),
+                        values: agent.seed_config(),
+                        opening_text: String::new(),
+                    },
+                    None,
+                    false,
+                )?;
+            }
+            Command::StartUnboundRunWithConfig {
+                project_id,
+                config,
+                issue_id,
+            } => {
+                self.start_unbound_run(&project_id, config, issue_id, true)?;
+            }
+            Command::SetShowCommandPreview { show } => {
+                self.show_command_preview = show;
+                self.persist_client_settings(&self.appearance.clone())?;
             }
             Command::StopRun { run_id } => {
                 self.stop_run(&run_id)?;
@@ -1277,14 +1374,62 @@ impl HostKernel {
                     issue_id: required_string(&request, "issueId")?,
                 })
             }
+            "prepareRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::PrepareRunLaunch {
+                    project_id: required_string(&request, "projectId")?,
+                    issue_id: request
+                        .get("issueId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    agent_id: request
+                        .get("agentId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    pick_agent: request
+                        .get("pickAgent")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "cancelRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CancelRunLaunch)
+            }
             "startUnboundRun" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
                 }
-                self.dispatch(Command::StartUnboundRun {
-                    project_id: required_string(&request, "projectId")?,
-                })
+                let project_id = required_string(&request, "projectId")?;
+                if request.get("agentId").is_some()
+                    || request.get("values").is_some()
+                    || request.get("openingText").is_some()
+                {
+                    self.dispatch(Command::StartUnboundRunWithConfig {
+                        project_id,
+                        config: parse_launch_config(&request)?,
+                        issue_id: request
+                            .get("issueId")
+                            .and_then(|value| value.as_str())
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned),
+                    })
+                } else {
+                    self.dispatch(Command::StartUnboundRun { project_id })
+                }
             }
+            "setShowCommandPreview" => self.dispatch(Command::SetShowCommandPreview {
+                show: request
+                    .get("show")
+                    .and_then(|value| value.as_bool())
+                    .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
+            }),
             "stopRun" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -1348,6 +1493,7 @@ impl HostKernel {
                 .collect(),
             recent_completed_limit: self.recent_limit,
             center_view: self.center_view,
+            show_command_preview: self.show_command_preview,
         };
         write_json(&self.data.desktop_client_settings_path, &file)?;
         let secrets = ClientSecretsFile {
@@ -1474,8 +1620,23 @@ impl HostKernel {
             runs,
             focused_run_id,
             quit_offer,
+            launch_form: match snapshot.get("launchForm") {
+                Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+                _ => None,
+            },
         });
         Ok(())
+    }
+
+    fn launch_form_for_focus(&self) -> Option<RunLaunchForm> {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            if let Some(view) = &self.remote_view {
+                if view.host_id == self.focused_host_id {
+                    return view.launch_form.clone();
+                }
+            }
+        }
+        self.launch_form.clone()
     }
 
     fn runs_for_focus(&self) -> (Vec<RunSummary>, String, Option<QuitOffer>) {
@@ -1497,7 +1658,88 @@ impl HostKernel {
         )
     }
 
-    fn start_unbound_run(&mut self, project_id: &str) -> Result<(), KernelError> {
+    fn prepare_run_launch(
+        &mut self,
+        project_id: &str,
+        issue_id: Option<String>,
+        agent_id: Option<String>,
+        pick_agent: bool,
+    ) -> Result<(), KernelError> {
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let language = self.appearance.language;
+        let agents = launch::summarize_agents(
+            &self.agents,
+            self.launch_env.as_ref(),
+            &project.local_path,
+            language,
+        );
+        let last = self.last_successful_agent.get(project_id).cloned();
+        let selected = launch::default_agent_id(&agents, last.as_deref(), agent_id.as_deref());
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == selected)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let current = self
+            .launch_defaults
+            .get(project_id)
+            .and_then(|agents| agents.get(&selected));
+        let other = launch::other_project_memory(&self.launch_defaults, project_id, &selected);
+        let (mut values, prefill_source) =
+            launch::merge_prefill(&agent.seed_config(), current, other);
+        let mut opening_text = String::new();
+        if let Some(issue_id) = issue_id.as_deref() {
+            if let Some(issue) = self.issue_by_id(issue_id) {
+                let instruction = format!("{}\n{}", issue.title, issue.url);
+                values.insert(launch::INITIAL_INSTRUCTION.into(), instruction.clone());
+                opening_text = instruction;
+            }
+        }
+        let fields = launch::localize_fields(agent.config_fields(), language);
+        let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
+        let skip_agent_picker = !pick_agent && (last.is_some() || agent_id.is_some());
+        self.launch_form = Some(RunLaunchForm {
+            project_id: project_id.to_string(),
+            issue_id,
+            agents,
+            selected_agent_id: selected,
+            skip_agent_picker,
+            fields: fields.clone(),
+            values: values.clone(),
+            prefill_source,
+            working_directory: project.local_path.display().to_string(),
+            isolation_supported: false,
+            isolation_reason: launch::isolation_reason(language),
+            opening_text,
+            command_preview: preview,
+            intents: launch::intent_options(language),
+            warnings: launch::unknown_enum_warnings(&fields, &values, language),
+            error: None,
+        });
+        Ok(())
+    }
+
+    fn issue_by_id(&self, issue_id: &str) -> Option<IssueRecord> {
+        self.loaded_issues
+            .values()
+            .flat_map(|issues| issues.iter())
+            .find(|issue| issue.id() == issue_id)
+            .cloned()
+    }
+
+    fn start_unbound_run(
+        &mut self,
+        project_id: &str,
+        config: RunLaunchConfig,
+        issue_id: Option<String>,
+        from_form: bool,
+    ) -> Result<(), KernelError> {
         let cwd = self
             .projects
             .iter()
@@ -1506,17 +1748,42 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
         let agent = self
             .agents
-            .first()
+            .iter()
+            .find(|agent| agent.id() == config.agent_id)
             .cloned()
-            .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))?;
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let language = self.appearance.language;
+        let fields = launch::localize_fields(agent.config_fields(), language);
+        if let Some(form) = &mut self.launch_form {
+            launch::apply_submitted_form(form, &config);
+            form.warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+            form.command_preview =
+                launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
+        }
+        if from_form {
+            if let Some(err) = launch::missing_required(&fields, &config.values, language)
+                .or_else(|| launch::opening_required(&config.opening_text, language))
+            {
+                if let Some(form) = &mut self.launch_form {
+                    form.error = Some(err);
+                    return Ok(());
+                }
+                return Err(KernelError::Protocol(err));
+            }
+        }
+        if let Some(issue_id) = issue_id.as_deref() {
+            self.require_live_tracker_for_issue(issue_id)?;
+        }
         let result = run::start_unbound(
             project_id,
             &cwd,
             agent.as_ref(),
             self.launch_env.as_ref(),
             self.sessions.as_ref(),
-            self.appearance.language,
+            language,
             &[],
+            &config,
+            issue_id.as_deref(),
         );
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
@@ -1525,9 +1792,28 @@ impl HostKernel {
         });
         if let Some(session) = result.session {
             self.live.insert(result.record.id.clone(), session);
+            self.remember_launch(project_id, &config)?;
+            self.launch_form = None;
+        } else if let Some(form) = &mut self.launch_form {
+            form.error = result.record.failure.clone();
         }
         self.runs.push(result.record);
         Ok(())
+    }
+
+    fn remember_launch(
+        &mut self,
+        project_id: &str,
+        config: &RunLaunchConfig,
+    ) -> Result<(), KernelError> {
+        let remembered = launch::remembered_values(&config.values);
+        self.launch_defaults
+            .entry(project_id.to_string())
+            .or_default()
+            .insert(config.agent_id.clone(), remembered);
+        self.last_successful_agent
+            .insert(project_id.to_string(), config.agent_id.clone());
+        self.persist_host_settings()
     }
 
     fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
@@ -1710,6 +1996,8 @@ impl HostKernel {
             focused_project_id: self.focused_project_id.clone(),
             projects: self.projects.iter().map(ProjectRecord::stored).collect(),
             refresh_interval_ms: self.refresh_interval_ms,
+            agent_launch_defaults: self.launch_defaults.clone(),
+            last_successful_agent: self.last_successful_agent.clone(),
         };
         write_json(&self.data.host_settings_path, &file)
     }
@@ -2402,6 +2690,30 @@ impl ShellCopy {
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
                 new_run: "新建".into(),
+                execute_run: "执行".into(),
+                start_run: "启动".into(),
+                switch_agent: "换一家".into(),
+                pick_agent: "选择 Agent".into(),
+                launch_title: "启动配置".into(),
+                prefill_current: "预填来自这个 Project 上次成功启动，本次可改。".into(),
+                prefill_other: "预填来自其它 Project 上这家 Agent 的记忆，本次可改。".into(),
+                prefill_seed: "预填来自本机 CLI 种子，本次可改。".into(),
+                isolation: "隔离执行目录".into(),
+                isolation_off_reason: "本票先关掉隔离，留给隔离票。".into(),
+                isolation_hint: "机制是 git worktree。默认关，不记住。".into(),
+                run_intent: "Run 意图".into(),
+                intent_none: "不选".into(),
+                intent_modify: "修改".into(),
+                intent_continue: "继续".into(),
+                intent_answer: "只回答".into(),
+                intent_review: "复查".into(),
+                intent_custom: "自定义".into(),
+                opening_placeholder: "要 Agent 做什么".into(),
+                folded_options: "附加参数与预览".into(),
+                command_preview: "命令预览".into(),
+                show_command_preview: "显示命令预览".into(),
+                instruction_required: "请填写要 Agent 做什么。".into(),
+                working_directory: "执行目录".into(),
                 unbound_issue: "未绑定 Issue".into(),
                 stop_run: "停止".into(),
                 quit_active_title: "还有活跃 Run".into(),
@@ -2517,6 +2829,30 @@ impl ShellCopy {
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
                 new_run: "New".into(),
+                execute_run: "Run".into(),
+                start_run: "Start".into(),
+                switch_agent: "Switch Agent".into(),
+                pick_agent: "Choose Agent".into(),
+                launch_title: "Launch".into(),
+                prefill_current: "Prefill is this Project's last successful launch. You can change it this time.".into(),
+                prefill_other: "Prefill is this Agent's memory from another Project. You can change it this time.".into(),
+                prefill_seed: "Prefill is the local CLI seed. You can change it this time.".into(),
+                isolation: "Isolated work directory".into(),
+                isolation_off_reason: "Isolation is disabled on this ticket.".into(),
+                isolation_hint: "This uses a git worktree. It stays off and is not remembered.".into(),
+                run_intent: "Run intent".into(),
+                intent_none: "None".into(),
+                intent_modify: "Modify".into(),
+                intent_continue: "Continue".into(),
+                intent_answer: "Answer only".into(),
+                intent_review: "Review".into(),
+                intent_custom: "Custom".into(),
+                opening_placeholder: "What should the Agent do".into(),
+                folded_options: "Extra options".into(),
+                command_preview: "Command preview".into(),
+                show_command_preview: "Show command preview".into(),
+                instruction_required: "Tell the Agent what to do.".into(),
+                working_directory: "Working directory".into(),
                 unbound_issue: "Unbound Issue".into(),
                 stop_run: "Stop".into(),
                 quit_active_title: "Active Runs still running".into(),
@@ -2539,6 +2875,10 @@ struct HostSettingsFile {
     projects: Vec<StoredProject>,
     #[serde(default = "default_refresh_interval_ms")]
     refresh_interval_ms: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    agent_launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    last_successful_agent: BTreeMap<String, String>,
 }
 
 impl Default for HostSettingsFile {
@@ -2548,6 +2888,8 @@ impl Default for HostSettingsFile {
             focused_project_id: None,
             projects: Vec::new(),
             refresh_interval_ms: refresh::DEFAULT_REFRESH_INTERVAL_MS,
+            agent_launch_defaults: BTreeMap::new(),
+            last_successful_agent: BTreeMap::new(),
         }
     }
 }
@@ -2612,6 +2954,12 @@ struct ClientSettingsFile {
     recent_completed_limit: u32,
     #[serde(default)]
     center_view: CenterView,
+    #[serde(default = "default_true")]
+    show_command_preview: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_recent_limit() -> u32 {
@@ -2639,6 +2987,7 @@ fn load_or_init_appearance(
         Vec<pairing::SavedRemoteHost>,
         u32,
         CenterView,
+        bool,
     ),
     KernelError,
 > {
@@ -2656,6 +3005,7 @@ fn load_or_init_appearance(
                 file.remote_hosts,
                 board::clamp_recent_limit(file.recent_completed_limit),
                 file.center_view,
+                file.show_command_preview,
             ));
         }
         if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
@@ -2666,6 +3016,7 @@ fn load_or_init_appearance(
                 Vec::new(),
                 board::DEFAULT_RECENT_LIMIT,
                 CenterView::Board,
+                true,
             ));
         }
     }
@@ -2687,6 +3038,7 @@ fn load_or_init_appearance(
         remote_hosts: Vec::new(),
         recent_completed_limit: board::DEFAULT_RECENT_LIMIT,
         center_view: CenterView::Board,
+        show_command_preview: true,
     };
     write_json(path, &file)?;
     Ok((
@@ -2695,6 +3047,7 @@ fn load_or_init_appearance(
         Vec::new(),
         board::DEFAULT_RECENT_LIMIT,
         CenterView::Board,
+        true,
     ))
 }
 
@@ -2773,6 +3126,35 @@ fn write_json_inner<T: Serialize>(
         owner::restrict_to_owner(path)?;
     }
     Ok(())
+}
+
+fn parse_launch_config(request: &serde_json::Value) -> Result<RunLaunchConfig, KernelError> {
+    let agent_id = required_string(request, "agentId")?;
+    let values = request
+        .get("values")
+        .and_then(|value| value.as_object())
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|text| (key.clone(), text.to_string()))
+                        .or_else(|| value.as_bool().map(|flag| (key.clone(), flag.to_string())))
+                        .or_else(|| {
+                            value
+                                .as_i64()
+                                .map(|number| (key.clone(), number.to_string()))
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(RunLaunchConfig {
+        agent_id,
+        values,
+        opening_text: optional_string(request, "openingText"),
+    })
 }
 
 fn required_string(request: &serde_json::Value, key: &str) -> Result<String, KernelError> {

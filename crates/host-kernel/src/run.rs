@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{format_not_found, prepare_launch_env, AgentPort, ProbeResult};
+use crate::agent::{format_not_found, prepare_launch_env, AgentPort, ProbeResult, RunLaunchConfig};
 use crate::pairing;
 use crate::session::{AgentSession, SessionFactory, SpawnRequest};
 use crate::{Language, LaunchEnvPort};
@@ -61,6 +61,8 @@ pub fn start_unbound(
     sessions: &dyn SessionFactory,
     language: Language,
     host_path_prefix: &[std::path::PathBuf],
+    config: &RunLaunchConfig,
+    issue_id: Option<&str>,
 ) -> StartResult {
     let id = pairing::random_id();
     let mut record = RunSummary {
@@ -68,8 +70,8 @@ pub fn start_unbound(
         project_id: project_id.to_string(),
         agent_id: agent.id().to_string(),
         agent_name: agent.name().to_string(),
-        issue_id: None,
-        unbound: true,
+        issue_id: issue_id.filter(|id| !id.is_empty()).map(ToOwned::to_owned),
+        unbound: issue_id.map(|id| id.is_empty()).unwrap_or(true),
         status: RunStatus::Starting,
         recent_action: agent.recent_action().filter(|text| !text.is_empty()),
         failure: None,
@@ -105,7 +107,7 @@ pub fn start_unbound(
             }
         }
         ProbeResult::Found { executable } => {
-            let argv = agent.assemble_argv(&executable);
+            let argv = agent.assemble_argv_for(&executable, &config.values);
             let request = SpawnRequest {
                 argv,
                 cwd: cwd.to_path_buf(),
@@ -115,6 +117,19 @@ pub fn start_unbound(
             };
             match sessions.spawn(request) {
                 Ok(session) => {
+                    if !config.opening_text.trim().is_empty() {
+                        if let Err(err) =
+                            session.write(format!("{}\n", config.opening_text.trim()).as_bytes())
+                        {
+                            session.stop();
+                            record.status = RunStatus::Ended;
+                            record.failure = Some(err.to_string());
+                            return StartResult {
+                                record,
+                                session: None,
+                            };
+                        }
+                    }
                     record.status = RunStatus::Running;
                     StartResult {
                         record,

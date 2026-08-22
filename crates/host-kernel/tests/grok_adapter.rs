@@ -34,6 +34,36 @@ fn grok_adapter_declares_interactive_tui_contract() {
 }
 
 #[test]
+fn grok_adapter_declares_first_layer_fields() {
+    let fields = GrokAdapter.config_fields();
+    let ids: Vec<_> = fields.iter().map(|field| field.id.as_str()).collect();
+    assert!(ids.contains(&"model"));
+    assert!(ids.contains(&"effort"));
+    assert!(ids.contains(&"permission-mode"));
+    assert!(ids.contains(&"always-approve"));
+    assert!(ids.contains(&"sandbox"));
+    assert!(ids.contains(&"initial-instruction"));
+    assert!(fields
+        .iter()
+        .any(|field| field.id == "additional-args" && field.folded));
+}
+
+#[test]
+fn grok_adapter_assembles_form_values_without_prompt_flag() {
+    let executable = PathBuf::from("/opt/fake/grok");
+    let mut values = GrokAdapter.seed_config();
+    values.insert("model".into(), "grok-4.6".into());
+    values.insert("always-approve".into(), "true".into());
+    values.insert("additional-args".into(), "--no-subagents".into());
+    let argv = GrokAdapter.assemble_argv_for(&executable, &values);
+    assert_eq!(argv[0], "/opt/fake/grok");
+    assert!(argv.windows(2).any(|pair| pair == ["--model", "grok-4.6"]));
+    assert!(argv.iter().any(|arg| arg == "--always-approve"));
+    assert!(argv.iter().any(|arg| arg == "--no-subagents"));
+    assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--single"));
+}
+
+#[test]
 fn grok_adapter_assembles_bare_interactive_tui_argv() {
     let executable = PathBuf::from("/opt/fake/grok");
     assert_eq!(
