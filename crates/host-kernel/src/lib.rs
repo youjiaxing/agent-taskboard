@@ -2,7 +2,9 @@
 
 mod local_rpc;
 mod owner;
+mod pairing;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -13,6 +15,7 @@ pub use local_rpc::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LoopbackAssets, LoopbackServer,
     LOCAL_RPC_PORT,
 };
+pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 
 const LOCAL_HOST_ID: &str = "local";
 
@@ -47,13 +50,18 @@ pub enum Theme {
     PlainNight,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     HideWindow,
     ShowWindow,
     QuitHost,
     SetLanguage(Language),
     SetTheme(Theme),
+    BeginPairingOffer { address: String },
+    RedeemPairing { code: String, client_name: String },
+    RevokeClient { client_id: String },
+    PairRemoteHost { address: String, code: String },
+    FocusHost { host_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,7 +71,7 @@ pub enum ProcessIntent {
     Exit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EmptyAction {
     RegisterFirstProject,
@@ -89,14 +97,19 @@ pub enum LoopbackPage {
 pub struct CommandOutcome {
     pub snapshot: HostSnapshot,
     pub process: ProcessIntent,
+    pub pairing: Option<IssuedPairing>,
 }
 
 impl CommandOutcome {
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "snapshot": self.snapshot,
             "process": self.process,
-        })
+        });
+        if let Some(pairing) = &self.pairing {
+            value["pairing"] = serde_json::to_value(pairing).expect("pairing json");
+        }
+        value
     }
 }
 
@@ -108,6 +121,7 @@ pub struct DataLayout {
     pub host_settings_path: PathBuf,
     pub host_secrets_path: PathBuf,
     pub desktop_client_settings_path: PathBuf,
+    pub desktop_client_secrets_path: PathBuf,
     pub log_dir: PathBuf,
 }
 
@@ -119,7 +133,7 @@ pub struct HostSummary {
     pub local: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
     pub id: String,
@@ -199,6 +213,18 @@ pub struct ShellCopy {
     pub shade_dark: String,
     pub edit_menu: String,
     pub pairing_required: String,
+    pub pairing_title: String,
+    pub pairing_this_host: String,
+    pub pairing_to_another: String,
+    pub pairing_address: String,
+    pub pairing_show: String,
+    pub pairing_copy: String,
+    pub pairing_same_payload: String,
+    pub pairing_paste: String,
+    pub pairing_connect: String,
+    pub paired_clients: String,
+    pub revoke_client: String,
+    pub no_paired_clients: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -214,6 +240,8 @@ pub struct HostSnapshot {
     pub copy: ShellCopy,
     pub empty_actions: Vec<EmptyAction>,
     pub loopback_page: LoopbackPage,
+    pub pairing_offer: Option<PairingOffer>,
+    pub paired_clients: Vec<PairedClient>,
 }
 
 #[derive(Debug)]
@@ -226,21 +254,51 @@ pub struct HostKernel {
     projects: Vec<ProjectSummary>,
     loopback_kind: LoopbackKind,
     loopback_port: u16,
+    pairing_offer: Option<pairing::ActiveOffer>,
+    host_id: String,
+    paired_clients: Vec<pairing::IssuedClient>,
+    focused_host_id: String,
+    remote_hosts: Vec<pairing::RemoteHost>,
+    remote_view: Option<RemoteView>,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteView {
+    host_id: String,
+    projects: Vec<ProjectSummary>,
+    empty_actions: Vec<EmptyAction>,
 }
 
 impl HostKernel {
     pub fn boot(request: BootRequest) -> Result<Self, KernelError> {
         let data = DataLayout::prepare(&request.app_local_data_dir, &request.app_log_dir)?;
-        if !data.host_settings_path.exists() {
-            write_json(&data.host_settings_path, &serde_json::json!({}))?;
-        }
-        write_secrets(&data.host_secrets_path, &serde_json::json!({}))?;
+        let host_id = load_or_init_host_id(&data.host_settings_path)?;
+        let paired_clients = load_paired_clients(&data.host_secrets_path)?;
 
-        let appearance = load_or_init_appearance(
+        let (appearance, focused_host_id, saved_remotes) = load_or_init_appearance(
             &data.desktop_client_settings_path,
             &request.system_locale,
             request.system_appearance,
         )?;
+        let tokens = load_client_tokens(&data.desktop_client_secrets_path)?;
+        let remote_hosts = saved_remotes
+            .into_iter()
+            .filter_map(|saved| {
+                tokens.get(&saved.id).map(|token| pairing::RemoteHost {
+                    id: saved.id,
+                    display_name: saved.display_name,
+                    address: saved.address,
+                    token: token.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let focused_host_id = if focused_host_id == LOCAL_HOST_ID
+            || remote_hosts.iter().any(|host| host.id == focused_host_id)
+        {
+            focused_host_id
+        } else {
+            LOCAL_HOST_ID.to_string()
+        };
 
         Ok(Self {
             running: true,
@@ -251,33 +309,49 @@ impl HostKernel {
             projects: Vec::new(),
             loopback_kind: LoopbackKind::HostNotRunning,
             loopback_port: LOCAL_RPC_PORT,
+            pairing_offer: None,
+            host_id,
+            paired_clients,
+            focused_host_id,
+            remote_hosts,
+            remote_view: None,
         })
     }
 
     pub fn snapshot(&self) -> HostSnapshot {
-        let empty_actions = if self.projects.is_empty() {
-            vec![
-                EmptyAction::RegisterFirstProject,
-                EmptyAction::PairAnotherHost,
-            ]
-        } else {
-            Vec::new()
-        };
+        let (projects, empty_actions) = self.board_for_focus();
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
-            focused_host_id: LOCAL_HOST_ID.to_string(),
-            hosts: vec![HostSummary {
-                id: LOCAL_HOST_ID.to_string(),
-                display_name: self.host_display_name.clone(),
-                local: true,
-            }],
-            projects: self.projects.clone(),
+            focused_host_id: self.focused_host_id.clone(),
+            hosts: self.connected_hosts(),
+            projects,
             appearance: AppearanceState::from_selection(self.appearance),
             data: self.data.clone(),
             copy: ShellCopy::for_language(self.appearance.language),
             empty_actions,
             loopback_page: self.loopback_page(),
+            pairing_offer: self
+                .pairing_offer
+                .as_ref()
+                .map(pairing::ActiveOffer::to_offer),
+            paired_clients: self
+                .paired_clients
+                .iter()
+                .map(pairing::IssuedClient::summary)
+                .collect(),
+        }
+    }
+
+    fn outcome(&self) -> CommandOutcome {
+        CommandOutcome {
+            snapshot: self.snapshot(),
+            process: if self.running {
+                ProcessIntent::KeepRunning
+            } else {
+                ProcessIntent::Exit
+            },
+            pairing: None,
         }
     }
 
@@ -324,15 +398,30 @@ impl HostKernel {
                 self.persist_client_settings(&appearance)?;
                 self.appearance = appearance;
             }
+            Command::BeginPairingOffer { address } => {
+                let address = pairing::parse_http_url(&address).map_err(KernelError::Protocol)?;
+                self.pairing_offer = Some(pairing::ActiveOffer::new(address));
+            }
+            Command::RedeemPairing { code, client_name } => {
+                let pairing = self.redeem_pairing(&code, &client_name)?;
+                return Ok(CommandOutcome {
+                    snapshot: self.snapshot(),
+                    process: ProcessIntent::KeepRunning,
+                    pairing: Some(pairing),
+                });
+            }
+            Command::RevokeClient { client_id } => {
+                self.paired_clients.retain(|client| client.id != client_id);
+                self.persist_host_secrets()?;
+            }
+            Command::PairRemoteHost { address, code } => {
+                self.pair_remote_host(&address, &code)?;
+            }
+            Command::FocusHost { host_id } => {
+                self.focus_host(&host_id)?;
+            }
         }
-        Ok(CommandOutcome {
-            snapshot: self.snapshot(),
-            process: if self.running {
-                ProcessIntent::KeepRunning
-            } else {
-                ProcessIntent::Exit
-            },
-        })
+        Ok(self.outcome())
     }
 
     pub fn handle(&mut self, request: serde_json::Value) -> Result<CommandOutcome, KernelError> {
@@ -341,10 +430,7 @@ impl HostKernel {
             .and_then(|value| value.as_str())
             .unwrap_or("snapshot");
         match op {
-            "snapshot" => Ok(CommandOutcome {
-                snapshot: self.snapshot(),
-                process: ProcessIntent::KeepRunning,
-            }),
+            "snapshot" => Ok(self.outcome()),
             "hideWindow" => self.dispatch(Command::HideWindow),
             "showWindow" => self.dispatch(Command::ShowWindow),
             "quitHost" => self.dispatch(Command::QuitHost),
@@ -366,12 +452,272 @@ impl HostKernel {
                 )?;
                 self.dispatch(Command::SetTheme(theme))
             }
+            "beginPairingOffer" => {
+                let address = request
+                    .get("address")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing address".into()))?
+                    .to_string();
+                self.dispatch(Command::BeginPairingOffer { address })
+            }
+            "redeemPairing" => {
+                let code = request
+                    .get("code")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing code".into()))?
+                    .to_string();
+                let client_name = request
+                    .get("clientName")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("Client")
+                    .to_string();
+                self.dispatch(Command::RedeemPairing { code, client_name })
+            }
+            "revokeClient" => {
+                let client_id = request
+                    .get("clientId")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing clientId".into()))?
+                    .to_string();
+                self.dispatch(Command::RevokeClient { client_id })
+            }
+            "pairRemoteHost" => {
+                let address = request
+                    .get("address")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing address".into()))?
+                    .to_string();
+                let code = request
+                    .get("code")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing code".into()))?
+                    .to_string();
+                self.dispatch(Command::PairRemoteHost { address, code })
+            }
+            "focusHost" => {
+                let host_id = request
+                    .get("hostId")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| KernelError::Protocol("missing hostId".into()))?
+                    .to_string();
+                self.dispatch(Command::FocusHost { host_id })
+            }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
     }
 
+    pub fn pairing_token_valid(&self, token: &str) -> bool {
+        let token = token.trim();
+        !token.is_empty()
+            && self
+                .paired_clients
+                .iter()
+                .any(|client| client.token == token)
+    }
+
     fn persist_client_settings(&self, appearance: &AppearanceSelection) -> Result<(), KernelError> {
-        write_json(&self.data.desktop_client_settings_path, appearance)
+        let file = ClientSettingsFile {
+            language: appearance.language,
+            theme: appearance.theme,
+            last_light_theme: appearance.last_light_theme,
+            focused_host_id: self.focused_host_id.clone(),
+            remote_hosts: self
+                .remote_hosts
+                .iter()
+                .map(pairing::RemoteHost::to_saved)
+                .collect(),
+        };
+        write_json(&self.data.desktop_client_settings_path, &file)?;
+        let secrets = ClientSecretsFile {
+            tokens: self
+                .remote_hosts
+                .iter()
+                .map(|host| (host.id.clone(), host.token.clone()))
+                .collect(),
+        };
+        write_json_inner(&self.data.desktop_client_secrets_path, &secrets, true)
+    }
+
+    fn connected_hosts(&self) -> Vec<HostSummary> {
+        let mut hosts = vec![HostSummary {
+            id: LOCAL_HOST_ID.to_string(),
+            display_name: self.host_display_name.clone(),
+            local: true,
+        }];
+        hosts.extend(self.remote_hosts.iter().map(|host| HostSummary {
+            id: host.id.clone(),
+            display_name: host.display_name.clone(),
+            local: false,
+        }));
+        hosts
+    }
+
+    fn board_for_focus(&self) -> (Vec<ProjectSummary>, Vec<EmptyAction>) {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            if let Some(view) = &self.remote_view {
+                if view.host_id == self.focused_host_id {
+                    return (view.projects.clone(), view.empty_actions.clone());
+                }
+            }
+        }
+        let empty_actions = if self.projects.is_empty() {
+            vec![
+                EmptyAction::RegisterFirstProject,
+                EmptyAction::PairAnotherHost,
+            ]
+        } else {
+            Vec::new()
+        };
+        (self.projects.clone(), empty_actions)
+    }
+
+    fn refresh_remote_view(&mut self, host_id: &str) -> Result<(), KernelError> {
+        if host_id == LOCAL_HOST_ID {
+            self.remote_view = None;
+            return Ok(());
+        }
+        let remote = self
+            .remote_hosts
+            .iter()
+            .find(|host| host.id == host_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
+        let response = pairing::post_rpc(
+            &remote.address,
+            Some(&remote.token),
+            &serde_json::json!({ "op": "snapshot" }),
+        )
+        .map_err(|err| match err {
+            KernelError::Io(_) | KernelError::Denied(_) => {
+                KernelError::Protocol("address is not reachable".into())
+            }
+            other => other,
+        })?;
+        let snapshot = response
+            .get("snapshot")
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("remote Host returned no snapshot".into()))?;
+        let projects = snapshot
+            .get("projects")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let empty_actions = snapshot
+            .get("emptyActions")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        self.remote_view = Some(RemoteView {
+            host_id: host_id.to_string(),
+            projects,
+            empty_actions,
+        });
+        Ok(())
+    }
+
+    fn pair_remote_host(&mut self, address: &str, code: &str) -> Result<(), KernelError> {
+        let address = pairing::parse_http_url(address).map_err(KernelError::Protocol)?;
+        if self.is_own_loopback(&address) {
+            return Err(KernelError::Protocol(
+                "cannot pair this window to its own Host".into(),
+            ));
+        }
+        let body = serde_json::json!({
+            "op": "redeemPairing",
+            "code": code,
+            "clientName": self.host_display_name,
+        });
+        let response = pairing::post_rpc(&address, None, &body).map_err(|err| match err {
+            KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
+            other => other,
+        })?;
+        let pairing = response
+            .get("pairing")
+            .cloned()
+            .ok_or_else(|| KernelError::Denied("invalid pairing code".into()))?;
+        let issued: IssuedPairing = serde_json::from_value(pairing)?;
+        if issued.token.is_empty() || issued.host_id.is_empty() {
+            return Err(KernelError::Denied("invalid pairing code".into()));
+        }
+        if issued.host_id == LOCAL_HOST_ID {
+            return Err(KernelError::Protocol("remote Host id is invalid".into()));
+        }
+        self.remote_hosts.retain(|host| host.id != issued.host_id);
+        self.remote_hosts.push(pairing::RemoteHost {
+            id: issued.host_id,
+            display_name: issued.display_name,
+            address,
+            token: issued.token,
+        });
+        self.persist_client_settings(&self.appearance.clone())
+    }
+
+    fn is_own_loopback(&self, address: &str) -> bool {
+        if self.loopback_kind != LoopbackKind::Serving {
+            return false;
+        }
+        let rest = address
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(address);
+        let hostport = rest.split('/').next().unwrap_or(rest);
+        let (host, port) = match hostport.rsplit_once(':') {
+            Some((host, port)) if port.bytes().all(|byte| byte.is_ascii_digit()) => {
+                (host, port.parse::<u16>().ok())
+            }
+            _ => (hostport, Some(LOCAL_RPC_PORT)),
+        };
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        matches!(host, "127.0.0.1" | "localhost" | "::1") && port == Some(self.loopback_port)
+    }
+
+    fn focus_host(&mut self, host_id: &str) -> Result<(), KernelError> {
+        if host_id != LOCAL_HOST_ID && !self.remote_hosts.iter().any(|host| host.id == host_id) {
+            return Err(KernelError::Protocol("unknown host".into()));
+        }
+        self.focused_host_id = host_id.to_string();
+        self.refresh_remote_view(host_id)?;
+        self.persist_client_settings(&self.appearance.clone())
+    }
+
+    fn redeem_pairing(
+        &mut self,
+        code: &str,
+        client_name: &str,
+    ) -> Result<IssuedPairing, KernelError> {
+        let Some(offer) = &self.pairing_offer else {
+            return Err(KernelError::Denied("invalid pairing code".into()));
+        };
+        if !pairing::codes_match(&offer.code, code) {
+            return Err(KernelError::Denied("invalid pairing code".into()));
+        }
+        let client_name = client_name.trim();
+        if client_name.is_empty() {
+            return Err(KernelError::Protocol("missing clientName".into()));
+        }
+        let client = pairing::IssuedClient {
+            id: pairing::random_id(),
+            name: client_name.to_string(),
+            token: pairing::generate_token(),
+        };
+        let issued = IssuedPairing {
+            token: client.token.clone(),
+            host_id: self.host_id.clone(),
+            display_name: self.host_display_name.clone(),
+        };
+        self.pairing_offer = None;
+        self.paired_clients.push(client);
+        self.persist_host_secrets()?;
+        Ok(issued)
+    }
+
+    fn persist_host_secrets(&self) -> Result<(), KernelError> {
+        let file = HostSecretsFile {
+            clients: self.paired_clients.clone(),
+        };
+        write_json_inner(&self.data.host_secrets_path, &file, true)
     }
 }
 
@@ -388,6 +734,7 @@ impl DataLayout {
             host_settings_path: host_dir.join("settings.json"),
             host_secrets_path: host_dir.join("secrets.json"),
             desktop_client_settings_path: desktop_client_dir.join("settings.json"),
+            desktop_client_secrets_path: desktop_client_dir.join("secrets.json"),
             log_dir: app_log_dir.to_path_buf(),
         })
     }
@@ -419,6 +766,18 @@ impl ShellCopy {
                 shade_dark: "深".into(),
                 edit_menu: "编辑".into(),
                 pairing_required: "经 Tailscale、局域网或其它站点访问需要长期令牌。本机回环页 http://127.0.0.1:10529/ 免配对。".into(),
+                pairing_title: "配对".into(),
+                pairing_this_host: "让别人连这台".into(),
+                pairing_to_another: "连到另一台 Host".into(),
+                pairing_address: "可到达地址".into(),
+                pairing_show: "出示配对码".into(),
+                pairing_copy: "复制".into(),
+                pairing_same_payload: "二维码和复制文本是同一份信息。连通走你自己的 Tailscale、局域网或 VPN，没有产品中继。".into(),
+                pairing_paste: "粘贴配对信息".into(),
+                pairing_connect: "连接".into(),
+                paired_clients: "已配对的 Client".into(),
+                revoke_client: "撤销".into(),
+                no_paired_clients: "还没有已配对的 Client。".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -443,21 +802,102 @@ impl ShellCopy {
                 shade_dark: "Dark".into(),
                 edit_menu: "Edit".into(),
                 pairing_required: "Access via Tailscale, LAN, or another site needs a long-term token. The loopback page at http://127.0.0.1:10529/ does not require pairing.".into(),
+                pairing_title: "Pairing".into(),
+                pairing_this_host: "Let others join this Host".into(),
+                pairing_to_another: "Connect to another Host".into(),
+                pairing_address: "Reachable address".into(),
+                pairing_show: "Show pairing code".into(),
+                pairing_copy: "Copy".into(),
+                pairing_same_payload: "The QR code and the copyable text are the same payload. Reach this Host on your own Tailscale, LAN, or VPN — there is no product relay.".into(),
+                pairing_paste: "Paste pairing payload".into(),
+                pairing_connect: "Connect".into(),
+                paired_clients: "Paired clients".into(),
+                revoke_client: "Revoke".into(),
+                no_paired_clients: "No paired clients yet.".into(),
             },
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct HostSettingsFile {
+    #[serde(default)]
+    id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct HostSecretsFile {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    clients: Vec<pairing::IssuedClient>,
+}
+
+fn load_or_init_host_id(path: &Path) -> Result<String, KernelError> {
+    let mut file = if path.exists() {
+        serde_json::from_str(&fs::read_to_string(path)?)?
+    } else {
+        HostSettingsFile::default()
+    };
+    if file.id.trim().is_empty() {
+        file.id = pairing::random_id();
+        write_json(path, &file)?;
+    }
+    Ok(file.id)
+}
+
+fn load_paired_clients(path: &Path) -> Result<Vec<pairing::IssuedClient>, KernelError> {
+    if !path.exists() {
+        write_json_inner(path, &HostSecretsFile::default(), true)?;
+        return Ok(Vec::new());
+    }
+    owner::restrict_to_owner(path)?;
+    let raw = fs::read_to_string(path)?;
+    let file = serde_json::from_str::<HostSecretsFile>(&raw).unwrap_or_default();
+    Ok(file.clients)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClientSettingsFile {
+    language: Language,
+    theme: Theme,
+    last_light_theme: Theme,
+    #[serde(default = "local_host_id")]
+    focused_host_id: String,
+    #[serde(default)]
+    remote_hosts: Vec<pairing::SavedRemoteHost>,
+}
+
+fn local_host_id() -> String {
+    LOCAL_HOST_ID.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ClientSecretsFile {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tokens: BTreeMap<String, String>,
 }
 
 fn load_or_init_appearance(
     path: &Path,
     system_locale: &str,
     system_appearance: SystemAppearance,
-) -> Result<AppearanceSelection, KernelError> {
+) -> Result<(AppearanceSelection, String, Vec<pairing::SavedRemoteHost>), KernelError> {
     if path.exists() {
         let raw = fs::read_to_string(path)?;
+        if let Ok(mut file) = serde_json::from_str::<ClientSettingsFile>(&raw) {
+            file.last_light_theme = daytime_theme(file.last_light_theme);
+            return Ok((
+                AppearanceSelection {
+                    language: file.language,
+                    theme: file.theme,
+                    last_light_theme: file.last_light_theme,
+                },
+                file.focused_host_id,
+                file.remote_hosts,
+            ));
+        }
         if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
             file.last_light_theme = daytime_theme(file.last_light_theme);
-            return Ok(file);
+            return Ok((file, LOCAL_HOST_ID.to_string(), Vec::new()));
         }
     }
     let language = match_language(system_locale);
@@ -470,8 +910,26 @@ fn load_or_init_appearance(
         theme,
         last_light_theme: Theme::WarmPaper,
     };
-    write_json(path, &appearance)?;
-    Ok(appearance)
+    let file = ClientSettingsFile {
+        language,
+        theme,
+        last_light_theme: Theme::WarmPaper,
+        focused_host_id: LOCAL_HOST_ID.to_string(),
+        remote_hosts: Vec::new(),
+    };
+    write_json(path, &file)?;
+    Ok((appearance, LOCAL_HOST_ID.to_string(), Vec::new()))
+}
+
+fn load_client_tokens(path: &Path) -> Result<BTreeMap<String, String>, KernelError> {
+    if !path.exists() {
+        write_json_inner(path, &ClientSecretsFile::default(), true)?;
+        return Ok(BTreeMap::new());
+    }
+    owner::restrict_to_owner(path)?;
+    let raw = fs::read_to_string(path)?;
+    let file = serde_json::from_str::<ClientSecretsFile>(&raw).unwrap_or_default();
+    Ok(file.tokens)
 }
 
 fn occupied_reason(language: Language, port: u16) -> String {
@@ -540,19 +998,12 @@ fn write_json_inner<T: Serialize>(
     Ok(())
 }
 
-fn write_secrets(path: &Path, value: &serde_json::Value) -> Result<(), KernelError> {
-    if !path.exists() {
-        write_json_inner(path, value, true)?;
-    }
-    owner::restrict_to_owner(path)?;
-    Ok(())
-}
-
 #[derive(Debug)]
 pub enum KernelError {
     Io(io::Error),
     Json(serde_json::Error),
     Protocol(String),
+    Denied(String),
 }
 
 impl std::fmt::Display for KernelError {
@@ -561,6 +1012,7 @@ impl std::fmt::Display for KernelError {
             KernelError::Io(err) => write!(f, "{err}"),
             KernelError::Json(err) => write!(f, "{err}"),
             KernelError::Protocol(err) => write!(f, "{err}"),
+            KernelError::Denied(err) => write!(f, "{err}"),
         }
     }
 }

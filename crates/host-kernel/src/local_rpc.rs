@@ -22,14 +22,14 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 pub fn bind_local_rpc(preferred_port: u16) -> io::Result<(TcpListener, String)> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, preferred_port))
-        .or_else(|_| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))?;
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, preferred_port))
+        .or_else(|_| TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)))?;
     let port = listener.local_addr()?.port();
     Ok((listener, format!("http://127.0.0.1:{port}")))
 }
 
 fn bind_strict(port: u16) -> io::Result<(TcpListener, String)> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port))?;
     let bound = listener.local_addr()?.port();
     Ok((listener, format!("http://127.0.0.1:{bound}")))
 }
@@ -227,13 +227,6 @@ fn hostname_of(hostport: &str) -> &str {
     }
 }
 
-fn host_header_is_loopback(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return false;
-    };
-    matches!(hostname_of(host.trim()), "127.0.0.1" | "localhost" | "::1")
-}
-
 fn serve_connection(
     mut stream: TcpStream,
     kernel: &Mutex<HostKernel>,
@@ -241,10 +234,11 @@ fn serve_connection(
 ) -> io::Result<Option<CommandOutcome>> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let peer = stream.peer_addr().ok();
     let request = read_request(&mut stream)?;
     let origin = request.header("origin");
-    let allowed_origin = local_client_origin_allowed(origin);
-    if !allowed_origin || !host_header_is_loopback(request.header("host")) {
+    let allowed = authorize(&request, kernel, peer)?;
+    if !allowed {
         let message = kernel
             .lock()
             .ok()
@@ -259,7 +253,7 @@ fn serve_connection(
         write_json(
             &mut stream,
             403,
-            origin.filter(|_| allowed_origin),
+            origin.filter(|_| local_client_origin_allowed(origin)),
             &body.to_string(),
         )?;
         return Ok(None);
@@ -303,6 +297,7 @@ fn serve_connection(
             Err(err) => {
                 let status = match err {
                     KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                    KernelError::Denied(_) => 403,
                     KernelError::Io(_) => 500,
                 };
                 write_json(
@@ -628,11 +623,65 @@ fn write_json(
     stream.write_all(response.as_bytes())
 }
 
+fn authorize(
+    request: &HttpRequest,
+    kernel: &Mutex<HostKernel>,
+    peer: Option<SocketAddr>,
+) -> io::Result<bool> {
+    let origin = request.header("origin");
+    let peer_loopback = peer.map(|addr| addr.ip().is_loopback()).unwrap_or(false);
+    if peer_loopback && local_client_origin_allowed(origin) {
+        return Ok(true);
+    }
+    if request.method == "OPTIONS" && local_client_origin_allowed(origin) {
+        return Ok(true);
+    }
+    if is_redeem_rpc(request) {
+        return Ok(true);
+    }
+    if let Some(token) = bearer_token(request) {
+        let host = kernel
+            .lock()
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+        return Ok(host.pairing_token_valid(token));
+    }
+    Ok(false)
+}
+
+fn is_redeem_rpc(request: &HttpRequest) -> bool {
+    if request.method != "POST" || (request.path != "/rpc" && request.path != "/rpc/") {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&request.body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("op")
+                .and_then(|op| op.as_str())
+                .map(|op| op == "redeemPairing")
+        })
+        .unwrap_or(false)
+}
+
+fn bearer_token(request: &HttpRequest) -> Option<&str> {
+    request
+        .header("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
 fn cors_headers(origin: Option<&str>) -> String {
     match origin {
-        Some(origin) if local_client_origin_allowed(Some(origin)) => format!(
-            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nVary: Origin\r\n"
-        ),
+        Some(origin)
+            if local_client_origin_allowed(Some(origin))
+                || origin.starts_with("http://")
+                || origin.starts_with("https://") =>
+        {
+            format!(
+            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, authorization\r\nVary: Origin\r\n"
+        )
+        }
         _ => String::new(),
     }
 }

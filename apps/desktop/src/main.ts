@@ -25,7 +25,30 @@ type ShellCopy = {
   shadeLight: string;
   shadeDark: string;
   editMenu: string;
+  pairingRequired: string;
+  pairingTitle: string;
+  pairingThisHost: string;
+  pairingToAnother: string;
+  pairingAddress: string;
+  pairingShow: string;
+  pairingCopy: string;
+  pairingSamePayload: string;
+  pairingPaste: string;
+  pairingConnect: string;
+  pairedClients: string;
+  revokeClient: string;
+  noPairedClients: string;
 };
+
+type PairingOffer = {
+  address: string;
+  code: string;
+  text: string;
+  qrText: string;
+  qrSvg: string;
+};
+
+type PairedClient = { id: string; name: string };
 
 type LoopbackPage =
   | { status: "serving"; url: string }
@@ -48,6 +71,8 @@ type Snapshot = {
   copy: ShellCopy;
   emptyActions: Array<"register-first-project" | "pair-another-host">;
   loopbackPage: LoopbackPage;
+  pairingOffer: PairingOffer | null;
+  pairedClients: PairedClient[];
 };
 
 type RpcResult = { snapshot: Snapshot; process: "keep-running" | "exit" };
@@ -59,6 +84,11 @@ if (!app) {
 
 let snapshot: Snapshot | null = null;
 let settingsOpen = false;
+let pairingOpen = false;
+let hostPickerOpen = false;
+let pairingAddress = "";
+let pairingPaste = "";
+let pairingError = "";
 
 function isLoopbackPage(): boolean {
   const { hostname, port } = window.location;
@@ -84,16 +114,30 @@ async function protocolBase(): Promise<string> {
   throw new Error("Host protocol is not available");
 }
 
+let rpcGeneration = 0;
+
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Snapshot> {
+  const generation = ++rpcGeneration;
   const response = await fetch(`${await protocolBase()}/rpc`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ op, ...extra }),
   });
   if (!response.ok) {
-    throw new Error((await response.text()) || `Host protocol ${response.status}`);
+    const text = await response.text();
+    let message = text || `Host protocol ${response.status}`;
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      message = parsed.message || parsed.error || message;
+    } catch {
+      // keep raw body
+    }
+    throw new Error(message);
   }
   const result = (await response.json()) as RpcResult;
+  if (generation !== rpcGeneration && snapshot) {
+    return snapshot;
+  }
   snapshot = result.snapshot;
   return result.snapshot;
 }
@@ -127,6 +171,9 @@ function render(): void {
 
   const host = hosts.find((item) => item.id === snapshot?.focusedHostId) ?? hosts[0];
   const empty = snapshot.emptyActions.length > 0;
+  if (!pairingAddress) {
+    pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
+  }
 
   app.innerHTML = `
     <div class="frame">
@@ -143,7 +190,17 @@ function render(): void {
             <div class="group-name">${escapeHtml(copy.hosts)}</div>
             ${
               host
-                ? `<button type="button" class="item active"><span class="dot"></span>${escapeHtml(host.displayName)}<span class="tag">${escapeHtml(copy.thisMachine)}</span></button>`
+                ? `<button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`
+                : ""
+            }
+            ${
+              hostPickerOpen && hosts.length > 1
+                ? `<div class="host-picker">${hosts
+                    .map(
+                      (item) =>
+                        `<button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`,
+                    )
+                    .join("")}</div>`
                 : ""
             }
             <button type="button" class="item" data-act="pair">+ ${escapeHtml(copy.pairAnotherHost)}</button>
@@ -213,6 +270,54 @@ function render(): void {
           </div>`
         : ""
     }
+    ${
+      pairingOpen
+        ? `<div class="overlay" data-act="close-pairing">
+            <div class="sheet pairing-sheet" data-act="pairing-noop">
+              <h2>${escapeHtml(copy.pairingTitle)}</h2>
+              <p class="hint">${escapeHtml(copy.pairingSamePayload)}</p>
+              <div class="field">
+                <div class="label">${escapeHtml(copy.pairingThisHost)}</div>
+                <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
+                <input id="pairing-address" data-field="address" value="${escapeHtml(pairingAddress)}" />
+                <div class="actions">
+                  <button type="button" class="primary" data-act="show-offer">${escapeHtml(copy.pairingShow)}</button>
+                </div>
+                ${
+                  snapshot.pairingOffer
+                    ? `<div class="offer">
+                        <div class="qr">${snapshot.pairingOffer.qrSvg}</div>
+                        <pre class="payload">${escapeHtml(snapshot.pairingOffer.text)}</pre>
+                        <button type="button" data-act="copy-offer">${escapeHtml(copy.pairingCopy)}</button>
+                      </div>`
+                    : ""
+                }
+              </div>
+              <div class="field">
+                <div class="label">${escapeHtml(copy.pairedClients)}</div>
+                ${
+                  snapshot.pairedClients.length
+                    ? snapshot.pairedClients
+                        .map(
+                          (client) =>
+                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}">${escapeHtml(copy.revokeClient)}</button></div>`,
+                        )
+                        .join("")
+                    : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`
+                }
+              </div>
+              <div class="field">
+                <div class="label">${escapeHtml(copy.pairingToAnother)}</div>
+                <textarea data-field="paste" rows="4" placeholder="${escapeHtml(copy.pairingPaste)}">${escapeHtml(pairingPaste)}</textarea>
+                <div class="actions">
+                  <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
+                </div>
+              </div>
+              ${pairingError ? `<p class="notice">${escapeHtml(pairingError)}</p>` : ""}
+            </div>
+          </div>`
+        : ""
+    }
   `;
 }
 
@@ -241,6 +346,81 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "settings") {
     settingsOpen = true;
+    pairingOpen = false;
+    render();
+    return;
+  }
+  if (act === "pairing-noop") {
+    return;
+  }
+  if (act === "close-pairing" && event.target === target) {
+    pairingOpen = false;
+    pairingError = "";
+    render();
+    return;
+  }
+  if (act === "pair") {
+    pairingOpen = true;
+    settingsOpen = false;
+    hostPickerOpen = false;
+    pairingError = "";
+    render();
+    return;
+  }
+  if (act === "toggle-hosts") {
+    hostPickerOpen = snapshot.hosts.length > 1 ? !hostPickerOpen : false;
+    render();
+    return;
+  }
+  if (act === "focus-host" && target.dataset.id) {
+    await rpc("focusHost", { hostId: target.dataset.id });
+    hostPickerOpen = false;
+    render();
+    return;
+  }
+  if (act === "show-offer") {
+    pairingError = "";
+    const addressInput = app.querySelector<HTMLInputElement>("[data-field='address']");
+    pairingAddress = addressInput?.value ?? pairingAddress;
+    try {
+      await rpc("beginPairingOffer", { address: pairingAddress });
+    } catch (error) {
+      pairingError = error instanceof Error ? error.message : String(error);
+    }
+    render();
+    return;
+  }
+  if (act === "copy-offer" && snapshot.pairingOffer) {
+    await navigator.clipboard.writeText(snapshot.pairingOffer.text);
+    return;
+  }
+  if (act === "revoke" && target.dataset.id) {
+    pairingError = "";
+    try {
+      await rpc("revokeClient", { clientId: target.dataset.id });
+    } catch (error) {
+      pairingError = error instanceof Error ? error.message : String(error);
+    }
+    render();
+    return;
+  }
+  if (act === "connect-host") {
+    pairingError = "";
+    const pasteInput = app.querySelector<HTMLTextAreaElement>("[data-field='paste']");
+    pairingPaste = pasteInput?.value ?? pairingPaste;
+    const parsed = parsePairingPayload(pairingPaste);
+    if (!parsed) {
+      pairingError = snapshot.copy.pairingPaste;
+      render();
+      return;
+    }
+    try {
+      await rpc("pairRemoteHost", parsed);
+      pairingPaste = "";
+      pairingOpen = false;
+    } catch (error) {
+      pairingError = error instanceof Error ? error.message : String(error);
+    }
     render();
     return;
   }
@@ -265,6 +445,31 @@ app.addEventListener("click", async (event) => {
     await rpc("quitHost");
   }
 });
+
+app.addEventListener("input", (event) => {
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+  const field = target.getAttribute("data-field");
+  if (field === "address" && "value" in target) {
+    pairingAddress = (target as HTMLInputElement).value;
+  }
+  if (field === "paste" && "value" in target) {
+    pairingPaste = (target as HTMLTextAreaElement).value;
+  }
+});
+
+function parsePairingPayload(raw: string): { address: string; code: string } | null {
+  const parts = raw
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  const address = parts[0];
+  const code = parts[parts.length - 1];
+  if (!address.includes("://") || !code) return null;
+  return { address, code };
+}
 
 rpc("snapshot").then(render).catch((error: unknown) => {
   if (app) {
