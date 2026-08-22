@@ -3,11 +3,14 @@
 mod local_rpc;
 mod owner;
 mod pairing;
+mod project;
+mod tracker;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +19,11 @@ pub use local_rpc::{
     LOCAL_RPC_PORT,
 };
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
+pub use project::ProjectInference;
+pub use tracker::{
+    AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker, ProjectConnection, RepairHint,
+    ScriptedGitHub, TrackerKind, TrackerPort,
+};
 
 const LOCAL_HOST_ID: &str = "local";
 
@@ -57,11 +65,45 @@ pub enum Command {
     QuitHost,
     SetLanguage(Language),
     SetTheme(Theme),
-    BeginPairingOffer { address: String },
-    RedeemPairing { code: String, client_name: String },
-    RevokeClient { client_id: String },
-    PairRemoteHost { address: String, code: String },
-    FocusHost { host_id: String },
+    BeginPairingOffer {
+        address: String,
+    },
+    RedeemPairing {
+        code: String,
+        client_name: String,
+    },
+    RevokeClient {
+        client_id: String,
+    },
+    PairRemoteHost {
+        address: String,
+        code: String,
+    },
+    FocusHost {
+        host_id: String,
+    },
+    RegisterProject {
+        name: String,
+        local_path: String,
+        github_host: String,
+        repository: String,
+    },
+    EditProject {
+        project_id: String,
+        name: String,
+        local_path: String,
+        github_host: String,
+        repository: String,
+    },
+    RemoveProject {
+        project_id: String,
+    },
+    FocusProject {
+        project_id: String,
+    },
+    InferProject {
+        local_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +140,7 @@ pub struct CommandOutcome {
     pub snapshot: HostSnapshot,
     pub process: ProcessIntent,
     pub pairing: Option<IssuedPairing>,
+    pub inference: Option<ProjectInference>,
 }
 
 impl CommandOutcome {
@@ -108,6 +151,9 @@ impl CommandOutcome {
         });
         if let Some(pairing) = &self.pairing {
             value["pairing"] = serde_json::to_value(pairing).expect("pairing json");
+        }
+        if let Some(inference) = &self.inference {
+            value["inference"] = serde_json::to_value(inference).expect("inference json");
         }
         value
     }
@@ -138,6 +184,50 @@ pub struct HostSummary {
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
+    pub local_path: PathBuf,
+    pub tracker: TrackerKind,
+    pub github_host: String,
+    pub repository: String,
+    pub connection: ProjectConnection,
+    pub has_active_run: bool,
+    pub tracker_synced: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectRecord {
+    id: String,
+    name: String,
+    local_path: PathBuf,
+    github_host: String,
+    repository: String,
+    connection: ProjectConnection,
+    tracker_synced: bool,
+}
+
+impl ProjectRecord {
+    fn summary(&self, has_active_run: bool) -> ProjectSummary {
+        ProjectSummary {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            local_path: self.local_path.clone(),
+            tracker: TrackerKind::Github,
+            github_host: self.github_host.clone(),
+            repository: self.repository.clone(),
+            connection: self.connection.clone(),
+            has_active_run,
+            tracker_synced: self.tracker_synced,
+        }
+    }
+
+    fn stored(&self) -> StoredProject {
+        StoredProject {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            local_path: self.local_path.clone(),
+            github_host: self.github_host.clone(),
+            repository: self.repository.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -225,6 +315,33 @@ pub struct ShellCopy {
     pub paired_clients: String,
     pub revoke_client: String,
     pub no_paired_clients: String,
+    pub add_project: String,
+    pub edit_project: String,
+    pub remove_project: String,
+    pub register_project_title: String,
+    pub edit_project_title: String,
+    pub display_name: String,
+    pub local_directory: String,
+    pub github_host: String,
+    pub repository: String,
+    pub infer_from_directory: String,
+    pub use_inference: String,
+    pub inference_hint: String,
+    pub save_registration: String,
+    pub cancel: String,
+    pub remove_confirm_title: String,
+    pub remove_confirm_body: String,
+    pub remove_confirm: String,
+    pub cannot_remove_active_run: String,
+    pub cannot_remove_active_run_body: String,
+    pub got_it: String,
+    pub auth_failed: String,
+    pub repair_cli: String,
+    pub repair_secrets: String,
+    pub repair_env: String,
+    pub no_gh_detected: String,
+    pub connection_ready: String,
+    pub project_menu: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +350,7 @@ pub struct HostSnapshot {
     pub running: bool,
     pub window_visible: bool,
     pub focused_host_id: String,
+    pub focused_project_id: String,
     pub hosts: Vec<HostSummary>,
     pub projects: Vec<ProjectSummary>,
     pub appearance: AppearanceState,
@@ -244,14 +362,16 @@ pub struct HostSnapshot {
     pub paired_clients: Vec<PairedClient>,
 }
 
-#[derive(Debug)]
 pub struct HostKernel {
     running: bool,
     window_visible: bool,
     host_display_name: String,
     data: DataLayout,
     appearance: AppearanceSelection,
-    projects: Vec<ProjectSummary>,
+    projects: Vec<ProjectRecord>,
+    focused_project_id: Option<String>,
+    active_run_projects: BTreeSet<String>,
+    tracker: Arc<dyn TrackerPort>,
     loopback_kind: LoopbackKind,
     loopback_port: u16,
     pairing_offer: Option<pairing::ActiveOffer>,
@@ -266,13 +386,22 @@ pub struct HostKernel {
 struct RemoteView {
     host_id: String,
     projects: Vec<ProjectSummary>,
+    focused_project_id: String,
     empty_actions: Vec<EmptyAction>,
 }
 
 impl HostKernel {
     pub fn boot(request: BootRequest) -> Result<Self, KernelError> {
+        Self::boot_with(request, Arc::new(GitHubTracker::live()))
+    }
+
+    pub fn boot_with(
+        request: BootRequest,
+        tracker: Arc<dyn TrackerPort>,
+    ) -> Result<Self, KernelError> {
         let data = DataLayout::prepare(&request.app_local_data_dir, &request.app_log_dir)?;
-        let host_id = load_or_init_host_id(&data.host_settings_path)?;
+        let settings = load_or_init_host_settings(&data.host_settings_path)?;
+        let host_id = settings.id;
         let paired_clients = load_paired_clients(&data.host_secrets_path)?;
 
         let (appearance, focused_host_id, saved_remotes) = load_or_init_appearance(
@@ -300,13 +429,28 @@ impl HostKernel {
             LOCAL_HOST_ID.to_string()
         };
 
+        let language = appearance.language;
+        let secrets_path = data.host_secrets_path.clone();
+        let projects = settings
+            .projects
+            .into_iter()
+            .map(|stored| probe_record(stored, tracker.as_ref(), &secrets_path, language))
+            .collect::<Vec<_>>();
+        let focused_project_id = settings
+            .focused_project_id
+            .filter(|id| projects.iter().any(|project| project.id == *id))
+            .or_else(|| projects.first().map(|project| project.id.clone()));
+
         Ok(Self {
             running: true,
             window_visible: true,
             host_display_name: request.host_display_name,
             data,
             appearance,
-            projects: Vec::new(),
+            projects,
+            focused_project_id,
+            active_run_projects: BTreeSet::new(),
+            tracker,
             loopback_kind: LoopbackKind::HostNotRunning,
             loopback_port: LOCAL_RPC_PORT,
             pairing_offer: None,
@@ -319,11 +463,12 @@ impl HostKernel {
     }
 
     pub fn snapshot(&self) -> HostSnapshot {
-        let (projects, empty_actions) = self.board_for_focus();
+        let (projects, focused_project_id, empty_actions) = self.board_for_focus();
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
             focused_host_id: self.focused_host_id.clone(),
+            focused_project_id,
             hosts: self.connected_hosts(),
             projects,
             appearance: AppearanceState::from_selection(self.appearance),
@@ -352,7 +497,24 @@ impl HostKernel {
                 ProcessIntent::Exit
             },
             pairing: None,
+            inference: None,
         }
+    }
+
+    pub fn set_project_active_run(
+        &mut self,
+        project_id: &str,
+        active: bool,
+    ) -> Result<(), KernelError> {
+        if !self.projects.iter().any(|project| project.id == project_id) {
+            return Err(KernelError::Protocol("unknown project".into()));
+        }
+        if active {
+            self.active_run_projects.insert(project_id.to_string());
+        } else {
+            self.active_run_projects.remove(project_id);
+        }
+        Ok(())
     }
 
     pub(crate) fn note_loopback_page(&mut self, kind: LoopbackKind, port: u16) {
@@ -408,6 +570,7 @@ impl HostKernel {
                     snapshot: self.snapshot(),
                     process: ProcessIntent::KeepRunning,
                     pairing: Some(pairing),
+                    inference: None,
                 });
             }
             Command::RevokeClient { client_id } => {
@@ -419,6 +582,38 @@ impl HostKernel {
             }
             Command::FocusHost { host_id } => {
                 self.focus_host(&host_id)?;
+            }
+            Command::RegisterProject {
+                name,
+                local_path,
+                github_host,
+                repository,
+            } => {
+                self.register_project(&name, &local_path, &github_host, &repository)?;
+            }
+            Command::EditProject {
+                project_id,
+                name,
+                local_path,
+                github_host,
+                repository,
+            } => {
+                self.edit_project(&project_id, &name, &local_path, &github_host, &repository)?;
+            }
+            Command::RemoveProject { project_id } => {
+                self.remove_project(&project_id)?;
+            }
+            Command::FocusProject { project_id } => {
+                self.focus_project(&project_id)?;
+            }
+            Command::InferProject { local_path } => {
+                let inference = self.infer_project(&local_path)?;
+                return Ok(CommandOutcome {
+                    snapshot: self.snapshot(),
+                    process: ProcessIntent::KeepRunning,
+                    pairing: None,
+                    inference,
+                });
             }
         }
         Ok(self.outcome())
@@ -502,6 +697,53 @@ impl HostKernel {
                     .to_string();
                 self.dispatch(Command::FocusHost { host_id })
             }
+            "registerProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RegisterProject {
+                    name: required_string(&request, "name")?,
+                    local_path: required_string(&request, "localPath")?,
+                    github_host: optional_string(&request, "githubHost"),
+                    repository: required_string(&request, "repository")?,
+                })
+            }
+            "editProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::EditProject {
+                    project_id: required_string(&request, "projectId")?,
+                    name: required_string(&request, "name")?,
+                    local_path: required_string(&request, "localPath")?,
+                    github_host: optional_string(&request, "githubHost"),
+                    repository: required_string(&request, "repository")?,
+                })
+            }
+            "removeProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RemoveProject {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "focusProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusProject {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "inferProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::InferProject {
+                    local_path: required_string(&request, "localPath")?,
+                })
+            }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
     }
@@ -552,11 +794,15 @@ impl HostKernel {
         hosts
     }
 
-    fn board_for_focus(&self) -> (Vec<ProjectSummary>, Vec<EmptyAction>) {
+    fn board_for_focus(&self) -> (Vec<ProjectSummary>, String, Vec<EmptyAction>) {
         if self.focused_host_id != LOCAL_HOST_ID {
             if let Some(view) = &self.remote_view {
                 if view.host_id == self.focused_host_id {
-                    return (view.projects.clone(), view.empty_actions.clone());
+                    return (
+                        view.projects.clone(),
+                        view.focused_project_id.clone(),
+                        view.empty_actions.clone(),
+                    );
                 }
             }
         }
@@ -568,7 +814,13 @@ impl HostKernel {
         } else {
             Vec::new()
         };
-        (self.projects.clone(), empty_actions)
+        let projects = self
+            .projects
+            .iter()
+            .map(|project| project.summary(self.active_run_projects.contains(&project.id)))
+            .collect();
+        let focused_project_id = self.focused_project_id.clone().unwrap_or_default();
+        (projects, focused_project_id, empty_actions)
     }
 
     fn refresh_remote_view(&mut self, host_id: &str) -> Result<(), KernelError> {
@@ -609,9 +861,15 @@ impl HostKernel {
             .map(serde_json::from_value)
             .transpose()?
             .unwrap_or_default();
+        let focused_project_id = snapshot
+            .get("focusedProjectId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
         self.remote_view = Some(RemoteView {
             host_id: host_id.to_string(),
             projects,
+            focused_project_id,
             empty_actions,
         });
         Ok(())
@@ -714,10 +972,189 @@ impl HostKernel {
     }
 
     fn persist_host_secrets(&self) -> Result<(), KernelError> {
+        let github_pats = read_github_pats(&self.data.host_secrets_path)?;
         let file = HostSecretsFile {
             clients: self.paired_clients.clone(),
+            github_pats,
         };
         write_json_inner(&self.data.host_secrets_path, &file, true)
+    }
+
+    fn persist_host_settings(&self) -> Result<(), KernelError> {
+        let file = HostSettingsFile {
+            id: self.host_id.clone(),
+            focused_project_id: self.focused_project_id.clone(),
+            projects: self.projects.iter().map(ProjectRecord::stored).collect(),
+        };
+        write_json(&self.data.host_settings_path, &file)
+    }
+
+    fn forward_if_remote(
+        &mut self,
+        request: &serde_json::Value,
+    ) -> Result<Option<CommandOutcome>, KernelError> {
+        if self.focused_host_id == LOCAL_HOST_ID {
+            return Ok(None);
+        }
+        let remote = self
+            .remote_hosts
+            .iter()
+            .find(|host| host.id == self.focused_host_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
+        let response =
+            pairing::post_rpc(&remote.address, Some(&remote.token), request).map_err(|err| {
+                match err {
+                    KernelError::Io(_) | KernelError::Denied(_) => {
+                        KernelError::Protocol("address is not reachable".into())
+                    }
+                    other => other,
+                }
+            })?;
+        let host_id = self.focused_host_id.clone();
+        self.refresh_remote_view(&host_id)?;
+        let mut outcome = self.outcome();
+        if let Some(inference) = response.get("inference").cloned() {
+            outcome.inference = serde_json::from_value(inference).ok();
+        }
+        Ok(Some(outcome))
+    }
+
+    fn register_project(
+        &mut self,
+        name: &str,
+        local_path: &str,
+        github_host: &str,
+        repository: &str,
+    ) -> Result<(), KernelError> {
+        let name = project::require_name(name).map_err(KernelError::Protocol)?;
+        let local_path =
+            project::require_local_directory(local_path).map_err(KernelError::Protocol)?;
+        let github_host =
+            project::normalize_github_host(github_host).map_err(KernelError::Protocol)?;
+        let repository =
+            project::normalize_repository(repository).map_err(KernelError::Protocol)?;
+        if self
+            .projects
+            .iter()
+            .any(|project| project.local_path == local_path)
+        {
+            return Err(KernelError::Protocol(
+                "a Project is already registered for this directory".into(),
+            ));
+        }
+        let connection = self.probe_github(&github_host, &repository);
+        let record = ProjectRecord {
+            id: pairing::random_id(),
+            name,
+            local_path,
+            github_host,
+            repository,
+            connection,
+            tracker_synced: false,
+        };
+        self.focused_project_id = Some(record.id.clone());
+        self.projects.push(record);
+        self.persist_host_settings()
+    }
+
+    fn edit_project(
+        &mut self,
+        project_id: &str,
+        name: &str,
+        local_path: &str,
+        github_host: &str,
+        repository: &str,
+    ) -> Result<(), KernelError> {
+        let name = project::require_name(name).map_err(KernelError::Protocol)?;
+        let local_path =
+            project::require_local_directory(local_path).map_err(KernelError::Protocol)?;
+        let github_host =
+            project::normalize_github_host(github_host).map_err(KernelError::Protocol)?;
+        let repository =
+            project::normalize_repository(repository).map_err(KernelError::Protocol)?;
+        if self
+            .projects
+            .iter()
+            .any(|project| project.id != project_id && project.local_path == local_path)
+        {
+            return Err(KernelError::Protocol(
+                "a Project is already registered for this directory".into(),
+            ));
+        }
+        let connection = self.probe_github(&github_host, &repository);
+        let project = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        project.name = name;
+        project.local_path = local_path;
+        project.github_host = github_host;
+        project.repository = repository;
+        project.connection = connection;
+        self.persist_host_settings()
+    }
+
+    fn remove_project(&mut self, project_id: &str) -> Result<(), KernelError> {
+        let index = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        if self.active_run_projects.contains(project_id) {
+            return Err(KernelError::Denied(
+                "cannot remove a Project with an active Run".into(),
+            ));
+        }
+        let was_current = self.focused_project_id.as_deref() == Some(project_id);
+        let _removed = self.projects.remove(index);
+        self.active_run_projects.remove(project_id);
+        if was_current {
+            self.focused_project_id = if self.projects.is_empty() {
+                None
+            } else {
+                Some(self.projects[index.min(self.projects.len() - 1)].id.clone())
+            };
+        }
+        self.persist_host_settings()
+    }
+
+    fn focus_project(&mut self, project_id: &str) -> Result<(), KernelError> {
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return Err(KernelError::Protocol("unknown project".into()));
+        };
+        let host = self.projects[index].github_host.clone();
+        let repository = self.projects[index].repository.clone();
+        let connection = self.probe_github(&host, &repository);
+        self.projects[index].connection = connection;
+        self.focused_project_id = Some(project_id.to_string());
+        self.persist_host_settings()
+    }
+
+    fn infer_project(&self, local_path: &str) -> Result<Option<ProjectInference>, KernelError> {
+        let local_path =
+            project::require_local_directory(local_path).map_err(KernelError::Protocol)?;
+        Ok(project::infer_github_project(&local_path))
+    }
+
+    fn probe_github(&self, github_host: &str, repository: &str) -> ProjectConnection {
+        let pat = read_github_pat(&self.data.host_secrets_path, github_host);
+        let outcome = self.tracker.probe(&tracker::ProbeContext {
+            github_host,
+            repository,
+            secrets_pat: pat.as_deref(),
+            secrets_path: &self.data.host_secrets_path,
+        });
+        connection_from_probe(
+            outcome,
+            &self.data.host_secrets_path,
+            self.appearance.language,
+        )
     }
 }
 
@@ -778,6 +1215,33 @@ impl ShellCopy {
                 paired_clients: "已配对的 Client".into(),
                 revoke_client: "撤销".into(),
                 no_paired_clients: "还没有已配对的 Client。".into(),
+                add_project: "登记 Project".into(),
+                edit_project: "编辑登记…".into(),
+                remove_project: "移除 Project…".into(),
+                register_project_title: "登记 Project".into(),
+                edit_project_title: "编辑 Project 登记".into(),
+                display_name: "显示名称".into(),
+                local_directory: "本地目录".into(),
+                github_host: "GitHub host".into(),
+                repository: "仓库".into(),
+                infer_from_directory: "从本地目录推断".into(),
+                use_inference: "使用这份推断结果".into(),
+                inference_hint: "Host 可以从所填目录推断 git remote。推断结果不会自动写入，必须由你确认采用。".into(),
+                save_registration: "保存登记".into(),
+                cancel: "取消".into(),
+                remove_confirm_title: "移除这个 Project？".into(),
+                remove_confirm_body: "只取消这台 Host 上的登记。不会删除本地目录、git 仓库，也不会删除远端 Issue。".into(),
+                remove_confirm: "只移除登记".into(),
+                cannot_remove_active_run: "现在不能移除".into(),
+                cannot_remove_active_run_body: "这个 Project 有活跃 Run。先停止或结束 Run，再回来移除。关闭 Client 或切换 Project 都不会停止 Run。".into(),
+                got_it: "知道了".into(),
+                auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
+                repair_cli: "用 gh 登录".into(),
+                repair_secrets: "在 Host 秘密文件里写入这个 host 的 PAT".into(),
+                repair_env: "设置应用专用或通用环境变量".into(),
+                no_gh_detected: "这台电脑上没检测到 gh。".into(),
+                connection_ready: "GitHub 已连通".into(),
+                project_menu: "管理".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -814,24 +1278,69 @@ impl ShellCopy {
                 paired_clients: "Paired clients".into(),
                 revoke_client: "Revoke".into(),
                 no_paired_clients: "No paired clients yet.".into(),
+                add_project: "Register Project".into(),
+                edit_project: "Edit registration…".into(),
+                remove_project: "Remove Project…".into(),
+                register_project_title: "Register Project".into(),
+                edit_project_title: "Edit Project registration".into(),
+                display_name: "Display name".into(),
+                local_directory: "Local directory".into(),
+                github_host: "GitHub host".into(),
+                repository: "Repository".into(),
+                infer_from_directory: "Infer from local directory".into(),
+                use_inference: "Use this inference".into(),
+                inference_hint: "The Host can infer a git remote from the folder. Inference is only a candidate until you confirm it.".into(),
+                save_registration: "Save registration".into(),
+                cancel: "Cancel".into(),
+                remove_confirm_title: "Remove this Project?".into(),
+                remove_confirm_body: "This only unregisters it on this Host. It does not delete the local directory, git repository, or remote Issues.".into(),
+                remove_confirm: "Remove registration only".into(),
+                cannot_remove_active_run: "Cannot remove now".into(),
+                cannot_remove_active_run_body: "This Project has an active Run. Stop or finish the Run first. Closing a Client or switching Project does not stop the Run.".into(),
+                got_it: "Got it".into(),
+                auth_failed: "GitHub credentials for this Project are not available.".into(),
+                repair_cli: "Sign in with gh".into(),
+                repair_secrets: "Write a PAT for this host in the Host secrets file".into(),
+                repair_env: "Set the app-specific or generic environment variable".into(),
+                no_gh_detected: "gh was not detected on this machine.".into(),
+                connection_ready: "GitHub is connected".into(),
+                project_menu: "Manage".into(),
             },
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct HostSettingsFile {
     #[serde(default)]
     id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    focused_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    projects: Vec<StoredProject>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredProject {
+    id: String,
+    name: String,
+    local_path: PathBuf,
+    github_host: String,
+    repository: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct HostSecretsFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     clients: Vec<pairing::IssuedClient>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    github_pats: BTreeMap<String, String>,
 }
 
-fn load_or_init_host_id(path: &Path) -> Result<String, KernelError> {
+fn load_or_init_host_settings(path: &Path) -> Result<HostSettingsFile, KernelError> {
     let mut file = if path.exists() {
         serde_json::from_str(&fs::read_to_string(path)?)?
     } else {
@@ -841,7 +1350,7 @@ fn load_or_init_host_id(path: &Path) -> Result<String, KernelError> {
         file.id = pairing::random_id();
         write_json(path, &file)?;
     }
-    Ok(file.id)
+    Ok(file)
 }
 
 fn load_paired_clients(path: &Path) -> Result<Vec<pairing::IssuedClient>, KernelError> {
@@ -996,6 +1505,125 @@ fn write_json_inner<T: Serialize>(
         owner::restrict_to_owner(path)?;
     }
     Ok(())
+}
+
+fn required_string(request: &serde_json::Value, key: &str) -> Result<String, KernelError> {
+    request
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| KernelError::Protocol(format!("missing {key}")))
+}
+
+fn optional_string(request: &serde_json::Value, key: &str) -> String {
+    request
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn read_github_pats(path: &Path) -> Result<BTreeMap<String, String>, KernelError> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    owner::restrict_to_owner(path)?;
+    let raw = fs::read_to_string(path)?;
+    let file = serde_json::from_str::<HostSecretsFile>(&raw).unwrap_or_default();
+    Ok(file.github_pats)
+}
+
+fn read_github_pat(path: &Path, host: &str) -> Option<String> {
+    read_github_pats(path)
+        .ok()
+        .and_then(|pats| pats.get(host).cloned())
+        .and_then(|token| {
+            let token = token.trim().to_string();
+            (!token.is_empty()).then_some(token)
+        })
+}
+
+fn probe_record(
+    stored: StoredProject,
+    tracker: &dyn TrackerPort,
+    secrets_path: &Path,
+    language: Language,
+) -> ProjectRecord {
+    let pat = read_github_pat(secrets_path, &stored.github_host);
+    let outcome = tracker.probe(&tracker::ProbeContext {
+        github_host: &stored.github_host,
+        repository: &stored.repository,
+        secrets_pat: pat.as_deref(),
+        secrets_path,
+    });
+    ProjectRecord {
+        id: stored.id,
+        name: stored.name,
+        local_path: stored.local_path,
+        github_host: stored.github_host,
+        repository: stored.repository,
+        connection: connection_from_probe(outcome, secrets_path, language),
+        tracker_synced: false,
+    }
+}
+
+fn connection_from_probe(
+    outcome: tracker::ProbeOutcome,
+    secrets_path: &Path,
+    language: Language,
+) -> ProjectConnection {
+    match outcome {
+        tracker::ProbeOutcome::Ready { source } => ProjectConnection::Ready { source },
+        tracker::ProbeOutcome::Failed {
+            source,
+            kind: AuthFailureKind::Unreachable,
+            cli_detected,
+            detail,
+        } => ProjectConnection::Unreachable {
+            source,
+            repair: tracker::repair_hint(cli_detected, secrets_path),
+            message: auth_failure_message(
+                language,
+                AuthFailureKind::Unreachable,
+                detail.as_deref(),
+            ),
+        },
+        tracker::ProbeOutcome::Failed {
+            source,
+            kind,
+            cli_detected,
+            detail,
+        } => ProjectConnection::AuthFailed {
+            source,
+            kind,
+            repair: tracker::repair_hint(cli_detected, secrets_path),
+            message: auth_failure_message(language, kind, detail.as_deref()),
+        },
+    }
+}
+
+fn auth_failure_message(language: Language, kind: AuthFailureKind, detail: Option<&str>) -> String {
+    let base = match (language, kind) {
+        (Language::ZhCn, AuthFailureKind::MissingCredentials) => {
+            "没有可用的 GitHub 凭据。".to_string()
+        }
+        (Language::En, AuthFailureKind::MissingCredentials) => {
+            "No GitHub credentials are available.".to_string()
+        }
+        (Language::ZhCn, AuthFailureKind::Rejected) => "GitHub 拒绝了当前凭据。".to_string(),
+        (Language::En, AuthFailureKind::Rejected) => {
+            "GitHub rejected the current credentials.".to_string()
+        }
+        (Language::ZhCn, AuthFailureKind::Unreachable) => "连不上这个 GitHub host。".to_string(),
+        (Language::En, AuthFailureKind::Unreachable) => {
+            "This GitHub host could not be reached.".to_string()
+        }
+    };
+    match detail {
+        Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
+        _ => base,
+    }
 }
 
 #[derive(Debug)]

@@ -38,6 +38,78 @@ type ShellCopy = {
   pairedClients: string;
   revokeClient: string;
   noPairedClients: string;
+  addProject: string;
+  editProject: string;
+  removeProject: string;
+  registerProjectTitle: string;
+  editProjectTitle: string;
+  displayName: string;
+  localDirectory: string;
+  githubHost: string;
+  repository: string;
+  inferFromDirectory: string;
+  useInference: string;
+  inferenceHint: string;
+  saveRegistration: string;
+  cancel: string;
+  removeConfirmTitle: string;
+  removeConfirmBody: string;
+  removeConfirm: string;
+  cannotRemoveActiveRun: string;
+  cannotRemoveActiveRunBody: string;
+  gotIt: string;
+  authFailed: string;
+  repairCli: string;
+  repairSecrets: string;
+  repairEnv: string;
+  noGhDetected: string;
+  connectionReady: string;
+  projectMenu: string;
+};
+
+type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
+
+type Repair = {
+  cliDetected: boolean;
+  secretsPath: string;
+  appEnv: string;
+  genericEnv: string;
+  suggestedScope: string;
+};
+
+type ProjectConnection =
+  | { status: "ready"; source: CredentialSource }
+  | {
+      status: "auth-failed";
+      source?: CredentialSource;
+      kind: "missing-credentials" | "rejected" | "unreachable";
+      repair: Repair;
+      message: string;
+    }
+  | {
+      status: "unreachable";
+      source?: CredentialSource;
+      repair: Repair;
+      message: string;
+    };
+
+type Project = {
+  id: string;
+  name: string;
+  localPath: string;
+  tracker: "github";
+  githubHost: string;
+  repository: string;
+  connection: ProjectConnection;
+  hasActiveRun: boolean;
+  trackerSynced: boolean;
+};
+
+type ProjectDraft = {
+  name: string;
+  localPath: string;
+  githubHost: string;
+  repository: string;
 };
 
 type PairingOffer = {
@@ -59,8 +131,9 @@ type Snapshot = {
   running: boolean;
   windowVisible: boolean;
   focusedHostId: string;
+  focusedProjectId: string;
   hosts: { id: string; displayName: string; local: boolean }[];
-  projects: { id: string; name: string }[];
+  projects: Project[];
   appearance: {
     language: Language;
     theme: Theme;
@@ -75,7 +148,11 @@ type Snapshot = {
   pairedClients: PairedClient[];
 };
 
-type RpcResult = { snapshot: Snapshot; process: "keep-running" | "exit" };
+type RpcResult = {
+  snapshot: Snapshot;
+  process: "keep-running" | "exit";
+  inference?: ProjectDraft;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -89,6 +166,17 @@ let hostPickerOpen = false;
 let pairingAddress = "";
 let pairingPaste = "";
 let pairingError = "";
+let projectMenuId = "";
+let formOpen: "register" | "edit" | null = null;
+let formProjectId = "";
+let formDraft: ProjectDraft = emptyDraft();
+let inferred: ProjectDraft | null = null;
+let formError = "";
+let removeProject: Project | null = null;
+
+function emptyDraft(): ProjectDraft {
+  return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+}
 
 function isLoopbackPage(): boolean {
   const { hostname, port } = window.location;
@@ -116,7 +204,7 @@ async function protocolBase(): Promise<string> {
 
 let rpcGeneration = 0;
 
-async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Snapshot> {
+async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
   const generation = ++rpcGeneration;
   const response = await fetch(`${await protocolBase()}/rpc`, {
     method: "POST",
@@ -136,10 +224,10 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Sna
   }
   const result = (await response.json()) as RpcResult;
   if (generation !== rpcGeneration && snapshot) {
-    return snapshot;
+    return { snapshot, process: "keep-running", inference: result.inference };
   }
   snapshot = result.snapshot;
-  return result.snapshot;
+  return result;
 }
 
 function emptyActionAct(action: Snapshot["emptyActions"][number]): string {
@@ -164,7 +252,8 @@ function languageLabel(copy: ShellCopy, language: Language): string {
 
 function render(): void {
   if (!snapshot || !app) return;
-  const { copy, appearance, hosts, projects } = snapshot;
+  const snap = snapshot;
+  const { copy, appearance, hosts, projects } = snap;
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
   document.documentElement.dataset.theme = appearance.theme;
   document.title = copy.appName;
@@ -190,7 +279,10 @@ function render(): void {
             <div class="group-name">${escapeHtml(copy.hosts)}</div>
             ${
               host
-                ? `<button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`
+                ? `<div class="host-line">
+                    <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
+                    <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
+                  </div>`
                 : ""
             }
             ${
@@ -203,29 +295,28 @@ function render(): void {
                     .join("")}</div>`
                 : ""
             }
-            <button type="button" class="item" data-act="pair">+ ${escapeHtml(copy.pairAnotherHost)}</button>
           </div>
           <div>
-            <div class="group-name">${escapeHtml(copy.projects)}</div>
+            <div class="group-head">
+              <div class="group-name">${escapeHtml(copy.projects)}</div>
+              <button type="button" class="title-icon" data-act="register" aria-label="${escapeHtml(copy.addProject)}">＋</button>
+            </div>
             ${
               projects.length
-                ? projects
-                    .map((project) => `<button type="button" class="item">${escapeHtml(project.name)}</button>`)
-                    .join("")
+                ? projects.map((project) => projectRow(copy, project, snap.focusedProjectId)).join("")
                 : `<div class="nested">${escapeHtml(copy.noProjectTitle)}</div>`
             }
-            <button type="button" class="item" data-act="register">+ ${escapeHtml(copy.registerFirstProject)}</button>
           </div>
         </aside>
         <main class="workspace">
           ${
             empty
               ? `<div class="empty">
-                  ${loopbackNotice(snapshot.loopbackPage)}
+                  ${loopbackNotice(snap.loopbackPage)}
                   <h1>${escapeHtml(copy.noProjectTitle)}</h1>
                   <p>${escapeHtml(copy.noProjectBody)}</p>
                   <div class="actions">
-                    ${snapshot.emptyActions
+                    ${snap.emptyActions
                       .map(
                         (action, index) =>
                           `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
@@ -233,7 +324,7 @@ function render(): void {
                       .join("")}
                   </div>
                 </div>`
-              : `${loopbackNotice(snapshot.loopbackPage)}`
+              : projectMain(copy, snap)
           }
         </main>
       </div>
@@ -318,7 +409,143 @@ function render(): void {
           </div>`
         : ""
     }
+    ${formOpen ? projectForm(copy) : ""}
+    ${removeProject ? removeDialog(copy, removeProject) : ""}
   `;
+}
+
+function currentProject(snap: Snapshot): Project | undefined {
+  return (
+    snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
+  );
+}
+
+function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
+  const active = project.id === focusedId;
+  const degraded = project.connection.status !== "ready";
+  return `<div class="project-row ${active ? "active" : ""}">
+    <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
+      <b>${escapeHtml(project.name)}</b>
+      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
+    </button>
+    ${degraded ? `<span class="dot warn" title="${escapeHtml(copy.authFailed)}"></span>` : ""}
+    <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
+    ${
+      projectMenuId === project.id
+        ? `<div class="project-menu">
+            <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
+            <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
+          </div>`
+        : ""
+    }
+  </div>`;
+}
+
+function projectMain(copy: ShellCopy, snap: Snapshot): string {
+  const project = currentProject(snap);
+  if (!project) return loopbackNotice(snap.loopbackPage);
+  return `<div class="project-board">
+    ${loopbackNotice(snap.loopbackPage)}
+    <div class="board-head">
+      <h1>${escapeHtml(project.name)}</h1>
+      <p>${escapeHtml(project.localPath)}</p>
+      <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+    </div>
+    ${connectionPanel(copy, project)}
+  </div>`;
+}
+
+function connectionPanel(copy: ShellCopy, project: Project): string {
+  if (project.connection.status === "ready") {
+    return `<p class="notice ok">${escapeHtml(copy.connectionReady)}</p>`;
+  }
+  const repair = project.connection.repair;
+  const title =
+    project.connection.status === "auth-failed" ? copy.authFailed : project.connection.message;
+  const body =
+    project.connection.status === "auth-failed" ? project.connection.message : "";
+  return `<div class="notice bad">
+    <b>${escapeHtml(title)}</b>
+    ${body ? `<p>${escapeHtml(body)}</p>` : ""}
+    ${
+      project.connection.status === "auth-failed"
+        ? `<ul class="repair">
+      <li>${escapeHtml(copy.repairCli)}${repair.cliDetected ? "" : ` — ${escapeHtml(copy.noGhDetected)}`}</li>
+      <li>${escapeHtml(copy.repairSecrets)}：<code>${escapeHtml(repair.secretsPath)}</code></li>
+      <li>${escapeHtml(copy.repairEnv)}：<code>${escapeHtml(repair.appEnv)}</code> / <code>${escapeHtml(repair.genericEnv)}</code></li>
+    </ul>
+    <p class="tiny">${escapeHtml(repair.suggestedScope)}</p>`
+        : ""
+    }
+  </div>`;
+}
+
+function projectForm(copy: ShellCopy): string {
+  const editing = formOpen === "edit";
+  return `<div class="overlay modal" data-act="close-form">
+    <form class="sheet form-sheet" data-act="form-noop" data-form="project">
+      <h2>${escapeHtml(editing ? copy.editProjectTitle : copy.registerProjectTitle)}</h2>
+      <p class="hint">${escapeHtml(copy.inferenceHint)}</p>
+      <div class="field">
+        <label class="label" for="project-name">${escapeHtml(copy.displayName)}</label>
+        <input id="project-name" data-field="name" required value="${escapeHtml(formDraft.name)}" />
+      </div>
+      <div class="field">
+        <label class="label" for="project-path">${escapeHtml(copy.localDirectory)}</label>
+        <input id="project-path" data-field="localPath" required value="${escapeHtml(formDraft.localPath)}" />
+      </div>
+      <div class="field">
+        <label class="label" for="project-host">${escapeHtml(copy.githubHost)}</label>
+        <input id="project-host" data-field="githubHost" value="${escapeHtml(formDraft.githubHost)}" />
+      </div>
+      <div class="field">
+        <label class="label" for="project-repo">${escapeHtml(copy.repository)}</label>
+        <input id="project-repo" data-field="repository" required placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
+      </div>
+      <div class="inference">
+        <button type="button" data-act="infer">${escapeHtml(copy.inferFromDirectory)}</button>
+        ${
+          inferred
+            ? `<div class="notice" style="margin-top:8px">
+                <b>${escapeHtml(inferred.githubHost)}/${escapeHtml(inferred.repository)}</b>
+                <div class="actions">
+                  <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
+                </div>
+              </div>`
+            : ""
+        }
+      </div>
+      ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
+      <div class="actions">
+        <button type="button" data-act="close-form">${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary">${escapeHtml(editing ? copy.saveRegistration : copy.addProject)}</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function removeDialog(copy: ShellCopy, project: Project): string {
+  if (project.hasActiveRun) {
+    return `<div class="overlay modal" data-act="close-remove">
+      <div class="sheet" data-act="form-noop">
+        <h2>${escapeHtml(copy.cannotRemoveActiveRun)} ${escapeHtml(project.name)}</h2>
+        <p class="notice bad">${escapeHtml(copy.cannotRemoveActiveRunBody)}</p>
+        <div class="actions">
+          <button type="button" class="primary" data-act="close-remove">${escapeHtml(copy.gotIt)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  return `<div class="overlay modal" data-act="close-remove">
+    <div class="sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.removeConfirmTitle)}</h2>
+      <p class="notice">${escapeHtml(copy.removeConfirmBody)}</p>
+      <div class="actions">
+        <button type="button" data-act="close-remove">${escapeHtml(copy.cancel)}</button>
+        <button type="button" class="danger primary" data-act="confirm-remove">${escapeHtml(copy.removeConfirm)}</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 function loopbackNotice(page: LoopbackPage): string {
@@ -347,6 +574,9 @@ app.addEventListener("click", async (event) => {
   if (act === "settings") {
     settingsOpen = true;
     pairingOpen = false;
+    formOpen = null;
+    removeProject = null;
+    projectMenuId = "";
     render();
     return;
   }
@@ -363,7 +593,108 @@ app.addEventListener("click", async (event) => {
     pairingOpen = true;
     settingsOpen = false;
     hostPickerOpen = false;
+    formOpen = null;
+    removeProject = null;
+    projectMenuId = "";
     pairingError = "";
+    render();
+    return;
+  }
+  if (act === "register") {
+    formOpen = "register";
+    formProjectId = "";
+    formDraft = emptyDraft();
+    inferred = null;
+    formError = "";
+    projectMenuId = "";
+    pairingOpen = false;
+    settingsOpen = false;
+    removeProject = null;
+    render();
+    return;
+  }
+  if (act === "form-noop") {
+    return;
+  }
+  if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
+    formOpen = null;
+    inferred = null;
+    formError = "";
+    render();
+    return;
+  }
+  if (act === "project-menu" && target.dataset.id) {
+    projectMenuId = projectMenuId === target.dataset.id ? "" : target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "focus-project" && target.dataset.id) {
+    projectMenuId = "";
+    await rpc("focusProject", { projectId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "edit-project" && target.dataset.id) {
+    const project = snapshot.projects.find((item) => item.id === target.dataset.id);
+    if (!project) return;
+    formOpen = "edit";
+    formProjectId = project.id;
+    formDraft = {
+      name: project.name,
+      localPath: project.localPath,
+      githubHost: project.githubHost,
+      repository: project.repository,
+    };
+    inferred = null;
+    formError = "";
+    projectMenuId = "";
+    render();
+    return;
+  }
+  if (act === "remove-project" && target.dataset.id) {
+    removeProject = snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
+    projectMenuId = "";
+    render();
+    return;
+  }
+  if (act === "close-remove" && (event.target === target || target.tagName === "BUTTON")) {
+    removeProject = null;
+    render();
+    return;
+  }
+  if (act === "confirm-remove" && removeProject) {
+    try {
+      await rpc("removeProject", { projectId: removeProject.id });
+      removeProject = null;
+    } catch (error) {
+      formError = error instanceof Error ? error.message : String(error);
+    }
+    render();
+    return;
+  }
+  if (act === "infer") {
+    formError = "";
+    try {
+      const result = await rpc("inferProject", { localPath: formDraft.localPath });
+      inferred = result.inference ?? null;
+      if (!inferred) {
+        formError = snapshot.copy.inferenceHint;
+      }
+    } catch (error) {
+      inferred = null;
+      formError = error instanceof Error ? error.message : String(error);
+    }
+    render();
+    return;
+  }
+  if (act === "apply-infer" && inferred) {
+    formDraft = {
+      name: formDraft.name || inferred.name,
+      localPath: formDraft.localPath || inferred.localPath,
+      githubHost: inferred.githubHost,
+      repository: inferred.repository,
+    };
+    inferred = null;
     render();
     return;
   }
@@ -456,6 +787,31 @@ app.addEventListener("input", (event) => {
   if (field === "paste" && "value" in target) {
     pairingPaste = (target as HTMLTextAreaElement).value;
   }
+  if (
+    (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") &&
+    "value" in target
+  ) {
+    formDraft = { ...formDraft, [field]: (target as HTMLInputElement).value };
+  }
+});
+
+app.addEventListener("submit", async (event) => {
+  const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");
+  if (!form || !snapshot) return;
+  event.preventDefault();
+  formError = "";
+  try {
+    if (formOpen === "edit") {
+      await rpc("editProject", { projectId: formProjectId, ...formDraft });
+    } else {
+      await rpc("registerProject", formDraft);
+    }
+    formOpen = null;
+    inferred = null;
+  } catch (error) {
+    formError = error instanceof Error ? error.message : String(error);
+  }
+  render();
 });
 
 function parsePairingPayload(raw: string): { address: string; code: string } | null {
