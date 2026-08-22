@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::issue::{
@@ -128,6 +130,38 @@ impl RefreshStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CenterView {
+    #[default]
+    Board,
+    Graph,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNode {
+    pub id: String,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub open: bool,
+    pub rank: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardSnapshot {
@@ -140,6 +174,8 @@ pub struct BoardSnapshot {
     pub label_mapping_active: bool,
     pub recent_limit: u32,
     pub refresh: RefreshStatus,
+    pub graph: Option<DependencyGraph>,
+    pub show_closed_graph_context: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +196,7 @@ pub fn project_board(
     selected_id: Option<&str>,
     recent_limit: u32,
     refresh: RefreshStatus,
+    show_closed_graph_context: bool,
 ) -> BoardSnapshot {
     let recent_limit = clamp_recent_limit(recent_limit);
     let Some(issues) = loaded else {
@@ -173,6 +210,8 @@ pub fn project_board(
             label_mapping_active: false,
             recent_limit,
             refresh,
+            graph: None,
+            show_closed_graph_context,
         };
     };
 
@@ -242,7 +281,174 @@ pub fn project_board(
         label_mapping_active: mapping_active,
         recent_limit,
         refresh,
+        graph: Some(dependency_graph(issues, show_closed_graph_context)),
+        show_closed_graph_context,
     }
+}
+
+fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> DependencyGraph {
+    let by_id: BTreeMap<String, &IssueRecord> =
+        issues.iter().map(|issue| (issue.id(), issue)).collect();
+    let mut refs: BTreeMap<String, &IssueRef> = BTreeMap::new();
+    for issue in issues {
+        for blocker in &issue.blocked_by {
+            if let DependencyRef::Known(known) = blocker {
+                refs.entry(known.id()).or_insert(known);
+            }
+        }
+        for blocked in &issue.blocking {
+            refs.entry(blocked.id()).or_insert(blocked);
+        }
+    }
+    let mut node_ids: BTreeSet<String> = issues
+        .iter()
+        .filter(|issue| issue.open)
+        .map(IssueRecord::id)
+        .collect();
+
+    if show_closed_context {
+        let open_ids = node_ids.clone();
+        for issue in issues.iter().filter(|issue| open_ids.contains(&issue.id())) {
+            for blocker in &issue.blocked_by {
+                if let DependencyRef::Known(known) = blocker {
+                    if !known.open.unwrap_or(true) {
+                        node_ids.insert(known.id());
+                    }
+                }
+            }
+            for blocked in &issue.blocking {
+                if !blocked.open.unwrap_or(true) {
+                    node_ids.insert(blocked.id());
+                }
+            }
+        }
+    }
+
+    let mut edge_set: BTreeSet<(String, String)> = BTreeSet::new();
+    for issue in issues {
+        if !node_ids.contains(&issue.id()) {
+            continue;
+        }
+        for blocker in &issue.blocked_by {
+            if let DependencyRef::Known(known) = blocker {
+                if node_ids.contains(&known.id()) {
+                    edge_set.insert((known.id(), issue.id()));
+                }
+            }
+        }
+        for blocked in &issue.blocking {
+            if node_ids.contains(&blocked.id()) {
+                edge_set.insert((issue.id(), blocked.id()));
+            }
+        }
+    }
+
+    let ranks = graph_ranks(&node_ids, &edge_set);
+    let mut nodes: Vec<GraphNode> = node_ids
+        .iter()
+        .map(|id| {
+            graph_node(
+                id,
+                by_id.get(id).copied(),
+                refs.get(id).copied(),
+                ranks.get(id).copied().unwrap_or(0),
+            )
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.number.cmp(&b.number)));
+    let edges = edge_set
+        .into_iter()
+        .map(|(from, to)| GraphEdge { from, to })
+        .collect();
+    DependencyGraph { nodes, edges }
+}
+
+fn graph_node(
+    id: &str,
+    issue: Option<&IssueRecord>,
+    fallback: Option<&IssueRef>,
+    rank: u32,
+) -> GraphNode {
+    if let Some(issue) = issue {
+        return GraphNode {
+            id: issue.id(),
+            repository: issue.repository.clone(),
+            number: issue.number,
+            title: issue.title.clone(),
+            open: issue.open,
+            rank,
+        };
+    }
+    if let Some(issue) = fallback {
+        return GraphNode {
+            id: issue.id(),
+            repository: issue.repository.clone(),
+            number: issue.number,
+            title: issue.title.clone(),
+            open: issue.open.unwrap_or(false),
+            rank,
+        };
+    }
+    let (repository, number) = split_issue_id(id);
+    GraphNode {
+        id: id.to_string(),
+        repository,
+        number,
+        title: String::new(),
+        open: false,
+        rank,
+    }
+}
+
+fn split_issue_id(id: &str) -> (String, u64) {
+    match id.rsplit_once('#') {
+        Some((repository, number)) => (repository.to_string(), number.parse().unwrap_or(0)),
+        None => (id.to_string(), 0),
+    }
+}
+
+fn graph_ranks(
+    node_ids: &BTreeSet<String>,
+    edges: &BTreeSet<(String, String)>,
+) -> BTreeMap<String, u32> {
+    let mut incoming: BTreeMap<String, u32> = node_ids.iter().map(|id| (id.clone(), 0)).collect();
+    let mut outgoing: BTreeMap<String, Vec<String>> =
+        node_ids.iter().map(|id| (id.clone(), Vec::new())).collect();
+    for (from, to) in edges {
+        if node_ids.contains(from) && node_ids.contains(to) {
+            *incoming.entry(to.clone()).or_default() += 1;
+            outgoing.entry(from.clone()).or_default().push(to.clone());
+        }
+    }
+    let mut ranks: BTreeMap<String, u32> = BTreeMap::new();
+    let mut pending: Vec<String> = incoming
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    pending.sort();
+    for id in &pending {
+        ranks.insert(id.clone(), 0);
+    }
+    let mut remaining = incoming;
+    while let Some(id) = pending.pop() {
+        let rank = ranks.get(&id).copied().unwrap_or(0);
+        let nexts = outgoing.get(&id).cloned().unwrap_or_default();
+        for next in nexts {
+            let next_rank = ranks.get(&next).copied().unwrap_or(0).max(rank + 1);
+            ranks.insert(next.clone(), next_rank);
+            if let Some(count) = remaining.get_mut(&next) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    pending.push(next);
+                }
+            }
+        }
+    }
+    for id in node_ids {
+        ranks.entry(id.clone()).or_insert(0);
+    }
+    ranks
 }
 
 fn lane(issue: &IssueRecord) -> Lane {

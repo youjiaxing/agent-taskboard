@@ -18,8 +18,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 pub use board::{
-    clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, FrontierEmptyReason,
-    IssueCard, IssueDetail, IssueLink, RefreshStatus, DEFAULT_RECENT_LIMIT,
+    clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
+    FrontierEmptyReason, GraphEdge, GraphNode, IssueCard, IssueDetail, IssueLink, RefreshStatus,
+    DEFAULT_RECENT_LIMIT,
 };
 pub use issue::{IssueRecord, TriageRole};
 pub use local_rpc::{
@@ -120,6 +121,12 @@ pub enum Command {
         issue_id: String,
     },
     ClearParentFilter,
+    SetCenterView {
+        view: CenterView,
+    },
+    SetShowClosedGraphContext {
+        show: bool,
+    },
     SetRecentCompletedLimit {
         limit: u32,
     },
@@ -424,6 +431,10 @@ pub struct ShellCopy {
     pub project_menu: String,
     pub board_hint: String,
     pub child_hint: String,
+    pub graph_hint: String,
+    pub view_board: String,
+    pub view_graph: String,
+    pub show_closed_context: String,
     pub clear_filter: String,
     pub col_blocked: String,
     pub col_frontier: String,
@@ -483,6 +494,7 @@ pub struct HostSnapshot {
     pub paired_clients: Vec<PairedClient>,
     pub board: Option<BoardSnapshot>,
     pub recent_completed_limit: u32,
+    pub center_view: CenterView,
 }
 
 pub struct HostKernel {
@@ -512,6 +524,8 @@ pub struct HostKernel {
     selected_issue_id: Option<String>,
     parent_filter: Option<String>,
     recent_limit: u32,
+    center_view: CenterView,
+    show_closed_graph_context: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -568,11 +582,12 @@ impl HostKernel {
         let host_id = settings.id;
         let paired_clients = load_paired_clients(&data.host_secrets_path)?;
 
-        let (appearance, focused_host_id, saved_remotes, recent_limit) = load_or_init_appearance(
-            &data.desktop_client_settings_path,
-            &request.system_locale,
-            request.system_appearance,
-        )?;
+        let (appearance, focused_host_id, saved_remotes, recent_limit, center_view) =
+            load_or_init_appearance(
+                &data.desktop_client_settings_path,
+                &request.system_locale,
+                request.system_appearance,
+            )?;
         let tokens = load_client_tokens(&data.desktop_client_secrets_path)?;
         let remote_hosts = saved_remotes
             .into_iter()
@@ -632,6 +647,8 @@ impl HostKernel {
             selected_issue_id: None,
             parent_filter: None,
             recent_limit,
+            center_view,
+            show_closed_graph_context: false,
         };
         let project_ids: Vec<String> = host
             .projects
@@ -674,6 +691,7 @@ impl HostKernel {
                 .collect(),
             board,
             recent_completed_limit: self.recent_limit,
+            center_view: self.center_view,
         }
     }
 
@@ -814,6 +832,13 @@ impl HostKernel {
             }
             Command::ClearParentFilter => {
                 self.parent_filter = None;
+            }
+            Command::SetCenterView { view } => {
+                self.center_view = view;
+                self.persist_client_settings(&self.appearance.clone())?;
+            }
+            Command::SetShowClosedGraphContext { show } => {
+                self.show_closed_graph_context = show;
             }
             Command::SetRecentCompletedLimit { limit } => {
                 self.recent_limit = board::clamp_recent_limit(limit);
@@ -1016,6 +1041,21 @@ impl HostKernel {
                 }
                 self.dispatch(Command::ClearParentFilter)
             }
+            "setCenterView" => {
+                let view = serde_json::from_value(
+                    request
+                        .get("view")
+                        .cloned()
+                        .ok_or_else(|| KernelError::Protocol("missing view".into()))?,
+                )?;
+                self.dispatch(Command::SetCenterView { view })
+            }
+            "setShowClosedGraphContext" => self.dispatch(Command::SetShowClosedGraphContext {
+                show: request
+                    .get("show")
+                    .and_then(|value| value.as_bool())
+                    .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
+            }),
             "setRecentCompletedLimit" => self.dispatch(Command::SetRecentCompletedLimit {
                 limit: request
                     .get("limit")
@@ -1154,6 +1194,7 @@ impl HostKernel {
                 .map(pairing::RemoteHost::to_saved)
                 .collect(),
             recent_completed_limit: self.recent_limit,
+            center_view: self.center_view,
         };
         write_json(&self.data.desktop_client_settings_path, &file)?;
         let secrets = ClientSecretsFile {
@@ -1582,6 +1623,7 @@ impl HostKernel {
             self.selected_issue_id.as_deref(),
             self.recent_limit,
             self.refresh_status_for(focused_project_id),
+            self.show_closed_graph_context,
         ))
     }
 
@@ -2025,6 +2067,10 @@ impl ShellCopy {
                 project_menu: "管理".into(),
                 board_hint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。".into(),
                 child_hint: "只看这些直接子票。仍是看板视图，不是第二种 Frontier。".into(),
+                graph_hint: "只画 Dependency，不画父子。点节点只换详情。".into(),
+                view_board: "看板".into(),
+                view_graph: "依赖图".into(),
+                show_closed_context: "也显示已关闭上下文".into(),
                 clear_filter: "清除过滤".into(),
                 col_blocked: "阻塞中".into(),
                 col_frontier: "Frontier".into(),
@@ -2129,6 +2175,10 @@ impl ShellCopy {
                 project_menu: "Manage".into(),
                 board_hint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.".into(),
                 child_hint: "Direct children only. Still a board, not a second Frontier.".into(),
+                graph_hint: "Dependencies only — not parent/child. Click a node to change details.".into(),
+                view_board: "Board".into(),
+                view_graph: "Dependency graph".into(),
+                show_closed_context: "Also show closed context".into(),
                 clear_filter: "Clear filter".into(),
                 col_blocked: "Blocked".into(),
                 col_frontier: "Frontier".into(),
@@ -2255,6 +2305,8 @@ struct ClientSettingsFile {
     remote_hosts: Vec<pairing::SavedRemoteHost>,
     #[serde(default = "default_recent_limit")]
     recent_completed_limit: u32,
+    #[serde(default)]
+    center_view: CenterView,
 }
 
 fn default_recent_limit() -> u32 {
@@ -2281,6 +2333,7 @@ fn load_or_init_appearance(
         String,
         Vec<pairing::SavedRemoteHost>,
         u32,
+        CenterView,
     ),
     KernelError,
 > {
@@ -2297,6 +2350,7 @@ fn load_or_init_appearance(
                 file.focused_host_id,
                 file.remote_hosts,
                 board::clamp_recent_limit(file.recent_completed_limit),
+                file.center_view,
             ));
         }
         if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
@@ -2306,6 +2360,7 @@ fn load_or_init_appearance(
                 LOCAL_HOST_ID.to_string(),
                 Vec::new(),
                 board::DEFAULT_RECENT_LIMIT,
+                CenterView::Board,
             ));
         }
     }
@@ -2326,6 +2381,7 @@ fn load_or_init_appearance(
         focused_host_id: LOCAL_HOST_ID.to_string(),
         remote_hosts: Vec::new(),
         recent_completed_limit: board::DEFAULT_RECENT_LIMIT,
+        center_view: CenterView::Board,
     };
     write_json(path, &file)?;
     Ok((
@@ -2333,6 +2389,7 @@ fn load_or_init_appearance(
         LOCAL_HOST_ID.to_string(),
         Vec::new(),
         board::DEFAULT_RECENT_LIMIT,
+        CenterView::Board,
     ))
 }
 
