@@ -158,6 +158,7 @@ fn spawn_local_rpc_inner(
             while !stop.load(Ordering::Relaxed) && kernel_running(&kernel) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
                         let kernel = Arc::clone(&kernel);
                         let on_outcome = Arc::clone(&on_outcome);
                         let stop = Arc::clone(&stop);
@@ -264,6 +265,10 @@ fn serve_connection(
         return Ok(None);
     }
 
+    if let Some(outcome) = serve_run_io(&mut stream, &request, origin, kernel)? {
+        return Ok(outcome);
+    }
+
     if request.method == "GET" || request.method == "HEAD" {
         serve_loopback_get(&mut stream, &request, origin, assets)?;
         return Ok(None);
@@ -316,6 +321,145 @@ fn serve_connection(
 
     write_json(&mut stream, 404, origin, r#"{"error":"not found"}"#)?;
     Ok(None)
+}
+
+fn serve_run_io(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    kernel: &Mutex<HostKernel>,
+) -> io::Result<Option<Option<CommandOutcome>>> {
+    let Some((run_id, action)) = parse_run_route(&request.path) else {
+        return Ok(None);
+    };
+    match (request.method.as_str(), action.as_str()) {
+        ("GET", "output") => {
+            let after = query_param(&request.path, "after")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let session = {
+                let host = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                host.pty_session(&run_id)
+            };
+            let session = match session {
+                Ok(session) => session,
+                Err(_) => {
+                    write_json(stream, 404, origin, r#"{"error":"unknown run"}"#)?;
+                    return Ok(Some(None));
+                }
+            };
+            let chunk = session.read_after(after, Duration::from_secs(8));
+            if let Some(code) = chunk.exit_code {
+                if let Ok(mut host) = kernel.lock() {
+                    host.note_run_exit(&run_id, code);
+                }
+            }
+            let body = serde_json::json!({
+                "offset": chunk.offset,
+                "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &chunk.data),
+                "exited": chunk.exit_code,
+            });
+            write_json(stream, 200, origin, &body.to_string())?;
+            Ok(Some(None))
+        }
+        ("POST", "input") => {
+            let data = pty_input_bytes(&request.body);
+            let result = {
+                let host = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                host.write_pty(&run_id, &data)
+            };
+            match result {
+                Ok(()) => {
+                    write_json(stream, 200, origin, r#"{"ok":true}"#)?;
+                    Ok(Some(None))
+                }
+                Err(KernelError::Protocol(_)) => {
+                    write_json(stream, 404, origin, r#"{"error":"unknown run"}"#)?;
+                    Ok(Some(None))
+                }
+                Err(err) => {
+                    write_json(
+                        stream,
+                        500,
+                        origin,
+                        &format!(
+                            r#"{{"error":{}}}"#,
+                            serde_json::to_string(&err.to_string()).unwrap()
+                        ),
+                    )?;
+                    Ok(Some(None))
+                }
+            }
+        }
+        ("POST", "resize") => {
+            let cols = serde_json::from_slice::<serde_json::Value>(&request.body)
+                .ok()
+                .and_then(|value| value.get("cols").and_then(|v| v.as_u64()))
+                .unwrap_or(80) as u16;
+            let rows = serde_json::from_slice::<serde_json::Value>(&request.body)
+                .ok()
+                .and_then(|value| value.get("rows").and_then(|v| v.as_u64()))
+                .unwrap_or(24) as u16;
+            let result = {
+                let host = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                host.resize_pty(&run_id, cols, rows)
+            };
+            match result {
+                Ok(()) => {
+                    write_json(stream, 200, origin, r#"{"ok":true}"#)?;
+                    Ok(Some(None))
+                }
+                Err(_) => {
+                    write_json(stream, 404, origin, r#"{"error":"unknown run"}"#)?;
+                    Ok(Some(None))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn parse_run_route(path: &str) -> Option<(String, String)> {
+    let path = path.split('?').next().unwrap_or(path);
+    let mut parts = path.trim_start_matches('/').split('/');
+    if parts.next()? != "runs" {
+        return None;
+    }
+    let id = parts.next()?.to_string();
+    let action = parts.next()?.to_string();
+    if id.is_empty() || action.is_empty() {
+        return None;
+    }
+    Some((id, action))
+}
+
+fn query_param(path: &str, key: &str) -> Option<String> {
+    let query = path.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (name, value) = pair.split_once('=')?;
+        if name == key {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn pty_input_bytes(body: &[u8]) -> Vec<u8> {
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(data) = value.get("data").and_then(|value| value.as_str()) {
+            return data.as_bytes().to_vec();
+        }
+        if let Some(text) = value.get("text").and_then(|value| value.as_str()) {
+            return text.as_bytes().to_vec();
+        }
+    }
+    body.to_vec()
 }
 
 fn serve_loopback_get(

@@ -260,7 +260,11 @@ fn an_active_run_blocks_remove() {
     let dir = make_dir(tmp.path(), "work/busy");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "busy", &dir, "you/busy");
-    host.set_project_active_run(&id, true).unwrap();
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": id,
+    }))
+    .unwrap();
 
     let err = host
         .handle(serde_json::json!({

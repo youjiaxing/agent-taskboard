@@ -397,20 +397,24 @@ fn last_data_is_not_used_to_claim_or_advance_when_read_fails() {
         .unwrap_err();
     assert!(matches!(bound, KernelError::Denied(_)));
 
+    let started = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    let run = started.snapshot.runs.first().expect("offline unbound Run");
+    assert!(run.unbound);
+    let run_id = run.id.clone();
     host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": project_id,
+        "op": "injectRunInput",
+        "runId": run_id,
+        "text": "yes",
     }))
     .unwrap();
     host.handle(serde_json::json!({
         "op": "stopRun",
-        "runId": "run-1",
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "injectRunInput",
-        "runId": "run-1",
-        "text": "yes",
+        "runId": run_id,
     }))
     .unwrap();
 
