@@ -6,6 +6,7 @@ mod local_rpc;
 mod owner;
 mod pairing;
 mod project;
+mod refresh;
 mod tracker;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, FrontierEmptyReason,
-    IssueCard, IssueDetail, IssueLink, DEFAULT_RECENT_LIMIT,
+    IssueCard, IssueDetail, IssueLink, RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use issue::{IssueRecord, TriageRole};
 pub use local_rpc::{
@@ -27,6 +28,7 @@ pub use local_rpc::{
 };
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 pub use project::ProjectInference;
+pub use refresh::DEFAULT_REFRESH_INTERVAL_MS;
 pub use tracker::{
     map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
     ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
@@ -121,6 +123,48 @@ pub enum Command {
     SetRecentCompletedLimit {
         limit: u32,
     },
+    Refresh {
+        project_id: Option<String>,
+    },
+    Tick {
+        now_ms: Option<u64>,
+    },
+    SetClientView {
+        client_id: String,
+        project_id: String,
+        visible: bool,
+    },
+    NoteRunEnded {
+        project_id: String,
+    },
+    ClaimIssue {
+        issue_id: String,
+    },
+    ReleaseIssue {
+        issue_id: String,
+    },
+    AutoAdvance {
+        project_id: String,
+    },
+    CheckIssueClosed {
+        issue_id: String,
+    },
+    StartBoundRun {
+        issue_id: String,
+    },
+    StartUnboundRun {
+        project_id: String,
+    },
+    StopRun {
+        run_id: String,
+    },
+    InjectRunInput {
+        run_id: String,
+        text: String,
+    },
+    SetRefreshInterval {
+        interval_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,12 +196,28 @@ pub enum LoopbackPage {
     HostNotRunning { url: String, reason: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum HostEvent {
+    RefreshStatusChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        status: RefreshStatus,
+    },
+    BoardUpdated {
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandOutcome {
     pub snapshot: HostSnapshot,
     pub process: ProcessIntent,
     pub pairing: Option<IssuedPairing>,
     pub inference: Option<ProjectInference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<HostEvent>,
 }
 
 impl CommandOutcome {
@@ -171,6 +231,9 @@ impl CommandOutcome {
         }
         if let Some(inference) = &self.inference {
             value["inference"] = serde_json::to_value(inference).expect("inference json");
+        }
+        if !self.events.is_empty() {
+            value["events"] = serde_json::to_value(&self.events).expect("events json");
         }
         value
     }
@@ -390,6 +453,16 @@ pub struct ShellCopy {
     pub recent_limit: String,
     pub recent_limit_help: String,
     pub unclear_issue: String,
+    pub refresh_now: String,
+    pub refresh_refreshing: String,
+    pub refresh_as_of: String,
+    pub refresh_next: String,
+    pub refresh_offline: String,
+    pub refresh_never: String,
+    pub refresh_rate_limited: String,
+    pub refresh_retry: String,
+    pub refresh_paused: String,
+    pub refresh_auth: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,10 +504,45 @@ pub struct HostKernel {
     remote_hosts: Vec<pairing::RemoteHost>,
     remote_view: Option<RemoteView>,
     loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
-    loaded_boards: BTreeSet<String>,
+    refresh: BTreeMap<String, ProjectRefreshState>,
+    client_views: BTreeMap<String, ClientView>,
+    pending_events: Vec<HostEvent>,
+    now_ms: u64,
+    refresh_interval_ms: u64,
     selected_issue_id: Option<String>,
     parent_filter: Option<String>,
     recent_limit: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectRefreshState {
+    fetched_at_ms: Option<u64>,
+    last_attempt_ms: u64,
+    kind: StoredRefreshKind,
+    retry_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoredRefreshKind {
+    Ready,
+    Offline,
+    NeverFetched,
+    RateLimited,
+    AuthFailed,
+}
+
+#[derive(Debug, Clone)]
+struct ClientView {
+    project_id: String,
+    visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshTrigger {
+    Immediate,
+    Action,
+    Interval,
+    RunEnded,
 }
 
 #[derive(Debug, Clone)]
@@ -516,14 +624,27 @@ impl HostKernel {
             remote_hosts,
             remote_view: None,
             loaded_issues: BTreeMap::new(),
-            loaded_boards: BTreeSet::new(),
+            refresh: BTreeMap::new(),
+            client_views: BTreeMap::new(),
+            pending_events: Vec::new(),
+            now_ms: refresh::wall_ms(),
+            refresh_interval_ms: refresh::clamp_refresh_interval_ms(settings.refresh_interval_ms),
             selected_issue_id: None,
             parent_filter: None,
             recent_limit,
         };
-        if let Some(project_id) = host.focused_project_id.clone() {
-            host.load_board(&project_id);
+        let project_ids: Vec<String> = host
+            .projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect();
+        for project_id in &project_ids {
+            host.load_persisted_snapshot(project_id);
         }
+        if let Some(project_id) = host.focused_project_id.clone() {
+            host.refresh_project(&project_id, RefreshTrigger::Immediate);
+        }
+        host.pending_events.clear();
         Ok(host)
     }
 
@@ -556,7 +677,15 @@ impl HostKernel {
         }
     }
 
-    fn outcome(&self) -> CommandOutcome {
+    fn outcome(&mut self) -> CommandOutcome {
+        self.outcome_with(None, None)
+    }
+
+    fn outcome_with(
+        &mut self,
+        pairing: Option<IssuedPairing>,
+        inference: Option<ProjectInference>,
+    ) -> CommandOutcome {
         CommandOutcome {
             snapshot: self.snapshot(),
             process: if self.running {
@@ -564,8 +693,9 @@ impl HostKernel {
             } else {
                 ProcessIntent::Exit
             },
-            pairing: None,
-            inference: None,
+            pairing,
+            inference,
+            events: std::mem::take(&mut self.pending_events),
         }
     }
 
@@ -611,6 +741,9 @@ impl HostKernel {
             Command::ShowWindow => {
                 if self.running {
                     self.window_visible = true;
+                    if let Some(project_id) = self.focused_project_id.clone() {
+                        self.refresh_project(&project_id, RefreshTrigger::Immediate);
+                    }
                 }
             }
             Command::QuitHost => {
@@ -634,12 +767,7 @@ impl HostKernel {
             }
             Command::RedeemPairing { code, client_name } => {
                 let pairing = self.redeem_pairing(&code, &client_name)?;
-                return Ok(CommandOutcome {
-                    snapshot: self.snapshot(),
-                    process: ProcessIntent::KeepRunning,
-                    pairing: Some(pairing),
-                    inference: None,
-                });
+                return Ok(self.outcome_with(Some(pairing), None));
             }
             Command::RevokeClient { client_id } => {
                 self.paired_clients.retain(|client| client.id != client_id);
@@ -676,12 +804,7 @@ impl HostKernel {
             }
             Command::InferProject { local_path } => {
                 let inference = self.infer_project(&local_path)?;
-                return Ok(CommandOutcome {
-                    snapshot: self.snapshot(),
-                    process: ProcessIntent::KeepRunning,
-                    pairing: None,
-                    inference,
-                });
+                return Ok(self.outcome_with(None, inference));
             }
             Command::FocusIssue { issue_id } => {
                 self.selected_issue_id = Some(issue_id);
@@ -695,6 +818,52 @@ impl HostKernel {
             Command::SetRecentCompletedLimit { limit } => {
                 self.recent_limit = board::clamp_recent_limit(limit);
                 self.persist_client_settings(&self.appearance.clone())?;
+            }
+            Command::Refresh { project_id } => {
+                let project_id = project_id
+                    .or_else(|| self.focused_project_id.clone())
+                    .ok_or_else(|| KernelError::Protocol("missing projectId".into()))?;
+                self.refresh_project(&project_id, RefreshTrigger::Immediate);
+            }
+            Command::Tick { now_ms } => {
+                self.now_ms = now_ms.unwrap_or_else(refresh::wall_ms);
+                self.maybe_auto_refresh();
+            }
+            Command::SetClientView {
+                client_id,
+                project_id,
+                visible,
+            } => {
+                self.set_client_view(&client_id, &project_id, visible);
+            }
+            Command::NoteRunEnded { project_id } => {
+                self.refresh_project(&project_id, RefreshTrigger::RunEnded);
+            }
+            Command::ClaimIssue { issue_id } => {
+                self.require_live_tracker_for_issue(&issue_id)?;
+            }
+            Command::ReleaseIssue { issue_id } => {
+                self.require_live_tracker_for_issue(&issue_id)?;
+            }
+            Command::AutoAdvance { project_id } => {
+                self.require_live_tracker(&project_id)?;
+            }
+            Command::CheckIssueClosed { issue_id } => {
+                self.require_live_tracker_for_issue(&issue_id)?;
+            }
+            Command::StartBoundRun { issue_id } => {
+                self.require_live_tracker_for_issue(&issue_id)?;
+            }
+            Command::StartUnboundRun { project_id } => {
+                if !self.projects.iter().any(|project| project.id == project_id) {
+                    return Err(KernelError::Protocol("unknown project".into()));
+                }
+            }
+            Command::StopRun { run_id: _ } => {}
+            Command::InjectRunInput { run_id: _, text: _ } => {}
+            Command::SetRefreshInterval { interval_ms } => {
+                self.refresh_interval_ms = refresh::clamp_refresh_interval_ms(interval_ms);
+                self.persist_host_settings()?;
             }
         }
         Ok(self.outcome())
@@ -853,6 +1022,112 @@ impl HostKernel {
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| KernelError::Protocol("missing limit".into()))?
                     as u32,
+            }),
+            "refresh" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::Refresh {
+                    project_id: request
+                        .get("projectId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                })
+            }
+            "tick" => self.dispatch(Command::Tick {
+                now_ms: request.get("nowMs").and_then(|value| value.as_u64()),
+            }),
+            "setClientView" => self.dispatch(Command::SetClientView {
+                client_id: required_string(&request, "clientId")?,
+                project_id: optional_string(&request, "projectId"),
+                visible: request
+                    .get("visible")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            }),
+            "noteRunEnded" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::NoteRunEnded {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "claimIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ClaimIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "releaseIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ReleaseIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "autoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::AutoAdvance {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "checkIssueClosed" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CheckIssueClosed {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "startBoundRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::StartBoundRun {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "startUnboundRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::StartUnboundRun {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "stopRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::StopRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "injectRunInput" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::InjectRunInput {
+                    run_id: required_string(&request, "runId")?,
+                    text: request
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            }
+            "setRefreshInterval" => self.dispatch(Command::SetRefreshInterval {
+                interval_ms: request
+                    .get("intervalMs")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
             }),
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
@@ -1101,6 +1376,7 @@ impl HostKernel {
             id: self.host_id.clone(),
             focused_project_id: self.focused_project_id.clone(),
             projects: self.projects.iter().map(ProjectRecord::stored).collect(),
+            refresh_interval_ms: self.refresh_interval_ms,
         };
         write_json(&self.data.host_settings_path, &file)
     }
@@ -1172,7 +1448,9 @@ impl HostKernel {
         let project_id = record.id.clone();
         self.focused_project_id = Some(project_id.clone());
         self.projects.push(record);
-        self.load_board(&project_id);
+        self.selected_issue_id = None;
+        self.parent_filter = None;
+        self.refresh_project(&project_id, RefreshTrigger::Immediate);
         self.persist_host_settings()
     }
 
@@ -1212,11 +1490,13 @@ impl HostKernel {
         project.repository = repository;
         project.connection = connection;
         project.tracker_synced = false;
+        self.loaded_issues.remove(project_id);
+        self.refresh.remove(project_id);
+        refresh::remove_project_data(&self.data.host_dir, project_id);
         if self.focused_project_id.as_deref() == Some(project_id) {
-            self.load_board(project_id);
-        } else {
-            self.loaded_boards.remove(project_id);
-            self.loaded_issues.remove(project_id);
+            self.selected_issue_id = None;
+            self.parent_filter = None;
+            self.refresh_project(project_id, RefreshTrigger::Immediate);
         }
         self.persist_host_settings()
     }
@@ -1235,8 +1515,9 @@ impl HostKernel {
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let _removed = self.projects.remove(index);
         self.active_run_projects.remove(project_id);
-        self.loaded_boards.remove(project_id);
+        self.refresh.remove(project_id);
         self.loaded_issues.remove(project_id);
+        refresh::remove_project_data(&self.data.host_dir, project_id);
         if was_current {
             self.selected_issue_id = None;
             self.parent_filter = None;
@@ -1246,7 +1527,7 @@ impl HostKernel {
                 Some(self.projects[index.min(self.projects.len() - 1)].id.clone())
             };
             if let Some(next_id) = self.focused_project_id.clone() {
-                self.load_board(&next_id);
+                self.refresh_project(&next_id, RefreshTrigger::Immediate);
             }
         }
         self.persist_host_settings()
@@ -1265,7 +1546,9 @@ impl HostKernel {
         let connection = self.probe_github(&host, &repository);
         self.projects[index].connection = connection;
         self.focused_project_id = Some(project_id.to_string());
-        self.load_board(project_id);
+        self.selected_issue_id = None;
+        self.parent_filter = None;
+        self.refresh_project(project_id, RefreshTrigger::Immediate);
         self.persist_host_settings()
     }
 
@@ -1288,67 +1571,355 @@ impl HostKernel {
                 }
             });
         }
-        let loaded = if self.loaded_boards.contains(focused_project_id) {
-            Some(
-                self.loaded_issues
-                    .get(focused_project_id)
-                    .map_or(&[][..], Vec::as_slice),
-            )
-        } else {
-            None
-        };
+        let loaded = self
+            .loaded_issues
+            .get(focused_project_id)
+            .map(Vec::as_slice);
         Some(board::project_board(
             focused_project_id,
             loaded,
             self.parent_filter.as_deref(),
             self.selected_issue_id.as_deref(),
             self.recent_limit,
+            self.refresh_status_for(focused_project_id),
         ))
     }
 
-    fn load_board(&mut self, project_id: &str) {
-        self.selected_issue_id = None;
-        self.parent_filter = None;
+    fn load_persisted_snapshot(&mut self, project_id: &str) {
+        let Some(stored) =
+            refresh::load_snapshot(&refresh::snapshot_path(&self.data.host_dir, project_id))
+        else {
+            return;
+        };
+        self.loaded_issues
+            .insert(project_id.to_string(), stored.issues);
+        if let Some(project) = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        {
+            project.tracker_synced = true;
+        }
+        self.refresh.insert(
+            project_id.to_string(),
+            ProjectRefreshState {
+                fetched_at_ms: Some(stored.fetched_at_ms),
+                last_attempt_ms: stored.fetched_at_ms,
+                kind: StoredRefreshKind::Ready,
+                retry_at_ms: None,
+            },
+        );
+    }
+
+    fn refresh_project(&mut self, project_id: &str, _trigger: RefreshTrigger) -> bool {
         let Some(index) = self
             .projects
             .iter()
             .position(|project| project.id == project_id)
         else {
-            return;
+            return false;
         };
-        if !matches!(
-            self.projects[index].connection,
-            ProjectConnection::Ready { .. }
-        ) {
-            self.loaded_boards.remove(project_id);
-            self.loaded_issues.remove(project_id);
-            self.projects[index].tracker_synced = false;
-            return;
-        }
+        let previous_fetched = self
+            .refresh
+            .get(project_id)
+            .and_then(|state| state.fetched_at_ms);
+        self.pending_events.push(HostEvent::RefreshStatusChanged {
+            project_id: project_id.to_string(),
+            status: RefreshStatus::Refreshing {
+                fetched_at_ms: previous_fetched,
+            },
+        });
         let github_host = self.projects[index].github_host.clone();
         let repository = self.projects[index].repository.clone();
         let pat = read_github_pat(&self.data.host_secrets_path, &github_host);
-        match self.tracker.read_issues(&tracker::ProbeContext {
+        let now = self.now_ms;
+        let result = self.tracker.read_issues(&tracker::ProbeContext {
             github_host: &github_host,
             repository: &repository,
             secrets_pat: pat.as_deref(),
             secrets_path: &self.data.host_secrets_path,
-        }) {
+        });
+        match result {
             Ok(issues) => {
-                self.loaded_issues.insert(project_id.to_string(), issues);
-                self.loaded_boards.insert(project_id.to_string());
+                if !matches!(
+                    self.projects[index].connection,
+                    ProjectConnection::Ready { .. }
+                ) {
+                    self.projects[index].connection = self.probe_github(&github_host, &repository);
+                }
                 self.projects[index].tracker_synced = true;
-            }
-            Err(err) => {
-                self.projects[index].connection = connection_from_probe(
-                    err.into_probe(),
-                    &self.data.host_secrets_path,
-                    self.appearance.language,
+                let _ = refresh::save_snapshot(
+                    &refresh::snapshot_path(&self.data.host_dir, project_id),
+                    &refresh::StoredTrackerSnapshot {
+                        fetched_at_ms: now,
+                        issues: issues.clone(),
+                    },
                 );
-                self.loaded_boards.remove(project_id);
-                self.loaded_issues.remove(project_id);
-                self.projects[index].tracker_synced = false;
+                self.loaded_issues.insert(project_id.to_string(), issues);
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: Some(now),
+                        last_attempt_ms: now,
+                        kind: StoredRefreshKind::Ready,
+                        retry_at_ms: None,
+                    },
+                );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                self.pending_events.push(HostEvent::BoardUpdated {
+                    project_id: project_id.to_string(),
+                });
+                true
             }
+            Err(tracker::TrackerReadError::RateLimited { retry_after_ms }) => {
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: previous_fetched,
+                        last_attempt_ms: now,
+                        kind: StoredRefreshKind::RateLimited,
+                        retry_at_ms: retry_after_ms.map(|ms| now.saturating_add(ms)),
+                    },
+                );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                false
+            }
+            Err(tracker::TrackerReadError::Offline {
+                source,
+                cli_detected,
+                detail,
+            }) => {
+                self.projects[index].connection = ProjectConnection::Unreachable {
+                    source,
+                    repair: tracker::repair_hint(cli_detected, &self.data.host_secrets_path),
+                    message: auth_failure_message(
+                        self.appearance.language,
+                        AuthFailureKind::Unreachable,
+                        detail.as_deref(),
+                    ),
+                };
+                let has_data = self.loaded_issues.contains_key(project_id);
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: previous_fetched,
+                        last_attempt_ms: now,
+                        kind: if has_data {
+                            StoredRefreshKind::Offline
+                        } else {
+                            StoredRefreshKind::NeverFetched
+                        },
+                        retry_at_ms: None,
+                    },
+                );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                false
+            }
+            Err(tracker::TrackerReadError::Auth {
+                source,
+                kind,
+                cli_detected,
+                detail,
+            }) => {
+                self.projects[index].connection = ProjectConnection::AuthFailed {
+                    source,
+                    kind,
+                    repair: tracker::repair_hint(cli_detected, &self.data.host_secrets_path),
+                    message: auth_failure_message(
+                        self.appearance.language,
+                        kind,
+                        detail.as_deref(),
+                    ),
+                };
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: previous_fetched,
+                        last_attempt_ms: now,
+                        kind: StoredRefreshKind::AuthFailed,
+                        retry_at_ms: None,
+                    },
+                );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                false
+            }
+        }
+    }
+
+    fn maybe_auto_refresh(&mut self) {
+        let due: Vec<String> = self
+            .projects
+            .iter()
+            .map(|project| project.id.clone())
+            .filter(|id| self.should_auto_refresh(id))
+            .collect();
+        for project_id in due {
+            self.refresh_project(&project_id, RefreshTrigger::Interval);
+        }
+    }
+
+    fn should_auto_refresh(&self, project_id: &str) -> bool {
+        if !self.project_watched(project_id) {
+            return false;
+        }
+        let Some(state) = self.refresh.get(project_id) else {
+            return true;
+        };
+        match state.kind {
+            StoredRefreshKind::RateLimited => state
+                .retry_at_ms
+                .is_some_and(|retry_at| self.now_ms >= retry_at),
+            StoredRefreshKind::AuthFailed => false,
+            StoredRefreshKind::Ready
+            | StoredRefreshKind::Offline
+            | StoredRefreshKind::NeverFetched => {
+                self.now_ms
+                    >= state
+                        .last_attempt_ms
+                        .saturating_add(self.refresh_interval_ms)
+            }
+        }
+    }
+
+    fn project_watched(&self, project_id: &str) -> bool {
+        if self.window_visible
+            && self.focused_host_id == LOCAL_HOST_ID
+            && self.focused_project_id.as_deref() == Some(project_id)
+        {
+            return true;
+        }
+        self.client_views
+            .values()
+            .any(|view| view.visible && view.project_id == project_id)
+    }
+
+    fn refresh_status_for(&self, project_id: &str) -> RefreshStatus {
+        let Some(state) = self.refresh.get(project_id) else {
+            return RefreshStatus::NeverFetched;
+        };
+        let next = self.next_refresh_in_ms(project_id, state);
+        match state.kind {
+            StoredRefreshKind::Ready => match state.fetched_at_ms {
+                Some(fetched_at_ms) => RefreshStatus::Ready {
+                    fetched_at_ms,
+                    next_refresh_in_ms: next,
+                },
+                None => RefreshStatus::NeverFetched,
+            },
+            StoredRefreshKind::Offline => match state.fetched_at_ms {
+                Some(fetched_at_ms) => RefreshStatus::Offline {
+                    fetched_at_ms,
+                    next_refresh_in_ms: next,
+                },
+                None => RefreshStatus::NeverFetched,
+            },
+            StoredRefreshKind::NeverFetched => RefreshStatus::NeverFetched,
+            StoredRefreshKind::RateLimited => RefreshStatus::RateLimited {
+                fetched_at_ms: state.fetched_at_ms,
+                retry_at_ms: state.retry_at_ms,
+            },
+            StoredRefreshKind::AuthFailed => RefreshStatus::AuthFailed {
+                fetched_at_ms: state.fetched_at_ms,
+            },
+        }
+    }
+
+    fn next_refresh_in_ms(&self, project_id: &str, state: &ProjectRefreshState) -> Option<u64> {
+        if !self.project_watched(project_id) {
+            return None;
+        }
+        match state.kind {
+            StoredRefreshKind::RateLimited => state
+                .retry_at_ms
+                .map(|retry_at| retry_at.saturating_sub(self.now_ms)),
+            StoredRefreshKind::Ready | StoredRefreshKind::Offline => Some(
+                (state
+                    .last_attempt_ms
+                    .saturating_add(self.refresh_interval_ms))
+                .saturating_sub(self.now_ms),
+            ),
+            StoredRefreshKind::NeverFetched | StoredRefreshKind::AuthFailed => None,
+        }
+    }
+
+    fn set_client_view(&mut self, client_id: &str, project_id: &str, visible: bool) {
+        if !visible || project_id.is_empty() {
+            self.client_views.remove(client_id);
+            return;
+        }
+        let previous = self.client_views.insert(
+            client_id.to_string(),
+            ClientView {
+                project_id: project_id.to_string(),
+                visible: true,
+            },
+        );
+        let changed = previous
+            .map(|view| !view.visible || view.project_id != project_id)
+            .unwrap_or(true);
+        if changed {
+            self.refresh_project(project_id, RefreshTrigger::Immediate);
+        }
+    }
+
+    fn require_live_tracker(&mut self, project_id: &str) -> Result<(), KernelError> {
+        if !self.projects.iter().any(|project| project.id == project_id) {
+            return Err(KernelError::Protocol("unknown project".into()));
+        }
+        if self.refresh_project(project_id, RefreshTrigger::Action) {
+            Ok(())
+        } else {
+            Err(KernelError::Denied(self.write_block_reason(project_id)))
+        }
+    }
+
+    fn require_live_tracker_for_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        let project_id = match self.project_id_for_issue(issue_id) {
+            Ok(project_id) => project_id,
+            Err(_) => self
+                .focused_project_id
+                .clone()
+                .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?,
+        };
+        self.require_live_tracker(&project_id)
+    }
+
+    fn project_id_for_issue(&self, issue_id: &str) -> Result<String, KernelError> {
+        self.loaded_issues
+            .iter()
+            .find_map(|(project_id, issues)| {
+                issues
+                    .iter()
+                    .any(|issue| issue.id() == issue_id)
+                    .then(|| project_id.clone())
+            })
+            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))
+    }
+
+    fn write_block_reason(&self, project_id: &str) -> String {
+        match self.refresh.get(project_id).map(|state| state.kind) {
+            Some(StoredRefreshKind::RateLimited) => "cannot write to tracker: rate-limited".into(),
+            Some(StoredRefreshKind::AuthFailed) => "cannot write to tracker: auth-failed".into(),
+            Some(StoredRefreshKind::NeverFetched) | None => {
+                "cannot write to tracker: never-fetched".into()
+            }
+            _ => "cannot write to tracker: offline".into(),
         }
     }
 
@@ -1483,6 +2054,16 @@ impl ShellCopy {
                 recent_limit: "最近完成列张数".into(),
                 recent_limit_help: "默认 5。只影响最右那一列。不能拖进这一列来关票。".into(),
                 unclear_issue: "对端看不清".into(),
+                refresh_now: "刷新".into(),
+                refresh_refreshing: "正在刷新".into(),
+                refresh_as_of: "数据截至".into(),
+                refresh_next: "下次刷新".into(),
+                refresh_offline: "已离线".into(),
+                refresh_never: "还没有成功拉过 Tracker。".into(),
+                refresh_rate_limited: "已被限流".into(),
+                refresh_retry: "大约可再刷新".into(),
+                refresh_paused: "自动刷新已暂停，可手动再试。".into(),
+                refresh_auth: "凭据不可用".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -1577,12 +2158,22 @@ impl ShellCopy {
                 recent_limit: "Recently-closed count".into(),
                 recent_limit_help: "Default 5. Only the rightmost column. Dragging here does not close.".into(),
                 unclear_issue: "The other side is unclear".into(),
+                refresh_now: "Refresh".into(),
+                refresh_refreshing: "Refreshing".into(),
+                refresh_as_of: "Data as of".into(),
+                refresh_next: "Next refresh".into(),
+                refresh_offline: "Offline".into(),
+                refresh_never: "Tracker has never been fetched successfully.".into(),
+                refresh_rate_limited: "Rate limited".into(),
+                refresh_retry: "Can retry around".into(),
+                refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
+                refresh_auth: "Credentials unavailable".into(),
             },
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostSettingsFile {
     #[serde(default)]
@@ -1591,6 +2182,23 @@ struct HostSettingsFile {
     focused_project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     projects: Vec<StoredProject>,
+    #[serde(default = "default_refresh_interval_ms")]
+    refresh_interval_ms: u64,
+}
+
+impl Default for HostSettingsFile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            focused_project_id: None,
+            projects: Vec::new(),
+            refresh_interval_ms: refresh::DEFAULT_REFRESH_INTERVAL_MS,
+        }
+    }
+}
+
+fn default_refresh_interval_ms() -> u64 {
+    refresh::DEFAULT_REFRESH_INTERVAL_MS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

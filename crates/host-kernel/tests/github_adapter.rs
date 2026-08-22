@@ -186,6 +186,44 @@ fn github_summary_without_visible_open_blocker_is_unclear() {
 }
 
 #[test]
+fn github_adapter_maps_rate_limit_with_retry_after() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("work/garden");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tracker = GitHubTracker::scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "tok".into())].into(),
+        accept_tokens: ["tok".into()].into(),
+        rate_limited: true,
+        retry_after_ms: Some(45_000),
+        ..Default::default()
+    });
+    let mut host = HostKernel::boot_with(
+        BootRequest {
+            app_local_data_dir: tmp.path().to_path_buf(),
+            app_log_dir: tmp.path().join("logs"),
+            system_locale: "en-US".into(),
+            system_appearance: SystemAppearance::Light,
+            host_display_name: "Studio".into(),
+        },
+        Arc::new(tracker),
+    )
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": "garden",
+        "localPath": dir,
+        "repository": "you/garden",
+    }))
+    .unwrap();
+    match host.snapshot().board.unwrap().refresh {
+        host_kernel::RefreshStatus::RateLimited { retry_at_ms, .. } => {
+            assert!(retry_at_ms.is_some());
+        }
+        other => panic!("expected rate-limited, got {other:?}"),
+    }
+}
+
+#[test]
 fn map_github_issue_node_ignores_related_payload() {
     let mapped = host_kernel::map_github_issue_node(&node(serde_json::json!({})), "you/garden")
         .expect("issue");

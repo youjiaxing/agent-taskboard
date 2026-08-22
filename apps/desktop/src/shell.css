@@ -220,6 +220,24 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .board-head h1 { margin: 0; font-size: 22px; font-weight: 550; letter-spacing: -.03em; }
 .board-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.refresh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--chip);
+  font-size: 12px;
+  color: var(--muted);
+}
+.refresh-bar span { min-width: 0; line-height: 1.45; }
+.refresh-bar[data-kind="offline"],
+.refresh-bar[data-kind="never-fetched"] { border-color: var(--line-strong); }
+.refresh-bar[data-kind="rate-limited"] { border-color: var(--accent); color: var(--accent-ink); }
+.refresh-bar[data-kind="auth-failed"] { border-color: var(--accent); color: var(--accent-ink); }
+.refresh-bar[data-kind="refreshing"] { border-color: var(--dot); }
 .board-empty {
   margin-top: 12px;
   padding: 16px;

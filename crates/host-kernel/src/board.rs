@@ -73,6 +73,62 @@ pub struct BoardColumns {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RefreshStatus {
+    Refreshing {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+    },
+    Ready {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: u64,
+        #[serde(rename = "nextRefreshInMs")]
+        next_refresh_in_ms: Option<u64>,
+    },
+    Offline {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: u64,
+        #[serde(rename = "nextRefreshInMs")]
+        next_refresh_in_ms: Option<u64>,
+    },
+    NeverFetched,
+    RateLimited {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+        #[serde(rename = "retryAtMs")]
+        retry_at_ms: Option<u64>,
+    },
+    AuthFailed {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+    },
+}
+
+impl RefreshStatus {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Refreshing { .. } => "refreshing",
+            Self::Ready { .. } => "ready",
+            Self::Offline { .. } => "offline",
+            Self::NeverFetched => "never-fetched",
+            Self::RateLimited { .. } => "rate-limited",
+            Self::AuthFailed { .. } => "auth-failed",
+        }
+    }
+
+    pub fn fetched_at_ms(&self) -> Option<u64> {
+        match self {
+            Self::Refreshing { fetched_at_ms } => *fetched_at_ms,
+            Self::Ready { fetched_at_ms, .. } => Some(*fetched_at_ms),
+            Self::Offline { fetched_at_ms, .. } => Some(*fetched_at_ms),
+            Self::NeverFetched => None,
+            Self::RateLimited { fetched_at_ms, .. } => *fetched_at_ms,
+            Self::AuthFailed { fetched_at_ms } => *fetched_at_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardSnapshot {
     pub project_id: String,
@@ -83,6 +139,7 @@ pub struct BoardSnapshot {
     pub selected: Option<IssueDetail>,
     pub label_mapping_active: bool,
     pub recent_limit: u32,
+    pub refresh: RefreshStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +159,7 @@ pub fn project_board(
     parent_filter: Option<&str>,
     selected_id: Option<&str>,
     recent_limit: u32,
+    refresh: RefreshStatus,
 ) -> BoardSnapshot {
     let recent_limit = clamp_recent_limit(recent_limit);
     let Some(issues) = loaded else {
@@ -114,6 +172,7 @@ pub fn project_board(
             selected: None,
             label_mapping_active: false,
             recent_limit,
+            refresh,
         };
     };
 
@@ -182,6 +241,7 @@ pub fn project_board(
         selected: selected_id.and_then(|id| select_issue(issues, id, mapping_active)),
         label_mapping_active: mapping_active,
         recent_limit,
+        refresh,
     }
 }
 
