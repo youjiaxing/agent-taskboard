@@ -1,35 +1,17 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use host_kernel::{
-    BootRequest, Command, HostKernel, HostSnapshot, ProcessIntent, SystemAppearance,
+    bind_local_rpc, spawn_local_rpc, BootRequest, Command, HostKernel, HostSnapshot, ProcessIntent,
+    SystemAppearance, LOCAL_RPC_PORT,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::webview::PageLoadEvent;
+use tauri::{AppHandle, Manager, WindowEvent};
 
 struct AppState {
-    kernel: Mutex<HostKernel>,
-}
-
-#[tauri::command]
-fn host_rpc(
-    app: AppHandle,
-    state: State<AppState>,
-    request: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let mut kernel = state.kernel.lock().map_err(|err| err.to_string())?;
-    let result = kernel.handle(request).map_err(|err| err.to_string())?;
-    let snapshot = kernel.snapshot();
-    let should_exit = matches!(
-        result.get("process").and_then(|value| value.as_str()),
-        Some("exit")
-    );
-    drop(kernel);
-    refresh_shell(&app, &snapshot)?;
-    if should_exit {
-        app.exit(0);
-    }
-    Ok(result)
+    kernel: Arc<Mutex<HostKernel>>,
+    protocol_url: String,
 }
 
 pub fn run() {
@@ -37,13 +19,35 @@ pub fn run() {
         .setup(|app| {
             let kernel = boot_kernel(app.handle())?;
             let snapshot = kernel.snapshot();
+            let kernel = Arc::new(Mutex::new(kernel));
+            let (listener, protocol_url) = bind_local_rpc(LOCAL_RPC_PORT)?;
+            let app_handle = app.handle().clone();
+            spawn_local_rpc(listener, Arc::clone(&kernel), move |outcome| {
+                let _ = refresh_shell(&app_handle, &outcome.snapshot);
+                if outcome.process == ProcessIntent::Exit {
+                    app_handle.exit(0);
+                }
+            });
             app.manage(AppState {
-                kernel: Mutex::new(kernel),
+                kernel,
+                protocol_url: protocol_url.clone(),
             });
             build_tray(app.handle())?;
             refresh_shell(app.handle(), &snapshot)?;
             app.on_menu_event(|app, event| handle_shell_menu(app, event.id().as_ref()));
+            if let Some(window) = app.get_webview_window("main") {
+                inject_protocol_url(&window, &protocol_url);
+            }
             Ok(())
+        })
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            if let Some(state) = webview.try_state::<AppState>() {
+                let encoded = serde_json::to_string(&state.protocol_url).unwrap();
+                let _ = webview.eval(format!("window.__HOST_PROTOCOL__ = {encoded};"));
+            }
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -56,7 +60,6 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![host_rpc])
         .build(tauri::generate_context!())
         .expect("error while building Agent Taskboard")
         .run(|app, event| match event {
@@ -70,6 +73,11 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+fn inject_protocol_url(window: &tauri::WebviewWindow, url: &str) {
+    let encoded = serde_json::to_string(url).unwrap();
+    let _ = window.eval(format!("window.__HOST_PROTOCOL__ = {encoded};"));
 }
 
 fn boot_kernel(app: &AppHandle) -> Result<HostKernel, Box<dyn std::error::Error>> {
@@ -93,30 +101,18 @@ fn boot_kernel(app: &AppHandle) -> Result<HostKernel, Box<dyn std::error::Error>
 }
 
 fn host_display_name() -> String {
-    hostname()
-        .or_else(computer_name)
+    command_stdout("hostname", &[])
+        .or_else(|| command_stdout("scutil", &["--get", "ComputerName"]))
         .unwrap_or_else(|| "Host".to_string())
 }
 
-fn hostname() -> Option<String> {
-    std::process::Command::new("hostname")
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program)
+        .args(args)
         .output()
-        .ok()
-        .and_then(|output| {
-            let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
-            (!name.is_empty()).then_some(name)
-        })
-}
-
-fn computer_name() -> Option<String> {
-    std::process::Command::new("scutil")
-        .args(["--get", "ComputerName"])
-        .output()
-        .ok()
-        .and_then(|output| {
-            let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
-            (!name.is_empty()).then_some(name)
-        })
+        .ok()?;
+    let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -147,9 +143,17 @@ fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String>
     rebuild_app_menu(app, snapshot).map_err(|err| err.to_string())
 }
 
-fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
+fn resident_items(
+    app: &AppHandle,
+    snapshot: &HostSnapshot,
+) -> tauri::Result<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)> {
     let show = MenuItem::with_id(app, "show", &snapshot.copy.show_window, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", &snapshot.copy.quit_host, true, None::<&str>)?;
+    Ok((show, quit))
+}
+
+fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
+    let (show, quit) = resident_items(app, snapshot)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(menu))?;
@@ -159,8 +163,7 @@ fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<
 }
 
 fn rebuild_app_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", &snapshot.copy.show_window, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", &snapshot.copy.quit_host, true, None::<&str>)?;
+    let (show, quit) = resident_items(app, snapshot)?;
     let app_menu = Submenu::with_items(
         app,
         &snapshot.copy.app_name,

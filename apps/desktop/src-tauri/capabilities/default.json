@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Main window talks to the Host kernel through one RPC command.",
+  "description": "Main window is a Client shell: window, tray, and the shared Host protocol on loopback.",
   "windows": ["main"],
   "permissions": [
     "core:default",

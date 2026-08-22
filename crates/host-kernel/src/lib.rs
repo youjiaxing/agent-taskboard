@@ -1,10 +1,15 @@
 //! Host 内核：桌面窗口、浏览器和以后的远程 Client 都走这一条接缝。
 
+mod local_rpc;
+mod owner;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+pub use local_rpc::{bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LOCAL_RPC_PORT};
 
 const LOCAL_HOST_ID: &str = "local";
 
@@ -48,7 +53,7 @@ pub enum Command {
     SetTheme(Theme),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProcessIntent {
     KeepRunning,
@@ -62,10 +67,19 @@ pub enum EmptyAction {
     PairAnotherHost,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CommandOutcome {
     pub snapshot: HostSnapshot,
     pub process: ProcessIntent,
+}
+
+impl CommandOutcome {
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "snapshot": self.snapshot,
+            "process": self.process,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +108,32 @@ pub struct ProjectSummary {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppearanceSelection {
+    language: Language,
+    theme: Theme,
+    last_light_theme: Theme,
+}
+
+impl AppearanceSelection {
+    fn with_language(self, language: Language) -> Self {
+        Self { language, ..self }
+    }
+
+    fn with_theme(self, theme: Theme) -> Self {
+        Self {
+            theme,
+            last_light_theme: if matches!(theme, Theme::PlainNight) {
+                self.last_light_theme
+            } else {
+                daytime_theme(theme)
+            },
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceState {
@@ -102,7 +142,18 @@ pub struct AppearanceState {
     pub last_light_theme: Theme,
     pub languages: Vec<Language>,
     pub themes: Vec<Theme>,
-    pub follow_system: bool,
+}
+
+impl AppearanceState {
+    fn from_selection(selection: AppearanceSelection) -> Self {
+        Self {
+            language: selection.language,
+            theme: selection.theme,
+            last_light_theme: selection.last_light_theme,
+            languages: vec![Language::ZhCn, Language::En],
+            themes: vec![Theme::WarmPaper, Theme::PlainPaper, Theme::PlainNight],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,18 +202,8 @@ pub struct HostKernel {
     window_visible: bool,
     host_display_name: String,
     data: DataLayout,
-    language: Language,
-    theme: Theme,
-    last_light_theme: Theme,
+    appearance: AppearanceSelection,
     projects: Vec<ProjectSummary>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientSettingsFile {
-    language: Language,
-    theme: Theme,
-    last_light_theme: Theme,
 }
 
 impl HostKernel {
@@ -173,7 +214,7 @@ impl HostKernel {
         }
         write_secrets(&data.host_secrets_path, &serde_json::json!({}))?;
 
-        let (language, theme, last_light_theme) = load_or_init_appearance(
+        let appearance = load_or_init_appearance(
             &data.desktop_client_settings_path,
             &request.system_locale,
             request.system_appearance,
@@ -184,9 +225,7 @@ impl HostKernel {
             window_visible: true,
             host_display_name: request.host_display_name,
             data,
-            language,
-            theme,
-            last_light_theme,
+            appearance,
             projects: Vec::new(),
         })
     }
@@ -210,16 +249,9 @@ impl HostKernel {
                 local: true,
             }],
             projects: self.projects.clone(),
-            appearance: AppearanceState {
-                language: self.language,
-                theme: self.theme,
-                last_light_theme: self.last_light_theme,
-                languages: vec![Language::ZhCn, Language::En],
-                themes: vec![Theme::WarmPaper, Theme::PlainPaper, Theme::PlainNight],
-                follow_system: false,
-            },
+            appearance: AppearanceState::from_selection(self.appearance),
             data: self.data.clone(),
-            copy: ShellCopy::for_language(self.language),
+            copy: ShellCopy::for_language(self.appearance.language),
             empty_actions,
         }
     }
@@ -237,18 +269,14 @@ impl HostKernel {
                 self.window_visible = false;
             }
             Command::SetLanguage(language) => {
-                self.persist_client_settings_values(language, self.theme, self.last_light_theme)?;
-                self.language = language;
+                let appearance = self.appearance.with_language(language);
+                self.persist_client_settings(&appearance)?;
+                self.appearance = appearance;
             }
             Command::SetTheme(theme) => {
-                let last_light_theme = light_theme(if matches!(theme, Theme::PlainNight) {
-                    self.last_light_theme
-                } else {
-                    theme
-                });
-                self.persist_client_settings_values(self.language, theme, last_light_theme)?;
-                self.theme = theme;
-                self.last_light_theme = last_light_theme;
+                let appearance = self.appearance.with_theme(theme);
+                self.persist_client_settings(&appearance)?;
+                self.appearance = appearance;
             }
         }
         Ok(CommandOutcome {
@@ -261,19 +289,19 @@ impl HostKernel {
         })
     }
 
-    pub fn handle(&mut self, request: serde_json::Value) -> Result<serde_json::Value, KernelError> {
+    pub fn handle(&mut self, request: serde_json::Value) -> Result<CommandOutcome, KernelError> {
         let op = request
             .get("op")
             .and_then(|value| value.as_str())
             .unwrap_or("snapshot");
-        let outcome = match op {
-            "snapshot" => CommandOutcome {
+        match op {
+            "snapshot" => Ok(CommandOutcome {
                 snapshot: self.snapshot(),
                 process: ProcessIntent::KeepRunning,
-            },
-            "hideWindow" => self.dispatch(Command::HideWindow)?,
-            "showWindow" => self.dispatch(Command::ShowWindow)?,
-            "quitHost" => self.dispatch(Command::QuitHost)?,
+            }),
+            "hideWindow" => self.dispatch(Command::HideWindow),
+            "showWindow" => self.dispatch(Command::ShowWindow),
+            "quitHost" => self.dispatch(Command::QuitHost),
             "setLanguage" => {
                 let language = serde_json::from_value(
                     request
@@ -281,7 +309,7 @@ impl HostKernel {
                         .cloned()
                         .ok_or_else(|| KernelError::Protocol("missing language".into()))?,
                 )?;
-                self.dispatch(Command::SetLanguage(language))?
+                self.dispatch(Command::SetLanguage(language))
             }
             "setTheme" => {
                 let theme = serde_json::from_value(
@@ -290,32 +318,14 @@ impl HostKernel {
                         .cloned()
                         .ok_or_else(|| KernelError::Protocol("missing theme".into()))?,
                 )?;
-                self.dispatch(Command::SetTheme(theme))?
+                self.dispatch(Command::SetTheme(theme))
             }
-            other => {
-                return Err(KernelError::Protocol(format!("unknown op {other}")));
-            }
-        };
-        Ok(serde_json::json!({
-            "snapshot": outcome.snapshot,
-            "process": outcome.process,
-        }))
+            other => Err(KernelError::Protocol(format!("unknown op {other}"))),
+        }
     }
 
-    fn persist_client_settings_values(
-        &self,
-        language: Language,
-        theme: Theme,
-        last_light_theme: Theme,
-    ) -> Result<(), KernelError> {
-        write_json(
-            &self.data.desktop_client_settings_path,
-            &ClientSettingsFile {
-                language,
-                theme,
-                last_light_theme,
-            },
-        )
+    fn persist_client_settings(&self, appearance: &AppearanceSelection) -> Result<(), KernelError> {
+        write_json(&self.data.desktop_client_settings_path, appearance)
     }
 }
 
@@ -394,15 +404,12 @@ fn load_or_init_appearance(
     path: &Path,
     system_locale: &str,
     system_appearance: SystemAppearance,
-) -> Result<(Language, Theme, Theme), KernelError> {
+) -> Result<AppearanceSelection, KernelError> {
     if path.exists() {
         let raw = fs::read_to_string(path)?;
-        if let Ok(file) = serde_json::from_str::<ClientSettingsFile>(&raw) {
-            return Ok((
-                file.language,
-                file.theme,
-                light_theme(file.last_light_theme),
-            ));
+        if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
+            file.last_light_theme = daytime_theme(file.last_light_theme);
+            return Ok(file);
         }
     }
     let language = match_language(system_locale);
@@ -410,16 +417,13 @@ fn load_or_init_appearance(
         SystemAppearance::Light => Theme::WarmPaper,
         SystemAppearance::Dark => Theme::PlainNight,
     };
-    let last_light_theme = Theme::WarmPaper;
-    write_json(
-        path,
-        &ClientSettingsFile {
-            language,
-            theme,
-            last_light_theme,
-        },
-    )?;
-    Ok((language, theme, last_light_theme))
+    let appearance = AppearanceSelection {
+        language,
+        theme,
+        last_light_theme: Theme::WarmPaper,
+    };
+    write_json(path, &appearance)?;
+    Ok(appearance)
 }
 
 fn match_language(locale: &str) -> Language {
@@ -431,7 +435,7 @@ fn match_language(locale: &str) -> Language {
     }
 }
 
-fn light_theme(theme: Theme) -> Theme {
+fn daytime_theme(theme: Theme) -> Theme {
     match theme {
         Theme::PlainNight => Theme::WarmPaper,
         other => other,
@@ -459,11 +463,11 @@ fn write_json_inner<T: Serialize>(
         file.sync_all()?;
     }
     if owner_only {
-        restrict_to_owner(&tmp)?;
+        owner::restrict_to_owner(&tmp)?;
     }
-    fs::rename(&tmp, path)?;
+    owner::replace_file(&tmp, path)?;
     if owner_only {
-        restrict_to_owner(path)?;
+        owner::restrict_to_owner(path)?;
     }
     Ok(())
 }
@@ -472,19 +476,7 @@ fn write_secrets(path: &Path, value: &serde_json::Value) -> Result<(), KernelErr
     if !path.exists() {
         write_json_inner(path, value, true)?;
     }
-    restrict_to_owner(path)?;
-    Ok(())
-}
-
-fn restrict_to_owner(path: &Path) -> Result<(), KernelError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(path, perms)?;
-    }
-    let _ = path;
+    owner::restrict_to_owner(path)?;
     Ok(())
 }
 

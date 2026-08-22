@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import "./shell.css";
 
 type Language = "zh-CN" | "en";
@@ -40,10 +39,9 @@ type Snapshot = {
     lastLightTheme: Theme;
     languages: Language[];
     themes: Theme[];
-    followSystem: boolean;
   };
   copy: ShellCopy;
-  emptyActions: string[];
+  emptyActions: Array<"register-first-project" | "pair-another-host">;
 };
 
 type RpcResult = { snapshot: Snapshot; process: "keep-running" | "exit" };
@@ -56,10 +54,38 @@ if (!app) {
 let snapshot: Snapshot | null = null;
 let settingsOpen = false;
 
+async function protocolBase(): Promise<string> {
+  for (let i = 0; i < 50; i += 1) {
+    if (window.__HOST_PROTOCOL__) {
+      return window.__HOST_PROTOCOL__;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Host protocol is not available");
+}
+
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Snapshot> {
-  const result = await invoke<RpcResult>("host_rpc", { request: { op, ...extra } });
+  const response = await fetch(`${await protocolBase()}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op, ...extra }),
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()) || `Host protocol ${response.status}`);
+  }
+  const result = (await response.json()) as RpcResult;
   snapshot = result.snapshot;
   return result.snapshot;
+}
+
+function emptyActionAct(action: Snapshot["emptyActions"][number]): string {
+  return action === "register-first-project" ? "register" : "pair";
+}
+
+function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions"][number]): string {
+  return action === "register-first-project"
+    ? copy.registerFirstProject
+    : copy.pairAnotherHost;
 }
 
 function themeLabel(copy: ShellCopy, theme: Theme): string {
@@ -80,7 +106,7 @@ function render(): void {
   document.title = copy.appName;
 
   const host = hosts.find((item) => item.id === snapshot?.focusedHostId) ?? hosts[0];
-  const empty = projects.length === 0;
+  const empty = snapshot.emptyActions.length > 0;
 
   app.innerHTML = `
     <div class="frame">
@@ -121,8 +147,12 @@ function render(): void {
                   <h1>${escapeHtml(copy.noProjectTitle)}</h1>
                   <p>${escapeHtml(copy.noProjectBody)}</p>
                   <div class="actions">
-                    <button type="button" class="primary" data-act="register">${escapeHtml(copy.registerFirstProject)}</button>
-                    <button type="button" data-act="pair">${escapeHtml(copy.pairAnotherHost)}</button>
+                    ${snapshot.emptyActions
+                      .map(
+                        (action, index) =>
+                          `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
+                      )
+                      .join("")}
                   </div>
                 </div>`
               : ""
