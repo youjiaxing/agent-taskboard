@@ -212,13 +212,104 @@ html[data-theme="plain-night"] button.danger.primary {
   align-self: stretch;
   width: 100%;
   min-height: 100%;
-  padding: 28px 32px;
+  padding: 20px 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 .board-head h1 { margin: 0; font-size: 22px; font-weight: 550; letter-spacing: -.03em; }
 .board-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.board-empty {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r);
+  color: var(--muted);
+  background: var(--chip);
+}
+.board-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+.board-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.board-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+.lanes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+.lane {
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  min-width: 0;
+  min-height: 240px;
+}
+.lane-hd {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 650;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.lane-empty, .lane-note { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.lane-note { margin: 10px 0 0; }
+.issue-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.issue-card.sel { border-color: var(--accent); background: var(--sel); }
+.issue-id { font-size: 11px; color: var(--muted); }
+.issue-title { font-size: 13px; margin-top: 2px; }
+.issue-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.issue-detail {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2);
+  padding: 12px;
+  min-width: 0;
+}
+.detail-hd { font-weight: 650; font-size: 14px; line-height: 1.4; }
+.detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.detail-block {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.detail-block h4 { margin: 0 0 8px; font-size: 12px; }
+.detail-block .tiny { margin: 6px 0 4px; font-size: 11px; color: var(--muted); }
+.name-btn {
+  display: inline-block;
+  margin: 0 6px 6px 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.muted { color: var(--muted); font-size: 12px; }
+@media (max-width: 960px) {
+  .board-shell { grid-template-columns: 1fr; }
+  .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .notice.ok { border-color: var(--dot); }
 .notice.bad { border-color: var(--accent); }
 .repair { margin: 8px 0 0; padding-left: 18px; line-height: 1.55; }
@@ -279,6 +370,10 @@ html[data-theme="plain-night"] button.danger.primary {
   justify-content: center;
   background: var(--paper);
 }
+.workspace.board-open {
+  align-items: stretch;
+  justify-content: stretch;
+}
 .empty {
   width: min(480px, 100%);
   padding: 24px;
@@ -330,6 +425,15 @@ html[data-theme="plain-night"] button.danger.primary {
   padding: 16px 16px 18px;
 }
 .sheet h2 { margin: 0 0 12px; font-size: 16px; }
+.sheet input[type="number"] {
+  width: 88px;
+  font: inherit;
+  color: inherit;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 6px 8px;
+}
 .field { margin-bottom: 12px; }
 .field .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
