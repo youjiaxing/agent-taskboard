@@ -1,0 +1,192 @@
+:root {
+  --sans: "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+  --r: 8px;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+button, select {
+  font: inherit;
+  color: inherit;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--line-strong); }
+button.primary {
+  background: var(--ink);
+  color: var(--on-ink);
+  border-color: var(--ink);
+}
+button.ghost { background: transparent; }
+button.active { background: var(--sel); border-color: var(--accent); color: var(--accent-ink); }
+button:disabled { opacity: .45; cursor: default; }
+
+html[data-theme="warm-paper"] {
+  --desk: #cfc4b0;
+  --paper: #fff8ee;
+  --paper-2: #f4ead8;
+  --ink: #2a2218;
+  --on-ink: #fff8ee;
+  --muted: #7a6d5c;
+  --line: #e2d3bb;
+  --line-strong: #c4b191;
+  --accent: #c45c26;
+  --accent-ink: #7a2e0c;
+  --sel: #f3d3b4;
+  --chip: #f3ead8;
+  --btn: #fff8ee;
+  --dot: #2f7d4a;
+}
+html[data-theme="plain-paper"] {
+  --desk: #eceae6;
+  --paper: #fffcf8;
+  --paper-2: #f3f2ee;
+  --ink: #1c1b19;
+  --on-ink: #fffcf8;
+  --muted: #6f6d68;
+  --line: #e3e1db;
+  --line-strong: #c6c3bb;
+  --accent: #c23b2e;
+  --accent-ink: #8a1f16;
+  --sel: #fde8e4;
+  --chip: #f3f2ee;
+  --btn: #fffcf8;
+  --dot: #2f7d4a;
+}
+html[data-theme="plain-night"] {
+  --desk: #0e0e0d;
+  --paper: #181817;
+  --paper-2: #121211;
+  --ink: #f4f2ee;
+  --on-ink: #181817;
+  --muted: #a3a19b;
+  --line: #33322f;
+  --line-strong: #4d4c48;
+  --accent: #e86a5c;
+  --accent-ink: #ffd4ce;
+  --sel: #3a221f;
+  --chip: #232321;
+  --btn: #232321;
+  --dot: #7ad49a;
+}
+
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.frame {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 44px 1fr;
+}
+
+.chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.chrome-trail { margin-left: auto; display: flex; gap: 6px; }
+.chrome button { padding: 3px 8px; font-size: 12px; }
+
+.body {
+  display: grid;
+  grid-template-columns: 252px 1fr;
+  min-height: 0;
+}
+
+.side {
+  background: var(--paper-2);
+  border-right: 1px solid var(--line);
+  padding: 14px 10px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.group-name {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 650;
+  padding: 0 8px 6px;
+}
+.item, .nested {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.item.active { background: var(--sel); }
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--dot);
+  flex: 0 0 auto;
+}
+.tag {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.nested { color: var(--muted); font-size: 12px; padding-left: 22px; }
+
+.workspace {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+}
+.empty {
+  width: min(480px, 100%);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.empty h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 550;
+  letter-spacing: -.03em;
+}
+.empty p { margin: 0; color: var(--muted); line-height: 1.5; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--desk) 35%, transparent);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 52px 0 0 56px;
+}
+.sheet {
+  width: min(420px, calc(100% - 24px));
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--ink) 16%, transparent);
+  padding: 16px 16px 18px;
+}
+.sheet h2 { margin: 0 0 12px; font-size: 16px; }
+.field { margin-bottom: 12px; }
+.field .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.choices { display: flex; flex-wrap: wrap; gap: 6px; }
