@@ -1,5 +1,7 @@
 //! Host 内核：桌面窗口、浏览器和以后的远程 Client 都走这一条接缝。
 
+mod board;
+mod issue;
 mod local_rpc;
 mod owner;
 mod pairing;
@@ -14,6 +16,11 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+pub use board::{
+    clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, FrontierEmptyReason,
+    IssueCard, IssueDetail, IssueLink, DEFAULT_RECENT_LIMIT,
+};
+pub use issue::{IssueRecord, TriageRole};
 pub use local_rpc::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LoopbackAssets, LoopbackServer,
     LOCAL_RPC_PORT,
@@ -21,8 +28,8 @@ pub use local_rpc::{
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 pub use project::ProjectInference;
 pub use tracker::{
-    AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker, ProjectConnection, RepairHint,
-    ScriptedGitHub, TrackerKind, TrackerPort,
+    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
+    ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
 };
 
 const LOCAL_HOST_ID: &str = "local";
@@ -103,6 +110,16 @@ pub enum Command {
     },
     InferProject {
         local_path: String,
+    },
+    FocusIssue {
+        issue_id: String,
+    },
+    FilterParent {
+        issue_id: String,
+    },
+    ClearParentFilter,
+    SetRecentCompletedLimit {
+        limit: u32,
     },
 }
 
@@ -342,6 +359,37 @@ pub struct ShellCopy {
     pub no_gh_detected: String,
     pub connection_ready: String,
     pub project_menu: String,
+    pub board_hint: String,
+    pub child_hint: String,
+    pub clear_filter: String,
+    pub col_blocked: String,
+    pub col_frontier: String,
+    pub col_in_progress: String,
+    pub col_recent: String,
+    pub no_items: String,
+    pub no_frontier_blocked: String,
+    pub no_frontier_claimed: String,
+    pub no_frontier_empty: String,
+    pub no_recent: String,
+    pub recent_note: String,
+    pub empty_no_data: String,
+    pub family: String,
+    pub deps: String,
+    pub parent: String,
+    pub children: String,
+    pub no_parent: String,
+    pub no_kids: String,
+    pub only_kids: String,
+    pub blocked_by: String,
+    pub blocking: String,
+    pub none_block: String,
+    pub none: String,
+    pub claimed: String,
+    pub unclaimed: String,
+    pub pick_issue: String,
+    pub recent_limit: String,
+    pub recent_limit_help: String,
+    pub unclear_issue: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +408,8 @@ pub struct HostSnapshot {
     pub loopback_page: LoopbackPage,
     pub pairing_offer: Option<PairingOffer>,
     pub paired_clients: Vec<PairedClient>,
+    pub board: Option<BoardSnapshot>,
+    pub recent_completed_limit: u32,
 }
 
 pub struct HostKernel {
@@ -380,6 +430,11 @@ pub struct HostKernel {
     focused_host_id: String,
     remote_hosts: Vec<pairing::RemoteHost>,
     remote_view: Option<RemoteView>,
+    loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
+    loaded_boards: BTreeSet<String>,
+    selected_issue_id: Option<String>,
+    parent_filter: Option<String>,
+    recent_limit: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +443,7 @@ struct RemoteView {
     projects: Vec<ProjectSummary>,
     focused_project_id: String,
     empty_actions: Vec<EmptyAction>,
+    board: Option<BoardSnapshot>,
 }
 
 impl HostKernel {
@@ -404,7 +460,7 @@ impl HostKernel {
         let host_id = settings.id;
         let paired_clients = load_paired_clients(&data.host_secrets_path)?;
 
-        let (appearance, focused_host_id, saved_remotes) = load_or_init_appearance(
+        let (appearance, focused_host_id, saved_remotes, recent_limit) = load_or_init_appearance(
             &data.desktop_client_settings_path,
             &request.system_locale,
             request.system_appearance,
@@ -441,7 +497,7 @@ impl HostKernel {
             .filter(|id| projects.iter().any(|project| project.id == *id))
             .or_else(|| projects.first().map(|project| project.id.clone()));
 
-        Ok(Self {
+        let mut host = Self {
             running: true,
             window_visible: true,
             host_display_name: request.host_display_name,
@@ -459,11 +515,21 @@ impl HostKernel {
             focused_host_id,
             remote_hosts,
             remote_view: None,
-        })
+            loaded_issues: BTreeMap::new(),
+            loaded_boards: BTreeSet::new(),
+            selected_issue_id: None,
+            parent_filter: None,
+            recent_limit,
+        };
+        if let Some(project_id) = host.focused_project_id.clone() {
+            host.load_board(&project_id);
+        }
+        Ok(host)
     }
 
     pub fn snapshot(&self) -> HostSnapshot {
         let (projects, focused_project_id, empty_actions) = self.board_for_focus();
+        let board = self.current_board(&focused_project_id);
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
@@ -485,6 +551,8 @@ impl HostKernel {
                 .iter()
                 .map(pairing::IssuedClient::summary)
                 .collect(),
+            board,
+            recent_completed_limit: self.recent_limit,
         }
     }
 
@@ -615,6 +683,19 @@ impl HostKernel {
                     inference,
                 });
             }
+            Command::FocusIssue { issue_id } => {
+                self.selected_issue_id = Some(issue_id);
+            }
+            Command::FilterParent { issue_id } => {
+                self.parent_filter = Some(issue_id);
+            }
+            Command::ClearParentFilter => {
+                self.parent_filter = None;
+            }
+            Command::SetRecentCompletedLimit { limit } => {
+                self.recent_limit = board::clamp_recent_limit(limit);
+                self.persist_client_settings(&self.appearance.clone())?;
+            }
         }
         Ok(self.outcome())
     }
@@ -744,6 +825,35 @@ impl HostKernel {
                     local_path: required_string(&request, "localPath")?,
                 })
             }
+            "focusIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "filterParent" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FilterParent {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "clearParentFilter" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ClearParentFilter)
+            }
+            "setRecentCompletedLimit" => self.dispatch(Command::SetRecentCompletedLimit {
+                limit: request
+                    .get("limit")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| KernelError::Protocol("missing limit".into()))?
+                    as u32,
+            }),
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
     }
@@ -768,6 +878,7 @@ impl HostKernel {
                 .iter()
                 .map(pairing::RemoteHost::to_saved)
                 .collect(),
+            recent_completed_limit: self.recent_limit,
         };
         write_json(&self.data.desktop_client_settings_path, &file)?;
         let secrets = ClientSecretsFile {
@@ -866,11 +977,16 @@ impl HostKernel {
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string();
+        let board = match snapshot.get("board") {
+            Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+            _ => None,
+        };
         self.remote_view = Some(RemoteView {
             host_id: host_id.to_string(),
             projects,
             focused_project_id,
             empty_actions,
+            board,
         });
         Ok(())
     }
@@ -1053,8 +1169,10 @@ impl HostKernel {
             connection,
             tracker_synced: false,
         };
-        self.focused_project_id = Some(record.id.clone());
+        let project_id = record.id.clone();
+        self.focused_project_id = Some(project_id.clone());
         self.projects.push(record);
+        self.load_board(&project_id);
         self.persist_host_settings()
     }
 
@@ -1093,6 +1211,13 @@ impl HostKernel {
         project.github_host = github_host;
         project.repository = repository;
         project.connection = connection;
+        project.tracker_synced = false;
+        if self.focused_project_id.as_deref() == Some(project_id) {
+            self.load_board(project_id);
+        } else {
+            self.loaded_boards.remove(project_id);
+            self.loaded_issues.remove(project_id);
+        }
         self.persist_host_settings()
     }
 
@@ -1110,12 +1235,19 @@ impl HostKernel {
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let _removed = self.projects.remove(index);
         self.active_run_projects.remove(project_id);
+        self.loaded_boards.remove(project_id);
+        self.loaded_issues.remove(project_id);
         if was_current {
+            self.selected_issue_id = None;
+            self.parent_filter = None;
             self.focused_project_id = if self.projects.is_empty() {
                 None
             } else {
                 Some(self.projects[index.min(self.projects.len() - 1)].id.clone())
             };
+            if let Some(next_id) = self.focused_project_id.clone() {
+                self.load_board(&next_id);
+            }
         }
         self.persist_host_settings()
     }
@@ -1133,6 +1265,7 @@ impl HostKernel {
         let connection = self.probe_github(&host, &repository);
         self.projects[index].connection = connection;
         self.focused_project_id = Some(project_id.to_string());
+        self.load_board(project_id);
         self.persist_host_settings()
     }
 
@@ -1140,6 +1273,83 @@ impl HostKernel {
         let local_path =
             project::require_local_directory(local_path).map_err(KernelError::Protocol)?;
         Ok(project::infer_github_project(&local_path))
+    }
+
+    fn current_board(&self, focused_project_id: &str) -> Option<BoardSnapshot> {
+        if focused_project_id.is_empty() {
+            return None;
+        }
+        if self.focused_host_id != LOCAL_HOST_ID {
+            return self.remote_view.as_ref().and_then(|view| {
+                if view.host_id == self.focused_host_id {
+                    view.board.clone()
+                } else {
+                    None
+                }
+            });
+        }
+        let loaded = if self.loaded_boards.contains(focused_project_id) {
+            Some(
+                self.loaded_issues
+                    .get(focused_project_id)
+                    .map_or(&[][..], Vec::as_slice),
+            )
+        } else {
+            None
+        };
+        Some(board::project_board(
+            focused_project_id,
+            loaded,
+            self.parent_filter.as_deref(),
+            self.selected_issue_id.as_deref(),
+            self.recent_limit,
+        ))
+    }
+
+    fn load_board(&mut self, project_id: &str) {
+        self.selected_issue_id = None;
+        self.parent_filter = None;
+        let Some(index) = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return;
+        };
+        if !matches!(
+            self.projects[index].connection,
+            ProjectConnection::Ready { .. }
+        ) {
+            self.loaded_boards.remove(project_id);
+            self.loaded_issues.remove(project_id);
+            self.projects[index].tracker_synced = false;
+            return;
+        }
+        let github_host = self.projects[index].github_host.clone();
+        let repository = self.projects[index].repository.clone();
+        let pat = read_github_pat(&self.data.host_secrets_path, &github_host);
+        match self.tracker.read_issues(&tracker::ProbeContext {
+            github_host: &github_host,
+            repository: &repository,
+            secrets_pat: pat.as_deref(),
+            secrets_path: &self.data.host_secrets_path,
+        }) {
+            Ok(issues) => {
+                self.loaded_issues.insert(project_id.to_string(), issues);
+                self.loaded_boards.insert(project_id.to_string());
+                self.projects[index].tracker_synced = true;
+            }
+            Err(err) => {
+                self.projects[index].connection = connection_from_probe(
+                    err.into_probe(),
+                    &self.data.host_secrets_path,
+                    self.appearance.language,
+                );
+                self.loaded_boards.remove(project_id);
+                self.loaded_issues.remove(project_id);
+                self.projects[index].tracker_synced = false;
+            }
+        }
     }
 
     fn probe_github(&self, github_host: &str, repository: &str) -> ProjectConnection {
@@ -1242,6 +1452,37 @@ impl ShellCopy {
                 no_gh_detected: "这台电脑上没检测到 gh。".into(),
                 connection_ready: "GitHub 已连通".into(),
                 project_menu: "管理".into(),
+                board_hint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。".into(),
+                child_hint: "只看这些直接子票。仍是看板视图，不是第二种 Frontier。".into(),
+                clear_filter: "清除过滤".into(),
+                col_blocked: "阻塞中".into(),
+                col_frontier: "Frontier".into(),
+                col_in_progress: "进行中".into(),
+                col_recent: "最近完成".into(),
+                no_items: "没有".into(),
+                no_frontier_blocked: "没有可领的票。剩下的都还被挡住。".into(),
+                no_frontier_claimed: "没有可领的票。未关的都已被认领。".into(),
+                no_frontier_empty: "没有可领的票。这个 Project 里没有未关的票。".into(),
+                no_recent: "还没有刚关的".into(),
+                recent_note: "只留最近几张，不是全部已关闭。不能拖进这一列来关票。".into(),
+                empty_no_data: "还没有可显示的数据。".into(),
+                family: "属于 / 子票".into(),
+                deps: "挡住它的 / 它挡住的".into(),
+                parent: "属于".into(),
+                children: "子票".into(),
+                no_parent: "没有父，仍是一等 Issue。".into(),
+                no_kids: "没有子票".into(),
+                only_kids: "只看这些子票".into(),
+                blocked_by: "挡住它的".into(),
+                blocking: "它挡住的".into(),
+                none_block: "无，可进 Frontier".into(),
+                none: "无".into(),
+                claimed: "已认领".into(),
+                unclaimed: "未认领".into(),
+                pick_issue: "点一张 Issue".into(),
+                recent_limit: "最近完成列张数".into(),
+                recent_limit_help: "默认 5。只影响最右那一列。不能拖进这一列来关票。".into(),
+                unclear_issue: "对端看不清".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -1305,6 +1546,37 @@ impl ShellCopy {
                 no_gh_detected: "gh was not detected on this machine.".into(),
                 connection_ready: "GitHub is connected".into(),
                 project_menu: "Manage".into(),
+                board_hint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.".into(),
+                child_hint: "Direct children only. Still a board, not a second Frontier.".into(),
+                clear_filter: "Clear filter".into(),
+                col_blocked: "Blocked".into(),
+                col_frontier: "Frontier".into(),
+                col_in_progress: "In progress".into(),
+                col_recent: "Recently closed".into(),
+                no_items: "None".into(),
+                no_frontier_blocked: "Nothing to claim. The rest are still blocked.".into(),
+                no_frontier_claimed: "Nothing to claim. Open issues are already claimed.".into(),
+                no_frontier_empty: "Nothing to claim. This Project has no open issues.".into(),
+                no_recent: "None just closed".into(),
+                recent_note: "Only the last few, not all closed issues. Dragging here does not close.".into(),
+                empty_no_data: "No displayable data yet.".into(),
+                family: "Parent / children".into(),
+                deps: "Blocked by / blocking".into(),
+                parent: "Parent".into(),
+                children: "Children".into(),
+                no_parent: "No parent. Still a first-class Issue.".into(),
+                no_kids: "No children".into(),
+                only_kids: "Only these children".into(),
+                blocked_by: "Blocked by".into(),
+                blocking: "Blocking".into(),
+                none_block: "None — can enter Frontier".into(),
+                none: "None".into(),
+                claimed: "Claimed".into(),
+                unclaimed: "Unclaimed".into(),
+                pick_issue: "Select an Issue".into(),
+                recent_limit: "Recently-closed count".into(),
+                recent_limit_help: "Default 5. Only the rightmost column. Dragging here does not close.".into(),
+                unclear_issue: "The other side is unclear".into(),
             },
         }
     }
@@ -1373,6 +1645,12 @@ struct ClientSettingsFile {
     focused_host_id: String,
     #[serde(default)]
     remote_hosts: Vec<pairing::SavedRemoteHost>,
+    #[serde(default = "default_recent_limit")]
+    recent_completed_limit: u32,
+}
+
+fn default_recent_limit() -> u32 {
+    board::DEFAULT_RECENT_LIMIT
 }
 
 fn local_host_id() -> String {
@@ -1389,7 +1667,15 @@ fn load_or_init_appearance(
     path: &Path,
     system_locale: &str,
     system_appearance: SystemAppearance,
-) -> Result<(AppearanceSelection, String, Vec<pairing::SavedRemoteHost>), KernelError> {
+) -> Result<
+    (
+        AppearanceSelection,
+        String,
+        Vec<pairing::SavedRemoteHost>,
+        u32,
+    ),
+    KernelError,
+> {
     if path.exists() {
         let raw = fs::read_to_string(path)?;
         if let Ok(mut file) = serde_json::from_str::<ClientSettingsFile>(&raw) {
@@ -1402,11 +1688,17 @@ fn load_or_init_appearance(
                 },
                 file.focused_host_id,
                 file.remote_hosts,
+                board::clamp_recent_limit(file.recent_completed_limit),
             ));
         }
         if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
             file.last_light_theme = daytime_theme(file.last_light_theme);
-            return Ok((file, LOCAL_HOST_ID.to_string(), Vec::new()));
+            return Ok((
+                file,
+                LOCAL_HOST_ID.to_string(),
+                Vec::new(),
+                board::DEFAULT_RECENT_LIMIT,
+            ));
         }
     }
     let language = match_language(system_locale);
@@ -1425,9 +1717,15 @@ fn load_or_init_appearance(
         last_light_theme: Theme::WarmPaper,
         focused_host_id: LOCAL_HOST_ID.to_string(),
         remote_hosts: Vec::new(),
+        recent_completed_limit: board::DEFAULT_RECENT_LIMIT,
     };
     write_json(path, &file)?;
-    Ok((appearance, LOCAL_HOST_ID.to_string(), Vec::new()))
+    Ok((
+        appearance,
+        LOCAL_HOST_ID.to_string(),
+        Vec::new(),
+        board::DEFAULT_RECENT_LIMIT,
+    ))
 }
 
 fn load_client_tokens(path: &Path) -> Result<BTreeMap<String, String>, KernelError> {

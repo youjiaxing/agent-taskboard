@@ -65,6 +65,37 @@ type ShellCopy = {
   noGhDetected: string;
   connectionReady: string;
   projectMenu: string;
+  boardHint: string;
+  childHint: string;
+  clearFilter: string;
+  colBlocked: string;
+  colFrontier: string;
+  colInProgress: string;
+  colRecent: string;
+  noItems: string;
+  noFrontierBlocked: string;
+  noFrontierClaimed: string;
+  noFrontierEmpty: string;
+  noRecent: string;
+  recentNote: string;
+  emptyNoData: string;
+  family: string;
+  deps: string;
+  parent: string;
+  children: string;
+  noParent: string;
+  noKids: string;
+  onlyKids: string;
+  blockedBy: string;
+  blocking: string;
+  noneBlock: string;
+  none: string;
+  claimed: string;
+  unclaimed: string;
+  pickIssue: string;
+  recentLimit: string;
+  recentLimitHelp: string;
+  unclearIssue: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -112,6 +143,67 @@ type ProjectDraft = {
   repository: string;
 };
 
+type TriageRole =
+  | "needs-triage"
+  | "needs-info"
+  | "ready-for-agent"
+  | "ready-for-human"
+  | "wontfix";
+
+type IssueCard = {
+  id: string;
+  repository: string;
+  number: number;
+  title: string;
+  url: string;
+  claimedBy: string[];
+  triageRole: TriageRole | null;
+  open: boolean;
+};
+
+type IssueLink = {
+  id: string;
+  repository: string;
+  number: number | null;
+  title: string;
+  open: boolean | null;
+  visible: boolean;
+};
+
+type IssueDetail = {
+  id: string;
+  repository: string;
+  number: number;
+  title: string;
+  url: string;
+  open: boolean;
+  claimedBy: string[];
+  triageRole: TriageRole | null;
+  labels: string[];
+  parent: IssueLink | null;
+  children: IssueLink[];
+  blockedBy: IssueLink[];
+  blocking: IssueLink[];
+};
+
+type BoardColumns = {
+  blocked: IssueCard[];
+  frontier: IssueCard[];
+  inProgress: IssueCard[];
+  recentlyCompleted: IssueCard[];
+};
+
+type BoardSnapshot = {
+  projectId: string;
+  columns: BoardColumns | null;
+  empty: "no-data" | null;
+  frontierEmpty: "all-blocked" | "all-claimed" | "no-open" | null;
+  parentFilter: IssueCard | null;
+  selected: IssueDetail | null;
+  labelMappingActive: boolean;
+  recentLimit: number;
+};
+
 type PairingOffer = {
   address: string;
   code: string;
@@ -146,6 +238,8 @@ type Snapshot = {
   loopbackPage: LoopbackPage;
   pairingOffer: PairingOffer | null;
   pairedClients: PairedClient[];
+  board: BoardSnapshot | null;
+  recentCompletedLimit: number;
 };
 
 type RpcResult = {
@@ -308,7 +402,7 @@ function render(): void {
             }
           </div>
         </aside>
-        <main class="workspace">
+        <main class="workspace ${empty ? "" : "board-open"}">
           ${
             empty
               ? `<div class="empty">
@@ -355,6 +449,11 @@ function render(): void {
                     )
                     .join("")}
                 </div>
+              </div>
+              <div class="field">
+                <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
+                <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
+                <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
               </div>
               <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>
             </div>
@@ -452,7 +551,135 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
       <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
     </div>
     ${connectionPanel(copy, project)}
+    ${boardView(copy, snap.board)}
   </div>`;
+}
+
+function boardView(copy: ShellCopy, board: BoardSnapshot | null): string {
+  if (!board || board.empty === "no-data" || !board.columns) {
+    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
+  }
+  const hint = board.parentFilter ? copy.childHint : copy.boardHint;
+  const cols: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
+    ["blocked", copy.colBlocked, board.columns.blocked],
+    ["frontier", copy.colFrontier, board.columns.frontier],
+    ["inProgress", copy.colInProgress, board.columns.inProgress],
+    ["recentlyCompleted", copy.colRecent, board.columns.recentlyCompleted],
+  ];
+  return `<div class="board-shell">
+    <div class="board-main">
+      <div class="board-hint">
+        ${escapeHtml(hint)}
+        ${
+          board.parentFilter
+            ? `<button type="button" data-act="clear-filter">${escapeHtml(copy.clearFilter)}</button>`
+            : ""
+        }
+      </div>
+      <div class="lanes">
+        ${cols
+          .map(([key, name, items]) => {
+            const empty =
+              items.length > 0
+                ? ""
+                : key === "frontier"
+                  ? frontierEmptyText(copy, board.frontierEmpty)
+                  : key === "recentlyCompleted"
+                    ? copy.noRecent
+                    : copy.noItems;
+            return `<section class="lane" data-lane="${key}">
+              <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
+              ${items.map((issue) => issueCard(copy, issue, board.selected?.id)).join("")}
+              ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
+              ${key === "recentlyCompleted" ? `<p class="lane-note">${escapeHtml(copy.recentNote)}</p>` : ""}
+            </section>`;
+          })
+          .join("")}
+      </div>
+    </div>
+    <aside class="issue-detail">${issueDetail(copy, board)}</aside>
+  </div>`;
+}
+
+function frontierEmptyText(
+  copy: ShellCopy,
+  reason: BoardSnapshot["frontierEmpty"],
+): string {
+  if (reason === "all-blocked") return copy.noFrontierBlocked;
+  if (reason === "all-claimed") return copy.noFrontierClaimed;
+  if (reason === "no-open") return copy.noFrontierEmpty;
+  return copy.noItems;
+}
+
+function issueCard(copy: ShellCopy, issue: IssueCard, selectedId: string | undefined): string {
+  const tags = [
+    issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
+    issue.claimedBy.length
+      ? `<span class="tag">${escapeHtml(copy.claimed)} ${escapeHtml(issue.claimedBy.join(", "))}</span>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  return `<button type="button" class="issue-card ${issue.id === selectedId ? "sel" : ""}" data-act="focus-issue" data-id="${escapeHtml(issue.id)}">
+    <div class="issue-id">#${issue.number}</div>
+    <div class="issue-title">${escapeHtml(issue.title)}</div>
+    ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
+  </button>`;
+}
+
+function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
+  const issue = board.selected;
+  if (!issue) {
+    return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
+  }
+  const claim = issue.claimedBy.length
+    ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
+    : copy.unclaimed;
+  return `
+    <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+    <div class="detail-meta">
+      ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
+      <span class="tag">${escapeHtml(claim)}</span>
+    </div>
+    <section class="detail-block">
+      <h4>${escapeHtml(copy.family)}</h4>
+      <div class="tiny">${escapeHtml(copy.parent)}</div>
+      ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
+      <div class="tiny">${escapeHtml(copy.children)}</div>
+      ${
+        issue.children.length
+          ? issue.children.map((child) => issueLink(copy, child)).join("")
+          : `<span class="muted">${escapeHtml(copy.noKids)}</span>`
+      }
+      ${
+        issue.children.length
+          ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>`
+          : ""
+      }
+    </section>
+    <section class="detail-block">
+      <h4>${escapeHtml(copy.deps)}</h4>
+      <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
+      ${
+        issue.blockedBy.length
+          ? issue.blockedBy.map((link) => issueLink(copy, link)).join("")
+          : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`
+      }
+      <div class="tiny">${escapeHtml(copy.blocking)}</div>
+      ${
+        issue.blocking.length
+          ? issue.blocking.map((link) => issueLink(copy, link)).join("")
+          : `<span class="muted">${escapeHtml(copy.none)}</span>`
+      }
+    </section>`;
+}
+
+function issueLink(copy: ShellCopy, link: IssueLink): string {
+  if (!link.visible) {
+    return `<span class="muted">${escapeHtml(copy.unclearIssue)}</span>`;
+  }
+  const label = `#${link.number ?? "?"} ${link.title}`.trim();
+  return `<button type="button" class="name-btn" data-act="focus-issue" data-id="${escapeHtml(link.id)}">${escapeHtml(label)}</button>`;
 }
 
 function connectionPanel(copy: ShellCopy, project: Project): string {
@@ -774,6 +1001,31 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "quit") {
     await rpc("quitHost");
+  }
+  if (act === "focus-issue" && target.dataset.id) {
+    await rpc("focusIssue", { issueId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "filter-parent" && target.dataset.id) {
+    await rpc("filterParent", { issueId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "clear-filter") {
+    await rpc("clearParentFilter");
+    render();
+  }
+});
+
+app.addEventListener("change", async (event) => {
+  const target = event.target as HTMLElement | null;
+  if (!target || !snapshot) return;
+  if (target.getAttribute("data-field") === "recentLimit" && "value" in target) {
+    const limit = Number((target as HTMLInputElement).value);
+    if (!Number.isFinite(limit)) return;
+    await rpc("setRecentCompletedLimit", { limit });
+    render();
   }
 });
 

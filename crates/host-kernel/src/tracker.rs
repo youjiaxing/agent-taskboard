@@ -5,6 +5,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::issue::{DependencyRef, IssueRecord, IssueRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -80,8 +83,37 @@ pub enum ProbeOutcome {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackerReadError {
+    Auth {
+        source: Option<CredentialSource>,
+        kind: AuthFailureKind,
+        cli_detected: bool,
+        detail: Option<String>,
+    },
+}
+
+impl TrackerReadError {
+    pub fn into_probe(self) -> ProbeOutcome {
+        match self {
+            Self::Auth {
+                source,
+                kind,
+                cli_detected,
+                detail,
+            } => ProbeOutcome::Failed {
+                source,
+                kind,
+                cli_detected,
+                detail,
+            },
+        }
+    }
+}
+
 pub trait TrackerPort: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
+    fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError>;
 }
 
 pub const GITHUB_APP_ENV: &str = "AGENT_TASKBOARD_GITHUB_TOKEN";
@@ -120,6 +152,8 @@ fn nonempty(value: Option<&str>) -> Option<String> {
 
 pub struct MemoryTracker {
     failures: Mutex<BTreeSet<String>>,
+    read_failures: Mutex<BTreeSet<String>>,
+    issues: Mutex<BTreeMap<String, Vec<IssueRecord>>>,
     source: CredentialSource,
 }
 
@@ -127,6 +161,8 @@ impl MemoryTracker {
     pub fn new() -> Self {
         Self {
             failures: Mutex::new(BTreeSet::new()),
+            read_failures: Mutex::new(BTreeSet::new()),
+            issues: Mutex::new(BTreeMap::new()),
             source: CredentialSource::Cli,
         }
     }
@@ -136,6 +172,22 @@ impl MemoryTracker {
             .lock()
             .expect("memory tracker")
             .insert(repository.into());
+    }
+
+    pub fn fail_read(&self, repository: impl Into<String>) {
+        self.read_failures
+            .lock()
+            .expect("memory tracker")
+            .insert(repository.into());
+    }
+
+    pub fn add_issue(&self, issue: IssueRecord) {
+        self.issues
+            .lock()
+            .expect("memory tracker")
+            .entry(issue.repository.clone())
+            .or_default()
+            .push(issue);
     }
 }
 
@@ -165,6 +217,29 @@ impl TrackerPort for MemoryTracker {
             }
         }
     }
+
+    fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError> {
+        if self
+            .read_failures
+            .lock()
+            .expect("memory tracker")
+            .contains(ctx.repository)
+        {
+            return Err(TrackerReadError::Auth {
+                source: Some(self.source),
+                kind: AuthFailureKind::Unreachable,
+                cli_detected: true,
+                detail: Some(format!("cannot read {}", ctx.repository)),
+            });
+        }
+        Ok(self
+            .issues
+            .lock()
+            .expect("memory tracker")
+            .get(ctx.repository)
+            .cloned()
+            .unwrap_or_default())
+    }
 }
 
 trait EnvSource: Send + Sync {
@@ -178,6 +253,12 @@ trait GhAuth: Send + Sync {
 
 trait GitHubApi: Send + Sync {
     fn probe_repo(&self, host: &str, repository: &str, token: &str) -> Result<(), ProbeError>;
+    fn list_issue_nodes(
+        &self,
+        host: &str,
+        repository: &str,
+        token: &str,
+    ) -> Result<Vec<Value>, ProbeError>;
 }
 
 enum ProbeError {
@@ -198,6 +279,8 @@ pub struct ScriptedGitHub {
     pub gh_tokens: BTreeMap<String, String>,
     pub accept_tokens: BTreeSet<String>,
     pub unreachable: bool,
+    pub issues: BTreeMap<String, Vec<Value>>,
+    pub read_unauthorized: bool,
 }
 
 impl GitHubTracker {
@@ -219,13 +302,16 @@ impl GitHubTracker {
             api: Box::new(MapApi {
                 accept: script.accept_tokens.clone(),
                 unreachable: script.unreachable,
+                issues: script.issues.clone(),
+                read_unauthorized: script.read_unauthorized,
             }),
         }
     }
-}
 
-impl TrackerPort for GitHubTracker {
-    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
+    fn authorize(
+        &self,
+        ctx: &ProbeContext<'_>,
+    ) -> Result<(String, CredentialSource, bool), ProbeOutcome> {
         let app_env = self.env.var(GITHUB_APP_ENV);
         let generic_env = self
             .env
@@ -239,29 +325,94 @@ impl TrackerPort for GitHubTracker {
             gh_token.as_deref(),
             generic_env.as_deref(),
         );
-        let Some((token, source)) = resolved else {
-            return ProbeOutcome::Failed {
+        match resolved {
+            Some((token, source)) => Ok((token, source, cli_detected)),
+            None => Err(ProbeOutcome::Failed {
                 source: None,
                 kind: AuthFailureKind::MissingCredentials,
                 cli_detected,
                 detail: None,
-            };
-        };
-        match self.api.probe_repo(ctx.github_host, ctx.repository, &token) {
-            Ok(()) => ProbeOutcome::Ready { source },
-            Err(ProbeError::Unauthorized) => ProbeOutcome::Failed {
-                source: Some(source),
-                kind: AuthFailureKind::Rejected,
-                cli_detected,
-                detail: None,
-            },
-            Err(ProbeError::Unreachable(detail)) => ProbeOutcome::Failed {
-                source: Some(source),
-                kind: AuthFailureKind::Unreachable,
-                cli_detected,
-                detail: Some(detail),
-            },
+            }),
         }
+    }
+}
+
+impl TrackerPort for GitHubTracker {
+    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
+        match self.authorize(ctx) {
+            Err(outcome) => outcome,
+            Ok((token, source, _)) => {
+                match self.api.probe_repo(ctx.github_host, ctx.repository, &token) {
+                    Ok(()) => ProbeOutcome::Ready { source },
+                    Err(err) => probe_error_outcome(err, source, self.gh.detected()),
+                }
+            }
+        }
+    }
+
+    fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError> {
+        let (token, source, cli_detected) =
+            self.authorize(ctx).map_err(|outcome| match outcome {
+                ProbeOutcome::Failed {
+                    source,
+                    kind,
+                    cli_detected,
+                    detail,
+                } => TrackerReadError::Auth {
+                    source,
+                    kind,
+                    cli_detected,
+                    detail,
+                },
+                ProbeOutcome::Ready { .. } => TrackerReadError::Auth {
+                    source: None,
+                    kind: AuthFailureKind::MissingCredentials,
+                    cli_detected: self.gh.detected(),
+                    detail: None,
+                },
+            })?;
+        match self
+            .api
+            .list_issue_nodes(ctx.github_host, ctx.repository, &token)
+        {
+            Ok(nodes) => Ok(nodes
+                .iter()
+                .filter_map(|node| map_github_issue_node(node, ctx.repository))
+                .collect()),
+            Err(err) => Err(TrackerReadError::Auth {
+                source: Some(source),
+                kind: match err {
+                    ProbeError::Unauthorized => AuthFailureKind::Rejected,
+                    ProbeError::Unreachable(_) => AuthFailureKind::Unreachable,
+                },
+                cli_detected,
+                detail: match err {
+                    ProbeError::Unreachable(detail) => Some(detail),
+                    ProbeError::Unauthorized => None,
+                },
+            }),
+        }
+    }
+}
+
+fn probe_error_outcome(
+    err: ProbeError,
+    source: CredentialSource,
+    cli_detected: bool,
+) -> ProbeOutcome {
+    match err {
+        ProbeError::Unauthorized => ProbeOutcome::Failed {
+            source: Some(source),
+            kind: AuthFailureKind::Rejected,
+            cli_detected,
+            detail: None,
+        },
+        ProbeError::Unreachable(detail) => ProbeOutcome::Failed {
+            source: Some(source),
+            kind: AuthFailureKind::Unreachable,
+            cli_detected,
+            detail: Some(detail),
+        },
     }
 }
 
@@ -322,13 +473,119 @@ impl GitHubApi for LiveGitHubApi {
             Err(err) => Err(ProbeError::Unreachable(err.to_string())),
         }
     }
+
+    fn list_issue_nodes(
+        &self,
+        host: &str,
+        repository: &str,
+        token: &str,
+    ) -> Result<Vec<Value>, ProbeError> {
+        let Some((owner, name)) = repository.split_once('/') else {
+            return Err(ProbeError::Unreachable(
+                "repository must be owner/name".into(),
+            ));
+        };
+        let url = github_graphql_url(host);
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(20))
+            .build();
+        let mut after: Option<String> = None;
+        let mut nodes = Vec::new();
+        loop {
+            let body = serde_json::json!({
+                "query": GITHUB_ISSUES_QUERY,
+                "variables": { "owner": owner, "name": name, "after": after },
+            });
+            let response = match agent
+                .post(&url)
+                .set("Authorization", &format!("Bearer {token}"))
+                .set("User-Agent", "Agent-Taskboard")
+                .set("Accept", "application/vnd.github+json")
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string())
+            {
+                Ok(response) => response,
+                Err(ureq::Error::Status(401 | 403, _)) => return Err(ProbeError::Unauthorized),
+                Err(ureq::Error::Status(404, _)) => return Err(ProbeError::Unauthorized),
+                Err(ureq::Error::Status(code, _)) => {
+                    return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
+                }
+                Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
+            };
+            let payload: Value = serde_json::from_str(
+                &response
+                    .into_string()
+                    .map_err(|err| ProbeError::Unreachable(err.to_string()))?,
+            )
+            .map_err(|err| ProbeError::Unreachable(err.to_string()))?;
+            if payload
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_some_and(|errors| !errors.is_empty())
+            {
+                return Err(ProbeError::Unreachable("GitHub GraphQL error".into()));
+            }
+            let connection = payload
+                .pointer("/data/repository/issues")
+                .cloned()
+                .unwrap_or(Value::Null);
+            if let Some(page) = connection.get("nodes").and_then(Value::as_array) {
+                nodes.extend(page.iter().cloned());
+            }
+            let has_next = connection
+                .pointer("/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            after = connection
+                .pointer("/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            if !has_next || after.is_none() || nodes.len() >= 500 {
+                break;
+            }
+        }
+        Ok(nodes)
+    }
 }
+
+const GITHUB_ISSUES_QUERY: &str = r#"
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, states: [OPEN, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        state
+        closedAt
+        url
+        repository { nameWithOwner }
+        parent { number title state repository { nameWithOwner } }
+        assignees(first: 10) { nodes { login } }
+        labels(first: 30) { nodes { name } }
+        issueDependenciesSummary { blockedBy }
+        blockedBy(first: 50) { nodes { number title state repository { nameWithOwner } } }
+        blocking(first: 50) { nodes { number title state repository { nameWithOwner } } }
+        subIssues(first: 100) { nodes { number title state repository { nameWithOwner } } }
+      }
+    }
+  }
+}
+"#;
 
 fn github_repo_url(host: &str, repository: &str) -> String {
     if host.eq_ignore_ascii_case("github.com") {
         format!("https://api.github.com/repos/{repository}")
     } else {
         format!("https://{host}/api/v3/repos/{repository}")
+    }
+}
+
+fn github_graphql_url(host: &str) -> String {
+    if host.eq_ignore_ascii_case("github.com") {
+        "https://api.github.com/graphql".into()
+    } else {
+        format!("https://{host}/api/graphql")
     }
 }
 
@@ -364,6 +621,8 @@ impl GhAuth for MapGh {
 struct MapApi {
     accept: BTreeSet<String>,
     unreachable: bool,
+    issues: BTreeMap<String, Vec<Value>>,
+    read_unauthorized: bool,
 }
 
 impl GitHubApi for MapApi {
@@ -377,4 +636,227 @@ impl GitHubApi for MapApi {
             Err(ProbeError::Unauthorized)
         }
     }
+
+    fn list_issue_nodes(
+        &self,
+        _host: &str,
+        repository: &str,
+        token: &str,
+    ) -> Result<Vec<Value>, ProbeError> {
+        if self.unreachable {
+            return Err(ProbeError::Unreachable("unreachable".into()));
+        }
+        if self.read_unauthorized || !self.accept.contains(token) {
+            return Err(ProbeError::Unauthorized);
+        }
+        Ok(self.issues.get(repository).cloned().unwrap_or_default())
+    }
+}
+
+pub fn map_github_issue_node(node: &Value, fallback_repository: &str) -> Option<IssueRecord> {
+    if node.get("pull_request").is_some() {
+        return None;
+    }
+    let number = node.get("number")?.as_u64()?;
+    let title = node
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let repository = node
+        .pointer("/repository/nameWithOwner")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_repository)
+        .to_string();
+    let state = node.get("state").and_then(Value::as_str).unwrap_or("OPEN");
+    let open = !state.eq_ignore_ascii_case("closed");
+    let url = node
+        .get("url")
+        .or_else(|| node.get("html_url"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("https://github.com/{repository}/issues/{number}"));
+    let closed_at = node
+        .get("closedAt")
+        .or_else(|| node.get("closed_at"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let assignees = logins(node.get("assignees"));
+    let labels = label_names(node.get("labels"));
+    let parent = parse_ref(node.get("parent"), &repository);
+    let children = connection_refs(
+        node.get("subIssues").or_else(|| node.get("sub_issues")),
+        &repository,
+    );
+    let mut blocked_by = connection_deps(
+        node.get("blockedBy")
+            .or_else(|| node.get("blocked_by"))
+            .or_else(|| node.pointer("/dependencies/blocked_by")),
+        &repository,
+    );
+    let blocking = connection_refs(
+        node.get("blocking")
+            .or_else(|| node.pointer("/dependencies/blocking")),
+        &repository,
+    );
+    let summary_open = node
+        .pointer("/issueDependenciesSummary/blockedBy")
+        .or_else(|| node.pointer("/issue_dependencies_summary/blocked_by"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let known_open = blocked_by
+        .iter()
+        .filter(|blocker| blocker.unfinished())
+        .count() as u64;
+    if summary_open > known_open {
+        for _ in 0..(summary_open - known_open) {
+            blocked_by.push(DependencyRef::Unclear {
+                repository: None,
+                number: None,
+            });
+        }
+    }
+    Some(IssueRecord {
+        repository,
+        number,
+        title,
+        url,
+        open,
+        closed_at,
+        assignees,
+        labels,
+        parent,
+        children,
+        blocked_by,
+        blocking,
+    })
+}
+
+fn logins(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("login")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect(),
+        Some(object) => object
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("login")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+fn label_names(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("name")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .collect(),
+        Some(object) => object
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.get("name")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+fn connection_refs(value: Option<&Value>, fallback_repository: &str) -> Vec<IssueRef> {
+    connection_nodes(value)
+        .into_iter()
+        .filter_map(|node| parse_ref(Some(node), fallback_repository))
+        .collect()
+}
+
+fn connection_deps(value: Option<&Value>, fallback_repository: &str) -> Vec<DependencyRef> {
+    connection_nodes(value)
+        .into_iter()
+        .map(|node| parse_dep(node, fallback_repository))
+        .collect()
+}
+
+fn connection_nodes(value: Option<&Value>) -> Vec<&Value> {
+    match value {
+        Some(Value::Array(items)) => items.iter().collect(),
+        Some(object) => object
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().collect())
+            .unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+fn parse_ref(value: Option<&Value>, fallback_repository: &str) -> Option<IssueRef> {
+    let value = value?;
+    if value.is_null() {
+        return None;
+    }
+    let number = value.get("number")?.as_u64()?;
+    let repository = value
+        .pointer("/repository/nameWithOwner")
+        .and_then(Value::as_str)
+        .unwrap_or(fallback_repository)
+        .to_string();
+    let title = value
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Some(IssueRef {
+        repository,
+        number,
+        title,
+        open: value.get("state").and_then(Value::as_str).map(state_open),
+    })
+}
+
+fn parse_dep(value: &Value, fallback_repository: &str) -> DependencyRef {
+    match parse_ref(Some(value), fallback_repository) {
+        Some(issue) if issue.open.is_some() && !issue.repository.is_empty() => {
+            DependencyRef::Known(issue)
+        }
+        Some(issue) => DependencyRef::Unclear {
+            repository: Some(issue.repository),
+            number: Some(issue.number),
+        },
+        None => DependencyRef::Unclear {
+            repository: value
+                .pointer("/repository/nameWithOwner")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            number: value.get("number").and_then(Value::as_u64),
+        },
+    }
+}
+
+fn state_open(state: &str) -> bool {
+    !state.eq_ignore_ascii_case("closed")
 }

@@ -55,7 +55,7 @@ fn registering_a_github_project_lists_it_and_makes_it_current() {
     assert_eq!(out.snapshot.focused_project_id, project.id);
     assert!(out.snapshot.empty_actions.is_empty());
     assert!(!project.has_active_run);
-    assert!(!project.tracker_synced);
+    assert!(project.tracker_synced);
     assert!(matches!(
         project.connection,
         ProjectConnection::Ready {
@@ -239,7 +239,9 @@ fn removing_the_last_project_returns_to_an_empty_host() {
 fn a_project_that_never_synced_the_tracker_can_still_be_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/fresh");
-    let mut host = boot_memory(tmp.path());
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.fail_read("you/fresh");
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker).unwrap();
     let id = register(&mut host, "fresh", &dir, "you/fresh");
     assert!(!host.snapshot().projects[0].tracker_synced);
 
@@ -338,6 +340,7 @@ fn credentials_prefer_app_env_then_secrets_then_cli_then_generic_env() {
                 ]
                 .into(),
                 unreachable: false,
+                ..Default::default()
             },
             Some("secret-token"),
         ),
@@ -356,6 +359,7 @@ fn credentials_prefer_app_env_then_secrets_then_cli_then_generic_env() {
                 ]
                 .into(),
                 unreachable: false,
+                ..Default::default()
             },
             Some("secret-token"),
         ),
@@ -369,6 +373,7 @@ fn credentials_prefer_app_env_then_secrets_then_cli_then_generic_env() {
                 gh_tokens: [("github.com".into(), "cli-token".into())].into(),
                 accept_tokens: ["cli-token".into(), "generic-token".into()].into(),
                 unreachable: false,
+                ..Default::default()
             },
             None,
         ),
@@ -382,6 +387,7 @@ fn credentials_prefer_app_env_then_secrets_then_cli_then_generic_env() {
                 gh_tokens: Default::default(),
                 accept_tokens: ["generic-token".into()].into(),
                 unreachable: false,
+                ..Default::default()
             },
             None,
         ),
@@ -401,6 +407,7 @@ fn an_unreachable_host_is_not_reported_as_auth_failure() {
             gh_tokens: Default::default(),
             accept_tokens: ["generic-token".into()].into(),
             unreachable: true,
+            ..Default::default()
         })),
     )
     .unwrap();
