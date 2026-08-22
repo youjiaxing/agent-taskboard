@@ -1,13 +1,30 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::{Language, LaunchEnvironment};
+
+mod antigravity;
+mod claude;
+mod codex;
+
+pub use antigravity::{AntigravityAdapter, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME};
+pub use claude::{ClaudeAdapter, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME};
+pub use codex::{CodexAdapter, CODEX_BIN, CODEX_ID, CODEX_NAME};
 
 pub const GROK_BUILD_ID: &str = "grok-build";
 pub const GROK_BUILD_NAME: &str = "Grok Build";
 pub const GROK_BIN: &str = "grok";
+
+pub fn builtin_agents() -> Vec<Arc<dyn AgentPort>> {
+    vec![
+        Arc::new(GrokAdapter),
+        Arc::new(CodexAdapter),
+        Arc::new(ClaudeAdapter),
+        Arc::new(AntigravityAdapter),
+    ]
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -162,6 +179,17 @@ pub trait AgentPort: Send + Sync {
     fn recent_action(&self) -> Option<String> {
         None
     }
+
+    fn native_isolation(&self) -> bool {
+        false
+    }
+
+    fn isolation_unavailable_reason(&self, language: Language) -> String {
+        match language {
+            Language::ZhCn => format!("{} 没有原生隔离执行目录。", self.name()),
+            Language::En => format!("{} has no native isolated work directory.", self.name()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +241,10 @@ impl AgentPort for GrokAdapter {
     ) -> Vec<String> {
         grok_argv(executable, values)
     }
+
+    fn native_isolation(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -224,6 +256,9 @@ pub struct MemoryAgent {
     known_locations: Vec<PathBuf>,
     installed: Mutex<bool>,
     recent_action: Mutex<Option<String>>,
+    fields: Vec<AgentField>,
+    seed: BTreeMap<String, String>,
+    native_isolation: bool,
 }
 
 impl MemoryAgent {
@@ -241,11 +276,22 @@ impl MemoryAgent {
             known_locations: vec![PathBuf::from("/mem/.grok/bin")],
             installed: Mutex::new(true),
             recent_action: Mutex::new(None),
+            fields: grok_fields(),
+            seed: grok_seed(),
+            native_isolation: false,
         }
     }
 
     pub fn installed_grok() -> Self {
-        Self::installed(GROK_BUILD_ID, GROK_BUILD_NAME, GROK_BIN)
+        let mut agent = Self::installed(GROK_BUILD_ID, GROK_BUILD_NAME, GROK_BIN);
+        agent.native_isolation = true;
+        agent
+    }
+
+    pub fn with_fields(mut self, fields: Vec<AgentField>, seed: BTreeMap<String, String>) -> Self {
+        self.fields = fields;
+        self.seed = seed;
+        self
     }
 
     pub fn missing_grok() -> Self {
@@ -299,11 +345,11 @@ impl AgentPort for MemoryAgent {
     }
 
     fn config_fields(&self) -> Vec<AgentField> {
-        grok_fields()
+        self.fields.clone()
     }
 
     fn seed_config(&self) -> BTreeMap<String, String> {
-        grok_seed()
+        self.seed.clone()
     }
 
     fn assemble_argv_for(
@@ -317,76 +363,33 @@ impl AgentPort for MemoryAgent {
     fn recent_action(&self) -> Option<String> {
         self.recent_action.lock().expect("memory agent").clone()
     }
+
+    fn native_isolation(&self) -> bool {
+        self.native_isolation
+    }
 }
 
 fn grok_fields() -> Vec<AgentField> {
     vec![
-        AgentField {
-            id: "model".into(),
-            label: "model".into(),
-            kind: AgentFieldKind::Text,
-            options: Vec::new(),
-            required: true,
-            folded: false,
-        },
-        AgentField {
-            id: "effort".into(),
-            label: "effort".into(),
-            kind: AgentFieldKind::Select,
-            options: vec!["low".into(), "medium".into(), "high".into()],
-            required: true,
-            folded: false,
-        },
-        AgentField {
-            id: "permission-mode".into(),
-            label: "权限模式".into(),
-            kind: AgentFieldKind::Select,
-            options: vec![
-                "normal".into(),
-                "plan".into(),
-                "auto".into(),
-                "always-approve".into(),
-            ],
-            required: true,
-            folded: false,
-        },
-        AgentField {
-            id: "always-approve".into(),
-            label: "alwaysApprove".into(),
-            kind: AgentFieldKind::Boolean,
-            options: Vec::new(),
-            required: false,
-            folded: false,
-        },
-        AgentField {
-            id: "sandbox".into(),
-            label: "sandbox".into(),
-            kind: AgentFieldKind::Select,
-            options: vec![
-                "off".into(),
-                "workspace".into(),
-                "read-only".into(),
-                "strict".into(),
-            ],
-            required: true,
-            folded: false,
-        },
-        AgentField {
-            id: "initial-instruction".into(),
-            label: "初始指令".into(),
-            kind: AgentFieldKind::Multiline,
-            options: Vec::new(),
-            required: false,
-            folded: false,
-        },
-        AgentField {
-            id: "additional-args".into(),
-            label: "附加参数".into(),
-            kind: AgentFieldKind::Text,
-            options: Vec::new(),
-            required: false,
-            folded: true,
-        },
+        text_field("model", "model", true, false),
+        select_field("effort", "effort", &["low", "medium", "high"], true, false),
+        select_field(
+            "permission-mode",
+            "权限模式",
+            &["normal", "plan", "auto", "always-approve"],
+            true,
+            false,
+        ),
+        boolean_field("always-approve", "alwaysApprove", false),
+        select_field(
+            "sandbox",
+            "sandbox",
+            &["off", "workspace", "read-only", "strict"],
+            true,
+            false,
+        ),
+        initial_instruction_field(),
+        additional_args_field(),
     ]
 }
 
@@ -416,9 +419,7 @@ fn grok_argv(executable: &Path, values: &BTreeMap<String, String>) -> Vec<String
     {
         argv.push("--always-approve".into());
     }
-    if let Some(args) = values.get("additional-args") {
-        argv.extend(args.split_whitespace().map(ToOwned::to_owned));
-    }
+    append_additional_args(&mut argv, values);
     argv
 }
 
@@ -427,6 +428,84 @@ fn append_flag(argv: &mut Vec<String>, flag: &str, value: Option<&String>) {
         argv.push(flag.into());
         argv.push(value.clone());
     }
+}
+
+fn append_switch(argv: &mut Vec<String>, flag: &str, values: &BTreeMap<String, String>, id: &str) {
+    if values.get(id).is_some_and(|value| value == "true") {
+        argv.push(flag.into());
+    }
+}
+
+fn append_additional_args(argv: &mut Vec<String>, values: &BTreeMap<String, String>) {
+    if let Some(args) = values.get("additional-args") {
+        argv.extend(
+            args.split_whitespace()
+                .filter(|part| !part.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+}
+
+fn text_field(id: &str, label: &str, required: bool, folded: bool) -> AgentField {
+    AgentField {
+        id: id.into(),
+        label: label.into(),
+        kind: AgentFieldKind::Text,
+        options: Vec::new(),
+        required,
+        folded,
+    }
+}
+
+fn select_field(
+    id: &str,
+    label: &str,
+    options: &[&str],
+    required: bool,
+    folded: bool,
+) -> AgentField {
+    AgentField {
+        id: id.into(),
+        label: label.into(),
+        kind: AgentFieldKind::Select,
+        options: options.iter().map(|option| (*option).to_string()).collect(),
+        required,
+        folded,
+    }
+}
+
+fn boolean_field(id: &str, label: &str, folded: bool) -> AgentField {
+    AgentField {
+        id: id.into(),
+        label: label.into(),
+        kind: AgentFieldKind::Boolean,
+        options: Vec::new(),
+        required: false,
+        folded,
+    }
+}
+
+fn multiline_field(id: &str, label: &str) -> AgentField {
+    AgentField {
+        id: id.into(),
+        label: label.into(),
+        kind: AgentFieldKind::Multiline,
+        options: Vec::new(),
+        required: false,
+        folded: false,
+    }
+}
+
+fn additional_args_field() -> AgentField {
+    text_field("additional-args", "附加参数", false, true)
+}
+
+fn initial_instruction_field() -> AgentField {
+    multiline_field("initial-instruction", "初始指令")
+}
+
+fn local_bin() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".local").join("bin"))
 }
 
 pub fn probe_binary(bin: &str, env: &LaunchEnvironment, known: &[PathBuf]) -> ProbeResult {

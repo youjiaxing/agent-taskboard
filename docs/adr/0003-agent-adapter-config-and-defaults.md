@@ -1,6 +1,6 @@
 # Agent Adapter 配置合同与默认值
 
-三家官方 CLI 的启动参数、枚举和鉴权方式对不齐，而且以后还要接新的 Agent。内核只认一份稳定合同：探测本机可执行文件、按 Adapter 声明字段、组装交互 TUI 的 argv、说明能力。字段集合、枚举和 flag 拼法分家维护，不造假统一的 `permissionMode` 或统一 effort 五档。v1 内置 Grok Build → Codex → Claude Code，名单不封闭；加一家是新模块，不改启动表单、默认值记忆或 Run 生命周期。各家云账号、API key、登录态不是看板职责。
+三家官方 CLI 的启动参数、枚举和鉴权方式对不齐，而且以后还要接新的 Agent。内核只认一份稳定合同：探测本机可执行文件、按 Adapter 声明字段、组装交互 TUI 的 argv、说明能力。字段集合、枚举和 flag 拼法分家维护，不造假统一的 `permissionMode` 或统一 effort 五档。v1 内置 Grok Build → Codex → Claude Code → Antigravity CLI，名单不封闭；加一家是新模块，不改启动表单、默认值记忆或 Run 生命周期。各家云账号、API key、登录态不是看板职责。
 
 ## 默认值与启动表单
 
@@ -18,7 +18,7 @@
 - 管理或探测 Agent 登录态并据此禁启动
 - 用户丢一个二进制名就能开跑的「通用 CLI」
 - 运行时插件市场
-- v1 实现 DeepSeek Harness 或 Antigravity CLI（等它们有官方交互 TUI 再按同一合同加；仅有 `dsh web` 不算 Agent）
+- v1 实现 DeepSeek Harness（仅有 `dsh web` 不算 Agent）。Antigravity CLI 已按同一合同收进内置名单，只探测和启动 `agy`，不把 Gemini CLI 算作另一家。
 
 ## Considered options
 
@@ -36,4 +36,4 @@
 
 - `/to-spec` 按本合同写 Agent Adapter，不必为三家各编一套内核模型。
 - 启动表单按各 Adapter 的字段声明渲染；第一层字段清单见对应决策票，不在内核写死。
-- 默认选中：已安装列表里按 Grok Build → Codex → Claude Code 挑第一个。找不到可执行文件则不能启动；这不是在管登录。探测和 spawn 用哪份环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。
+- 默认选中：已安装列表里按 Grok Build → Codex → Claude Code → Antigravity CLI 挑第一个。找不到可执行文件则不能启动；这不是在管登录。探测和 spawn 用哪份环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。

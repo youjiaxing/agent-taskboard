@@ -24,9 +24,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub use agent::{
-    intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort, AgentSummary, GrokAdapter,
-    IntentOption, MemoryAgent, PrefillSource, ProbeResult, RunIntent, RunLaunchConfig,
-    RunLaunchForm, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
+    builtin_agents, intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort,
+    AgentSummary, AntigravityAdapter, ClaudeAdapter, CodexAdapter, GrokAdapter, IntentOption,
+    MemoryAgent, PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
+    ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID,
+    CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -587,7 +589,7 @@ impl KernelPorts {
     pub fn live() -> Self {
         Self {
             tracker: Arc::new(GitHubTracker::live()),
-            agents: vec![Arc::new(GrokAdapter)],
+            agents: builtin_agents(),
             launch_env: Arc::new(ShellLaunchEnv::live()),
             sessions: Arc::new(PtySessionFactory),
         }
@@ -1073,11 +1075,7 @@ impl HostKernel {
                 self.launch_form = None;
             }
             Command::StartUnboundRun { project_id } => {
-                let agent = self
-                    .agents
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))?;
+                let agent = self.default_agent_for_project(&project_id)?;
                 self.start_unbound_run(
                     &project_id,
                     RunLaunchConfig {
@@ -1658,6 +1656,30 @@ impl HostKernel {
         )
     }
 
+    fn default_agent_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Arc<dyn AgentPort>, KernelError> {
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let summaries = launch::summarize_agents(
+            &self.agents,
+            self.launch_env.as_ref(),
+            &project.local_path,
+            self.appearance.language,
+        );
+        let last = self.last_successful_agent.get(project_id).cloned();
+        let selected = launch::default_agent_id(&summaries, last.as_deref(), None);
+        self.agents
+            .iter()
+            .find(|agent| agent.id() == selected)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))
+    }
+
     fn prepare_run_launch(
         &mut self,
         project_id: &str,
@@ -1715,7 +1737,11 @@ impl HostKernel {
             prefill_source,
             working_directory: project.local_path.display().to_string(),
             isolation_supported: false,
-            isolation_reason: launch::isolation_reason(language),
+            isolation_reason: if agent.native_isolation() {
+                launch::isolation_reason(language)
+            } else {
+                agent.isolation_unavailable_reason(language)
+            },
             opening_text,
             command_preview: preview,
             intents: launch::intent_options(language),

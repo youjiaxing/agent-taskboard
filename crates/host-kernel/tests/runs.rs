@@ -130,8 +130,8 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     assert_eq!(out.snapshot.copy.unbound_issue, "未绑定 Issue");
     assert!(out.snapshot.projects[0].has_active_run);
     assert_eq!(out.snapshot.focused_run_id, run.id);
-    assert_eq!(h.launch_env.capture_count(), 1);
-    assert_eq!(h.launch_env.captured_dirs(), vec![dir.clone()]);
+    assert_eq!(h.launch_env.capture_count(), 2);
+    assert_eq!(h.launch_env.captured_dirs(), vec![dir.clone(), dir.clone()]);
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn probe_and_start_share_one_launch_env_and_exec_absolute_path() {
         }))
         .unwrap();
 
-    assert_eq!(h.launch_env.capture_count(), 1);
+    assert_eq!(h.launch_env.capture_count(), 2);
     let spawn = h.sessions.last_spawn().unwrap();
     assert_eq!(spawn.argv[0], "/mem/grok");
     assert!(spawn

@@ -49,6 +49,11 @@ fn grok_adapter_declares_first_layer_fields() {
 }
 
 #[test]
+fn grok_adapter_declares_native_isolation() {
+    assert!(GrokAdapter.native_isolation());
+}
+
+#[test]
 fn grok_adapter_assembles_form_values_without_prompt_flag() {
     let executable = PathBuf::from("/opt/fake/grok");
     let mut values = GrokAdapter.seed_config();

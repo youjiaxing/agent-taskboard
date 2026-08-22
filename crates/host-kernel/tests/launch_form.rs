@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use host_kernel::{
-    intent_prefix, AgentSession, BootRequest, HostKernel, KernelPorts, Language, MemoryAgent,
-    MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource, RunIntent, RunStatus,
-    SystemAppearance,
+    intent_prefix, AgentField, AgentFieldKind, AgentSession, BootRequest, HostKernel, KernelPorts,
+    Language, MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource,
+    RunIntent, RunStatus, SystemAppearance, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
+    CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -64,6 +65,43 @@ fn register(host: &mut HostKernel, dir: &Path, name: &str, repo: &str) -> String
     .unwrap()
     .id
     .clone()
+}
+
+fn field(id: &str, folded: bool) -> AgentField {
+    AgentField {
+        id: id.into(),
+        label: id.into(),
+        kind: AgentFieldKind::Text,
+        options: Vec::new(),
+        required: false,
+        folded,
+    }
+}
+
+fn memory_codex() -> MemoryAgent {
+    MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN).with_fields(
+        vec![
+            field("model", false),
+            field("effort", false),
+            field("approval", false),
+            field("sandbox", false),
+            field("initial-instruction", false),
+            field("profile", true),
+            field("additional-args", true),
+        ],
+        [
+            ("model", "gpt-5.1"),
+            ("effort", "medium"),
+            ("approval", "on-request"),
+            ("sandbox", "workspace-write"),
+            ("initial-instruction", ""),
+            ("profile", ""),
+            ("additional-args", ""),
+        ]
+        .into_iter()
+        .map(|(id, value)| (id.to_string(), value.to_string()))
+        .collect(),
+    )
 }
 
 fn grok_values() -> serde_json::Value {
@@ -528,6 +566,167 @@ fn last_agent_skips_picker_until_switch() {
         .unwrap();
     assert!(!form.skip_agent_picker);
     assert_eq!(form.agents.len(), 2);
+}
+
+#[test]
+fn switching_agent_replaces_fields_and_isolation_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let codex = Arc::new(memory_codex());
+    let mut h = harness_with(tmp.path(), vec![grok, codex]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    let grok_form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    let grok_ids: Vec<_> = grok_form
+        .fields
+        .iter()
+        .map(|field| field.id.as_str())
+        .collect();
+    assert!(grok_ids.contains(&"permission-mode"));
+    assert!(!grok_ids.contains(&"approval"));
+    assert!(grok_form.isolation_reason.contains("留给隔离票"));
+    assert!(!grok_form.isolation_supported);
+
+    let codex_form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "codex",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    let codex_ids: Vec<_> = codex_form
+        .fields
+        .iter()
+        .map(|field| field.id.as_str())
+        .collect();
+    assert!(codex_ids.contains(&"approval"));
+    assert!(codex_ids.contains(&"profile"));
+    assert!(!codex_ids.contains(&"permission-mode"));
+    assert_eq!(codex_form.selected_agent_id, "codex");
+    assert!(!codex_form.isolation_supported);
+    assert!(codex_form.isolation_reason.contains("没有原生隔离"));
+    assert!(!codex_form.isolation_reason.contains("留给隔离票"));
+}
+
+#[test]
+fn default_agent_is_first_installed_in_builtin_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = MemoryAgent::missing_grok();
+    let codex = MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN);
+    let claude = MemoryAgent::installed(CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CLAUDE_BIN);
+    let agy = MemoryAgent::installed(ANTIGRAVITY_ID, ANTIGRAVITY_NAME, ANTIGRAVITY_BIN);
+    let mut h = harness_with(
+        tmp.path(),
+        vec![
+            Arc::new(grok),
+            Arc::new(codex),
+            Arc::new(claude),
+            Arc::new(agy),
+        ],
+    );
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert_eq!(form.selected_agent_id, CODEX_ID);
+    assert_eq!(
+        form.agents
+            .iter()
+            .map(|agent| agent.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["grok-build", CODEX_ID, CLAUDE_CODE_ID, ANTIGRAVITY_ID]
+    );
+    assert_eq!(form.agents[3].name, ANTIGRAVITY_NAME);
+    assert!(!form.agents.iter().any(|agent| agent.id.contains("gemini")
+        || agent.name.contains("Gemini")
+        || agent.name.contains("gemini")));
+}
+
+#[test]
+fn start_without_form_uses_first_installed_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = MemoryAgent::missing_grok();
+    let codex = MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN);
+    let mut h = harness_with(tmp.path(), vec![Arc::new(grok), Arc::new(codex)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    let run = out.snapshot.runs.last().unwrap();
+    assert_eq!(run.agent_id, CODEX_ID);
+    assert_eq!(run.agent_name, CODEX_NAME);
+    assert_eq!(run.status, RunStatus::Running);
+    assert_eq!(h.sessions.spawn_count(), 1);
+}
+
+#[test]
+fn uninstalled_agent_cannot_start_from_form() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let missing = memory_codex();
+    missing.set_installed(false);
+    let mut h = harness_with(tmp.path(), vec![grok, Arc::new(missing)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "codex",
+        }))
+        .unwrap();
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "codex",
+            "values": {
+                "model": "gpt-5.1",
+                "effort": "medium",
+                "approval": "on-request",
+                "sandbox": "workspace-write",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "试未安装的 Codex",
+        }))
+        .unwrap();
+    let form = out.snapshot.launch_form.as_ref().unwrap();
+    let error = form.error.as_deref().unwrap();
+    assert!(error.contains("codex"), "{error}");
+    assert!(!error.to_ascii_lowercase().contains("login"), "{error}");
+    assert!(!error.contains("登录"), "{error}");
+    assert_eq!(out.snapshot.runs.last().unwrap().status, RunStatus::Ended);
+    assert_eq!(h.sessions.spawn_count(), 0);
 }
 
 #[test]
