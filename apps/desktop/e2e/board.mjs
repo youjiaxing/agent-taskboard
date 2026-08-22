@@ -54,6 +54,56 @@ if (filtered.join(",") !== "child ready") {
 await page.click("button:has-text('清除过滤')");
 await page.waitForFunction(() => !document.querySelector("button[data-act='clear-filter']"));
 
+const boardActive = await page.$eval("button[data-act='center-view'][data-id='board']", (node) =>
+  node.classList.contains("active"),
+);
+if (!boardActive) {
+  throw new Error("factory default should be the board view");
+}
+
+await page.click("button[data-act='center-view'][data-id='graph']");
+await page.waitForSelector(".dep-graph");
+if (await page.$(".lanes")) {
+  throw new Error("graph view should replace the four columns");
+}
+const graphTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
+  nodes.map((node) => node.textContent),
+);
+if (!graphTitles.includes("unparented ready") || !graphTitles.includes("blocker")) {
+  throw new Error(`graph should include all open issues, got ${JSON.stringify(graphTitles)}`);
+}
+if (graphTitles.includes("old gate") || graphTitles.includes("just closed")) {
+  throw new Error("closed context should be off by default");
+}
+const edge = await page.$('path[data-from="you/garden#9"][data-to="you/garden#3"]');
+if (!edge) {
+  throw new Error("graph should draw the blocker edge from left to right");
+}
+if (await page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]')) {
+  throw new Error("graph should not draw parent/child as an edge");
+}
+
+await page.click(".graph-node:has-text('unparented ready')");
+await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+if (await page.$("button[data-act='clear-filter']")) {
+  throw new Error("clicking a graph node should not filter the board");
+}
+
+await page.click("[data-field='closedContext']");
+await page.waitForSelector(".graph-node:has-text('old gate')");
+if (await page.$(".graph-node:has-text('just closed')")) {
+  throw new Error("closed context should only add dependency neighbors");
+}
+
+await page.click("button[data-act='center-view'][data-id='board']");
+await page.waitForSelector(".lanes");
+const afterGraphFrontier = await page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
+  nodes.map((node) => node.textContent),
+);
+if (!afterGraphFrontier.includes("unparented ready")) {
+  throw new Error("returning to the board should keep the unfiltered Frontier");
+}
+
 await page.click("button:has-text('设置')");
 await page.waitForSelector("#recent-limit");
 await page.fill("#recent-limit", "1");

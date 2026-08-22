@@ -220,6 +220,14 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .board-head h1 { margin: 0; font-size: 22px; font-weight: 550; letter-spacing: -.03em; }
 .board-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.board-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.view-switch { display: flex; gap: 6px; flex: 0 0 auto; }
+.view-switch button { padding: 4px 10px; font-size: 12px; }
 .refresh-bar {
   display: flex;
   align-items: center;
@@ -298,6 +306,75 @@ html[data-theme="plain-night"] button.danger.primary {
   margin-bottom: 8px;
 }
 .issue-card.sel { border-color: var(--accent); background: var(--sel); }
+.dep-graph { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
+.graph-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  width: fit-content;
+}
+.graph-canvas {
+  position: relative;
+  overflow: auto;
+  min-height: 280px;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2);
+}
+.graph-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.graph-edges path {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+  marker-end: url(#graph-arrow);
+}
+.graph-edges marker path { fill: var(--line-strong); }
+.graph-flow {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 56px;
+  padding: 16px;
+  width: max-content;
+  min-width: 100%;
+}
+.graph-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 168px;
+  max-width: 220px;
+}
+.graph-node {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.graph-node.sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+  background: var(--sel);
+}
+.graph-node.closed { opacity: .62; }
+.graph-node .issue-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .issue-id { font-size: 11px; color: var(--muted); }
 .issue-title { font-size: 13px; margin-top: 2px; }
 .issue-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }

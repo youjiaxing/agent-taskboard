@@ -67,6 +67,10 @@ type ShellCopy = {
   projectMenu: string;
   boardHint: string;
   childHint: string;
+  graphHint: string;
+  viewBoard: string;
+  viewGraph: string;
+  showClosedContext: string;
   clearFilter: string;
   colBlocked: string;
   colFrontier: string;
@@ -211,6 +215,27 @@ type RefreshStatus =
   | { kind: "rate-limited"; fetchedAtMs?: number | null; retryAtMs?: number | null }
   | { kind: "auth-failed"; fetchedAtMs?: number | null };
 
+type GraphNode = {
+  id: string;
+  repository: string;
+  number: number;
+  title: string;
+  open: boolean;
+  rank: number;
+};
+
+type GraphEdge = {
+  from: string;
+  to: string;
+};
+
+type DependencyGraph = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+};
+
+type CenterView = "board" | "graph";
+
 type BoardSnapshot = {
   projectId: string;
   columns: BoardColumns | null;
@@ -221,6 +246,8 @@ type BoardSnapshot = {
   labelMappingActive: boolean;
   recentLimit: number;
   refresh: RefreshStatus;
+  graph: DependencyGraph | null;
+  showClosedGraphContext: boolean;
 };
 
 type PairingOffer = {
@@ -259,6 +286,7 @@ type Snapshot = {
   pairedClients: PairedClient[];
   board: BoardSnapshot | null;
   recentCompletedLimit: number;
+  centerView: CenterView;
 };
 
 type RpcResult = {
@@ -545,6 +573,38 @@ function render(): void {
     ${formOpen ? projectForm(copy) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
   `;
+  paintGraphEdges();
+}
+
+function paintGraphEdges(): void {
+  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+  const svg = app?.querySelector<SVGSVGElement>(".graph-edges");
+  const graph = snapshot?.board?.graph;
+  if (!canvas || !svg || !graph) return;
+  const origin = canvas.getBoundingClientRect();
+  const width = Math.max(canvas.scrollWidth, canvas.clientWidth);
+  const height = Math.max(canvas.scrollHeight, canvas.clientHeight);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("width", String(width));
+  svg.setAttribute("height", String(height));
+  const nodes = [...canvas.querySelectorAll<HTMLElement>(".graph-node")];
+  const byId = new Map(nodes.map((node) => [node.dataset.id ?? "", node]));
+  const paths = graph.edges
+    .map((edge) => {
+      const from = byId.get(edge.from);
+      const to = byId.get(edge.to);
+      if (!from || !to) return "";
+      const a = from.getBoundingClientRect();
+      const b = to.getBoundingClientRect();
+      const x1 = a.right - origin.left + canvas.scrollLeft;
+      const y1 = a.top + a.height / 2 - origin.top + canvas.scrollTop;
+      const x2 = b.left - origin.left + canvas.scrollLeft;
+      const y2 = b.top + b.height / 2 - origin.top + canvas.scrollTop;
+      const mid = (x1 + x2) / 2;
+      return `<path data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}" d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" />`;
+    })
+    .join("");
+  svg.innerHTML = `<defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"></path></marker></defs>${paths}`;
 }
 
 function currentProject(snap: Snapshot): Project | undefined {
@@ -580,28 +640,32 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
   return `<div class="project-board">
     ${loopbackNotice(snap.loopbackPage)}
     <div class="board-head">
-      <h1>${escapeHtml(project.name)}</h1>
-      <p>${escapeHtml(project.localPath)}</p>
-      <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+      <div class="board-head-row">
+        <div>
+          <h1>${escapeHtml(project.name)}</h1>
+          <p>${escapeHtml(project.localPath)}</p>
+          <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+        </div>
+        <div class="view-switch" role="tablist">
+          <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
+          <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+        </div>
+      </div>
     </div>
     ${refreshBar(copy, snap.board)}
     ${connectionPanel(copy, project)}
-    ${boardView(copy, snap.board)}
+    ${boardView(copy, snap)}
   </div>`;
 }
 
-function boardView(copy: ShellCopy, board: BoardSnapshot | null): string {
+function boardView(copy: ShellCopy, snap: Snapshot): string {
+  const board = snap.board;
   if (!board || board.empty === "no-data" || !board.columns) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
-  const hint = board.parentFilter ? copy.childHint : copy.boardHint;
-  const cols: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
-    ["blocked", copy.colBlocked, board.columns.blocked],
-    ["frontier", copy.colFrontier, board.columns.frontier],
-    ["inProgress", copy.colInProgress, board.columns.inProgress],
-    ["recentlyCompleted", copy.colRecent, board.columns.recentlyCompleted],
-  ];
-  return `<div class="board-shell">
+  const onGraph = snap.centerView === "graph";
+  const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
+  return `<div class="board-shell" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -611,29 +675,81 @@ function boardView(copy: ShellCopy, board: BoardSnapshot | null): string {
             : ""
         }
       </div>
-      <div class="lanes">
-        ${cols
-          .map(([key, name, items]) => {
-            const empty =
-              items.length > 0
-                ? ""
-                : key === "frontier"
-                  ? frontierEmptyText(copy, board.frontierEmpty)
-                  : key === "recentlyCompleted"
-                    ? copy.noRecent
-                    : copy.noItems;
-            return `<section class="lane" data-lane="${key}">
-              <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
-              ${items.map((issue) => issueCard(copy, issue, board.selected?.id)).join("")}
-              ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
-              ${key === "recentlyCompleted" ? `<p class="lane-note">${escapeHtml(copy.recentNote)}</p>` : ""}
-            </section>`;
-          })
-          .join("")}
-      </div>
+      ${onGraph ? dependencyGraphView(copy, board) : boardLanes(copy, board)}
     </div>
     <aside class="issue-detail">${issueDetail(copy, board)}</aside>
   </div>`;
+}
+
+function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
+  const cols: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
+    ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
+    ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
+    ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
+    ["recentlyCompleted", copy.colRecent, board.columns?.recentlyCompleted ?? []],
+  ];
+  return `<div class="lanes">
+    ${cols
+      .map(([key, name, items]) => {
+        const empty =
+          items.length > 0
+            ? ""
+            : key === "frontier"
+              ? frontierEmptyText(copy, board.frontierEmpty)
+              : key === "recentlyCompleted"
+                ? copy.noRecent
+                : copy.noItems;
+        return `<section class="lane" data-lane="${key}">
+          <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
+          ${items.map((issue) => issueCard(copy, issue, board.selected?.id)).join("")}
+          ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
+          ${key === "recentlyCompleted" ? `<p class="lane-note">${escapeHtml(copy.recentNote)}</p>` : ""}
+        </section>`;
+      })
+      .join("")}
+  </div>`;
+}
+
+function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot): string {
+  const graph = board.graph;
+  if (!graph) {
+    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
+  }
+  const columns = new Map<number, GraphNode[]>();
+  for (const node of graph.nodes) {
+    const list = columns.get(node.rank) ?? [];
+    list.push(node);
+    columns.set(node.rank, list);
+  }
+  const ranks = [...columns.keys()].sort((a, b) => a - b);
+  return `<div class="dep-graph">
+    <label class="graph-opt">
+      <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
+      ${escapeHtml(copy.showClosedContext)}
+    </label>
+    <div class="graph-canvas">
+      <svg class="graph-edges" aria-hidden="true"></svg>
+      <div class="graph-flow">
+        ${ranks
+          .map(
+            (rank) =>
+              `<div class="graph-col" data-rank="${rank}">${(columns.get(rank) ?? [])
+                .map((node) => graphNode(node, board.selected?.id))
+                .join("")}</div>`,
+          )
+          .join("")}
+      </div>
+    </div>
+  </div>`;
+}
+
+function graphNode(node: GraphNode, selectedId: string | undefined): string {
+  const selected = node.id === selectedId ? "sel" : "";
+  const closed = node.open ? "" : "closed";
+  return `<button type="button" class="graph-node ${selected} ${closed}" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+    <div class="issue-id">#${node.number}</div>
+    <div class="issue-title">${escapeHtml(node.title)}</div>
+  </button>`;
 }
 
 function frontierEmptyText(
@@ -1099,6 +1215,11 @@ app.addEventListener("click", async (event) => {
   if (act === "quit") {
     await rpc("quitHost");
   }
+  if (act === "center-view" && target.dataset.id) {
+    await rpc("setCenterView", { view: target.dataset.id });
+    render();
+    return;
+  }
   if (act === "focus-issue" && target.dataset.id) {
     await rpc("focusIssue", { issueId: target.dataset.id });
     render();
@@ -1122,6 +1243,12 @@ app.addEventListener("change", async (event) => {
     const limit = Number((target as HTMLInputElement).value);
     if (!Number.isFinite(limit)) return;
     await rpc("setRecentCompletedLimit", { limit });
+    render();
+  }
+  if (target.getAttribute("data-field") === "closedContext" && "checked" in target) {
+    await rpc("setShowClosedGraphContext", {
+      show: (target as HTMLInputElement).checked,
+    });
     render();
   }
 });
