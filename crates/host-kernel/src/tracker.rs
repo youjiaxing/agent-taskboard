@@ -91,24 +91,14 @@ pub enum TrackerReadError {
         cli_detected: bool,
         detail: Option<String>,
     },
-}
-
-impl TrackerReadError {
-    pub fn into_probe(self) -> ProbeOutcome {
-        match self {
-            Self::Auth {
-                source,
-                kind,
-                cli_detected,
-                detail,
-            } => ProbeOutcome::Failed {
-                source,
-                kind,
-                cli_detected,
-                detail,
-            },
-        }
-    }
+    Offline {
+        source: Option<CredentialSource>,
+        cli_detected: bool,
+        detail: Option<String>,
+    },
+    RateLimited {
+        retry_after_ms: Option<u64>,
+    },
 }
 
 pub trait TrackerPort: Send + Sync {
@@ -150,9 +140,17 @@ fn nonempty(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+#[derive(Debug, Clone)]
+enum ReadScript {
+    Offline,
+    Auth,
+    RateLimited { retry_after_ms: Option<u64> },
+}
+
 pub struct MemoryTracker {
     failures: Mutex<BTreeSet<String>>,
-    read_failures: Mutex<BTreeSet<String>>,
+    read_scripts: Mutex<BTreeMap<String, ReadScript>>,
+    read_counts: Mutex<BTreeMap<String, u64>>,
     issues: Mutex<BTreeMap<String, Vec<IssueRecord>>>,
     source: CredentialSource,
 }
@@ -161,7 +159,8 @@ impl MemoryTracker {
     pub fn new() -> Self {
         Self {
             failures: Mutex::new(BTreeSet::new()),
-            read_failures: Mutex::new(BTreeSet::new()),
+            read_scripts: Mutex::new(BTreeMap::new()),
+            read_counts: Mutex::new(BTreeMap::new()),
             issues: Mutex::new(BTreeMap::new()),
             source: CredentialSource::Cli,
         }
@@ -175,10 +174,47 @@ impl MemoryTracker {
     }
 
     pub fn fail_read(&self, repository: impl Into<String>) {
-        self.read_failures
+        self.read_scripts
             .lock()
             .expect("memory tracker")
-            .insert(repository.into());
+            .insert(repository.into(), ReadScript::Offline);
+    }
+
+    pub fn fail_auth(&self, repository: impl Into<String>) {
+        self.read_scripts
+            .lock()
+            .expect("memory tracker")
+            .insert(repository.into(), ReadScript::Auth);
+    }
+
+    pub fn fail_rate_limited(&self, repository: impl Into<String>, retry_after_ms: Option<u64>) {
+        self.read_scripts.lock().expect("memory tracker").insert(
+            repository.into(),
+            ReadScript::RateLimited { retry_after_ms },
+        );
+    }
+
+    pub fn clear_read_script(&self, repository: &str) {
+        self.read_scripts
+            .lock()
+            .expect("memory tracker")
+            .remove(repository);
+    }
+
+    pub fn read_count(&self, repository: &str) -> u64 {
+        self.read_counts
+            .lock()
+            .expect("memory tracker")
+            .get(repository)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn set_issues(&self, repository: impl Into<String>, issues: Vec<IssueRecord>) {
+        self.issues
+            .lock()
+            .expect("memory tracker")
+            .insert(repository.into(), issues);
     }
 
     pub fn add_issue(&self, issue: IssueRecord) {
@@ -219,17 +255,47 @@ impl TrackerPort for MemoryTracker {
     }
 
     fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError> {
+        *self
+            .read_counts
+            .lock()
+            .expect("memory tracker")
+            .entry(ctx.repository.to_string())
+            .or_default() += 1;
         if self
-            .read_failures
+            .failures
             .lock()
             .expect("memory tracker")
             .contains(ctx.repository)
         {
             return Err(TrackerReadError::Auth {
                 source: Some(self.source),
-                kind: AuthFailureKind::Unreachable,
+                kind: AuthFailureKind::Rejected,
                 cli_detected: true,
-                detail: Some(format!("cannot read {}", ctx.repository)),
+                detail: Some(format!("{} rejected {}", ctx.github_host, ctx.repository)),
+            });
+        }
+        if let Some(script) = self
+            .read_scripts
+            .lock()
+            .expect("memory tracker")
+            .get(ctx.repository)
+            .cloned()
+        {
+            return Err(match script {
+                ReadScript::Offline => TrackerReadError::Offline {
+                    source: Some(self.source),
+                    cli_detected: true,
+                    detail: Some(format!("cannot read {}", ctx.repository)),
+                },
+                ReadScript::Auth => TrackerReadError::Auth {
+                    source: Some(self.source),
+                    kind: AuthFailureKind::Rejected,
+                    cli_detected: true,
+                    detail: Some(format!("{} rejected {}", ctx.github_host, ctx.repository)),
+                },
+                ReadScript::RateLimited { retry_after_ms } => {
+                    TrackerReadError::RateLimited { retry_after_ms }
+                }
             });
         }
         Ok(self
@@ -264,6 +330,7 @@ trait GitHubApi: Send + Sync {
 enum ProbeError {
     Unauthorized,
     Unreachable(String),
+    RateLimited { retry_after_ms: Option<u64> },
 }
 
 pub struct GitHubTracker {
@@ -281,6 +348,8 @@ pub struct ScriptedGitHub {
     pub unreachable: bool,
     pub issues: BTreeMap<String, Vec<Value>>,
     pub read_unauthorized: bool,
+    pub rate_limited: bool,
+    pub retry_after_ms: Option<u64>,
 }
 
 impl GitHubTracker {
@@ -304,6 +373,8 @@ impl GitHubTracker {
                 unreachable: script.unreachable,
                 issues: script.issues.clone(),
                 read_unauthorized: script.read_unauthorized,
+                rate_limited: script.rate_limited,
+                retry_after_ms: script.retry_after_ms,
             }),
         }
     }
@@ -379,17 +450,21 @@ impl TrackerPort for GitHubTracker {
                 .iter()
                 .filter_map(|node| map_github_issue_node(node, ctx.repository))
                 .collect()),
-            Err(err) => Err(TrackerReadError::Auth {
-                source: Some(source),
-                kind: match err {
-                    ProbeError::Unauthorized => AuthFailureKind::Rejected,
-                    ProbeError::Unreachable(_) => AuthFailureKind::Unreachable,
+            Err(err) => Err(match err {
+                ProbeError::Unauthorized => TrackerReadError::Auth {
+                    source: Some(source),
+                    kind: AuthFailureKind::Rejected,
+                    cli_detected,
+                    detail: None,
                 },
-                cli_detected,
-                detail: match err {
-                    ProbeError::Unreachable(detail) => Some(detail),
-                    ProbeError::Unauthorized => None,
+                ProbeError::Unreachable(detail) => TrackerReadError::Offline {
+                    source: Some(source),
+                    cli_detected,
+                    detail: Some(detail),
                 },
+                ProbeError::RateLimited { retry_after_ms } => {
+                    TrackerReadError::RateLimited { retry_after_ms }
+                }
             }),
         }
     }
@@ -413,6 +488,7 @@ fn probe_error_outcome(
             cli_detected,
             detail: Some(detail),
         },
+        ProbeError::RateLimited { .. } => ProbeOutcome::Ready { source },
     }
 }
 
@@ -467,6 +543,9 @@ impl GitHubApi for LiveGitHubApi {
         {
             Ok(_) => Ok(()),
             Err(ureq::Error::Status(401 | 403 | 404, _)) => Err(ProbeError::Unauthorized),
+            Err(ureq::Error::Status(429, response)) => Err(ProbeError::RateLimited {
+                retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
+            }),
             Err(ureq::Error::Status(code, _)) => {
                 Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")))
             }
@@ -507,6 +586,11 @@ impl GitHubApi for LiveGitHubApi {
                 Ok(response) => response,
                 Err(ureq::Error::Status(401 | 403, _)) => return Err(ProbeError::Unauthorized),
                 Err(ureq::Error::Status(404, _)) => return Err(ProbeError::Unauthorized),
+                Err(ureq::Error::Status(429, response)) => {
+                    return Err(ProbeError::RateLimited {
+                        retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
+                    });
+                }
                 Err(ureq::Error::Status(code, _)) => {
                     return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
                 }
@@ -581,6 +665,14 @@ fn github_repo_url(host: &str, repository: &str) -> String {
     }
 }
 
+fn parse_retry_after_ms(value: Option<&str>) -> Option<u64> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|seconds| seconds.saturating_mul(1000))
+}
+
 fn github_graphql_url(host: &str) -> String {
     if host.eq_ignore_ascii_case("github.com") {
         "https://api.github.com/graphql".into()
@@ -623,12 +715,17 @@ struct MapApi {
     unreachable: bool,
     issues: BTreeMap<String, Vec<Value>>,
     read_unauthorized: bool,
+    rate_limited: bool,
+    retry_after_ms: Option<u64>,
 }
 
 impl GitHubApi for MapApi {
     fn probe_repo(&self, _host: &str, _repository: &str, token: &str) -> Result<(), ProbeError> {
         if self.unreachable {
             return Err(ProbeError::Unreachable("unreachable".into()));
+        }
+        if self.rate_limited {
+            return Ok(());
         }
         if self.accept.contains(token) {
             Ok(())
@@ -645,6 +742,11 @@ impl GitHubApi for MapApi {
     ) -> Result<Vec<Value>, ProbeError> {
         if self.unreachable {
             return Err(ProbeError::Unreachable("unreachable".into()));
+        }
+        if self.rate_limited {
+            return Err(ProbeError::RateLimited {
+                retry_after_ms: self.retry_after_ms,
+            });
         }
         if self.read_unauthorized || !self.accept.contains(token) {
             return Err(ProbeError::Unauthorized);

@@ -13,6 +13,13 @@ await page.addInitScript((protocol) => {
 }, url);
 await page.goto(url, { waitUntil: "networkidle" });
 await page.waitForSelector(".lanes");
+await page.waitForSelector(".refresh-bar");
+const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
+if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")) {
+  throw new Error(`refresh bar missing as-of time: ${refreshText}`);
+}
+await page.click(".refresh-bar button[data-act='refresh']");
+await page.waitForSelector(".lanes");
 
 const headers = await page.$$eval(".lane-hd", (nodes) =>
   nodes.map((node) => node.textContent.replace(/\s+/g, " ").trim()),

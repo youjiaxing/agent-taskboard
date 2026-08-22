@@ -18,7 +18,7 @@ pub enum TriageRole {
     Wontfix,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssueRef {
     pub repository: String,
     pub number: u64,
@@ -46,7 +46,8 @@ impl IssueRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum DependencyRef {
     Known(IssueRef),
     Unclear {
@@ -64,7 +65,7 @@ impl DependencyRef {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IssueRecord {
     pub repository: String,
     pub number: u64,

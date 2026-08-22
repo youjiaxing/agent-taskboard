@@ -96,6 +96,16 @@ type ShellCopy = {
   recentLimit: string;
   recentLimitHelp: string;
   unclearIssue: string;
+  refreshNow: string;
+  refreshRefreshing: string;
+  refreshAsOf: string;
+  refreshNext: string;
+  refreshOffline: string;
+  refreshNever: string;
+  refreshRateLimited: string;
+  refreshRetry: string;
+  refreshPaused: string;
+  refreshAuth: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -193,6 +203,14 @@ type BoardColumns = {
   recentlyCompleted: IssueCard[];
 };
 
+type RefreshStatus =
+  | { kind: "refreshing"; fetchedAtMs?: number | null }
+  | { kind: "ready"; fetchedAtMs: number; nextRefreshInMs?: number | null }
+  | { kind: "offline"; fetchedAtMs: number; nextRefreshInMs?: number | null }
+  | { kind: "never-fetched" }
+  | { kind: "rate-limited"; fetchedAtMs?: number | null; retryAtMs?: number | null }
+  | { kind: "auth-failed"; fetchedAtMs?: number | null };
+
 type BoardSnapshot = {
   projectId: string;
   columns: BoardColumns | null;
@@ -202,6 +220,7 @@ type BoardSnapshot = {
   selected: IssueDetail | null;
   labelMappingActive: boolean;
   recentLimit: number;
+  refresh: RefreshStatus;
 };
 
 type PairingOffer = {
@@ -267,6 +286,21 @@ let formDraft: ProjectDraft = emptyDraft();
 let inferred: ProjectDraft | null = null;
 let formError = "";
 let removeProject: Project | null = null;
+let refreshing = false;
+let tickTimer: number | undefined;
+const clientId = sessionClientId();
+
+function sessionClientId(): string {
+  const key = "agent-taskboard-client-id";
+  const existing = sessionStorage.getItem(key);
+  if (existing) return existing;
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `client-${Date.now()}`;
+  sessionStorage.setItem(key, id);
+  return id;
+}
 
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
@@ -550,6 +584,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
       <p>${escapeHtml(project.localPath)}</p>
       <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
     </div>
+    ${refreshBar(copy, snap.board)}
     ${connectionPanel(copy, project)}
     ${boardView(copy, snap.board)}
   </div>`;
@@ -682,28 +717,78 @@ function issueLink(copy: ShellCopy, link: IssueLink): string {
   return `<button type="button" class="name-btn" data-act="focus-issue" data-id="${escapeHtml(link.id)}">${escapeHtml(label)}</button>`;
 }
 
+function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
+  const status = board?.refresh ?? { kind: "never-fetched" as const };
+  const kind = refreshing ? "refreshing" : status.kind;
+  const parts: string[] = [];
+  if (kind === "refreshing") {
+    parts.push(copy.refreshRefreshing);
+  } else if (status.kind === "never-fetched") {
+    parts.push(copy.refreshNever);
+  } else if (status.kind === "offline") {
+    parts.push(`${copy.refreshOffline} · ${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    if (status.nextRefreshInMs != null) {
+      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
+    }
+  } else if (status.kind === "rate-limited") {
+    parts.push(copy.refreshRateLimited);
+    if (status.retryAtMs) {
+      parts.push(`${copy.refreshRetry} ${formatTime(status.retryAtMs)}`);
+    } else {
+      parts.push(copy.refreshPaused);
+    }
+    if (status.fetchedAtMs) {
+      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    }
+  } else if (status.kind === "auth-failed") {
+    parts.push(copy.refreshAuth);
+    if (status.fetchedAtMs) {
+      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    }
+  } else if (status.kind === "ready") {
+    parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    if (status.nextRefreshInMs != null) {
+      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
+    }
+  }
+  return `<div class="refresh-bar" data-kind="${escapeHtml(kind)}">
+    <span>${escapeHtml(parts.join(" · "))}</span>
+    <button type="button" data-act="refresh">${escapeHtml(copy.refreshNow)}</button>
+  </div>`;
+}
+
+function formatTime(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString();
+  } catch {
+    return String(ms);
+  }
+}
+
+function formatCountdown(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  }
+  return `${seconds}s`;
+}
+
 function connectionPanel(copy: ShellCopy, project: Project): string {
-  if (project.connection.status === "ready") {
-    return `<p class="notice ok">${escapeHtml(copy.connectionReady)}</p>`;
+  if (project.connection.status !== "auth-failed") {
+    return "";
   }
   const repair = project.connection.repair;
-  const title =
-    project.connection.status === "auth-failed" ? copy.authFailed : project.connection.message;
-  const body =
-    project.connection.status === "auth-failed" ? project.connection.message : "";
   return `<div class="notice bad">
-    <b>${escapeHtml(title)}</b>
-    ${body ? `<p>${escapeHtml(body)}</p>` : ""}
-    ${
-      project.connection.status === "auth-failed"
-        ? `<ul class="repair">
+    <b>${escapeHtml(copy.authFailed)}</b>
+    <p>${escapeHtml(project.connection.message)}</p>
+    <ul class="repair">
       <li>${escapeHtml(copy.repairCli)}${repair.cliDetected ? "" : ` — ${escapeHtml(copy.noGhDetected)}`}</li>
       <li>${escapeHtml(copy.repairSecrets)}：<code>${escapeHtml(repair.secretsPath)}</code></li>
       <li>${escapeHtml(copy.repairEnv)}：<code>${escapeHtml(repair.appEnv)}</code> / <code>${escapeHtml(repair.genericEnv)}</code></li>
     </ul>
-    <p class="tiny">${escapeHtml(repair.suggestedScope)}</p>`
-        : ""
-    }
+    <p class="tiny">${escapeHtml(repair.suggestedScope)}</p>
   </div>`;
 }
 
@@ -858,6 +943,18 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-project" && target.dataset.id) {
     projectMenuId = "";
     await rpc("focusProject", { projectId: target.dataset.id });
+    await reportClientView();
+    render();
+    return;
+  }
+  if (act === "refresh") {
+    refreshing = true;
+    render();
+    try {
+      await rpc("refresh");
+    } finally {
+      refreshing = false;
+    }
     render();
     return;
   }
@@ -1079,8 +1176,39 @@ function parsePairingPayload(raw: string): { address: string; code: string } | n
   return { address, code };
 }
 
-rpc("snapshot").then(render).catch((error: unknown) => {
-  if (app) {
-    app.textContent = error instanceof Error ? error.message : String(error);
-  }
+async function reportClientView(): Promise<void> {
+  const projectId = snapshot?.focusedProjectId ?? "";
+  const visible = document.visibilityState === "visible";
+  await rpc("setClientView", { clientId, projectId, visible });
+}
+
+function ensureTick(): void {
+  if (tickTimer != null) return;
+  tickTimer = window.setInterval(() => {
+    rpc("tick").then(render).catch(() => {});
+  }, 1000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  const visible = document.visibilityState === "visible";
+  const work = visible ? rpc("refresh").then(() => reportClientView()) : reportClientView();
+  work.then(render).catch(() => {});
 });
+
+window.addEventListener("focus", () => {
+  if (document.visibilityState !== "visible") return;
+  rpc("refresh").then(render).catch(() => {});
+});
+
+rpc("snapshot")
+  .then(async () => {
+    render();
+    ensureTick();
+    await reportClientView();
+    render();
+  })
+  .catch((error: unknown) => {
+    if (app) {
+      app.textContent = error instanceof Error ? error.message : String(error);
+    }
+  });
