@@ -9,9 +9,22 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+- **Close**: implementation tickets follow **收尾关票** below. Wayfinder Resolve and triage still `gh issue close <number> --comment "..."` (do not use that as the default after `/implement`).
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+
+## 收尾关票
+
+Default close-out after `/implement` (or when the user says 收尾 / 关票). The issue closes because GitHub processes `Closes #<n>` on merge — not because the agent ran `gh issue close`.
+
+Wayfinder children still **Resolve**: comment, `gh issue close`, then a pointer on the map.
+
+1. Working tree clean on the feature branch; tests already green from the implementation turn. Done when `git status` is clean and `HEAD` is the implementation commit.
+2. `git push -u origin HEAD`. Done when the branch tracks `origin`.
+3. `gh pr create` with title equal to the commit title (`feat(host): …`) and a body that has `## 摘要`, a `Closes #<n>` line, `## 范围` (Host kernel / Client), and `明确不做` for deferred tickets. Done when `gh pr view` shows that URL and `Closes #<n>` in the body.
+4. `gh pr merge <pr> --merge --delete-branch` (merge commit, same as #71–#72). Done when the PR is `MERGED`, the issue is `CLOSED`, the feature branch is gone on the remote, and local `main` is at the merge commit.
+
+If the user only asked to open a PR, stop after step 3. If merge is blocked, stop and report.
 
 ## Pull requests as a triage surface
 
