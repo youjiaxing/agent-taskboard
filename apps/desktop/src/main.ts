@@ -158,6 +158,12 @@ type ShellCopy = {
   quitActiveBody: string;
   quitReturn: string;
   quitStopAll: string;
+  viewChanges: string;
+  thisRound: string;
+  uncommitted: string;
+  addChangeNote: string;
+  changeNotePlaceholder: string;
+  deleteChangeNote: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -386,10 +392,62 @@ type RunLaunchForm = {
   isolationSupported: boolean;
   isolationReason: string;
   openingText: string;
+  changeNotesText?: string;
   commandPreview: string;
   intents: IntentOption[];
   warnings?: string[];
   error?: string | null;
+};
+
+type ChangeScope = "this-round" | "uncommitted";
+
+type ChangeLine = {
+  kind: "context" | "add" | "delete";
+  oldLine?: number | null;
+  newLine?: number | null;
+  text: string;
+};
+
+type ChangeHunk = {
+  header: string;
+  lines: ChangeLine[];
+};
+
+type ChangeFile = {
+  path: string;
+  hunks: ChangeHunk[];
+};
+
+type ChangeRepo = {
+  path: string;
+  displayPath: string;
+  available: boolean;
+  unavailableReason?: string | null;
+  startCommit?: string | null;
+  files: ChangeFile[];
+};
+
+type ChangeNote = {
+  id: string;
+  runId: string;
+  projectId: string;
+  issueId?: string | null;
+  repo: string;
+  path: string;
+  line: number;
+  text: string;
+};
+
+type ViewChanges = {
+  runId: string;
+  issueId?: string | null;
+  workingDirectory: string;
+  isolated: boolean;
+  scope: ChangeScope;
+  available: boolean;
+  unavailableReason?: string | null;
+  repos: ChangeRepo[];
+  notes: ChangeNote[];
 };
 
 type LaunchDraft = {
@@ -449,6 +507,7 @@ type RpcResult = {
   process: "keep-running" | "exit";
   inference?: ProjectDraft;
   events?: HostEvent[];
+  viewChanges?: ViewChanges;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -480,6 +539,11 @@ let ptyRunId = "";
 let ptyPumping = false;
 let launchDraft: LaunchDraft | null = null;
 let launchFolded = false;
+let changesOpen = false;
+let changesScope: ChangeScope = "this-round";
+let changesView: ViewChanges | null = null;
+let noteDraft = "";
+let noteTarget: { repo: string; path: string; line: number } | null = null;
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -561,8 +625,10 @@ function refreshLaunchWarnings(): void {
 function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
   const prefix = form.intents.find((intent) => intent.id === draft.intentId)?.prefix ?? "";
   const body = (draft.values["initial-instruction"] ?? "").trim();
-  if (prefix && body) return `${prefix}\n${body}`;
-  return prefix || body;
+  const notes = (form.changeNotesText ?? "").trim();
+  const core = prefix && body ? `${prefix}\n${body}` : prefix || body;
+  if (core && notes) return `${core}\n\n${notes}`;
+  return core || notes;
 }
 
 function isLoopbackPage(): boolean {
@@ -623,6 +689,11 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   }
   snapshot = result.snapshot;
   return result;
+}
+
+async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
+  const result = await rpc("viewChanges", { runId, scope });
+  changesView = result.viewChanges ?? null;
 }
 
 function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
@@ -894,6 +965,7 @@ function render(): void {
     ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
+    ${changesOpen ? viewChangesPanel(copy) : ""}
   `;
   paintGraphEdges();
   attachTerminal(snap);
@@ -1012,7 +1084,10 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
         <b>${escapeHtml(run.agentName)}</b>
         <span>${escapeHtml(identity)}</span>
       </div>
-      <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+      <div class="actions">
+        <button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>
+        <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+      </div>
     </header>
     ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
@@ -1027,6 +1102,106 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
           </form>`
     }
   </section>`;
+}
+
+function viewChangesPanel(copy: ShellCopy): string {
+  const view = changesView;
+  const scope = view?.scope ?? changesScope;
+  return `<div class="overlay modal" data-act="close-changes">
+    <div class="sheet form-sheet changes-sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.viewChanges)}</h2>
+      <div class="choices">
+        <button type="button" class="${scope === "this-round" ? "active" : ""}" data-act="changes-scope" data-id="this-round">${escapeHtml(copy.thisRound)}</button>
+        <button type="button" class="${scope === "uncommitted" ? "active" : ""}" data-act="changes-scope" data-id="uncommitted">${escapeHtml(copy.uncommitted)}</button>
+      </div>
+      ${
+        !view
+          ? `<p class="notice">${escapeHtml(copy.viewChanges)}</p>`
+          : !view.available
+            ? `<p class="notice bad">${escapeHtml(view.unavailableReason || copy.viewChanges)}</p>`
+            : view.repos
+                .map((repo) => changeRepoBlock(copy, view, repo))
+                .join("")
+      }
+      <div class="actions">
+        <button type="button" data-act="close-changes">${escapeHtml(copy.cancel)}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function changeRepoBlock(copy: ShellCopy, view: ViewChanges, repo: ChangeRepo): string {
+  const title = repo.displayPath === "." ? view.workingDirectory : repo.displayPath;
+  if (!repo.available) {
+    return `<section class="change-repo">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="notice">${escapeHtml(repo.unavailableReason || copy.viewChanges)}</p>
+    </section>`;
+  }
+  if (!repo.files.length) {
+    return `<section class="change-repo">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="muted">${escapeHtml(copy.noItems)}</p>
+    </section>`;
+  }
+  return `<section class="change-repo">
+    <h3>${escapeHtml(title)}</h3>
+    ${repo.files.map((file) => changeFileBlock(copy, view, repo, file)).join("")}
+  </section>`;
+}
+
+function changeFileBlock(
+  copy: ShellCopy,
+  view: ViewChanges,
+  repo: ChangeRepo,
+  file: ChangeFile,
+): string {
+  return `<article class="change-file">
+    <h4>${escapeHtml(file.path)}</h4>
+    ${file.hunks
+      .map(
+        (hunk) => `<div class="diff">${hunk.lines
+          .map((line) => changeLineRow(copy, view, repo, file, line))
+          .join("")}</div>`,
+      )
+      .join("")}
+  </article>`;
+}
+
+function changeLineRow(
+  copy: ShellCopy,
+  view: ViewChanges,
+  repo: ChangeRepo,
+  file: ChangeFile,
+  line: ChangeLine,
+): string {
+  const mark = line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ";
+  const number = line.newLine ?? line.oldLine ?? 0;
+  const notes = view.notes.filter(
+    (note) => note.repo === repo.displayPath && note.path === file.path && note.line === number,
+  );
+  const canNote = line.kind !== "delete" && line.newLine;
+  const active =
+    noteTarget &&
+    noteTarget.repo === repo.displayPath &&
+    noteTarget.path === file.path &&
+    noteTarget.line === line.newLine;
+  const noteForm = active
+    ? `<form class="note-form" data-act="write-note">
+        <input name="text" maxlength="400" value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" />
+        <button type="submit">${escapeHtml(copy.addChangeNote)}</button>
+      </form>`
+    : "";
+  const noteList = notes
+    .map(
+      (note) =>
+        `<div class="change-note">${escapeHtml(note.text)} <button type="button" data-act="delete-note" data-id="${escapeHtml(note.id)}">${escapeHtml(copy.deleteChangeNote)}</button></div>`,
+    )
+    .join("");
+  const attrs = canNote
+    ? ` data-act="note-line" data-repo="${escapeHtml(repo.displayPath)}" data-path="${escapeHtml(file.path)}" data-line="${line.newLine}"`
+    : "";
+  return `<span class="diff-line ${line.kind}"${attrs}><span class="diff-no">${number || ""}</span><span class="diff-mark">${mark}</span><span class="diff-text">${escapeHtml(line.text)}</span></span>${noteForm}${noteList}`;
 }
 
 function quitOfferDialog(copy: ShellCopy): string {
@@ -1814,6 +1989,50 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "view-changes" && target.dataset.id) {
+    changesOpen = true;
+    changesScope = "this-round";
+    noteTarget = null;
+    noteDraft = "";
+    await loadViewChanges(target.dataset.id, changesScope);
+    render();
+    return;
+  }
+  if (act === "close-changes") {
+    changesOpen = false;
+    changesView = null;
+    noteTarget = null;
+    noteDraft = "";
+    render();
+    return;
+  }
+  if (act === "changes-scope" && target.dataset.id) {
+    const scope = target.dataset.id === "uncommitted" ? "uncommitted" : "this-round";
+    changesScope = scope;
+    const runId = changesView?.runId ?? snapshot.focusedRunId;
+    if (runId) await loadViewChanges(runId, scope);
+    render();
+    return;
+  }
+  if (act === "note-line" && target.dataset.repo && target.dataset.path && target.dataset.line) {
+    noteTarget = {
+      repo: target.dataset.repo,
+      path: target.dataset.path,
+      line: Number(target.dataset.line),
+    };
+    noteDraft = "";
+    render();
+    const input = app.querySelector<HTMLInputElement>(".note-form input");
+    input?.focus();
+    return;
+  }
+  if (act === "delete-note" && target.dataset.id) {
+    await rpc("deleteChangeNote", { noteId: target.dataset.id });
+    const runId = changesView?.runId ?? snapshot.focusedRunId;
+    if (runId) await loadViewChanges(runId, changesScope);
+    render();
+    return;
+  }
   if (act === "cancel-quit") {
     await rpc("cancelQuit");
     render();
@@ -2001,15 +2220,34 @@ app.addEventListener("click", async (event) => {
 });
 
 app.addEventListener("submit", async (event) => {
-  const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
-  if (!form || !snapshot) return;
+  const inject = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
+  if (inject && snapshot) {
+    event.preventDefault();
+    const runId = inject.dataset.id;
+    const input = inject.querySelector<HTMLInputElement>("input[name='text']");
+    const text = input?.value ?? "";
+    if (!runId || !text.trim()) return;
+    await rpc("injectRunInput", { runId, text });
+    if (input) input.value = "";
+    render();
+    return;
+  }
+  const noteForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='write-note']");
+  if (!noteForm || !snapshot || !noteTarget || !changesView) return;
   event.preventDefault();
-  const runId = form.dataset.id;
-  const input = form.querySelector<HTMLInputElement>("input[name='text']");
-  const text = input?.value ?? "";
-  if (!runId || !text.trim()) return;
-  await rpc("injectRunInput", { runId, text });
-  if (input) input.value = "";
+  const input = noteForm.querySelector<HTMLInputElement>("input[name='text']");
+  const text = input?.value ?? noteDraft;
+  if (!text.trim()) return;
+  await rpc("writeChangeNote", {
+    runId: changesView.runId,
+    repo: noteTarget.repo,
+    path: noteTarget.path,
+    line: noteTarget.line,
+    text,
+  });
+  noteDraft = "";
+  noteTarget = null;
+  await loadViewChanges(changesView.runId, changesScope);
   render();
 });
 
@@ -2073,6 +2311,9 @@ app.addEventListener("input", (event) => {
   }
   if (field === "paste" && "value" in target) {
     pairingPaste = (target as HTMLTextAreaElement).value;
+  }
+  if (target.closest(".note-form") && "value" in target) {
+    noteDraft = (target as HTMLInputElement).value;
   }
   if (
     (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") &&

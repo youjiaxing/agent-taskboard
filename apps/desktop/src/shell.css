@@ -558,6 +558,55 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .run-dock-hd b { margin-right: 8px; }
 .run-dock-hd span { color: var(--muted); font-size: 12px; }
+.run-dock-hd .actions { margin-top: 0; }
+.changes-sheet { width: min(820px, calc(100% - 24px)); }
+.change-repo { margin-top: 14px; }
+.change-repo h3 { margin: 0 0 8px; font-size: 13px; }
+.change-file { margin-bottom: 12px; }
+.change-file h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.diff {
+  margin: 0;
+  padding: 8px 0;
+  overflow: auto;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 44px 14px minmax(0, 1fr);
+  gap: 6px;
+  padding: 0 8px;
+  white-space: pre-wrap;
+}
+.diff-line.add { background: color-mix(in srgb, var(--dot) 16%, transparent); }
+.diff-line.delete { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.diff-line[data-act="note-line"] { cursor: pointer; }
+.diff-no, .diff-mark { color: var(--muted); }
+.change-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 8px 8px;
+  font-size: 12px;
+}
+.note-form {
+  display: flex;
+  gap: 8px;
+  margin: 6px 8px 10px;
+}
+.note-form input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 6px 8px;
+}
 .run-dock .notice { margin: 8px 12px 0; }
 .pty-slot, .pty-host {
   flex: 1;

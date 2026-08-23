@@ -2,6 +2,7 @@
 
 mod agent;
 mod board;
+mod changes;
 mod issue;
 mod launch;
 mod launch_env;
@@ -34,6 +35,10 @@ pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
     FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail, IssueLink,
     RefreshStatus, DEFAULT_RECENT_LIMIT,
+};
+pub use changes::{
+    ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
+    GitBaseline, ViewChanges,
 };
 pub use issue::{IssueRecord, TriageRole};
 pub use launch_env::{LaunchEnvPort, LaunchEnvironment, MemoryLaunchEnv, ShellLaunchEnv};
@@ -218,6 +223,16 @@ pub enum Command {
         desktop: bool,
         sound: bool,
     },
+    WriteChangeNote {
+        run_id: String,
+        repo: String,
+        path: String,
+        line: u32,
+        text: String,
+    },
+    DeleteChangeNote {
+        note_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +323,12 @@ pub struct CommandOutcome {
     pub inference: Option<ProjectInference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<HostEvent>,
+    #[serde(
+        rename = "viewChanges",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub view_changes: Option<ViewChanges>,
 }
 
 impl CommandOutcome {
@@ -324,6 +345,9 @@ impl CommandOutcome {
         }
         if !self.events.is_empty() {
             value["events"] = serde_json::to_value(&self.events).expect("events json");
+        }
+        if let Some(view_changes) = &self.view_changes {
+            value["viewChanges"] = serde_json::to_value(view_changes).expect("view changes json");
         }
         value
     }
@@ -605,6 +629,12 @@ pub struct ShellCopy {
     pub quit_active_body: String,
     pub quit_return: String,
     pub quit_stop_all: String,
+    pub view_changes: String,
+    pub this_round: String,
+    pub uncommitted: String,
+    pub add_change_note: String,
+    pub change_note_placeholder: String,
+    pub delete_change_note: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -704,6 +734,7 @@ pub struct HostKernel {
     show_command_preview: bool,
     notify_desktop: bool,
     notify_sound: bool,
+    change_notes: Vec<ChangeNote>,
 }
 
 #[derive(Debug, Clone)]
@@ -868,6 +899,7 @@ impl HostKernel {
             show_command_preview,
             notify_desktop,
             notify_sound,
+            change_notes: Vec::new(),
         };
         let project_ids: Vec<String> = host
             .projects
@@ -878,6 +910,7 @@ impl HostKernel {
             host.load_persisted_snapshot(project_id);
         }
         let crashed_ids = host.load_persisted_runs();
+        host.load_change_notes();
         if let Some(project_id) = host.focused_project_id.clone() {
             host.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
@@ -943,6 +976,7 @@ impl HostKernel {
             pairing,
             inference,
             events: std::mem::take(&mut self.pending_events),
+            view_changes: None,
         }
     }
 
@@ -1215,6 +1249,18 @@ impl HostKernel {
             Command::SetRefreshInterval { interval_ms } => {
                 self.refresh_interval_ms = refresh::clamp_refresh_interval_ms(interval_ms);
                 self.persist_host_settings()?;
+            }
+            Command::WriteChangeNote {
+                run_id,
+                repo,
+                path,
+                line,
+                text,
+            } => {
+                self.write_change_note(&run_id, repo, path, line, text)?;
+            }
+            Command::DeleteChangeNote { note_id } => {
+                self.delete_change_note(&note_id)?;
             }
         }
         Ok(self.outcome())
@@ -1574,6 +1620,52 @@ impl HostKernel {
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
             }),
+            "viewChanges" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let scope =
+                    ChangeScope::parse(request.get("scope").and_then(|value| value.as_str()))
+                        .map_err(KernelError::Protocol)?;
+                let view = self.view_changes(
+                    request
+                        .get("runId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty()),
+                    request
+                        .get("issueId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty()),
+                    scope,
+                )?;
+                let mut outcome = self.outcome();
+                outcome.view_changes = Some(view);
+                Ok(outcome)
+            }
+            "writeChangeNote" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::WriteChangeNote {
+                    run_id: required_string(&request, "runId")?,
+                    repo: optional_string(&request, "repo"),
+                    path: required_string(&request, "path")?,
+                    line: request
+                        .get("line")
+                        .and_then(|value| value.as_u64())
+                        .ok_or_else(|| KernelError::Protocol("missing line".into()))?
+                        as u32,
+                    text: required_string(&request, "text")?,
+                })
+            }
+            "deleteChangeNote" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::DeleteChangeNote {
+                    note_id: required_string(&request, "noteId")?,
+                })
+            }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
     }
@@ -1839,6 +1931,9 @@ impl HostKernel {
                 opening_text = instruction;
             }
         }
+        let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
+        let change_notes_text = changes::format_notes(&pending);
+        opening_text = changes::append_notes(&opening_text, &pending);
         let fields = launch::localize_fields(agent.config_fields(), language);
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
         let (isolation_supported, isolation_reason) =
@@ -1866,6 +1961,7 @@ impl HostKernel {
             isolation_supported,
             isolation_reason,
             opening_text,
+            change_notes_text,
             command_preview: preview,
             intents: launch::intent_options(language),
             warnings,
@@ -1951,6 +2047,11 @@ impl HostKernel {
                 return Err(KernelError::Protocol(err));
             }
         }
+        if !from_form {
+            let pending =
+                changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
+            config.opening_text = changes::append_notes(&config.opening_text, &pending);
+        }
         let (previous_run_id, resume_session_id) = match &previous {
             Some(previous) => (
                 Some(previous.id.clone()),
@@ -1979,6 +2080,11 @@ impl HostKernel {
         } else {
             Vec::new()
         };
+        let early_baselines = if isolate || !cwd.exists() {
+            None
+        } else {
+            Some(changes::record_baselines(&cwd))
+        };
         let mut result = run::start_unbound(
             project_id,
             &cwd,
@@ -2006,6 +2112,16 @@ impl HostKernel {
                 result.record.working_directory = tree.display().to_string();
             }
         }
+        result.record.git_baselines = if isolate {
+            let recorded_cwd = PathBuf::from(&result.record.working_directory);
+            if recorded_cwd.exists() {
+                changes::record_baselines(&recorded_cwd)
+            } else {
+                Vec::new()
+            }
+        } else {
+            early_baselines.unwrap_or_default()
+        };
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
             run_id: result.record.id.clone(),
@@ -2015,6 +2131,7 @@ impl HostKernel {
             self.live.insert(result.record.id.clone(), session);
             self.remember_launch(project_id, &config)?;
             self.launch_form = None;
+            self.clear_pending_notes(project_id, issue_id.as_deref())?;
         } else if let Some(form) = &mut self.launch_form {
             form.error = result.record.failure.clone();
         }
@@ -2157,6 +2274,117 @@ impl HostKernel {
 
     fn persist_runs(&self) -> Result<(), KernelError> {
         write_json(&self.data.host_dir.join("runs.json"), &self.runs)
+    }
+
+    fn change_notes_path(&self) -> PathBuf {
+        self.data.host_dir.join("change-notes.json")
+    }
+
+    fn persist_change_notes(&self) -> Result<(), KernelError> {
+        write_json(&self.change_notes_path(), &self.change_notes)
+    }
+
+    fn load_change_notes(&mut self) {
+        let Ok(raw) = fs::read_to_string(self.change_notes_path()) else {
+            return;
+        };
+        if let Ok(notes) = serde_json::from_str(&raw) {
+            self.change_notes = notes;
+        }
+    }
+
+    fn clear_pending_notes(
+        &mut self,
+        project_id: &str,
+        issue_id: Option<&str>,
+    ) -> Result<(), KernelError> {
+        self.change_notes
+            .retain(|note| note.project_id != project_id || note.issue_id.as_deref() != issue_id);
+        self.persist_change_notes()
+    }
+
+    fn run_for_changes(
+        &self,
+        run_id: Option<&str>,
+        issue_id: Option<&str>,
+    ) -> Result<&RunSummary, KernelError> {
+        if let Some(run_id) = run_id.filter(|id| !id.is_empty()) {
+            return self
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .ok_or_else(|| KernelError::Protocol("unknown run".into()));
+        }
+        let issue_id = issue_id
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| KernelError::Protocol("missing runId".into()))?;
+        self.runs
+            .iter()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .or_else(|| {
+                self.runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
+            })
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))
+    }
+
+    fn view_changes(
+        &self,
+        run_id: Option<&str>,
+        issue_id: Option<&str>,
+        scope: ChangeScope,
+    ) -> Result<ViewChanges, KernelError> {
+        let run = self.run_for_changes(run_id, issue_id)?;
+        Ok(changes::compute_view(
+            run,
+            scope,
+            &self.change_notes,
+            self.appearance.language,
+        ))
+    }
+
+    fn write_change_note(
+        &mut self,
+        run_id: &str,
+        repo: String,
+        path: String,
+        line: u32,
+        text: String,
+    ) -> Result<(), KernelError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(KernelError::Protocol("missing text".into()));
+        }
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.change_notes.push(changes::new_note(
+            &run,
+            if repo.trim().is_empty() {
+                ".".into()
+            } else {
+                repo
+            },
+            path,
+            line,
+            text.to_string(),
+        ));
+        self.persist_change_notes()
+    }
+
+    fn delete_change_note(&mut self, note_id: &str) -> Result<(), KernelError> {
+        let before = self.change_notes.len();
+        self.change_notes.retain(|note| note.id != note_id);
+        if self.change_notes.len() == before {
+            return Err(KernelError::Protocol("unknown note".into()));
+        }
+        self.persist_change_notes()
     }
 
     fn load_persisted_runs(&mut self) -> Vec<String> {
@@ -2548,6 +2776,9 @@ impl HostKernel {
         let mut outcome = self.outcome();
         if let Some(inference) = response.get("inference").cloned() {
             outcome.inference = serde_json::from_value(inference).ok();
+        }
+        if let Some(view) = response.get("viewChanges").cloned() {
+            outcome.view_changes = serde_json::from_value(view).ok();
         }
         Ok(Some(outcome))
     }
@@ -3279,6 +3510,12 @@ impl ShellCopy {
                 quit_active_body: "退出 Host 会停掉全部活跃 Run。选择返回则继续跑。".into(),
                 quit_return: "返回".into(),
                 quit_stop_all: "停掉全部".into(),
+                view_changes: "查看改动".into(),
+                this_round: "这一轮".into(),
+                uncommitted: "未提交".into(),
+                add_change_note: "写下改动备注".into(),
+                change_note_placeholder: "一句话，下次开跑才带上".into(),
+                delete_change_note: "删掉备注".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -3432,6 +3669,12 @@ impl ShellCopy {
                 quit_active_body: "Quitting Host will stop every active Run. Go back to keep them running.".into(),
                 quit_return: "Go back".into(),
                 quit_stop_all: "Stop all".into(),
+                view_changes: "View changes".into(),
+                this_round: "This round".into(),
+                uncommitted: "Uncommitted".into(),
+                add_change_note: "Add a change note".into(),
+                change_note_placeholder: "One sentence. It goes into the next opening.".into(),
+                delete_change_note: "Delete note".into(),
             },
         }
     }
