@@ -28,6 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci --prefix apps/desktop
+      - run: npx --prefix apps/desktop playwright install chromium
       - run: npm --prefix apps/desktop run verify:release
       - run: npm --prefix apps/desktop run build
       - run: cargo test
@@ -61,7 +62,7 @@ jobs:
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
       - uses: Swatinem/rust-cache@v2
       - run: npm ci --prefix apps/desktop
-      - run: npm --prefix apps/desktop run verify:release -- "$RELEASE_TAG"
+      - run: npm --prefix apps/desktop run verify:release
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       - uses: tauri-apps/tauri-action@v1
