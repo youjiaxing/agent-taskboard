@@ -4,6 +4,7 @@ use std::sync::Arc;
 use host_kernel::{
     BootRequest, HostKernel, IssueRecord, KernelError, KernelPorts, MemoryAgent, MemoryLaunchEnv,
     MemorySessionFactory, MemoryTracker, RunEndedReason, RunStatus, SystemAppearance,
+    WorkspaceView,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -362,6 +363,105 @@ fn focus_run_command_focuses_the_bound_issue_and_pty() {
         .unwrap();
 
     assert_eq!(out.snapshot.focused_run_id, run_id);
+    assert_eq!(out.snapshot.focused_project_id, project_id);
+    assert_eq!(out.snapshot.workspace_view, WorkspaceView::Run);
+    assert_eq!(
+        out.snapshot.board.unwrap().selected.unwrap().id,
+        "you/garden#1"
+    );
+}
+
+#[test]
+fn returning_to_board_keeps_the_issue_and_restores_its_pty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    start_bound_from_form(&mut h.host, &project_id, "you/garden#1").unwrap();
+    h.host
+        .handle(serde_json::json!({
+            "op": "focusIssue",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+
+    let out = h
+        .host
+        .handle(serde_json::json!({ "op": "returnToBoard" }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.workspace_view, WorkspaceView::Project);
+    assert!(!out.snapshot.focused_run_id.is_empty());
+    assert_eq!(
+        out.snapshot.board.unwrap().selected.unwrap().id,
+        "you/garden#1"
+    );
+}
+
+#[test]
+fn focusing_an_issue_without_an_active_run_hides_the_pty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    start_bound_from_form(&mut h.host, &project_id, "you/garden#1").unwrap();
+    h.tracker
+        .add_issue(IssueRecord::open("you/garden", 2, "other work"));
+    h.host
+        .handle(serde_json::json!({ "op": "refresh" }))
+        .unwrap();
+
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op": "focusIssue",
+            "issueId": "you/garden#2",
+        }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.workspace_view, WorkspaceView::Project);
+    assert!(out.snapshot.focused_run_id.is_empty());
+    assert_eq!(
+        out.snapshot.board.unwrap().selected.unwrap().id,
+        "you/garden#2"
+    );
+}
+
+#[test]
+fn host_overview_is_a_host_view_and_keeps_all_project_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first_dir = make_dir(tmp.path(), "work/garden");
+    let second_dir = make_dir(tmp.path(), "work/tools");
+    let mut h = harness(tmp.path());
+    let first_project = register(&mut h.host, &first_dir);
+    start_bound_from_form(&mut h.host, &first_project, "you/garden#1").unwrap();
+    h.tracker
+        .add_issue(IssueRecord::open("you/tools", 1, "tool work"));
+    let second_project = h
+        .host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "tools",
+            "localPath": second_dir,
+            "repository": "you/tools",
+        }))
+        .unwrap()
+        .snapshot
+        .projects
+        .into_iter()
+        .find(|project| project.repository == "you/tools")
+        .unwrap()
+        .id;
+    start_bound_from_form(&mut h.host, &second_project, "you/tools#1").unwrap();
+
+    let out = h
+        .host
+        .handle(serde_json::json!({ "op": "openHostOverview" }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.workspace_view, WorkspaceView::HostOverview);
+    assert_eq!(out.snapshot.runs.len(), 2);
+    assert!(out.snapshot.focused_run_id.is_empty());
 }
 
 #[test]

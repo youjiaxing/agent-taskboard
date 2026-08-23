@@ -214,6 +214,8 @@ pub enum Command {
     FocusRun {
         run_id: String,
     },
+    OpenHostOverview,
+    ReturnToBoard,
     InjectRunInput {
         run_id: String,
         text: String,
@@ -295,6 +297,14 @@ pub enum ProcessIntent {
 pub enum EmptyAction {
     RegisterFirstProject,
     PairAnotherHost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceView {
+    Project,
+    HostOverview,
+    Run,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -740,6 +750,18 @@ pub struct ShellCopy {
     pub veto_advance: String,
     pub usage: String,
     pub usage_hint: String,
+    pub host_overview: String,
+    pub host_overview_hint: String,
+    pub return_to_board: String,
+    pub show_sidebar: String,
+    pub hide_sidebar: String,
+    pub show_issue_detail: String,
+    pub hide_issue_detail: String,
+    pub show_ended_runs: String,
+    pub run_group_waiting: String,
+    pub run_group_running: String,
+    pub run_group_stopped: String,
+    pub run_group_ended: String,
     pub range_24_hours: String,
     pub range_today: String,
     pub range_7_days: String,
@@ -788,6 +810,7 @@ pub struct HostSnapshot {
     pub board: Option<BoardSnapshot>,
     pub recent_completed_limit: u32,
     pub center_view: CenterView,
+    pub workspace_view: WorkspaceView,
     pub runs: Vec<RunSummary>,
     pub focused_run_id: String,
     pub quit_offer: Option<QuitOffer>,
@@ -865,6 +888,7 @@ pub struct HostKernel {
     recent_limit: u32,
     issue_search: BTreeMap<String, IssueSearch>,
     center_view: CenterView,
+    workspace_view: WorkspaceView,
     show_closed_graph_context: bool,
     launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     last_successful_agent: BTreeMap<String, String>,
@@ -928,6 +952,7 @@ struct RemoteView {
     board: Option<BoardSnapshot>,
     runs: Vec<RunSummary>,
     focused_run_id: String,
+    workspace_view: WorkspaceView,
     quit_offer: Option<QuitOffer>,
     launch_form: Option<RunLaunchForm>,
     usage_open: bool,
@@ -1039,6 +1064,7 @@ impl HostKernel {
             recent_limit,
             issue_search: BTreeMap::new(),
             center_view,
+            workspace_view: WorkspaceView::Project,
             show_closed_graph_context: false,
             launch_defaults: settings.agent_launch_defaults,
             last_successful_agent: settings.last_successful_agent,
@@ -1077,7 +1103,7 @@ impl HostKernel {
     pub fn snapshot(&self) -> HostSnapshot {
         let (projects, focused_project_id, empty_actions) = self.board_for_focus();
         let board = self.current_board(&focused_project_id);
-        let (runs, focused_run_id, quit_offer) = self.runs_for_focus();
+        let (runs, focused_run_id, workspace_view, quit_offer) = self.runs_for_focus();
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
@@ -1102,6 +1128,7 @@ impl HostKernel {
             board,
             recent_completed_limit: self.recent_limit,
             center_view: self.center_view,
+            workspace_view,
             runs,
             focused_run_id,
             quit_offer,
@@ -1283,6 +1310,8 @@ impl HostKernel {
             Command::FocusProject { project_id } => {
                 self.usage_open = false;
                 self.usage_query.highlighted_run_id = None;
+                self.workspace_view = WorkspaceView::Project;
+                self.focused_run_id = None;
                 self.focus_project(&project_id)?;
             }
             Command::InferProject { local_path } => {
@@ -1291,9 +1320,8 @@ impl HostKernel {
             }
             Command::FocusIssue { issue_id } => {
                 self.selected_issue_id = Some(issue_id.clone());
-                if let Some(run_id) = self.active_run_id_for_issue(&issue_id) {
-                    self.focused_run_id = Some(run_id);
-                }
+                self.focused_run_id = self.active_run_id_for_issue(&issue_id);
+                self.workspace_view = WorkspaceView::Project;
             }
             Command::FilterParent { issue_id } => {
                 self.parent_filter = Some(issue_id);
@@ -1409,6 +1437,22 @@ impl HostKernel {
                 self.usage_open = false;
                 self.usage_query.highlighted_run_id = None;
                 self.focus_run(&run_id)?;
+                self.workspace_view = WorkspaceView::Run;
+            }
+            Command::OpenHostOverview => {
+                self.usage_open = false;
+                self.usage_query.highlighted_run_id = None;
+                self.focused_run_id = None;
+                self.workspace_view = WorkspaceView::HostOverview;
+            }
+            Command::ReturnToBoard => {
+                self.usage_open = false;
+                self.usage_query.highlighted_run_id = None;
+                self.focused_run_id = self
+                    .selected_issue_id
+                    .clone()
+                    .and_then(|issue_id| self.active_run_id_for_issue(&issue_id));
+                self.workspace_view = WorkspaceView::Project;
             }
             Command::InjectRunInput { run_id, text } => {
                 let mut data = text.into_bytes();
@@ -1862,6 +1906,18 @@ impl HostKernel {
                     run_id: required_string(&request, "runId")?,
                 })
             }
+            "openHostOverview" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenHostOverview)
+            }
+            "returnToBoard" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ReturnToBoard)
+            }
             "injectRunInput" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -2197,6 +2253,12 @@ impl HostKernel {
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string();
+        let workspace_view = snapshot
+            .get("workspaceView")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or(WorkspaceView::Project);
         let quit_offer = match snapshot.get("quitOffer") {
             Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
             _ => None,
@@ -2209,6 +2271,7 @@ impl HostKernel {
             board,
             runs,
             focused_run_id,
+            workspace_view,
             quit_offer,
             launch_form: match snapshot.get("launchForm") {
                 Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
@@ -2237,13 +2300,14 @@ impl HostKernel {
         self.launch_form.clone()
     }
 
-    fn runs_for_focus(&self) -> (Vec<RunSummary>, String, Option<QuitOffer>) {
+    fn runs_for_focus(&self) -> (Vec<RunSummary>, String, WorkspaceView, Option<QuitOffer>) {
         if self.focused_host_id != LOCAL_HOST_ID {
             if let Some(view) = &self.remote_view {
                 if view.host_id == self.focused_host_id {
                     return (
                         view.runs.clone(),
                         view.focused_run_id.clone(),
+                        view.workspace_view,
                         view.quit_offer.clone(),
                     );
                 }
@@ -2252,6 +2316,7 @@ impl HostKernel {
         (
             self.decorate_runs(&self.runs),
             self.focused_run_id.clone().unwrap_or_default(),
+            self.workspace_view,
             self.quit_offer.clone(),
         )
     }
@@ -3006,10 +3071,23 @@ impl HostKernel {
     }
 
     fn focus_run(&mut self, run_id: &str) -> Result<(), KernelError> {
-        if !self.runs.iter().any(|run| run.id == run_id) {
-            return Err(KernelError::Protocol("unknown run".into()));
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.focused_run_id = Some(run.id);
+        if self
+            .projects
+            .iter()
+            .any(|project| project.id == run.project_id)
+        {
+            self.focused_project_id = Some(run.project_id);
         }
-        self.focused_run_id = Some(run_id.to_string());
+        if let Some(issue_id) = run.issue_id {
+            self.selected_issue_id = Some(issue_id);
+        }
         Ok(())
     }
 
@@ -4532,6 +4610,18 @@ impl ShellCopy {
                 veto_advance: "否决".into(),
                 usage: "用量".into(),
                 usage_hint: "这台 Host 上全部 Project 的 token 流水。不估美元，不管账号额度。".into(),
+                host_overview: "总览".into(),
+                host_overview_hint: "当前 Host 上的 Run，按终端状态分组。不是 Frontier 聚合板。".into(),
+                return_to_board: "返回看板".into(),
+                show_sidebar: "显示侧栏".into(),
+                hide_sidebar: "收起侧栏".into(),
+                show_issue_detail: "显示 Issue".into(),
+                hide_issue_detail: "收起 Issue".into(),
+                show_ended_runs: "显示已结束".into(),
+                run_group_waiting: "等待操作".into(),
+                run_group_running: "进行中".into(),
+                run_group_stopped: "执行已停".into(),
+                run_group_ended: "已结束".into(),
                 range_24_hours: "24 小时".into(),
                 range_today: "今天".into(),
                 range_7_days: "7 天".into(),
@@ -4738,6 +4828,18 @@ impl ShellCopy {
                 veto_advance: "Veto".into(),
                 usage: "Usage".into(),
                 usage_hint: "Token traffic for every Project on this Host. No dollar estimates and no account quotas.".into(),
+                host_overview: "Overview".into(),
+                host_overview_hint: "Runs on the current Host, grouped by terminal state. This is not an aggregated Frontier.".into(),
+                return_to_board: "Back to board".into(),
+                show_sidebar: "Show sidebar".into(),
+                hide_sidebar: "Hide sidebar".into(),
+                show_issue_detail: "Show Issue".into(),
+                hide_issue_detail: "Hide Issue".into(),
+                show_ended_runs: "Show ended Runs".into(),
+                run_group_waiting: "Waiting".into(),
+                run_group_running: "In progress".into(),
+                run_group_stopped: "Execution stopped".into(),
+                run_group_ended: "Ended".into(),
                 range_24_hours: "24 hours".into(),
                 range_today: "Today".into(),
                 range_7_days: "7 days".into(),
