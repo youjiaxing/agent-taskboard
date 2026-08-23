@@ -8,6 +8,8 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
+    "process:allow-restart",
+    "updater:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }]

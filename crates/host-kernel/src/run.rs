@@ -110,6 +110,13 @@ pub struct QuitOffer {
     pub active_run_count: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInstallGate {
+    pub allowed: bool,
+    pub active_run_count: u32,
+}
+
 pub struct StartResult {
     pub record: RunSummary,
     pub session: Option<Arc<dyn AgentSession>>,

@@ -19,6 +19,8 @@ struct AppState {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let kernel = boot_kernel(app.handle())?;
             let kernel = Arc::new(Mutex::new(kernel));
@@ -86,6 +88,7 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
+            #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 show_main(app);
             }
@@ -235,14 +238,19 @@ fn handle_shell_menu(app: &AppHandle, id: &str) {
 }
 
 fn show_main(app: &AppHandle) {
+    let mut became_visible = false;
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut kernel) = state.kernel.lock() {
+            became_visible = !kernel.snapshot().window_visible;
+            let _ = kernel.dispatch(Command::ShowWindow);
+        }
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-    }
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Ok(mut kernel) = state.kernel.lock() {
-            let _ = kernel.dispatch(Command::ShowWindow);
+        if became_visible {
+            let _ = window.eval("window.dispatchEvent(new Event('agent-taskboard:check-update'));");
         }
     }
 }

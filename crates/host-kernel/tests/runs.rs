@@ -297,6 +297,83 @@ fn quitting_host_with_active_runs_requires_a_choice() {
 }
 
 #[test]
+fn update_install_requires_every_run_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+
+    let idle = h
+        .host
+        .handle(serde_json::json!({ "op": "updateInstallGate" }))
+        .unwrap()
+        .update_install_gate
+        .expect("update install gate");
+    assert!(idle.allowed);
+    assert_eq!(idle.active_run_count, 0);
+
+    let run_id = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .id
+        .clone();
+
+    let busy = h
+        .host
+        .handle(serde_json::json!({ "op": "updateInstallGate" }))
+        .unwrap()
+        .update_install_gate
+        .expect("update install gate");
+    assert!(!busy.allowed);
+    assert_eq!(busy.active_run_count, 1);
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": run_id,
+        }))
+        .unwrap();
+    assert!(
+        h.host
+            .handle(serde_json::json!({ "op": "beginUpdateInstall" }))
+            .unwrap()
+            .update_install_gate
+            .expect("update install gate")
+            .allowed
+    );
+
+    let err = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap_err();
+    assert!(err.to_string().contains("update install"));
+
+    h.host
+        .handle(serde_json::json!({ "op": "cancelUpdateInstall" }))
+        .unwrap();
+    let started = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    assert_eq!(
+        started.snapshot.runs.last().unwrap().status,
+        RunStatus::Running
+    );
+}
+
+#[test]
 fn recent_action_stays_empty_when_adapter_has_none() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
