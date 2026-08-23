@@ -1,5 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
@@ -16,6 +18,19 @@ type ShellCopy = {
   quitHost: string;
   showWindow: string;
   settings: string;
+  updates: string;
+  checkForUpdates: string;
+  updateChecking: string;
+  updateAvailable: string;
+  updateReady: string;
+  updateNotes: string;
+  updateConfirm: string;
+  updateLater: string;
+  updateCurrent: string;
+  updateUnavailableBrowser: string;
+  updateActiveRuns: string;
+  updateInstalling: string;
+  updateFailed: string;
   language: string;
   theme: string;
   languageZh: string;
@@ -656,6 +671,20 @@ type QuitOffer = {
   activeRunCount: number;
 };
 
+type UpdateInstallGate = {
+  allowed: boolean;
+  activeRunCount: number;
+};
+
+type UpdateState =
+  | { kind: "idle" }
+  | { kind: "checking"; manual: boolean }
+  | { kind: "current" }
+  | { kind: "available"; version: string; notes: string }
+  | { kind: "blocked"; activeRunCount: number }
+  | { kind: "installing"; progress: number | null }
+  | { kind: "failed"; message: string };
+
 type NotificationKind = "waiting" | "completed" | "abnormal-stop" | "crash-recovered";
 
 type HostEvent =
@@ -691,6 +720,7 @@ type RpcResult = {
   snapshot: Snapshot;
   process: "keep-running" | "exit";
   inference?: ProjectDraft;
+  updateInstallGate?: UpdateInstallGate;
   events?: HostEvent[];
   viewChanges?: ViewChanges;
 };
@@ -702,6 +732,10 @@ if (!app) {
 
 let snapshot: Snapshot | null = null;
 let settingsOpen = false;
+let updateState: UpdateState = { kind: "idle" };
+let pendingUpdate: Update | null = null;
+let pendingUpdateDownloaded = false;
+let startupUpdateChecked = false;
 let pairingOpen = false;
 let hostPickerOpen = false;
 let pairingAddress = "";
@@ -896,6 +930,105 @@ function isLoopbackPage(): boolean {
     (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]") &&
     port === "10529"
   );
+}
+
+function desktopUpdateAvailable(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+async function checkForUpdates(manual: boolean): Promise<void> {
+  if (!desktopUpdateAvailable()) {
+    updateState = { kind: "failed", message: snapshot?.copy.updateUnavailableBrowser ?? "" };
+    render();
+    return;
+  }
+  if (updateState.kind === "checking" || updateState.kind === "installing") return;
+  updateState = { kind: "checking", manual };
+  render();
+  try {
+    pendingUpdate?.close().catch(() => {});
+    pendingUpdate = await check({ timeout: 30_000 });
+    pendingUpdateDownloaded = false;
+    updateState = pendingUpdate
+      ? {
+          kind: "available",
+          version: pendingUpdate.version,
+          notes: pendingUpdate.body ?? "",
+        }
+      : { kind: "current" };
+  } catch (error) {
+    if (manual) {
+      updateState = {
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    } else {
+      updateState = { kind: "idle" };
+    }
+  }
+  render();
+}
+
+async function readUpdateInstallGate(op = "updateInstallGate"): Promise<UpdateInstallGate> {
+  const result = await rpc(op);
+  if (!result.updateInstallGate) throw new Error("Host returned no update install gate");
+  return result.updateInstallGate;
+}
+
+async function installPendingUpdate(): Promise<void> {
+  if (!pendingUpdate || updateState.kind === "installing") return;
+  let gate: UpdateInstallGate;
+  try {
+    gate = await readUpdateInstallGate();
+  } catch (error) {
+    updateState = {
+      kind: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    render();
+    return;
+  }
+  if (!gate.allowed) {
+    updateState = { kind: "blocked", activeRunCount: gate.activeRunCount };
+    render();
+    return;
+  }
+  updateState = { kind: "installing", progress: null };
+  render();
+  let downloaded = 0;
+  let contentLength: number | undefined;
+  try {
+    if (!pendingUpdateDownloaded) {
+      await pendingUpdate.download((event) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+        }
+        const progress = contentLength && contentLength > 0
+          ? Math.min(100, Math.round((downloaded / contentLength) * 100))
+          : null;
+        updateState = { kind: "installing", progress };
+        render();
+      });
+      pendingUpdateDownloaded = true;
+    }
+    const finalGate = await readUpdateInstallGate("beginUpdateInstall");
+    if (!finalGate.allowed) {
+      updateState = { kind: "blocked", activeRunCount: finalGate.activeRunCount };
+      render();
+      return;
+    }
+    await pendingUpdate.install();
+    await relaunch();
+  } catch (error) {
+    await rpc("cancelUpdateInstall").catch(() => {});
+    updateState = {
+      kind: "failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+    render();
+  }
 }
 
 async function protocolBase(): Promise<string> {
@@ -1189,6 +1322,7 @@ function render(): void {
                     .join("")}
                 </div>
               </div>
+              ${updateSettings(copy)}
               <div class="field">
                 <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
                 <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
@@ -1284,6 +1418,7 @@ function render(): void {
     ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
+    ${updateDialog(copy)}
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
@@ -1863,6 +1998,63 @@ function quitOfferDialog(copy: ShellCopy): string {
       </div>
     </div>
   </div>`;
+}
+
+function updateSettings(copy: ShellCopy): string {
+  const status = updateState.kind === "checking"
+    ? copy.updateChecking
+    : updateState.kind === "current"
+      ? copy.updateCurrent
+      : updateState.kind === "failed"
+        ? `${copy.updateFailed} ${updateState.message}`.trim()
+        : updateState.kind === "blocked"
+          ? `${copy.updateActiveRuns} (${updateState.activeRunCount})`
+          : "";
+  return `<div class="field update-settings">
+    <div class="label">${escapeHtml(copy.updates)}</div>
+    ${desktopUpdateAvailable()
+      ? `<button type="button" data-act="check-updates" ${updateState.kind === "checking" || updateState.kind === "installing" ? "disabled" : ""}>${escapeHtml(updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates)}</button>`
+      : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
+    ${status ? `<p class="hint update-status">${escapeHtml(status)}</p>` : ""}
+  </div>`;
+}
+
+function updateDialog(copy: ShellCopy): string {
+  if (updateState.kind === "available") {
+    return `<div class="overlay modal update-dialog" data-act="update-later">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateAvailable)} ${escapeHtml(updateState.version)}</h2>
+        <p class="notice">${escapeHtml(copy.updateReady)}</p>
+        ${updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(updateState.notes)}</p></div>` : ""}
+        <div class="actions">
+          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
+          <button type="button" class="primary" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if (updateState.kind === "blocked") {
+    return `<div class="overlay modal update-dialog" data-act="update-later">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateAvailable)}</h2>
+        <p class="notice bad">${escapeHtml(copy.updateActiveRuns)} (${updateState.activeRunCount})</p>
+        <div class="actions">
+          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
+          <button type="button" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if (updateState.kind === "installing") {
+    const progress = updateState.progress == null ? "" : ` ${updateState.progress}%`;
+    return `<div class="overlay modal update-dialog">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateInstalling)}${progress}</h2>
+        ${updateState.progress == null ? "" : `<progress max="100" value="${updateState.progress}"></progress>`}
+      </div>
+    </div>`;
+  }
+  return "";
 }
 
 function keyboardHelpDialog(copy: ShellCopy): string {
@@ -2673,6 +2865,20 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "check-updates") {
+    await checkForUpdates(true);
+    return;
+  }
+  if (act === "install-update") {
+    await installPendingUpdate();
+    return;
+  }
+  if (act === "update-later") {
+    if (event.target !== target && target.closest(".sheet")) return;
+    updateState = { kind: "idle" };
+    render();
+    return;
+  }
   if (act === "pairing-noop") {
     return;
   }
@@ -3480,6 +3686,10 @@ window.addEventListener("focus", () => {
   rpc("refresh").then(render).catch(() => {});
 });
 
+window.addEventListener("agent-taskboard:check-update", () => {
+  void checkForUpdates(false);
+});
+
 let wasMobileClient = mobileClient();
 
 window.addEventListener("resize", () => {
@@ -3501,6 +3711,12 @@ rpc("snapshot")
     ensureTick();
     await reportClientView();
     render();
+    if (desktopUpdateAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
+      startupUpdateChecked = true;
+      window.setTimeout(() => {
+        if (updateState.kind === "idle") void checkForUpdates(false);
+      }, 250);
+    }
   })
   .catch((error: unknown) => {
     if (app) {

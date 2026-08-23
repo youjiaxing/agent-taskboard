@@ -7,7 +7,7 @@ if (!url) {
 }
 
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ locale: "zh-CN" });
+const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 const page = await context.newPage();
 page.on("pageerror", (error) => {
   console.error("pageerror", error);
@@ -307,6 +307,13 @@ await page.waitForFunction(() => !document.querySelector(".run-dock"));
 
 await page.click("button:has-text('设置')");
 await page.waitForSelector("#recent-limit");
+const browserUpdateText = await page.$eval(".update-settings", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!browserUpdateText?.includes("浏览器 Client 不能给 Host 换包")) {
+  throw new Error(`browser Client should not expose update installation: ${browserUpdateText}`);
+}
+if (await page.$("button[data-act='check-updates']") || await page.$("button[data-act='install-update']")) {
+  throw new Error("browser Client must not expose updater actions");
+}
 await page.fill("#recent-limit", "1");
 await page.locator("#recent-limit").dispatchEvent("change");
 await page.waitForFunction(() => document.querySelectorAll('[data-lane="recentlyCompleted"] .issue-card').length === 1);

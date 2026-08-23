@@ -771,6 +771,9 @@ html[data-theme="plain-night"] button.danger.primary {
 .field .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.update-settings .update-status { margin: 8px 0 0; }
+.update-notes { max-height: 180px; overflow: auto; white-space: pre-wrap; line-height: 1.5; }
+.update-dialog progress { width: 100%; }
 .pairing-sheet {
   width: min(480px, calc(100% - 24px));
   max-height: calc(100vh - 80px);

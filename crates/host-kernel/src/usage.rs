@@ -575,7 +575,11 @@ pub fn build_usage_page(
             })
         })
         .collect();
-    rows.sort_by(|a, b| b.started_at_ms.cmp(&a.started_at_ms).then(b.run_id.cmp(&a.run_id)));
+    rows.sort_by(|a, b| {
+        b.started_at_ms
+            .cmp(&a.started_at_ms)
+            .then(b.run_id.cmp(&a.run_id))
+    });
 
     let mut bucket_starts = Vec::new();
     let mut cursor = bucket_start_ms(from_ms, kind, offset_secs);

@@ -25,8 +25,9 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": ["dmg", "nsis"],
+    "createUpdaterArtifacts": true,
     "resources": ["../dist"],
     "icon": [
       "icons/32x32.png",
@@ -34,6 +35,30 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": false
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/minimum-version.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1ODNBOTQ1QjUyMkRBOUMKUldTYzJpSzFSYW1ESlZJS3pzTTBhdzhOZDhud2ZmYTBjMWxkQjM1Uys1cHNLWm1rT0EyYUtKRFQK",
+      "endpoints": [
+        "https://github.com/youjiaxing/agent-taskboard/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

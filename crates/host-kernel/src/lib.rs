@@ -53,7 +53,7 @@ pub use local_rpc::{
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 pub use project::ProjectInference;
 pub use refresh::DEFAULT_REFRESH_INTERVAL_MS;
-pub use run::{QuitOffer, RunEndedReason, RunStatus, RunSummary};
+pub use run::{QuitOffer, RunEndedReason, RunStatus, RunSummary, UpdateInstallGate};
 pub use session::{
     AgentSession, MemorySession, MemorySessionFactory, PtyChunk, PtySessionFactory, SessionFactory,
     SpawnRequest,
@@ -400,6 +400,12 @@ pub struct CommandOutcome {
     pub process: ProcessIntent,
     pub pairing: Option<IssuedPairing>,
     pub inference: Option<ProjectInference>,
+    #[serde(
+        rename = "updateInstallGate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub update_install_gate: Option<UpdateInstallGate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<HostEvent>,
     #[serde(
@@ -421,6 +427,9 @@ impl CommandOutcome {
         }
         if let Some(inference) = &self.inference {
             value["inference"] = serde_json::to_value(inference).expect("inference json");
+        }
+        if let Some(gate) = &self.update_install_gate {
+            value["updateInstallGate"] = serde_json::to_value(gate).expect("update gate json");
         }
         if !self.events.is_empty() {
             value["events"] = serde_json::to_value(&self.events).expect("events json");
@@ -581,6 +590,19 @@ pub struct ShellCopy {
     pub quit_host: String,
     pub show_window: String,
     pub settings: String,
+    pub updates: String,
+    pub check_for_updates: String,
+    pub update_checking: String,
+    pub update_available: String,
+    pub update_ready: String,
+    pub update_notes: String,
+    pub update_confirm: String,
+    pub update_later: String,
+    pub update_current: String,
+    pub update_unavailable_browser: String,
+    pub update_active_runs: String,
+    pub update_installing: String,
+    pub update_failed: String,
     pub language: String,
     pub theme: String,
     pub language_zh: String,
@@ -910,6 +932,7 @@ pub struct HostKernel {
     usage_open: bool,
     usage_query: usage::UsageQuery,
     usage_samples: Vec<TelemetrySample>,
+    update_installing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1086,6 +1109,7 @@ impl HostKernel {
             usage_open: false,
             usage_query: usage::UsageQuery::default(),
             usage_samples: Vec::new(),
+            update_installing: false,
         };
         let project_ids: Vec<String> = host
             .projects
@@ -1179,6 +1203,7 @@ impl HostKernel {
             },
             pairing,
             inference,
+            update_install_gate: None,
             events: std::mem::take(&mut self.pending_events),
             view_changes,
         }
@@ -1206,6 +1231,15 @@ impl HostKernel {
             .get(run_id)
             .is_some_and(|session| session.was_stopped());
         self.mark_run_ended(run_id, RunEndedReason::from_exit(code, stopped));
+    }
+
+    pub fn update_install_gate(&mut self) -> UpdateInstallGate {
+        self.observe_live_runs();
+        let active_run_count = self.active_run_count();
+        UpdateInstallGate {
+            allowed: active_run_count == 0,
+            active_run_count,
+        }
     }
 
     pub fn write_pty(&self, run_id: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -1565,6 +1599,25 @@ impl HostKernel {
         match op {
             "snapshot" => {
                 self.observe_live_runs();
+                Ok(self.outcome())
+            }
+            "updateInstallGate" => {
+                let gate = self.update_install_gate();
+                let mut outcome = self.outcome();
+                outcome.update_install_gate = Some(gate);
+                Ok(outcome)
+            }
+            "beginUpdateInstall" => {
+                let gate = self.update_install_gate();
+                if gate.allowed {
+                    self.update_installing = true;
+                }
+                let mut outcome = self.outcome();
+                outcome.update_install_gate = Some(gate);
+                Ok(outcome)
+            }
+            "cancelUpdateInstall" => {
+                self.update_installing = false;
                 Ok(self.outcome())
             }
             "hideWindow" => self.dispatch(Command::HideWindow),
@@ -2454,6 +2507,9 @@ impl HostKernel {
         from_form: bool,
         previous: Option<PreviousRun>,
     ) -> Result<(), KernelError> {
+        if self.update_installing {
+            return Err(KernelError::Denied("update install is starting".into()));
+        }
         let project_dir = self
             .projects
             .iter()
@@ -4466,6 +4522,19 @@ impl ShellCopy {
                 quit_host: "退出 Host".into(),
                 show_window: "打开窗口".into(),
                 settings: "设置".into(),
+                updates: "应用更新".into(),
+                check_for_updates: "检查更新".into(),
+                update_checking: "正在检查…".into(),
+                update_available: "发现新版本".into(),
+                update_ready: "有新版本可安装。确认后才会下载和安装。".into(),
+                update_notes: "版本说明".into(),
+                update_confirm: "下载并安装".into(),
+                update_later: "稍后".into(),
+                update_current: "已经是最新版本。".into(),
+                update_unavailable_browser: "浏览器 Client 不能给 Host 换包。请在本机桌面应用中检查更新。".into(),
+                update_active_runs: "还有活跃 Run，不能安装更新。请先让全部 Run 结束或停止。".into(),
+                update_installing: "正在下载并安装…".into(),
+                update_failed: "更新失败，Host 数据和 Client 设置都没有改变。".into(),
                 language: "界面语言".into(),
                 theme: "主题".into(),
                 language_zh: "简体中文".into(),
@@ -4690,6 +4759,19 @@ impl ShellCopy {
                 quit_host: "Quit Host".into(),
                 show_window: "Open window".into(),
                 settings: "Settings".into(),
+                updates: "App updates".into(),
+                check_for_updates: "Check for updates".into(),
+                update_checking: "Checking…".into(),
+                update_available: "Update available".into(),
+                update_ready: "A new version is ready. Nothing downloads or installs until you confirm.".into(),
+                update_notes: "Release notes".into(),
+                update_confirm: "Download and install".into(),
+                update_later: "Later".into(),
+                update_current: "You already have the latest version.".into(),
+                update_unavailable_browser: "A browser Client cannot replace a Host installation. Check from the desktop app on that machine.".into(),
+                update_active_runs: "An active Run is still running, so the update cannot be installed. End or stop every Run first.".into(),
+                update_installing: "Downloading and installing…".into(),
+                update_failed: "The update failed. Host data and Client settings were not changed.".into(),
                 language: "Interface language".into(),
                 theme: "Theme".into(),
                 language_zh: "简体中文".into(),
