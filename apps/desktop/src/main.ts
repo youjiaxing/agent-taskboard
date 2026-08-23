@@ -224,6 +224,12 @@ type ShellCopy = {
   laneSwitched: string;
   usageEmpty: string;
   closeUsage: string;
+  mobileSwitchScope: string;
+  mobileBoard: string;
+  mobileIssue: string;
+  mobileRun: string;
+  mobileRecentOutput: string;
+  mobileLiveTerminal: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -409,6 +415,7 @@ type Snapshot = {
     themes: Theme[];
   };
   copy: ShellCopy;
+  copyCatalog: Record<Language, ShellCopy>;
   emptyActions: Array<"register-first-project" | "pair-another-host">;
   loopbackPage: LoopbackPage;
   pairingOffer: PairingOffer | null;
@@ -565,6 +572,7 @@ type RunSummary = {
   isolationNote?: string | null;
   startedAtMs?: number;
   telemetry?: RunTelemetryLane[];
+  recentOutput?: string;
 };
 
 type TokenCounts = {
@@ -729,6 +737,16 @@ let issueDetailVisible = true;
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
+type MobileView = "board" | "issue" | "run";
+type MobileAppearance = { language: Language; theme: Theme; lastLightTheme: Theme };
+let mobileView: MobileView = "board";
+let mobileScopeOpen = false;
+let mobileLiveTerminal = false;
+let mobilePtyOffset = 0;
+let mobilePtyRunId = "";
+let mobilePtyPumping = false;
+const mobilePtyText = new Map<string, string>();
+let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -745,6 +763,54 @@ function sessionClientId(): string {
 
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+}
+
+const MOBILE_BREAKPOINT = 640;
+const MOBILE_APPEARANCE_KEY = "agent-taskboard-mobile-appearance";
+
+function mobileClient(): boolean {
+  return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
+}
+
+function systemMobileAppearance(): MobileAppearance {
+  const language = navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return {
+    language,
+    theme: dark ? "plain-night" : "warm-paper",
+    lastLightTheme: "warm-paper",
+  };
+}
+
+function loadMobileAppearance(): MobileAppearance | null {
+  try {
+    const raw = localStorage.getItem(MOBILE_APPEARANCE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<MobileAppearance>;
+    if (
+      (value.language === "zh-CN" || value.language === "en")
+      && (value.theme === "warm-paper" || value.theme === "plain-paper" || value.theme === "plain-night")
+      && (value.lastLightTheme === "warm-paper" || value.lastLightTheme === "plain-paper")
+    ) {
+      return value as MobileAppearance;
+    }
+  } catch {
+    // Use the browser defaults when local settings are invalid.
+  }
+  return null;
+}
+
+function ensureMobileAppearance(): MobileAppearance {
+  if (!mobileAppearance) {
+    mobileAppearance = systemMobileAppearance();
+    saveMobileAppearance(mobileAppearance);
+  }
+  return mobileAppearance;
+}
+
+function saveMobileAppearance(appearance: MobileAppearance): void {
+  mobileAppearance = appearance;
+  localStorage.setItem(MOBILE_APPEARANCE_KEY, JSON.stringify(appearance));
 }
 
 function syncLaunchDraft(snap: Snapshot): void {
@@ -848,46 +914,46 @@ async function protocolBase(): Promise<string> {
   throw new Error("Host protocol is not available");
 }
 
-let rpcGeneration = 0;
+let rpcQueue: Promise<void> = Promise.resolve();
 
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  const generation = ++rpcGeneration;
-  const response = await fetch(`${await protocolBase()}/rpc`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ op, ...extra }),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `Host protocol ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { error?: string; message?: string };
-      message = parsed.message || parsed.error || message;
-    } catch {
-      // keep raw body
+  const request = rpcQueue.then(async () => {
+    const response = await fetch(`${await protocolBase()}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op, ...extra }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let message = text || `Host protocol ${response.status}`;
+      try {
+        const parsed = JSON.parse(text) as { error?: string; message?: string };
+        message = parsed.message || parsed.error || message;
+      } catch {
+        // keep raw body
+      }
+      throw new Error(message);
     }
-    throw new Error(message);
-  }
-  const result = (await response.json()) as RpcResult;
-  result.snapshot.runs = result.snapshot.runs ?? [];
-  result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
-  result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
-  result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
-  result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
-  result.snapshot.notifySound = result.snapshot.notifySound ?? true;
-  result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-  result.events = result.events ?? [];
-  syncLaunchDraft(result.snapshot);
-  deliverHostEvents(result.events, result.snapshot);
-  if (generation !== rpcGeneration && snapshot) {
-    return { snapshot, process: "keep-running", inference: result.inference, events: result.events };
-  }
-  snapshot = result.snapshot;
-  if (result.viewChanges) {
-    changesView = result.viewChanges;
-    changesOpen = true;
-  }
-  return result;
+    const result = (await response.json()) as RpcResult;
+    result.snapshot.runs = result.snapshot.runs ?? [];
+    result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
+    result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
+    result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
+    result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
+    result.snapshot.notifySound = result.snapshot.notifySound ?? true;
+    result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
+    result.events = result.events ?? [];
+    syncLaunchDraft(result.snapshot);
+    deliverHostEvents(result.events, result.snapshot);
+    snapshot = result.snapshot;
+    if (result.viewChanges) {
+      changesView = result.viewChanges;
+      changesOpen = true;
+    }
+    return result;
+  });
+  rpcQueue = request.then(() => undefined, () => undefined);
+  return request;
 }
 
 async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
@@ -937,6 +1003,7 @@ async function jumpToNotification(event: Extract<HostEvent, { type: "notificatio
 }
 
 function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
+  if (mobileClient()) return;
   for (const event of events) {
     if (event.type !== "notification") continue;
     const title = notificationTitle(snap.copy, event.kind);
@@ -978,6 +1045,10 @@ function themeLabel(copy: ShellCopy, theme: Theme): string {
   return copy.themePlainNight;
 }
 
+function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
+  return snapshot?.copyCatalog?.[language] ?? fallback;
+}
+
 function languageLabel(copy: ShellCopy, language: Language): string {
   return language === "zh-CN" ? copy.languageZh : copy.languageEn;
 }
@@ -985,15 +1056,23 @@ function languageLabel(copy: ShellCopy, language: Language): string {
 function render(): void {
   if (!snapshot || !app) return;
   const snap = snapshot;
-  const { copy, appearance, hosts, projects } = snap;
+  const isMobile = mobileClient();
+  const appearance = isMobile
+    ? { ...snap.appearance, ...ensureMobileAppearance() }
+    : snap.appearance;
+  const copy = isMobile && appearance.language !== snap.appearance.language
+    ? clientCopy(appearance.language, snap.copy)
+    : snap.copy;
+  const { hosts, projects } = snap;
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
   document.documentElement.dataset.theme = appearance.theme;
+  document.documentElement.dataset.mobile = isMobile ? "true" : "false";
   document.title = copy.appName;
 
   const host = hosts.find((item) => item.id === snapshot?.focusedHostId) ?? hosts[0];
   const empty = snapshot.emptyActions.length > 0;
-  const runLifted = snap.workspaceView === "run" && Boolean(focusedRun(snap));
-  const showSidebar = sidebarVisible && !runLifted;
+  const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
+  const showSidebar = !isMobile && sidebarVisible && !runLifted;
   if (!pairingAddress) {
     pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
@@ -1001,9 +1080,11 @@ function render(): void {
   app.innerHTML = `
     <div class="frame">
       <header class="chrome">
-        <button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-        <button type="button" class="ghost" data-act="toggle-issue" aria-label="${escapeHtml(issueDetailVisible ? copy.hideIssueDetail : copy.showIssueDetail)}">▱</button>
-        ${!showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
+        ${isMobile
+          ? `<button type="button" class="ghost" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
+          : `<button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
+             <button type="button" class="ghost" data-act="toggle-issue" aria-label="${escapeHtml(issueDetailVisible ? copy.hideIssueDetail : copy.showIssueDetail)}">▱</button>`}
+        ${!isMobile && !showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
         ${runLifted ? `<button type="button" class="ghost" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
         <button type="button" class="ghost" data-act="settings">${escapeHtml(copy.settings)}</button>
         <span class="chrome-trail">
@@ -1068,15 +1149,19 @@ function render(): void {
                 </div>`
               : snap.usageOpen
                 ? usagePage(copy, snap)
-                : snap.workspaceView === "host-overview"
-                  ? hostOverviewPage(copy, snap)
-                  : runLifted
-                    ? liftedRunView(copy, snap)
-                    : `${projectMain(copy, snap)}${runDock(copy, snap)}`
+                : isMobile
+                  ? mobileMain(copy, snap)
+                  : snap.workspaceView === "host-overview"
+                    ? hostOverviewPage(copy, snap)
+                    : runLifted
+                      ? liftedRunView(copy, snap)
+                      : `${projectMain(copy, snap)}${runDock(copy, snap)}`
           }
         </main>
       </div>
+      ${isMobile && !empty && !snap.usageOpen ? mobileNavigation(copy, snap) : ""}
     </div>
+    ${isMobile && mobileScopeOpen ? mobileScopeSheet(copy, snap) : ""}
     ${
       settingsOpen
         ? `<div class="overlay" data-act="close-settings">
@@ -1113,7 +1198,7 @@ function render(): void {
                 <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
                 ${escapeHtml(copy.showCommandPreview)}
               </label>
-              <label class="graph-opt">
+              ${isMobile ? "" : `<label class="graph-opt">
                 <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
                 ${escapeHtml(copy.notifyDesktop)}
               </label>
@@ -1142,7 +1227,7 @@ function render(): void {
               </div>`
                   : ""
               }
-              <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>
+              <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>`}
             </div>
           </div>`
         : ""
@@ -1203,7 +1288,13 @@ function render(): void {
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
   paintGraphEdges();
-  attachTerminal(snap);
+  if (isMobile && !mobileLiveTerminal) {
+    ptyPumping = false;
+    void pumpMobileOutput(snap);
+  } else {
+    mobilePtyPumping = false;
+    attachTerminal(snap);
+  }
 }
 
 function paintGraphEdges(): void {
@@ -1241,6 +1332,74 @@ function currentProject(snap: Snapshot): Project | undefined {
   return (
     snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
   );
+}
+
+function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  return `<nav class="mobile-nav" aria-label="${escapeHtml([copy.mobileBoard, copy.mobileIssue, copy.mobileRun].join(" / "))}">
+    <button type="button" class="${mobileView === "board" ? "active" : ""}" data-act="mobile-board">${escapeHtml(copy.mobileBoard)}</button>
+    <button type="button" class="${mobileView === "issue" ? "active" : ""}" data-act="mobile-issue">${escapeHtml(copy.mobileIssue)}</button>
+    <button type="button" class="${mobileView === "run" ? "active" : ""}" data-act="mobile-run" ${run ? "" : "disabled"}>${escapeHtml(copy.mobileRun)}</button>
+  </nav>`;
+}
+
+function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
+  const hosts = snap.hosts
+    .map((host) => `<button type="button" class="item ${host.id === snap.focusedHostId ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(host.id)}"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`)
+    .join("");
+  const projects = snap.projects
+    .map((project) => `<div class="mobile-scope-project ${project.id === snap.focusedProjectId ? "active" : ""}">
+      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(project.repository)}</span></button>
+      <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
+      <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
+    </div>`)
+    .join("");
+  return `<div class="overlay modal" data-act="close-mobile-scope">
+    <section class="sheet mobile-scope-sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.mobileSwitchScope)}</h2>
+      <div class="mobile-scope-hosts">${hosts}</div>
+      <div class="mobile-scope-projects">${projects}</div>
+      <div class="actions">
+        <button type="button" data-act="register">${escapeHtml(copy.addProject)}</button>
+        <button type="button" data-act="pair">${escapeHtml(copy.pairAnotherHost)}</button>
+        <button type="button" data-act="open-usage">${escapeHtml(copy.usage)}</button>
+      </div>
+    </section>
+  </div>`;
+}
+
+function mobileMain(copy: ShellCopy, snap: Snapshot): string {
+  if (mobileView === "run") return mobileRunView(copy, snap);
+  if (mobileView === "issue") {
+    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board) : ""}</aside></section>`;
+  }
+  return `<section class="mobile-board-view">${projectMain(copy, snap)}</section>`;
+}
+
+function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!run) {
+    return `<section class="mobile-run-view"><p class="board-empty">${escapeHtml(copy.noItems)}</p></section>`;
+  }
+  const identity = runIdentity(copy, run);
+  return `<section class="mobile-run-view">
+    <header class="run-dock-hd">
+      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
+      <div class="actions">
+        <button type="button" class="mobile-usage-entry" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.usage)}</button>
+        <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+      </div>
+    </header>
+    ${telemetryBar(copy, run)}
+    <section class="mobile-output-panel">
+      <div class="lane-hd">${escapeHtml(copy.mobileRecentOutput)}</div>
+      ${mobileLiveTerminal
+        ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
+        : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
+    </section>
+    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
+  </section>`;
 }
 
 function focusedRun(snap: Snapshot): RunSummary | undefined {
@@ -1555,7 +1714,7 @@ function toLocalInput(ms: number): string {
 function runControls(copy: ShellCopy, run: RunSummary): string {
   return `<div class="actions">
     <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
-    <button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>
+    ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>`}
     <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
   </div>`;
 }
@@ -1792,12 +1951,15 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
 }
 
 function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
-  const cols: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
+  const desktop: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
     ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
     ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
     ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
     ["recentlyCompleted", copy.colRecent, board.columns?.recentlyCompleted ?? []],
   ];
+  const cols = mobileClient()
+    ? [desktop[2], desktop[1], desktop[0], desktop[3]] as typeof desktop
+    : desktop;
   return `<div class="lanes">
     ${cols
       .map(([key, name, items]) => {
@@ -1902,9 +2064,9 @@ function issueCard(
     : lane === "inProgress" && issue.runId
       ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
          <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>
-         <button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>`
+         ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>`}`
       : lane === "recentlyCompleted"
-        ? `${issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
+        ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
            <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
         : "";
   return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
@@ -2322,6 +2484,60 @@ function attachTerminal(snap: Snapshot): void {
   }
 }
 
+async function pumpMobileOutput(snap: Snapshot): Promise<void> {
+  const run = mobileView === "run" ? focusedRun(snap) : undefined;
+  if (!run || run.status === "ended" || mobileLiveTerminal) {
+    if (run?.status === "ended" && run.recentOutput) {
+      mobilePtyText.set(run.id, run.recentOutput);
+    }
+    mobilePtyPumping = false;
+    return;
+  }
+  if (mobilePtyRunId !== run.id) {
+    mobilePtyRunId = run.id;
+    mobilePtyOffset = 0;
+  }
+  if (mobilePtyPumping) return;
+  mobilePtyPumping = true;
+  const runId = run.id;
+  try {
+    while (
+      mobileClient()
+      && mobileView === "run"
+      && !mobileLiveTerminal
+      && snapshot?.focusedRunId === runId
+    ) {
+      const response = await fetch(
+        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${mobilePtyOffset}`,
+      );
+      if (!response.ok || mobilePtyRunId !== runId) break;
+      const json = (await response.json()) as { offset: number; data: string; exited: number | null };
+      if (json.data) {
+        const raw = atob(json.data);
+        const bytes = Uint8Array.from(raw, (byte) => byte.charCodeAt(0));
+        const text = new TextDecoder().decode(bytes);
+        const recent = `${mobilePtyText.get(runId) ?? ""}${text}`.slice(-16_000);
+        mobilePtyText.set(runId, recent);
+        const output = app?.querySelector<HTMLElement>(`.mobile-run-output[data-run="${CSS.escape(runId)}"]`);
+        if (output) {
+          output.textContent = recent;
+          output.scrollTop = output.scrollHeight;
+        }
+      }
+      mobilePtyOffset = json.offset;
+      if (json.exited != null) {
+        await rpc("snapshot");
+        render();
+        break;
+      }
+    }
+  } catch {
+    // Keep the last readable output when the Run or Host disconnects.
+  } finally {
+    mobilePtyPumping = false;
+  }
+}
+
 async function sendPtyInput(runId: string, data: string): Promise<void> {
   try {
     await fetch(`${await protocolBase()}/runs/${encodeURIComponent(runId)}/input`, {
@@ -2389,6 +2605,38 @@ app.addEventListener("click", async (event) => {
   if (!target || !snapshot) return;
   if (target.dataset.stop) event.stopPropagation();
   const act = target.dataset.act;
+  if (act === "mobile-scope") {
+    mobileScopeOpen = true;
+    render();
+    return;
+  }
+  if (act === "close-mobile-scope" && event.target === target) {
+    mobileScopeOpen = false;
+    render();
+    return;
+  }
+  if (act === "mobile-board") {
+    mobileView = "board";
+    mobileLiveTerminal = false;
+    render();
+    return;
+  }
+  if (act === "mobile-issue") {
+    mobileView = "issue";
+    mobileLiveTerminal = false;
+    render();
+    return;
+  }
+  if (act === "mobile-run") {
+    if (focusedRun(snapshot)) mobileView = "run";
+    render();
+    return;
+  }
+  if (act === "mobile-live-terminal") {
+    mobileLiveTerminal = true;
+    render();
+    return;
+  }
   if (act === "close-settings" && event.target === target) {
     settingsOpen = false;
     render();
@@ -2435,6 +2683,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "pair") {
+    mobileScopeOpen = false;
     pairingOpen = true;
     settingsOpen = false;
     hostPickerOpen = false;
@@ -2446,6 +2695,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "register") {
+    mobileScopeOpen = false;
     formOpen = "register";
     formProjectId = "";
     formDraft = emptyDraft();
@@ -2489,6 +2739,8 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-project" && target.dataset.id) {
     projectMenuId = "";
+    mobileScopeOpen = false;
+    mobileView = "board";
     sidebarVisible = true;
     await rpc("focusProject", { projectId: target.dataset.id });
     await reportClientView();
@@ -2576,11 +2828,17 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-run" && target.dataset.id) {
     sidebarBeforeLift = sidebarVisible;
     await rpc("focusRun", { runId: target.dataset.id });
-    sidebarVisible = false;
+    if (mobileClient()) {
+      mobileView = "run";
+      mobileLiveTerminal = false;
+    } else {
+      sidebarVisible = false;
+    }
     render();
     return;
   }
   if (act === "open-usage") {
+    mobileScopeOpen = false;
     settingsOpen = false;
     pairingOpen = false;
     formOpen = null;
@@ -2615,6 +2873,10 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "stop-run" && target.dataset.id) {
     await rpc("stopRun", { runId: target.dataset.id });
+    if (mobileClient()) {
+      mobileView = "board";
+      mobileLiveTerminal = false;
+    }
     render();
     return;
   }
@@ -2684,6 +2946,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "edit-project" && target.dataset.id) {
+    mobileScopeOpen = false;
     const project = snapshot.projects.find((item) => item.id === target.dataset.id);
     if (!project) return;
     formOpen = "edit";
@@ -2701,6 +2964,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "remove-project" && target.dataset.id) {
+    mobileScopeOpen = false;
     removeProject = snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
     projectMenuId = "";
     render();
@@ -2805,19 +3069,38 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "language" && target.dataset.id) {
-    await rpc("setLanguage", { language: target.dataset.id });
+    if (mobileClient()) {
+      const appearance = ensureMobileAppearance();
+      saveMobileAppearance({ ...appearance, language: target.dataset.id as Language });
+    } else {
+      await rpc("setLanguage", { language: target.dataset.id });
+    }
     render();
     return;
   }
   if (act === "theme" && target.dataset.id) {
-    await rpc("setTheme", { theme: target.dataset.id });
+    if (mobileClient()) {
+      const appearance = ensureMobileAppearance();
+      const theme = target.dataset.id as Theme;
+      saveMobileAppearance({
+        ...appearance,
+        theme,
+        lastLightTheme: theme === "plain-night" ? appearance.lastLightTheme : theme,
+      });
+    } else {
+      await rpc("setTheme", { theme: target.dataset.id });
+    }
     render();
     return;
   }
   if (act === "shade") {
-    const next =
-      target.dataset.id === "dark" ? "plain-night" : snapshot.appearance.lastLightTheme;
-    await rpc("setTheme", { theme: next });
+    const current = mobileClient() ? ensureMobileAppearance() : snapshot.appearance;
+    const next = target.dataset.id === "dark" ? "plain-night" : current.lastLightTheme;
+    if (mobileClient()) {
+      saveMobileAppearance({ ...current, theme: next });
+    } else {
+      await rpc("setTheme", { theme: next });
+    }
     render();
     return;
   }
@@ -2839,7 +3122,10 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-issue" && target.dataset.id) {
     await rpc("focusIssue", { issueId: target.dataset.id });
-    if (target.closest(".issue-card") && snapshot.focusedRunId) {
+    if (mobileClient()) {
+      mobileView = "issue";
+      mobileLiveTerminal = false;
+    } else if (target.closest(".issue-card") && snapshot.focusedRunId) {
       sidebarBeforeLift = sidebarVisible;
       await rpc("focusRun", { runId: snapshot.focusedRunId });
       sidebarVisible = false;
@@ -3194,10 +3480,19 @@ window.addEventListener("focus", () => {
   rpc("refresh").then(render).catch(() => {});
 });
 
+let wasMobileClient = mobileClient();
+
 window.addEventListener("resize", () => {
+  if (!snapshot) return;
+  const isMobile = mobileClient();
+  if (isMobile !== wasMobileClient) {
+    wasMobileClient = isMobile;
+    mobileLiveTerminal = false;
+    render();
+  }
   fitAddon?.fit();
-  const runId = snapshot?.focusedRunId;
-  if (runId) void sendPtyResize(runId);
+  const runId = snapshot.focusedRunId;
+  if (runId && (!isMobile || mobileLiveTerminal)) void sendPtyResize(runId);
 });
 
 rpc("snapshot")
