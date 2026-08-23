@@ -18,8 +18,13 @@ page.on("console", (msg) => {
 });
 await page.addInitScript((protocol) => {
   window.__HOST_PROTOCOL__ = protocol;
+  window.__OPENED_URLS__ = [];
+  window.open = (target) => {
+    window.__OPENED_URLS__.push(String(target));
+    return null;
+  };
 }, url);
-await page.goto(url, { waitUntil: "networkidle" });
+await page.goto(url, { waitUntil: "domcontentloaded" });
 try {
   await page.waitForSelector(".lanes");
 } catch (error) {
@@ -28,6 +33,39 @@ try {
   throw error;
 }
 await page.waitForSelector(".refresh-bar");
+
+await page.keyboard.press("?");
+await page.waitForSelector(".keyboard-help");
+await page.keyboard.press("?");
+await page.waitForFunction(() => !document.querySelector(".keyboard-help"));
+await page.keyboard.press("j");
+const keyboardFocusedCard = await page.evaluate(() => document.activeElement?.classList.contains("issue-card-main"));
+if (!keyboardFocusedCard) {
+  throw new Error("j should focus a board card");
+}
+await page.keyboard.press("Enter");
+await page.waitForSelector(".issue-detail .detail-hd");
+
+const beforeTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) => nodes.map((node) => node.textContent));
+await page.fill("#issue-title-search", "child ready");
+const whileTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) => nodes.map((node) => node.textContent));
+if (whileTypingSearch.join(",") !== beforeTypingSearch.join(",")) {
+  throw new Error("title search should not run before Enter");
+}
+await page.press("#issue-title-search", "Enter");
+await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 1);
+const searchResult = await page.$eval(".issue-card .issue-title", (node) => node.textContent);
+if (searchResult !== "child ready") {
+  throw new Error(`unexpected title search result: ${searchResult}`);
+}
+await page.selectOption(".issue-search select[name='state']", "closed");
+await page.press("#issue-title-search", "Enter");
+await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 0);
+await page.fill("#issue-title-search", "");
+await page.selectOption(".issue-search select[name='state']", "all");
+await page.press("#issue-title-search", "Enter");
+await page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
+
 const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")) {
   throw new Error(`refresh bar missing as-of time: ${refreshText}`);
@@ -45,8 +83,13 @@ if (!headers[0].startsWith("阻塞中") || !headers[1].startsWith("Frontier") ||
   throw new Error(`unexpected column order: ${JSON.stringify(headers)}`);
 }
 
-await page.click(".issue-card:has-text('child ready')");
+await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".detail-hd:has-text('child ready')");
+await page.click(".issue-detail button[data-act='open-issue']");
+const openedDetailUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
+if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
+  throw new Error(`details should open the GitHub Issue, got ${openedDetailUrl}`);
+}
 const beforeFrontier = await page.$$eval('[data-lane="frontier"] .issue-card', (nodes) => nodes.length);
 
 await page.click(".name-btn:has-text('#1 parent')");
@@ -134,6 +177,28 @@ if (!afterGraphFrontier.includes("unparented ready")) {
   throw new Error("returning to the board should keep the unfiltered Frontier");
 }
 
+const inProgress = page.locator('[data-lane="inProgress"] .issue-card:has-text("active work")');
+for (const action of ["focus-run", "stop-run", "view-changes"]) {
+  if (!(await inProgress.locator(`button[data-act="${action}"]`).count())) {
+    throw new Error(`in-progress row should expose ${action}`);
+  }
+}
+
+const recentOpen = page.locator('[data-lane="recentlyCompleted"] button[data-act="open-issue"]').first();
+await recentOpen.click();
+const openedRecentUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
+if (!openedRecentUrl?.startsWith("https://github.com/you/garden/issues/")) {
+  throw new Error(`recently completed should open its GitHub Issue, got ${openedRecentUrl}`);
+}
+if (!(await page.locator('[data-lane="recentlyCompleted"] button[data-act="view-changes"]').count())) {
+  throw new Error("recently completed row with a Run should expose view changes");
+}
+
+const frontierRun = page.locator('[data-lane="frontier"] button[data-act="execute-run"]').first();
+if (!(await frontierRun.count())) {
+  throw new Error("Frontier row should expose Run");
+}
+
 const newLabel = await page.$eval("button[data-act='new-run']", (node) => node.getAttribute("aria-label"));
 if (newLabel !== "新建" && newLabel !== "New") {
   throw new Error(`project row plus should be New, got ${newLabel}`);
@@ -146,11 +211,9 @@ if (await pick.count()) {
   await page.waitForSelector("textarea[data-field='openingText']");
 }
 await page.fill("textarea[data-field='openingText']", "e2e unbound run");
-await page.click("button[type='submit']");
+await page.click(".launch-sheet button[type='submit']");
 await page.waitForSelector(".run-dock");
-if (await page.$(".launch-sheet")) {
-  await page.click("button[data-act='close-launch']");
-}
+await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
 const dockText = await page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
   throw new Error(`unbound Run dock missing identity, got ${dockText}`);
@@ -158,14 +221,41 @@ if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") &
 if (!(await page.$(".pty-slot"))) {
   throw new Error("Embedded Terminal slot missing");
 }
-await page.click("button[data-act='stop-run']");
-await page.waitForFunction(() => document.querySelector("button[data-act='stop-run']")?.disabled);
+await page.click(".xterm-helper-textarea");
+await page.keyboard.press("?");
+if (await page.$(".keyboard-help")) {
+  throw new Error("terminal focus should keep ? in the official TUI");
+}
+await page.click(".run-dock button[data-act='stop-run']");
+await page.waitForFunction(() => document.querySelector(".run-dock button[data-act='stop-run']")?.disabled);
 
 await page.click("button:has-text('设置')");
 await page.waitForSelector("#recent-limit");
 await page.fill("#recent-limit", "1");
 await page.locator("#recent-limit").dispatchEvent("change");
 await page.waitForFunction(() => document.querySelectorAll('[data-lane="recentlyCompleted"] .issue-card').length === 1);
+await page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+await page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-settings']"));
+
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForSelector(".lanes");
+const mobileColumns = await page.$eval(".lanes", (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+if (mobileColumns !== 1) {
+  throw new Error(`mobile board should use one column, got ${mobileColumns}`);
+}
+const mobileChangesButtons = await page.$$eval('button[data-act="view-changes"]', (nodes) =>
+  nodes.filter((node) => getComputedStyle(node).display !== "none").length,
+);
+if (mobileChangesButtons !== 0) {
+  throw new Error(`mobile should not expose full view changes, got ${mobileChangesButtons} buttons`);
+}
+await page.fill("#issue-title-search", "unparented ready");
+await page.press("#issue-title-search", "Enter");
+await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 1);
+await page.click("button[data-act='keyboard-help']");
+await page.waitForSelector(".keyboard-help");
+await page.keyboard.press("Escape");
+await page.waitForFunction(() => !document.querySelector(".keyboard-help"));
 
 await browser.close();
 console.log("board e2e ok");

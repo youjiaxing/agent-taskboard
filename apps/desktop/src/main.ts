@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
@@ -159,6 +160,17 @@ type ShellCopy = {
   quitReturn: string;
   quitStopAll: string;
   viewChanges: string;
+  focusRun: string;
+  openIssue: string;
+  searchTitle: string;
+  searchPlaceholder: string;
+  searchAllTriage: string;
+  searchAllStates: string;
+  searchOpen: string;
+  searchClosed: string;
+  searchSubmit: string;
+  keyboardHelp: string;
+  keyboardHelpBody: string;
   thisRound: string;
   uncommitted: string;
   addChangeNote: string;
@@ -268,6 +280,7 @@ type IssueCard = {
   triageRole: TriageRole | null;
   open: boolean;
   activity?: "running" | "waiting" | "execution-stopped" | null;
+  runId?: string | null;
 };
 
 type IssueLink = {
@@ -346,6 +359,11 @@ type BoardSnapshot = {
   refresh: RefreshStatus;
   graph: DependencyGraph | null;
   showClosedGraphContext: boolean;
+  search: {
+    title: string;
+    triageRole: TriageRole | null;
+    state: "all" | "open" | "closed";
+  };
 };
 
 type PairingOffer = {
@@ -690,6 +708,8 @@ let changesView: ViewChanges | null = null;
 let noteDraft = "";
 let noteTarget: { repo: string; path: string; line: number } | null = null;
 let telemetryExpanded = false;
+let keyboardHelpOpen = false;
+let keyboardCursorIssueId = "";
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -775,6 +795,14 @@ function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
   const core = prefix && body ? `${prefix}\n${body}` : prefix || body;
   if (core && notes) return `${core}\n\n${notes}`;
   return core || notes;
+}
+
+async function openExternalUrl(url: string): Promise<void> {
+  if ("__TAURI_INTERNALS__" in window) {
+    await openUrl(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function isLoopbackPage(): boolean {
@@ -1141,6 +1169,7 @@ function render(): void {
     ${removeProject ? removeDialog(copy, removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
     ${changesOpen ? viewChangesPanel(copy) : ""}
+    ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
   paintGraphEdges();
   attachTerminal(snap);
@@ -1586,6 +1615,16 @@ function quitOfferDialog(copy: ShellCopy): string {
   </div>`;
 }
 
+function keyboardHelpDialog(copy: ShellCopy): string {
+  return `<div class="overlay modal keyboard-help" data-act="close-keyboard-help">
+    <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true" aria-label="${escapeHtml(copy.keyboardHelp)}">
+      <h2>${escapeHtml(copy.keyboardHelp)}</h2>
+      <p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>
+      <div class="actions"><button type="button" data-act="close-keyboard-help">${escapeHtml(copy.gotIt)}</button></div>
+    </div>
+  </div>`;
+}
+
 function projectMain(copy: ShellCopy, snap: Snapshot): string {
   const project = currentProject(snap);
   if (!project) return loopbackNotice(snap.loopbackPage);
@@ -1605,10 +1644,37 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
       </div>
     </div>
     ${refreshBar(copy, snap.board)}
+    ${issueSearch(copy, snap)}
     ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
     ${boardView(copy, snap)}
   </div>`;
+}
+
+function issueSearch(copy: ShellCopy, snap: Snapshot): string {
+  const search = snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
+  const triageRoles: TriageRole[] = [
+    "needs-triage",
+    "needs-info",
+    "ready-for-agent",
+    "ready-for-human",
+    "wontfix",
+  ];
+  return `<form class="issue-search" data-act="issue-search">
+    <label class="sr-only" for="issue-title-search">${escapeHtml(copy.searchTitle)}</label>
+    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" />
+    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}">
+      <option value="">${escapeHtml(copy.searchAllTriage)}</option>
+      ${triageRoles.map((role) => `<option value="${role}" ${search.triageRole === role ? "selected" : ""}>${role}</option>`).join("")}
+    </select>
+    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}">
+      <option value="all" ${search.state === "all" ? "selected" : ""}>${escapeHtml(copy.searchAllStates)}</option>
+      <option value="open" ${search.state === "open" ? "selected" : ""}>${escapeHtml(copy.searchOpen)}</option>
+      <option value="closed" ${search.state === "closed" ? "selected" : ""}>${escapeHtml(copy.searchClosed)}</option>
+    </select>
+    <button type="submit">${escapeHtml(copy.searchSubmit)}</button>
+    <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
+  </form>`;
 }
 
 function boardView(copy: ShellCopy, snap: Snapshot): string {
@@ -1654,7 +1720,7 @@ function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
                 : copy.noItems;
         return `<section class="lane" data-lane="${key}">
           <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
-          ${items.map((issue) => issueCard(copy, issue, board.selected?.id)).join("")}
+          ${items.map((issue) => issueCard(copy, issue, board.selected?.id, key)).join("")}
           ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
           ${key === "recentlyCompleted" ? `<p class="lane-note">${escapeHtml(copy.recentNote)}</p>` : ""}
         </section>`;
@@ -1722,7 +1788,12 @@ function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activity"]): s
   return "";
 }
 
-function issueCard(copy: ShellCopy, issue: IssueCard, selectedId: string | undefined): string {
+function issueCard(
+  copy: ShellCopy,
+  issue: IssueCard,
+  selectedId: string | undefined,
+  lane: "blocked" | "frontier" | "inProgress" | "recentlyCompleted",
+): string {
   const activity = issueActivityLabel(copy, issue.activity);
   const tags = [
     activity ? `<span class="tag">${escapeHtml(activity)}</span>` : "",
@@ -1733,11 +1804,26 @@ function issueCard(copy: ShellCopy, issue: IssueCard, selectedId: string | undef
   ]
     .filter(Boolean)
     .join("");
-  return `<button type="button" class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-act="focus-issue" data-id="${escapeHtml(issue.id)}">
-    <div class="issue-id">#${issue.number}</div>
-    <div class="issue-title">${escapeHtml(issue.title)}</div>
-    ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
-  </button>`;
+  const cardAction = lane === "inProgress" && issue.runId ? "focus-run" : "focus-issue";
+  const actionTargetId = lane === "inProgress" && issue.runId ? issue.runId : issue.id;
+  const actions = lane === "frontier"
+    ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
+    : lane === "inProgress" && issue.runId
+      ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
+         <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>
+         <button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>`
+      : lane === "recentlyCompleted"
+        ? `${issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
+           <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
+        : "";
+  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
+    <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
+      <div class="issue-id">#${issue.number}</div>
+      <div class="issue-title">${escapeHtml(issue.title)}</div>
+      ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
+    </button>
+    ${actions ? `<div class="issue-card-actions">${actions}</div>` : ""}
+  </article>`;
 }
 
 function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
@@ -1765,6 +1851,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
       ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
       ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
       ${actions}
+      <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
     </div>
     <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
@@ -2261,6 +2348,20 @@ app.addEventListener("click", async (event) => {
   if (act === "form-noop") {
     return;
   }
+  if (act === "keyboard-help") {
+    keyboardHelpOpen = true;
+    render();
+    return;
+  }
+  if (act === "close-keyboard-help") {
+    keyboardHelpOpen = false;
+    render();
+    return;
+  }
+  if (act === "open-issue" && target.dataset.url) {
+    await openExternalUrl(target.dataset.url);
+    return;
+  }
   if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
     formOpen = null;
     inferred = null;
@@ -2637,6 +2738,20 @@ app.addEventListener("click", async (event) => {
 });
 
 app.addEventListener("submit", async (event) => {
+  const search = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-search']");
+  if (search && snapshot) {
+    event.preventDefault();
+    const data = new FormData(search);
+    await rpc("searchIssues", {
+      projectId: snapshot.focusedProjectId,
+      title: String(data.get("title") ?? ""),
+      triageRole: String(data.get("triageRole") ?? ""),
+      state: String(data.get("state") ?? "all"),
+    });
+    keyboardCursorIssueId = "";
+    render();
+    return;
+  }
   const inject = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
   if (inject && snapshot) {
     event.preventDefault();
@@ -2881,6 +2996,67 @@ document.addEventListener("visibilitychange", () => {
   const visible = document.visibilityState === "visible";
   const work = visible ? rpc("refresh").then(() => reportClientView()) : reportClientView();
   work.then(render).catch(() => {});
+});
+
+function terminalHasFocus(): boolean {
+  const active = document.activeElement as HTMLElement | null;
+  return Boolean(active?.closest(".pty-host"));
+}
+
+function typingTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+document.addEventListener("keydown", (event) => {
+  if (!snapshot || terminalHasFocus()) return;
+  if (event.key === "?" && !typingTarget(event.target)) {
+    event.preventDefault();
+    keyboardHelpOpen = !keyboardHelpOpen;
+    render();
+    return;
+  }
+  if (event.key === "Escape") {
+    if (keyboardHelpOpen) {
+      keyboardHelpOpen = false;
+      render();
+    }
+    return;
+  }
+  if (event.key === "/" && !typingTarget(event.target)) {
+    event.preventDefault();
+    app.querySelector<HTMLInputElement>("#issue-title-search")?.focus();
+    return;
+  }
+  if (
+    typingTarget(event.target)
+    || keyboardHelpOpen
+    || settingsOpen
+    || pairingOpen
+    || formOpen
+    || Boolean(removeProject)
+    || Boolean(snapshot.launchForm)
+    || Boolean(snapshot.quitOffer)
+    || changesOpen
+  ) return;
+  const cards = [...app.querySelectorAll<HTMLButtonElement>(".issue-card-main")];
+  if (!cards.length) return;
+  if (["j", "J", "ArrowDown", "k", "K", "ArrowUp"].includes(event.key)) {
+    event.preventDefault();
+    const direction = ["k", "K", "ArrowUp"].includes(event.key) ? -1 : 1;
+    const focusedIndex = cards.findIndex((card) => card === document.activeElement);
+    const rememberedIndex = cards.findIndex((card) => card.dataset.issueId === keyboardCursorIssueId);
+    const currentIndex = focusedIndex >= 0 ? focusedIndex : rememberedIndex;
+    const nextIndex = (currentIndex + direction + cards.length) % cards.length;
+    const nextCard = cards[nextIndex];
+    keyboardCursorIssueId = nextCard?.dataset.issueId ?? "";
+    nextCard?.focus();
+    return;
+  }
+  if (event.key === "Enter" && document.activeElement?.classList.contains("issue-card-main")) {
+    event.preventDefault();
+    (document.activeElement as HTMLButtonElement).click();
+  }
 });
 
 window.addEventListener("focus", () => {

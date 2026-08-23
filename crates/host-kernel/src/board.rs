@@ -36,6 +36,8 @@ pub struct IssueCard {
     pub open: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<IssueActivity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +180,48 @@ pub struct DependencyGraph {
     pub edges: Vec<GraphEdge>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IssueStateFilter {
+    #[default]
+    All,
+    Open,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueSearch {
+    pub title: String,
+    pub triage_role: Option<TriageRole>,
+    pub state: IssueStateFilter,
+}
+
+impl IssueSearch {
+    fn active(&self) -> bool {
+        !self.title.trim().is_empty()
+            || self.triage_role.is_some()
+            || self.state != IssueStateFilter::All
+    }
+
+    fn matches(&self, issue: &IssueRecord, mapping_active: bool) -> bool {
+        let title_matches = self.title.trim().is_empty()
+            || issue
+                .title
+                .to_lowercase()
+                .contains(&self.title.trim().to_lowercase());
+        let triage_matches = self
+            .triage_role
+            .is_none_or(|role| mapping_active && issue.triage_role() == Some(role));
+        let state_matches = match self.state {
+            IssueStateFilter::All => true,
+            IssueStateFilter::Open => issue.open,
+            IssueStateFilter::Closed => !issue.open,
+        };
+        title_matches && triage_matches && state_matches
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardSnapshot {
@@ -192,6 +236,7 @@ pub struct BoardSnapshot {
     pub refresh: RefreshStatus,
     pub graph: Option<DependencyGraph>,
     pub show_closed_graph_context: bool,
+    pub search: IssueSearch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +258,7 @@ pub fn project_board(
     recent_limit: u32,
     refresh: RefreshStatus,
     show_closed_graph_context: bool,
+    search: IssueSearch,
 ) -> BoardSnapshot {
     let recent_limit = clamp_recent_limit(recent_limit);
     let Some(issues) = loaded else {
@@ -228,25 +274,24 @@ pub fn project_board(
             refresh,
             graph: None,
             show_closed_graph_context,
+            search,
         };
     };
 
     let mapping_active = label_mapping_active(issues);
     let filter = parent_filter.and_then(|id| issues.iter().find(|issue| issue.id() == id));
-    let visible: Vec<&IssueRecord> = if let Some(parent) = filter {
-        issues
-            .iter()
-            .filter(|issue| {
+    let visible: Vec<&IssueRecord> = issues
+        .iter()
+        .filter(|issue| {
+            filter.is_none_or(|parent| {
                 issue
                     .parent
                     .as_ref()
                     .is_some_and(|item| item.id() == parent.id())
                     || parent.children.iter().any(|child| child.id() == issue.id())
-            })
-            .collect()
-    } else {
-        issues.iter().collect()
-    };
+            }) && search.matches(issue, mapping_active)
+        })
+        .collect();
 
     let mut blocked = Vec::new();
     let mut frontier = Vec::new();
@@ -276,7 +321,7 @@ pub fn project_board(
         .map(|issue| card(issue, mapping_active))
         .collect();
 
-    let frontier_empty = if frontier.is_empty() {
+    let frontier_empty = if frontier.is_empty() && !search.active() {
         Some(frontier_empty_reason(&visible))
     } else {
         None
@@ -299,6 +344,7 @@ pub fn project_board(
         refresh,
         graph: Some(dependency_graph(issues, show_closed_graph_context)),
         show_closed_graph_context,
+        search,
     }
 }
 
@@ -503,6 +549,7 @@ fn card(issue: &IssueRecord, mapping_active: bool) -> IssueCard {
         },
         open: issue.open,
         activity: None,
+        run_id: None,
     }
 }
 
