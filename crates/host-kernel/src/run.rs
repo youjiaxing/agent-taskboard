@@ -19,6 +19,31 @@ pub enum RunStatus {
     Ended,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunEndedReason {
+    Exited,
+    Stopped,
+    Abnormal,
+    Crash,
+}
+
+impl RunEndedReason {
+    pub fn execution_stopped(self) -> bool {
+        matches!(self, Self::Stopped | Self::Abnormal | Self::Crash)
+    }
+
+    pub fn from_exit(code: i32, stopped: bool) -> Self {
+        if stopped {
+            Self::Stopped
+        } else if code == 0 {
+            Self::Exited
+        } else {
+            Self::Abnormal
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
@@ -34,6 +59,12 @@ pub struct RunSummary {
     pub recent_action: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_reason: Option<RunEndedReason>,
 }
 
 impl RunSummary {
@@ -63,6 +94,8 @@ pub fn start_unbound(
     host_path_prefix: &[std::path::PathBuf],
     config: &RunLaunchConfig,
     issue_id: Option<&str>,
+    previous_run_id: Option<&str>,
+    resume_session_id: Option<&str>,
 ) -> StartResult {
     let id = pairing::random_id();
     let mut record = RunSummary {
@@ -75,11 +108,17 @@ pub fn start_unbound(
         status: RunStatus::Starting,
         recent_action: agent.recent_action().filter(|text| !text.is_empty()),
         failure: None,
+        previous_run_id: previous_run_id
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned),
+        native_session_id: None,
+        ended_reason: None,
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,
         Err(err) => {
             record.status = RunStatus::Ended;
+            record.ended_reason = Some(RunEndedReason::Abnormal);
             record.failure = Some(err);
             return StartResult {
                 record,
@@ -95,6 +134,7 @@ pub fn start_unbound(
             known_locations,
         } => {
             record.status = RunStatus::Ended;
+            record.ended_reason = Some(RunEndedReason::Abnormal);
             record.failure = Some(format_not_found(
                 language,
                 &command,
@@ -107,7 +147,11 @@ pub fn start_unbound(
             }
         }
         ProbeResult::Found { executable } => {
-            let argv = agent.assemble_argv_for(&executable, &config.values);
+            let argv = if let Some(session_id) = resume_session_id.filter(|id| !id.is_empty()) {
+                agent.assemble_argv_for_resume(&executable, &config.values, session_id)
+            } else {
+                agent.assemble_argv_for(&executable, &config.values)
+            };
             let request = SpawnRequest {
                 argv,
                 cwd: cwd.to_path_buf(),
@@ -123,6 +167,7 @@ pub fn start_unbound(
                         {
                             session.stop();
                             record.status = RunStatus::Ended;
+                            record.ended_reason = Some(RunEndedReason::Abnormal);
                             record.failure = Some(err.to_string());
                             return StartResult {
                                 record,
@@ -131,6 +176,7 @@ pub fn start_unbound(
                         }
                     }
                     record.status = RunStatus::Running;
+                    record.native_session_id = agent.native_session_id();
                     StartResult {
                         record,
                         session: Some(session),
@@ -138,6 +184,7 @@ pub fn start_unbound(
                 }
                 Err(err) => {
                     record.status = RunStatus::Ended;
+                    record.ended_reason = Some(RunEndedReason::Abnormal);
                     record.failure = Some(err);
                     StartResult {
                         record,

@@ -191,6 +191,11 @@ pub fn issue_id(repository: &str, number: u64) -> String {
     format!("{repository}#{number}")
 }
 
+pub fn parse_issue_id(id: &str) -> Option<(String, u64)> {
+    let (repository, number) = id.rsplit_once('#')?;
+    Some((repository.to_string(), number.parse().ok()?))
+}
+
 pub fn triage_role_from_labels(labels: &[String]) -> Option<TriageRole> {
     labels.iter().find_map(|label| {
         DEFAULT_TRIAGE_LABELS

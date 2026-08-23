@@ -27,6 +27,9 @@ pub trait AgentSession: Send + Sync {
     fn stop(&self);
     fn exit_code(&self) -> Option<i32>;
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk;
+    fn was_stopped(&self) -> bool {
+        false
+    }
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -138,6 +141,10 @@ impl AgentSession for MemorySession {
 
     fn exit_code(&self) -> Option<i32> {
         *self.exit.lock().expect("memory session")
+    }
+
+    fn was_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
     }
 
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk {
@@ -306,6 +313,10 @@ impl AgentSession for PtyLive {
 
     fn exit_code(&self) -> Option<i32> {
         *self.exit.lock().expect("pty exit")
+    }
+
+    fn was_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
     }
 
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk {

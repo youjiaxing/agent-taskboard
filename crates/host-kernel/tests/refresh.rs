@@ -340,7 +340,7 @@ fn claim_close_check_and_auto_advance_only_refresh_the_involved_project() {
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), garden_reads + 1);
     assert_eq!(tracker.read_count("you/notes"), notes_reads);
-    assert_eq!(frontier_ids(&host), vec!["you/garden#1"]);
+    assert!(frontier_ids(&host).is_empty());
 
     host.handle(serde_json::json!({
         "op": "checkIssueClosed",
