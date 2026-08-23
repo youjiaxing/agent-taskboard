@@ -73,6 +73,8 @@ pub struct RunSummary {
     pub isolated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git_baselines: Vec<crate::changes::GitBaseline>,
 }
 
 impl RunSummary {
@@ -125,6 +127,7 @@ pub fn start_unbound(
         working_directory: cwd.to_string_lossy().into_owned(),
         isolated: false,
         isolation_note: None,
+        git_baselines: Vec::new(),
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,

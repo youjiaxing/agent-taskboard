@@ -91,6 +91,8 @@ pub struct RunLaunchForm {
     pub isolation_reason: String,
     #[serde(default)]
     pub opening_text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub change_notes_text: String,
     #[serde(default)]
     pub command_preview: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
