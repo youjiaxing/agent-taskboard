@@ -502,7 +502,9 @@ html[data-theme="plain-night"] button.danger.primary {
   border-radius: var(--r);
 }
 .run-row.active { background: var(--sel); }
-.run-row.running b::before {
+.run-row.running b::before,
+.run-row.waiting b::before,
+.run-row.execution-stopped b::before {
   content: "";
   display: inline-block;
   width: 7px;
@@ -512,11 +514,31 @@ html[data-theme="plain-night"] button.danger.primary {
   background: var(--dot);
   vertical-align: middle;
 }
+.run-row.waiting b::before { background: var(--accent); }
+.run-row.execution-stopped b::before { background: var(--muted); }
 .run-row b, .run-row span { display: block; }
 .run-row span { font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 1px; }
 .run-row .run-fail {
   color: var(--accent-ink);
   white-space: pre-wrap;
+}
+.run-row .run-state { color: var(--accent-ink); }
+.issue-card.waiting { border-color: var(--accent); }
+.issue-card.execution-stopped { opacity: .85; }
+.inject-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 12px;
+}
+.inject-row input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 6px 8px;
 }
 .run-dock {
   flex: 0 0 38%;

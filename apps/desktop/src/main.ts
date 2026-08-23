@@ -64,6 +64,16 @@ type ShellCopy = {
   continueRun: string;
   releaseClaim: string;
   executionStopped: string;
+  waiting: string;
+  running: string;
+  injectLine: string;
+  injectPlaceholder: string;
+  notifyDesktop: string;
+  notifySound: string;
+  notifyWaiting: string;
+  notifyCompleted: string;
+  notifyAbnormal: string;
+  notifyCrash: string;
   gotIt: string;
   authFailed: string;
   repairCli: string;
@@ -212,6 +222,7 @@ type IssueCard = {
   claimedBy: string[];
   triageRole: TriageRole | null;
   open: boolean;
+  activity?: "running" | "waiting" | "execution-stopped" | null;
 };
 
 type IssueLink = {
@@ -238,6 +249,7 @@ type IssueDetail = {
   blockedBy: IssueLink[];
   blocking: IssueLink[];
   executionStopped?: boolean;
+  waitingForUser?: boolean;
   activeRunId?: string | null;
 };
 
@@ -333,6 +345,8 @@ type Snapshot = {
   quitOffer: QuitOffer | null;
   launchForm?: RunLaunchForm | null;
   showCommandPreview?: boolean;
+  notifyDesktop?: boolean;
+  notifySound?: boolean;
 };
 
 type AgentFieldKind = "text" | "select" | "boolean" | "multiline";
@@ -398,6 +412,7 @@ type RunSummary = {
   issueId?: string | null;
   unbound: boolean;
   status: RunStatus;
+  waitingForUser?: boolean;
   recentAction?: string | null;
   failure?: string | null;
   previousRunId?: string | null;
@@ -412,10 +427,28 @@ type QuitOffer = {
   activeRunCount: number;
 };
 
+type NotificationKind = "waiting" | "completed" | "abnormal-stop" | "crash-recovered";
+
+type HostEvent =
+  | { type: "refresh-status-changed"; projectId: string; status: RefreshStatus }
+  | { type: "board-updated"; projectId: string }
+  | { type: "run-status-changed"; runId: string; status: RunStatus }
+  | { type: "waiting"; runId: string }
+  | { type: "execution-stopped"; issueId: string; runId: string }
+  | { type: "host-crashed-recovered"; runIds: string[] }
+  | {
+      type: "notification";
+      kind: NotificationKind;
+      runId: string;
+      issueId?: string | null;
+      projectId: string;
+    };
+
 type RpcResult = {
   snapshot: Snapshot;
   process: "keep-running" | "exit";
   inference?: ProjectDraft;
+  events?: HostEvent[];
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -580,12 +613,83 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   result.snapshot.runs = result.snapshot.runs ?? [];
   result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
   result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
+  result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
+  result.snapshot.notifySound = result.snapshot.notifySound ?? true;
+  result.events = result.events ?? [];
   syncLaunchDraft(result.snapshot);
+  deliverHostEvents(result.events, result.snapshot);
   if (generation !== rpcGeneration && snapshot) {
-    return { snapshot, process: "keep-running", inference: result.inference };
+    return { snapshot, process: "keep-running", inference: result.inference, events: result.events };
   }
   snapshot = result.snapshot;
   return result;
+}
+
+function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
+  if (kind === "waiting") return copy.notifyWaiting;
+  if (kind === "completed") return copy.notifyCompleted;
+  if (kind === "abnormal-stop") return copy.notifyAbnormal;
+  return copy.notifyCrash;
+}
+
+function playNotifySound(): void {
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return;
+  const ctx = new AudioCtx();
+  const oscillator = ctx.createOscillator();
+  const gain = ctx.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.value = 880;
+  gain.gain.value = 0.05;
+  oscillator.connect(gain);
+  gain.connect(ctx.destination);
+  oscillator.start();
+  oscillator.stop(ctx.currentTime + 0.12);
+  oscillator.onended = () => {
+    void ctx.close();
+  };
+}
+
+async function jumpToNotification(event: Extract<HostEvent, { type: "notification" }>): Promise<void> {
+  await rpc("showWindow");
+  if (event.projectId) {
+    await rpc("focusProject", { projectId: event.projectId });
+  }
+  if (event.issueId) {
+    await rpc("focusIssue", { issueId: event.issueId });
+  }
+  if (event.runId) {
+    await rpc("focusRun", { runId: event.runId });
+  }
+  render();
+}
+
+function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
+  for (const event of events) {
+    if (event.type !== "notification") continue;
+    const title = notificationTitle(snap.copy, event.kind);
+    const body = event.issueId || event.runId;
+    if (snap.notifyDesktop && typeof Notification !== "undefined") {
+      const show = () => {
+        const note = new Notification(title, { body, tag: event.runId });
+        note.onclick = () => {
+          void jumpToNotification(event);
+        };
+      };
+      if (Notification.permission === "granted") {
+        show();
+      } else if (Notification.permission === "default") {
+        void Notification.requestPermission().then((permission) => {
+          if (permission === "granted") show();
+        });
+      }
+    }
+    if (snap.notifySound) {
+      playNotifySound();
+    }
+  }
 }
 
 function emptyActionAct(action: Snapshot["emptyActions"][number]): string {
@@ -724,6 +828,14 @@ function render(): void {
               <label class="graph-opt">
                 <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
                 ${escapeHtml(copy.showCommandPreview)}
+              </label>
+              <label class="graph-opt">
+                <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
+                ${escapeHtml(copy.notifyDesktop)}
+              </label>
+              <label class="graph-opt">
+                <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
+                ${escapeHtml(copy.notifySound)}
               </label>
               <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>
             </div>
@@ -866,9 +978,24 @@ function runIdentity(copy: ShellCopy, run: RunSummary): string {
 function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
   const identity = runIdentity(copy, run);
   const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
-  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(run.status)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+  const stateClass =
+    run.waitingForUser && run.status !== "ended"
+      ? "waiting"
+      : run.endedReason && run.endedReason !== "exited"
+        ? "execution-stopped"
+        : run.status;
+  const stateTag =
+    run.waitingForUser && run.status !== "ended"
+      ? copy.waiting
+      : run.endedReason && run.endedReason !== "exited"
+        ? copy.executionStopped
+        : run.status === "running"
+          ? copy.running
+          : "";
+  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
     <b>${escapeHtml(run.agentName)}</b>
     <span>${escapeHtml(identity)}</span>
+    ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
     ${action ? `<span class="run-action">${action}</span>` : ""}
     ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
     ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
@@ -887,9 +1014,18 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
       </div>
       <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
     </header>
+    ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
+    ${
+      run.status === "ended"
+        ? ""
+        : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}">
+            <input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" />
+            <button type="submit">${escapeHtml(copy.injectLine)}</button>
+          </form>`
+    }
   </section>`;
 }
 
@@ -1034,8 +1170,17 @@ function frontierEmptyText(
   return copy.noItems;
 }
 
+function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activity"]): string {
+  if (activity === "waiting") return copy.waiting;
+  if (activity === "execution-stopped") return copy.executionStopped;
+  if (activity === "running") return copy.running;
+  return "";
+}
+
 function issueCard(copy: ShellCopy, issue: IssueCard, selectedId: string | undefined): string {
+  const activity = issueActivityLabel(copy, issue.activity);
   const tags = [
+    activity ? `<span class="tag">${escapeHtml(activity)}</span>` : "",
     issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
     issue.claimedBy.length
       ? `<span class="tag">${escapeHtml(copy.claimed)} ${escapeHtml(issue.claimedBy.join(", "))}</span>`
@@ -1043,7 +1188,7 @@ function issueCard(copy: ShellCopy, issue: IssueCard, selectedId: string | undef
   ]
     .filter(Boolean)
     .join("");
-  return `<button type="button" class="issue-card ${issue.id === selectedId ? "sel" : ""}" data-act="focus-issue" data-id="${escapeHtml(issue.id)}">
+  return `<button type="button" class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-act="focus-issue" data-id="${escapeHtml(issue.id)}">
     <div class="issue-id">#${issue.number}</div>
     <div class="issue-title">${escapeHtml(issue.title)}</div>
     ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
@@ -1072,6 +1217,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
     <div class="detail-meta">
       ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
       <span class="tag">${escapeHtml(claim)}</span>
+      ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
       ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
       ${actions}
     </div>
@@ -1854,6 +2000,19 @@ app.addEventListener("click", async (event) => {
   }
 });
 
+app.addEventListener("submit", async (event) => {
+  const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
+  if (!form || !snapshot) return;
+  event.preventDefault();
+  const runId = form.dataset.id;
+  const input = form.querySelector<HTMLInputElement>("input[name='text']");
+  const text = input?.value ?? "";
+  if (!runId || !text.trim()) return;
+  await rpc("injectRunInput", { runId, text });
+  if (input) input.value = "";
+  render();
+});
+
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
   if (!target || !snapshot) return;
@@ -1873,6 +2032,25 @@ app.addEventListener("change", async (event) => {
     await rpc("setShowCommandPreview", {
       show: (target as HTMLInputElement).checked,
     });
+    render();
+  }
+  if (
+    (target.getAttribute("data-field") === "notifyDesktop" ||
+      target.getAttribute("data-field") === "notifySound") &&
+    "checked" in target
+  ) {
+    const desktop =
+      target.getAttribute("data-field") === "notifyDesktop"
+        ? (target as HTMLInputElement).checked
+        : Boolean(snapshot.notifyDesktop);
+    const sound =
+      target.getAttribute("data-field") === "notifySound"
+        ? (target as HTMLInputElement).checked
+        : Boolean(snapshot.notifySound);
+    if (desktop && typeof Notification !== "undefined" && Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    await rpc("setNotificationPrefs", { desktop, sound });
     render();
   }
   const launchId = target.getAttribute("data-launch");

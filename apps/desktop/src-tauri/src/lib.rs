@@ -28,6 +28,15 @@ pub fn run() {
                 loopback_assets(app.handle()),
                 move |outcome| {
                     let _ = refresh_shell(&app_handle, &outcome.snapshot);
+                    if outcome.snapshot.window_visible {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            if !window.is_visible().unwrap_or(true) {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
                     if outcome.process == ProcessIntent::Exit {
                         app_handle.exit(0);
                     }

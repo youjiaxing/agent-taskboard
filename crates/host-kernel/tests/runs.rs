@@ -351,6 +351,11 @@ fn english_copy_uses_new_for_the_plus_button() {
     assert_eq!(snap.copy.continue_run, "Continue");
     assert_eq!(snap.copy.release_claim, "Release claim");
     assert_eq!(snap.copy.execution_stopped, "Execution stopped");
+    assert_eq!(snap.copy.waiting, "Waiting");
+    assert_eq!(snap.copy.running, "Running");
+    assert_eq!(snap.copy.inject_line, "Inject");
+    assert_eq!(snap.copy.notify_desktop, "Desktop notifications");
+    assert_eq!(snap.copy.notify_sound, "Notification sound");
     assert_eq!(snap.copy.unbound_issue, "Unbound Issue");
     assert_eq!(snap.copy.stop_run, "Stop");
 }
