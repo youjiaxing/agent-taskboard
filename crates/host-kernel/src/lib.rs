@@ -682,6 +682,8 @@ struct ClientView {
 struct PreviousRun {
     id: String,
     native_session_id: Option<String>,
+    working_directory: String,
+    isolated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1764,8 +1766,19 @@ impl HostKernel {
             }
         }
         let fields = launch::localize_fields(agent.config_fields(), language);
+        values.insert(launch::ISOLATION_FIELD.into(), "false".into());
+        let (isolation_supported, isolation_reason) =
+            launch::isolation_availability(agent.as_ref(), &project.local_path, language);
         let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
         let skip_agent_picker = !pick_agent && (last.is_some() || agent_id.is_some());
+        let mut warnings = launch::unknown_enum_warnings(&fields, &values, language);
+        warnings.extend(launch::side_effect_warnings(
+            &project.local_path,
+            self.runs
+                .iter()
+                .any(|run| run.project_id == project_id && run.is_active()),
+            language,
+        ));
         self.launch_form = Some(RunLaunchForm {
             project_id: project_id.to_string(),
             issue_id,
@@ -1776,16 +1789,12 @@ impl HostKernel {
             values: values.clone(),
             prefill_source,
             working_directory: project.local_path.display().to_string(),
-            isolation_supported: false,
-            isolation_reason: if agent.native_isolation() {
-                launch::isolation_reason(language)
-            } else {
-                agent.isolation_unavailable_reason(language)
-            },
+            isolation_supported,
+            isolation_reason,
             opening_text,
             command_preview: preview,
             intents: launch::intent_options(language),
-            warnings: launch::unknown_enum_warnings(&fields, &values, language),
+            warnings,
             error: None,
         });
         Ok(())
@@ -1802,12 +1811,12 @@ impl HostKernel {
     fn start_unbound_run(
         &mut self,
         project_id: &str,
-        config: RunLaunchConfig,
+        mut config: RunLaunchConfig,
         issue_id: Option<String>,
         from_form: bool,
         previous: Option<PreviousRun>,
     ) -> Result<(), KernelError> {
-        let cwd = self
+        let project_dir = self
             .projects
             .iter()
             .find(|project| project.id == project_id)
@@ -1820,10 +1829,40 @@ impl HostKernel {
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
         let language = self.appearance.language;
+        let (supported, _) = launch::isolation_availability(agent.as_ref(), &project_dir, language);
+        let mut cwd = project_dir.clone();
+        let mut isolation_note = None;
+        let mut isolate = false;
+        if let Some(previous) = &previous {
+            config.values.remove(launch::ISOLATION_FIELD);
+            if previous.isolated {
+                let recorded = PathBuf::from(&previous.working_directory);
+                if !previous.working_directory.is_empty() && recorded.exists() {
+                    cwd = recorded;
+                } else {
+                    isolation_note = Some(launch::isolation_missing_tree_note(language));
+                }
+            }
+        } else {
+            isolate = launch::isolation_requested(&config.values) && supported;
+            if !isolate {
+                config
+                    .values
+                    .insert(launch::ISOLATION_FIELD.into(), "false".into());
+            }
+        }
         let fields = launch::localize_fields(agent.config_fields(), language);
         if let Some(form) = &mut self.launch_form {
             launch::apply_submitted_form(form, &config);
-            form.warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+            let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+            warnings.extend(launch::side_effect_warnings(
+                &project_dir,
+                self.runs
+                    .iter()
+                    .any(|run| run.project_id == project_id && run.is_active()),
+                language,
+            ));
+            form.warnings = warnings;
             form.command_preview =
                 launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
         }
@@ -1838,8 +1877,11 @@ impl HostKernel {
                 return Err(KernelError::Protocol(err));
             }
         }
-        let (previous_run_id, resume_session_id) = match previous {
-            Some(previous) => (Some(previous.id), previous.native_session_id),
+        let (previous_run_id, resume_session_id) = match &previous {
+            Some(previous) => (
+                Some(previous.id.clone()),
+                previous.native_session_id.clone(),
+            ),
             None => (None, None),
         };
         if let Some(issue_id) = issue_id.as_deref() {
@@ -1858,7 +1900,12 @@ impl HostKernel {
                 }
             }
         }
-        let result = run::start_unbound(
+        let before = if isolate {
+            launch::git_worktrees(&project_dir)
+        } else {
+            Vec::new()
+        };
+        let mut result = run::start_unbound(
             project_id,
             &cwd,
             agent.as_ref(),
@@ -1871,6 +1918,20 @@ impl HostKernel {
             previous_run_id.as_deref(),
             resume_session_id.as_deref(),
         );
+        let using_recorded_tree = previous.as_ref().is_some_and(|previous| previous.isolated)
+            && isolation_note.is_none()
+            && cwd != project_dir;
+        result.record.working_directory = cwd.display().to_string();
+        result.record.isolated = (isolate && result.session.is_some()) || using_recorded_tree;
+        result.record.isolation_note = isolation_note;
+        if isolate && result.session.is_some() {
+            if let Some(tree) = agent
+                .isolation_tree_after_launch(&project_dir, &before)
+                .or_else(|| launch::new_git_worktree(&project_dir, &before))
+            {
+                result.record.working_directory = tree.display().to_string();
+            }
+        }
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
             run_id: result.record.id.clone(),
@@ -1947,6 +2008,8 @@ impl HostKernel {
             Some(PreviousRun {
                 id: last.id.clone(),
                 native_session_id: last.native_session_id.clone(),
+                working_directory: last.working_directory.clone(),
+                isolated: last.isolated,
             }),
         )
     }
@@ -3010,7 +3073,7 @@ impl ShellCopy {
                 prefill_other: "预填来自其它 Project 上这家 Agent 的记忆，本次可改。".into(),
                 prefill_seed: "预填来自本机 CLI 种子，本次可改。".into(),
                 isolation: "隔离执行目录".into(),
-                isolation_off_reason: "本票先关掉隔离，留给隔离票。".into(),
+                isolation_off_reason: "为什么不可用".into(),
                 isolation_hint: "机制是 git worktree。默认关，不记住。".into(),
                 run_intent: "Run 意图".into(),
                 intent_none: "不选".into(),
@@ -3153,7 +3216,7 @@ impl ShellCopy {
                 prefill_other: "Prefill is this Agent's memory from another Project. You can change it this time.".into(),
                 prefill_seed: "Prefill is the local CLI seed. You can change it this time.".into(),
                 isolation: "Isolated work directory".into(),
-                isolation_off_reason: "Isolation is disabled on this ticket.".into(),
+                isolation_off_reason: "Why it's unavailable".into(),
                 isolation_hint: "This uses a git worktree. It stays off and is not remembered.".into(),
                 run_intent: "Run intent".into(),
                 intent_none: "None".into(),

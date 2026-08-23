@@ -595,8 +595,9 @@ fn switching_agent_replaces_fields_and_isolation_reason() {
         .collect();
     assert!(grok_ids.contains(&"permission-mode"));
     assert!(!grok_ids.contains(&"approval"));
-    assert!(grok_form.isolation_reason.contains("留给隔离票"));
+    assert!(grok_form.isolation_reason.contains("git"));
     assert!(!grok_form.isolation_supported);
+    assert!(!grok_form.isolation_reason.contains("留给隔离票"));
 
     let codex_form = h
         .host

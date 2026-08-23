@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    additional_args_field, append_additional_args, append_flag, initial_instruction_field,
-    local_bin, probe_binary, select_field, text_field, AgentField, AgentPort, ProbeResult,
+    additional_args_field, append_additional_args, append_flag, append_isolation_flag,
+    initial_instruction_field, local_bin, probe_binary, select_field, text_field, AgentField,
+    AgentPort, ProbeResult,
 };
 use crate::LaunchEnvironment;
 
@@ -91,6 +92,7 @@ impl AgentPort for ClaudeAdapter {
             "--permission-mode",
             values.get("permission-mode"),
         );
+        append_isolation_flag(&mut argv, values, true);
         append_additional_args(&mut argv, values);
         argv
     }

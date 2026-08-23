@@ -403,6 +403,9 @@ type RunSummary = {
   previousRunId?: string | null;
   nativeSessionId?: string | null;
   endedReason?: "exited" | "stopped" | "abnormal" | "crash" | null;
+  workingDirectory?: string;
+  isolated?: boolean;
+  isolationNote?: string | null;
 };
 
 type QuitOffer = {
@@ -509,11 +512,15 @@ function liveEnumWarnings(form: RunLaunchForm, draft: LaunchDraft, language: Lan
 function refreshLaunchWarnings(): void {
   const node = app?.querySelector<HTMLElement>(".launch-warnings");
   if (!node || !snapshot?.launchForm || !launchDraft) return;
-  const warnings = liveEnumWarnings(
+  const live = liveEnumWarnings(
     snapshot.launchForm,
     launchDraft,
     snapshot.appearance.language,
   );
+  const preserved = (snapshot.launchForm.warnings ?? []).filter(
+    (warning) => !warning.includes("不是已知的") && !warning.includes("is not a known"),
+  );
+  const warnings = [...preserved, ...live];
   node.textContent = warnings.join(" ");
   node.hidden = warnings.length === 0;
 }
@@ -864,6 +871,7 @@ function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
     <span>${escapeHtml(identity)}</span>
     ${action ? `<span class="run-action">${action}</span>` : ""}
     ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
+    ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
   </button>`;
 }
 
@@ -880,6 +888,7 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
       <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
     </header>
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
+    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
   </section>`;
 }
@@ -1237,11 +1246,16 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
         <div class="label">${escapeHtml(copy.workingDirectory)}</div>
         <input value="${escapeHtml(form.workingDirectory)}" readonly />
       </div>
-      <label class="graph-opt isolation-off">
-        <input type="checkbox" disabled />
+      <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
+        <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
         ${escapeHtml(copy.isolation)}
       </label>
-      <p class="hint">${escapeHtml(form.isolationReason)} ${escapeHtml(copy.isolationHint)}</p>
+      <p class="hint">${escapeHtml(copy.isolationHint)}</p>
+      ${
+        form.isolationSupported
+          ? ""
+          : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
+      }
       <details class="folded" ${launchFolded ? "open" : ""}>
         <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
         ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}

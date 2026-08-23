@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::agent::prepare_launch_env;
 use crate::agent::{
@@ -209,10 +210,100 @@ pub fn command_preview(argv: &[String]) -> String {
     argv.join(" ")
 }
 
-pub fn isolation_reason(language: Language) -> String {
+pub fn isolation_requested(values: &BTreeMap<String, String>) -> bool {
+    values
+        .get(ISOLATION_FIELD)
+        .is_some_and(|value| value == "true")
+}
+
+pub fn is_git_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
+
+pub fn isolation_availability(
+    agent: &dyn AgentPort,
+    project_dir: &Path,
+    language: Language,
+) -> (bool, String) {
+    if !agent.native_isolation() {
+        (false, agent.isolation_unavailable_reason(language))
+    } else if !is_git_repo(project_dir) {
+        (
+            false,
+            match language {
+                Language::ZhCn => "这个 Project 不是 git 仓库，不能隔离。".into(),
+                Language::En => {
+                    "This Project is not a git repository, so isolation is unavailable.".into()
+                }
+            },
+        )
+    } else {
+        (true, String::new())
+    }
+}
+
+pub fn side_effect_warnings(
+    project_dir: &Path,
+    has_active_run: bool,
+    language: Language,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if has_active_run {
+        warnings.push(match language {
+            Language::ZhCn => {
+                "这个 Project 已有活跃 Run。端口和本地锁文件可能冲突，但不禁止启动。".into()
+            }
+            Language::En => {
+                "This Project already has an active Run. Ports and local lock files may conflict, but launch is still allowed.".into()
+            }
+        });
+    }
+    if project_dir.join(".git").join("index.lock").exists() {
+        warnings.push(match language {
+            Language::ZhCn => "检测到本地锁文件，仍可启动。".into(),
+            Language::En => "A local lock file was found. Launch is still allowed.".into(),
+        });
+    }
+    warnings
+}
+
+pub fn isolation_missing_tree_note(language: Language) -> String {
     match language {
-        Language::ZhCn => "本票先关掉隔离，留给隔离票。".into(),
-        Language::En => "Isolation is disabled on this ticket.".into(),
+        Language::ZhCn => "上次的隔离执行目录已经不在，已回到 Project 主目录。".into(),
+        Language::En => {
+            "The previous isolated work directory is gone. This Run uses the Project directory."
+                .into()
+        }
+    }
+}
+
+pub fn git_worktrees(project_dir: &Path) -> Vec<PathBuf> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(project_dir)
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree ").map(PathBuf::from))
+        .collect()
+}
+
+pub fn new_git_worktree(project_dir: &Path, before: &[PathBuf]) -> Option<PathBuf> {
+    git_worktrees(project_dir).into_iter().find(|path| {
+        !same_path(path, project_dir) && !before.iter().any(|seen| same_path(seen, path))
+    })
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 

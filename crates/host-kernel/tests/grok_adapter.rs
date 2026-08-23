@@ -66,6 +66,20 @@ fn grok_adapter_assembles_form_values_without_prompt_flag() {
     assert!(argv.iter().any(|arg| arg == "--always-approve"));
     assert!(argv.iter().any(|arg| arg == "--no-subagents"));
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--single"));
+    assert!(!argv.iter().any(|arg| arg == "--worktree"));
+}
+
+#[test]
+fn grok_adapter_passes_worktree_without_inventing_a_name() {
+    let executable = PathBuf::from("/opt/fake/grok");
+    let mut values = GrokAdapter.seed_config();
+    values.insert("isolation".into(), "true".into());
+    let argv = GrokAdapter.assemble_argv_for(&executable, &values);
+    assert_eq!(argv.iter().filter(|arg| *arg == "--worktree").count(), 1);
+    let flag = argv.iter().position(|arg| arg == "--worktree").unwrap();
+    if let Some(next) = argv.get(flag + 1) {
+        assert!(next.starts_with('-'), "{argv:?}");
+    }
 }
 
 #[test]
