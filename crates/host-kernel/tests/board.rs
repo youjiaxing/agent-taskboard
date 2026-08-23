@@ -109,6 +109,58 @@ fn selecting_a_github_project_projects_four_columns_left_to_right() {
 }
 
 #[test]
+fn title_search_stacks_with_triage_and_open_closed_filters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "Fix search keyboard").label("ready-for-agent"),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "Fix search result").label("needs-info"));
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 3, "Fix search history")
+            .label("ready-for-agent")
+            .closed_at("2026-08-01T10:00:00Z"),
+    );
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 4, "Unrelated keyboard").label("ready-for-agent"),
+    );
+    let mut host = boot(tmp.path(), tracker);
+    let project_id = register(&mut host, &dir, "you/garden");
+
+    let open = host
+        .handle(serde_json::json!({
+            "op": "searchIssues",
+            "projectId": project_id,
+            "title": "search",
+            "triageRole": "ready-for-agent",
+            "state": "open",
+        }))
+        .unwrap()
+        .snapshot
+        .board
+        .unwrap();
+    assert_eq!(ids(&open.columns.unwrap().frontier), vec!["you/garden#1"]);
+    assert_eq!(open.search.title, "search");
+
+    let closed = host
+        .handle(serde_json::json!({
+            "op": "searchIssues",
+            "projectId": project_id,
+            "title": "SEARCH",
+            "triageRole": "ready-for-agent",
+            "state": "closed",
+        }))
+        .unwrap()
+        .snapshot
+        .board
+        .unwrap();
+    let columns = closed.columns.unwrap();
+    assert!(columns.frontier.is_empty());
+    assert_eq!(ids(&columns.recently_completed), vec!["you/garden#3"]);
+}
+
+#[test]
 fn triage_role_does_not_decide_frontier_membership() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
@@ -574,6 +626,7 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
             .blocked_by("you/garden", 9, "blocker", true),
     );
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
+    tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
     tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker"));
     tracker.add_issue(
         IssueRecord::open("you/garden", 5, "waiting on history").blocked_by(
@@ -594,6 +647,16 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     );
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
     register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "startBoundRun",
+        "issueId": "you/garden#10",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "startBoundRun",
+        "issueId": "you/garden#7",
+    }))
+    .unwrap();
     let kernel = Arc::new(Mutex::new(host));
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/dist")

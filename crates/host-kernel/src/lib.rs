@@ -38,7 +38,7 @@ pub use agent::{
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
     FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail, IssueLink,
-    RefreshStatus, DEFAULT_RECENT_LIMIT,
+    IssueSearch, IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
@@ -161,6 +161,10 @@ pub enum Command {
     },
     SetRecentCompletedLimit {
         limit: u32,
+    },
+    SearchIssues {
+        project_id: String,
+        search: IssueSearch,
     },
     Refresh {
         project_id: Option<String>,
@@ -711,6 +715,17 @@ pub struct ShellCopy {
     pub quit_return: String,
     pub quit_stop_all: String,
     pub view_changes: String,
+    pub focus_run: String,
+    pub open_issue: String,
+    pub search_title: String,
+    pub search_placeholder: String,
+    pub search_all_triage: String,
+    pub search_all_states: String,
+    pub search_open: String,
+    pub search_closed: String,
+    pub search_submit: String,
+    pub keyboard_help: String,
+    pub keyboard_help_body: String,
     pub this_round: String,
     pub uncommitted: String,
     pub add_change_note: String,
@@ -848,6 +863,7 @@ pub struct HostKernel {
     selected_issue_id: Option<String>,
     parent_filter: Option<String>,
     recent_limit: u32,
+    issue_search: BTreeMap<String, IssueSearch>,
     center_view: CenterView,
     show_closed_graph_context: bool,
     launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
@@ -1021,6 +1037,7 @@ impl HostKernel {
             selected_issue_id: None,
             parent_filter: None,
             recent_limit,
+            issue_search: BTreeMap::new(),
             center_view,
             show_closed_graph_context: false,
             launch_defaults: settings.agent_launch_defaults,
@@ -1294,6 +1311,15 @@ impl HostKernel {
             Command::SetRecentCompletedLimit { limit } => {
                 self.recent_limit = board::clamp_recent_limit(limit);
                 self.persist_client_settings(&self.appearance.clone())?;
+            }
+            Command::SearchIssues { project_id, search } => {
+                if !self.projects.iter().any(|project| project.id == project_id) {
+                    return Err(KernelError::Protocol(format!(
+                        "unknown project: {project_id}"
+                    )));
+                }
+                self.focused_project_id = Some(project_id.clone());
+                self.issue_search.insert(project_id, search);
             }
             Command::Refresh { project_id } => {
                 let project_id = project_id
@@ -1648,6 +1674,33 @@ impl HostKernel {
                     .ok_or_else(|| KernelError::Protocol("missing limit".into()))?
                     as u32,
             }),
+            "searchIssues" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let triage_role = request
+                    .get("triageRole")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                    .map(|value| serde_json::from_value(serde_json::Value::String(value.into())))
+                    .transpose()
+                    .map_err(|_| KernelError::Protocol("invalid triageRole".into()))?;
+                let state = request
+                    .get("state")
+                    .and_then(|value| value.as_str())
+                    .map(|value| serde_json::from_value(serde_json::Value::String(value.into())))
+                    .transpose()
+                    .map_err(|_| KernelError::Protocol("invalid state".into()))?
+                    .unwrap_or_default();
+                self.dispatch(Command::SearchIssues {
+                    project_id: required_string(&request, "projectId")?,
+                    search: IssueSearch {
+                        title: optional_string(&request, "title"),
+                        triage_role,
+                        state,
+                    },
+                })
+            }
             "refresh" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -2167,13 +2220,7 @@ impl HostKernel {
                 .unwrap_or(false),
             usage: match snapshot.get("usage") {
                 Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
-                _ => usage::build_usage_page(
-                    &usage::UsageQuery::default(),
-                    0,
-                    0,
-                    &[],
-                    &[],
-                ),
+                _ => usage::build_usage_page(&usage::UsageQuery::default(), 0, 0, &[], &[]),
             },
         });
         Ok(())
@@ -3052,6 +3099,19 @@ impl HostKernel {
         })
     }
 
+    fn run_for_issue(&self, issue_id: &str) -> Option<&RunSummary> {
+        self.runs
+            .iter()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .or_else(|| {
+                self.runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
+            })
+    }
+
     fn issue_activity(&self, issue_id: &str) -> Option<IssueActivity> {
         if self.issue_waiting(issue_id) {
             Some(IssueActivity::Waiting)
@@ -3896,10 +3956,18 @@ impl HostKernel {
             self.recent_limit,
             self.refresh_status_for(focused_project_id),
             self.show_closed_graph_context,
+            self.issue_search
+                .get(focused_project_id)
+                .cloned()
+                .unwrap_or_default(),
         );
         if let Some(columns) = board.columns.as_mut() {
             for card in &mut columns.in_progress {
                 card.activity = self.issue_activity(&card.id);
+                card.run_id = self.run_for_issue(&card.id).map(|run| run.id.clone());
+            }
+            for card in &mut columns.recently_completed {
+                card.run_id = self.run_for_issue(&card.id).map(|run| run.id.clone());
             }
         }
         if let Some(selected) = board.selected.as_mut() {
@@ -4439,6 +4507,17 @@ impl ShellCopy {
                 quit_return: "返回".into(),
                 quit_stop_all: "停掉全部".into(),
                 view_changes: "查看改动".into(),
+                focus_run: "聚焦".into(),
+                open_issue: "浏览器打开".into(),
+                search_title: "搜索 Issue".into(),
+                search_placeholder: "按标题搜索，回车才查".into(),
+                search_all_triage: "全部 triage".into(),
+                search_all_states: "open / closed".into(),
+                search_open: "open".into(),
+                search_closed: "closed".into(),
+                search_submit: "搜索".into(),
+                keyboard_help: "键盘帮助".into(),
+                keyboard_help_body: "J / K 或方向键在看板卡片间移动；Enter 打开详情；/ 聚焦搜索；? 打开或关闭帮助；Escape 关闭帮助。终端聚焦时快捷键全部交给官方 TUI。".into(),
                 this_round: "这一轮".into(),
                 uncommitted: "未提交".into(),
                 add_change_note: "写下改动备注".into(),
@@ -4634,6 +4713,17 @@ impl ShellCopy {
                 quit_return: "Go back".into(),
                 quit_stop_all: "Stop all".into(),
                 view_changes: "View changes".into(),
+                focus_run: "Focus".into(),
+                open_issue: "Open in browser".into(),
+                search_title: "Search Issues".into(),
+                search_placeholder: "Search titles on Enter".into(),
+                search_all_triage: "All triage".into(),
+                search_all_states: "open / closed".into(),
+                search_open: "open".into(),
+                search_closed: "closed".into(),
+                search_submit: "Search".into(),
+                keyboard_help: "Keyboard help".into(),
+                keyboard_help_body: "Use J / K or arrow keys to move between board cards; Enter opens details; / focuses search; ? opens or closes help; Escape closes help. When the terminal is focused, all shortcuts stay with the official TUI.".into(),
                 this_round: "This round".into(),
                 uncommitted: "Uncommitted".into(),
                 add_change_note: "Add a change note".into(),

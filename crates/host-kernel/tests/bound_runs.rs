@@ -341,6 +341,30 @@ fn focusing_an_issue_with_an_active_run_focuses_that_pty() {
 }
 
 #[test]
+fn focus_run_command_focuses_the_bound_issue_and_pty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .id
+        .clone();
+
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op": "focusRun",
+            "runId": run_id,
+        }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.focused_run_id, run_id);
+}
+
+#[test]
 fn continue_links_previous_run_and_resumes_native_session() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
