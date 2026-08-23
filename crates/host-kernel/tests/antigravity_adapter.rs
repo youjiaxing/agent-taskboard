@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use host_kernel::{
-    builtin_agents, AgentPort, AntigravityAdapter, ANTIGRAVITY_BIN, ANTIGRAVITY_ID,
+    builtin_agents, AgentPort, AntigravityAdapter, Language, ANTIGRAVITY_BIN, ANTIGRAVITY_ID,
     ANTIGRAVITY_NAME,
 };
 
@@ -13,6 +13,9 @@ fn antigravity_adapter_only_uses_agy() {
     assert_eq!(adapter.bin(), ANTIGRAVITY_BIN);
     assert_eq!(adapter.bin(), "agy");
     assert!(!adapter.native_isolation());
+    assert!(adapter
+        .isolation_unavailable_reason(Language::ZhCn)
+        .contains("--worktree"));
     assert!(!adapter.name().to_ascii_lowercase().contains("gemini"));
     assert!(!adapter
         .known_install_locations()

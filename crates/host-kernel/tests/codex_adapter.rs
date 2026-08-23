@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use host_kernel::{AgentPort, CodexAdapter, CODEX_BIN, CODEX_ID, CODEX_NAME};
+use host_kernel::{AgentPort, CodexAdapter, Language, CODEX_BIN, CODEX_ID, CODEX_NAME};
 
 #[test]
 fn codex_adapter_declares_interactive_tui_contract() {
@@ -10,6 +10,9 @@ fn codex_adapter_declares_interactive_tui_contract() {
     assert_eq!(adapter.name(), CODEX_NAME);
     assert_eq!(adapter.bin(), CODEX_BIN);
     assert!(!adapter.native_isolation());
+    assert!(adapter
+        .isolation_unavailable_reason(Language::ZhCn)
+        .contains("--worktree"));
     let known = adapter.known_install_locations();
     assert!(
         known
@@ -65,6 +68,9 @@ fn codex_adapter_assembles_approval_sandbox_and_profile() {
     assert!(!argv.iter().any(|arg| arg == "--permission-mode"));
     assert!(!argv.iter().any(|arg| arg == "exec"));
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--single"));
+    values.insert("isolation".into(), "true".into());
+    let isolated = CodexAdapter.assemble_argv_for(&executable, &values);
+    assert!(!isolated.iter().any(|arg| arg == "--worktree"));
 }
 
 #[test]

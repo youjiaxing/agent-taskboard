@@ -51,3 +51,16 @@ fn claude_adapter_assembles_permission_mode_and_effort() {
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--print"));
     assert!(!argv.iter().any(|arg| arg == "--worktree"));
 }
+
+#[test]
+fn claude_adapter_passes_worktree_without_inventing_a_name() {
+    let executable = PathBuf::from("/opt/fake/claude");
+    let mut values = ClaudeAdapter.seed_config();
+    values.insert("isolation".into(), "true".into());
+    let argv = ClaudeAdapter.assemble_argv_for(&executable, &values);
+    assert!(argv.iter().any(|arg| arg == "--worktree"));
+    let flag = argv.iter().position(|arg| arg == "--worktree").unwrap();
+    if let Some(next) = argv.get(flag + 1) {
+        assert!(next.starts_with('-'), "{argv:?}");
+    }
+}

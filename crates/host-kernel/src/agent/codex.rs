@@ -5,7 +5,7 @@ use super::{
     additional_args_field, append_additional_args, append_flag, initial_instruction_field,
     local_bin, probe_binary, select_field, text_field, AgentField, AgentPort, ProbeResult,
 };
-use crate::LaunchEnvironment;
+use crate::{Language, LaunchEnvironment};
 
 pub const CODEX_ID: &str = "codex";
 pub const CODEX_NAME: &str = "Codex";
@@ -95,5 +95,14 @@ impl AgentPort for CodexAdapter {
         append_flag(&mut argv, "--profile", values.get("profile"));
         append_additional_args(&mut argv, values);
         argv
+    }
+
+    fn isolation_unavailable_reason(&self, language: Language) -> String {
+        match language {
+            Language::ZhCn => "Codex CLI 没有原生 --worktree，隔离不可用。".into(),
+            Language::En => {
+                "Codex CLI has no native --worktree, so isolation is unavailable.".into()
+            }
+        }
     }
 }

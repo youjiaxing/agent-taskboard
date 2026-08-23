@@ -6,7 +6,7 @@ use super::{
     initial_instruction_field, local_bin, probe_binary, select_field, text_field, AgentField,
     AgentPort, ProbeResult,
 };
-use crate::LaunchEnvironment;
+use crate::{Language, LaunchEnvironment};
 
 pub const ANTIGRAVITY_ID: &str = "antigravity-cli";
 pub const ANTIGRAVITY_NAME: &str = "Antigravity CLI";
@@ -99,5 +99,14 @@ impl AgentPort for AntigravityAdapter {
         }
         append_additional_args(&mut argv, values);
         argv
+    }
+
+    fn isolation_unavailable_reason(&self, language: Language) -> String {
+        match language {
+            Language::ZhCn => "Antigravity CLI 没有原生 --worktree，隔离不可用。".into(),
+            Language::En => {
+                "Antigravity CLI has no native --worktree, so isolation is unavailable.".into()
+            }
+        }
     }
 }

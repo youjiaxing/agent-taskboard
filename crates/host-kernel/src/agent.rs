@@ -203,6 +203,14 @@ pub trait AgentPort: Send + Sync {
             Language::En => format!("{} has no native isolated work directory.", self.name()),
         }
     }
+
+    fn isolation_tree_after_launch(
+        &self,
+        _project_dir: &Path,
+        _before: &[PathBuf],
+    ) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -252,7 +260,7 @@ impl AgentPort for GrokAdapter {
         executable: &Path,
         values: &BTreeMap<String, String>,
     ) -> Vec<String> {
-        grok_argv(executable, values)
+        grok_argv(executable, values, true)
     }
 
     fn native_isolation(&self) -> bool {
@@ -273,6 +281,7 @@ pub struct MemoryAgent {
     seed: BTreeMap<String, String>,
     native_isolation: bool,
     native_session_id: Mutex<Option<String>>,
+    isolation_tree: Mutex<Option<PathBuf>>,
 }
 
 impl MemoryAgent {
@@ -294,6 +303,7 @@ impl MemoryAgent {
             seed: grok_seed(),
             native_isolation: false,
             native_session_id: Mutex::new(None),
+            isolation_tree: Mutex::new(None),
         }
     }
 
@@ -325,6 +335,10 @@ impl MemoryAgent {
 
     pub fn set_native_session_id(&self, session_id: Option<String>) {
         *self.native_session_id.lock().expect("memory agent") = session_id;
+    }
+
+    pub fn set_isolation_tree(&self, path: Option<PathBuf>) {
+        *self.isolation_tree.lock().expect("memory agent") = path;
     }
 }
 
@@ -376,7 +390,7 @@ impl AgentPort for MemoryAgent {
         executable: &Path,
         values: &BTreeMap<String, String>,
     ) -> Vec<String> {
-        grok_argv(executable, values)
+        grok_argv(executable, values, self.native_isolation)
     }
 
     fn recent_action(&self) -> Option<String> {
@@ -393,7 +407,7 @@ impl AgentPort for MemoryAgent {
         values: &BTreeMap<String, String>,
         session_id: &str,
     ) -> Vec<String> {
-        let mut argv = grok_argv(executable, values);
+        let mut argv = grok_argv(executable, values, false);
         argv.push("--resume".into());
         argv.push(session_id.to_string());
         argv
@@ -401,6 +415,14 @@ impl AgentPort for MemoryAgent {
 
     fn native_isolation(&self) -> bool {
         self.native_isolation
+    }
+
+    fn isolation_tree_after_launch(
+        &self,
+        _project_dir: &Path,
+        _before: &[PathBuf],
+    ) -> Option<PathBuf> {
+        self.isolation_tree.lock().expect("memory agent").clone()
     }
 }
 
@@ -440,7 +462,11 @@ fn grok_seed() -> BTreeMap<String, String> {
     ])
 }
 
-fn grok_argv(executable: &Path, values: &BTreeMap<String, String>) -> Vec<String> {
+fn grok_argv(
+    executable: &Path,
+    values: &BTreeMap<String, String>,
+    native_isolation: bool,
+) -> Vec<String> {
     let mut argv = vec![executable.to_string_lossy().into_owned()];
     append_flag(&mut argv, "--model", values.get("model"));
     append_flag(&mut argv, "--effort", values.get("effort"));
@@ -454,8 +480,23 @@ fn grok_argv(executable: &Path, values: &BTreeMap<String, String>) -> Vec<String
     {
         argv.push("--always-approve".into());
     }
+    append_isolation_flag(&mut argv, values, native_isolation);
     append_additional_args(&mut argv, values);
     argv
+}
+
+fn isolation_enabled(values: &BTreeMap<String, String>) -> bool {
+    values.get("isolation").is_some_and(|value| value == "true")
+}
+
+pub(super) fn append_isolation_flag(
+    argv: &mut Vec<String>,
+    values: &BTreeMap<String, String>,
+    native: bool,
+) {
+    if native && isolation_enabled(values) && !argv.iter().any(|arg| arg == "--worktree") {
+        argv.push("--worktree".into());
+    }
 }
 
 fn append_flag(argv: &mut Vec<String>, flag: &str, value: Option<&String>) {

@@ -65,6 +65,12 @@ pub struct RunSummary {
     pub native_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_reason: Option<RunEndedReason>,
+    #[serde(default)]
+    pub working_directory: String,
+    #[serde(default)]
+    pub isolated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_note: Option<String>,
 }
 
 impl RunSummary {
@@ -113,6 +119,9 @@ pub fn start_unbound(
             .map(ToOwned::to_owned),
         native_session_id: None,
         ended_reason: None,
+        working_directory: cwd.to_string_lossy().into_owned(),
+        isolated: false,
+        isolation_note: None,
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,

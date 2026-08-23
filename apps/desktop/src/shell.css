@@ -445,6 +445,8 @@ html[data-theme="plain-night"] button.danger.primary {
 .folded { margin: 8px 0 12px; }
 .folded summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .isolation-off { margin: 4px 0; opacity: .7; }
+.isolation-why { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.isolation-why summary { cursor: pointer; }
 .item, .nested {
   display: flex;
   align-items: center;
