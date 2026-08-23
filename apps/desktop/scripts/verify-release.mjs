@@ -13,7 +13,7 @@ if (versions.some((version) => !version) || new Set(versions).size !== 1) {
   fail(`version mismatch: ${versions.join(", ")}`);
 }
 
-const tag = process.argv[2];
+const tag = process.argv[2] || process.env.RELEASE_TAG;
 if (tag && tag !== `v${config.version}`) {
   fail(`release tag ${tag} does not match app version v${config.version}`);
 }

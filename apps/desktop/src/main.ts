@@ -1530,7 +1530,7 @@ function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
       <div class="lane-hd">${escapeHtml(copy.mobileRecentOutput)}</div>
       ${mobileLiveTerminal
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
-        : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
+        : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
     </section>
     ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
     ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
