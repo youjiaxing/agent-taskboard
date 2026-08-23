@@ -456,9 +456,6 @@ html[data-theme="plain-night"] button.danger.primary {
   .lanes { grid-template-columns: 1fr; }
   .issue-search select { flex: 1; min-width: 0; }
   button[data-act="view-changes"] { display: none; }
-  .lifted-run { grid-template-columns: 1fr; overflow: auto; }
-  .lifted-terminal { min-height: 56vh; }
-  .run-thumbnails { grid-template-columns: 1fr; }
 }
 .notice.ok { border-color: var(--dot); }
 .notice.bad { border-color: var(--accent); }
@@ -974,4 +971,9 @@ html[data-theme="plain-night"] button.danger.primary {
   .usage-full, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
   .usage-compact { display: grid; gap: 8px; }
   .telemetry-mobile { display: block; }
+}
+@media (max-width: 600px) {
+  .lifted-run { grid-template-columns: 1fr; overflow: auto; }
+  .lifted-terminal { min-height: 56vh; }
+  .run-thumbnails { grid-template-columns: 1fr; }
 }

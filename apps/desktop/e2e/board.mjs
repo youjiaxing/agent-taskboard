@@ -330,6 +330,20 @@ await page.click("button[data-act='keyboard-help']");
 await page.waitForSelector(".keyboard-help");
 await page.keyboard.press("Escape");
 await page.waitForFunction(() => !document.querySelector(".keyboard-help"));
+await page.fill("#issue-title-search", "");
+await page.press("#issue-title-search", "Enter");
+await page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
+await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
+await page.waitForSelector(".lifted-run");
+const mobileLiftColumns = await page.$eval(".lifted-run", (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+if (mobileLiftColumns !== 1) {
+  throw new Error(`mobile lifted Run should use one column, got ${mobileLiftColumns}`);
+}
+if (!(await page.$(".lifted-run .issue-detail")) || await page.$(".side")) {
+  throw new Error("mobile lifted Run should retain Issue details and remove the sidebar");
+}
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
 
 await browser.close();
 console.log("board e2e ok");
