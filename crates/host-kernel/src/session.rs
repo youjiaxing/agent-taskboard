@@ -33,6 +33,9 @@ pub trait AgentSession: Send + Sync {
     fn waiting_for_user(&self) -> bool {
         false
     }
+    fn completion_signals(&self) -> crate::agent::CompletionSignals {
+        crate::agent::CompletionSignals::default()
+    }
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -96,6 +99,8 @@ pub struct MemorySession {
     exit: Mutex<Option<i32>>,
     stopped: AtomicBool,
     waiting: AtomicBool,
+    session_end: AtomicBool,
+    stop_failure: AtomicBool,
     write_fail: Mutex<Option<String>>,
     pulse: Condvar,
 }
@@ -107,6 +112,8 @@ impl MemorySession {
             exit: Mutex::new(None),
             stopped: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
+            session_end: AtomicBool::new(false),
+            stop_failure: AtomicBool::new(false),
             write_fail: Mutex::new(None),
             pulse: Condvar::new(),
         }
@@ -114,6 +121,14 @@ impl MemorySession {
 
     pub fn set_waiting(&self, waiting: bool) {
         self.waiting.store(waiting, Ordering::SeqCst);
+    }
+
+    pub fn set_session_end(&self, value: bool) {
+        self.session_end.store(value, Ordering::SeqCst);
+    }
+
+    pub fn set_stop_failure(&self, value: bool) {
+        self.stop_failure.store(value, Ordering::SeqCst);
     }
 
     pub fn fail_next_write(&self, message: impl Into<String>) {
@@ -167,6 +182,13 @@ impl AgentSession for MemorySession {
 
     fn waiting_for_user(&self) -> bool {
         self.waiting.load(Ordering::SeqCst)
+    }
+
+    fn completion_signals(&self) -> crate::agent::CompletionSignals {
+        crate::agent::CompletionSignals {
+            session_end: self.session_end.load(Ordering::SeqCst),
+            stop_failure: self.stop_failure.load(Ordering::SeqCst),
+        }
     }
 
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk {

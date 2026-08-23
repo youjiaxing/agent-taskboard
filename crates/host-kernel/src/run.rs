@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{format_not_found, prepare_launch_env, AgentPort, ProbeResult, RunLaunchConfig};
+use crate::agent::{
+    format_not_found, prepare_launch_env, AgentPort, CompletionHookPlan, ProbeResult,
+    RunLaunchConfig,
+};
 use crate::pairing;
 use crate::session::{AgentSession, SessionFactory, SpawnRequest};
 use crate::{Language, LaunchEnvPort};
@@ -75,6 +78,18 @@ pub struct RunSummary {
     pub isolation_note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_baselines: Vec<crate::changes::GitBaseline>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hooks_attached: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_end: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_failure: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub self_check: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub self_check_attempted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_dir: Option<std::path::PathBuf>,
 }
 
 impl RunSummary {
@@ -106,6 +121,7 @@ pub fn start_unbound(
     issue_id: Option<&str>,
     previous_run_id: Option<&str>,
     resume_session_id: Option<&str>,
+    hooks: Option<&CompletionHookPlan>,
 ) -> StartResult {
     let id = pairing::random_id();
     let mut record = RunSummary {
@@ -128,6 +144,12 @@ pub fn start_unbound(
         isolated: false,
         isolation_note: None,
         git_baselines: Vec::new(),
+        hooks_attached: hooks.is_some(),
+        session_end: false,
+        stop_failure: false,
+        self_check: false,
+        self_check_attempted: false,
+        hook_dir: None,
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,
@@ -162,11 +184,18 @@ pub fn start_unbound(
             }
         }
         ProbeResult::Found { executable } => {
-            let argv = if let Some(session_id) = resume_session_id.filter(|id| !id.is_empty()) {
+            let mut argv = if let Some(session_id) = resume_session_id.filter(|id| !id.is_empty()) {
                 agent.assemble_argv_for_resume(&executable, &config.values, session_id)
             } else {
                 agent.assemble_argv_for(&executable, &config.values)
             };
+            let mut env = env;
+            if let Some(hooks) = hooks {
+                argv.extend(hooks.extra_argv.iter().cloned());
+                for (key, value) in &hooks.extra_env {
+                    env.vars.insert(key.clone(), value.clone());
+                }
+            }
             let request = SpawnRequest {
                 argv,
                 cwd: cwd.to_path_buf(),

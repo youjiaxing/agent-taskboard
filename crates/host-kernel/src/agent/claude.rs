@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    additional_args_field, append_additional_args, append_flag, append_isolation_flag,
+    additional_args_field, append_additional_args, append_flag, append_isolation_flag, hooks,
     initial_instruction_field, local_bin, probe_binary, select_field, text_field, AgentField,
-    AgentPort, ProbeResult,
+    AgentPort, CompletionHookPlan, ProbeResult,
 };
 use crate::LaunchEnvironment;
 
@@ -99,5 +99,23 @@ impl AgentPort for ClaudeAdapter {
 
     fn native_isolation(&self) -> bool {
         true
+    }
+
+    fn completion_hooks_supported(&self) -> bool {
+        true
+    }
+
+    fn attach_completion_hooks(
+        &self,
+        sink_dir: &Path,
+        _project_dir: &Path,
+    ) -> Result<CompletionHookPlan, String> {
+        let recorder = hooks::write_recorder(sink_dir)?;
+        let settings = sink_dir.join("claude-settings.json");
+        hooks::write_json_hooks(&settings, &recorder)?;
+        Ok(CompletionHookPlan {
+            extra_argv: vec!["--settings".into(), settings.to_string_lossy().into_owned()],
+            extra_env: hooks::sink_env(sink_dir),
+        })
     }
 }

@@ -164,6 +164,13 @@ type ShellCopy = {
   addChangeNote: string;
   changeNotePlaceholder: string;
   deleteChangeNote: string;
+  autoAdvance: string;
+  autoAdvanceHelp: string;
+  projectAutoAdvance: string;
+  restoreAutoAdvance: string;
+  restoreDelay: string;
+  pendingConfirmation: string;
+  vetoAdvance: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -203,6 +210,9 @@ type Project = {
   hasActiveRun: boolean;
   hasExecutionStopped?: boolean;
   trackerSynced: boolean;
+  autoAdvance?: boolean;
+  restoreAutoAdvance?: boolean;
+  restoreDelayMs?: number;
 };
 
 type ProjectDraft = {
@@ -353,6 +363,17 @@ type Snapshot = {
   showCommandPreview?: boolean;
   notifyDesktop?: boolean;
   notifySound?: boolean;
+  autoAdvance?: boolean;
+  pendingConfirmation?: PendingConfirmation | null;
+};
+
+type PendingConfirmation = {
+  projectId: string;
+  issueId: string;
+  runId: string;
+  agentId: string;
+  deadlineMs: number;
+  remainingMs: number;
 };
 
 type AgentFieldKind = "text" | "select" | "boolean" | "multiline";
@@ -494,6 +515,19 @@ type HostEvent =
   | { type: "waiting"; runId: string }
   | { type: "execution-stopped"; issueId: string; runId: string }
   | { type: "host-crashed-recovered"; runIds: string[] }
+  | {
+      type: "pending-confirmation-started";
+      projectId: string;
+      issueId: string;
+      runId: string;
+    }
+  | {
+      type: "pending-confirmation-ended";
+      projectId: string;
+      issueId: string;
+      runId: string;
+      advanced: boolean;
+    }
   | {
       type: "notification";
       kind: NotificationKind;
@@ -688,6 +722,10 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     return { snapshot, process: "keep-running", inference: result.inference, events: result.events };
   }
   snapshot = result.snapshot;
+  if (result.viewChanges) {
+    changesView = result.viewChanges;
+    changesOpen = true;
+  }
   return result;
 }
 
@@ -908,6 +946,27 @@ function render(): void {
                 <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
                 ${escapeHtml(copy.notifySound)}
               </label>
+              <label class="graph-opt">
+                <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
+                ${escapeHtml(copy.autoAdvance)}
+              </label>
+              <p class="hint">${escapeHtml(copy.autoAdvanceHelp)}</p>
+              ${
+                currentProject(snap)
+                  ? `<label class="graph-opt">
+                <input type="checkbox" data-field="projectAutoAdvance" ${currentProject(snap)?.autoAdvance ? "checked" : ""} />
+                ${escapeHtml(copy.projectAutoAdvance)}
+              </label>
+              <label class="graph-opt">
+                <input type="checkbox" data-field="restoreAutoAdvance" ${currentProject(snap)?.restoreAutoAdvance ? "checked" : ""} />
+                ${escapeHtml(copy.restoreAutoAdvance)}
+              </label>
+              <div class="field">
+                <label class="label" for="restore-delay">${escapeHtml(copy.restoreDelay)}</label>
+                <input id="restore-delay" type="number" min="0" max="600" data-field="restoreDelay" value="${Math.round((currentProject(snap)?.restoreDelayMs ?? 60000) / 1000)}" />
+              </div>`
+                  : ""
+              }
               <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>
             </div>
           </div>`
@@ -1236,6 +1295,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
       </div>
     </div>
     ${refreshBar(copy, snap.board)}
+    ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
     ${boardView(copy, snap)}
   </div>`;
@@ -1474,6 +1534,15 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
   return `<div class="refresh-bar" data-kind="${escapeHtml(kind)}">
     <span>${escapeHtml(parts.join(" · "))}</span>
     <button type="button" data-act="refresh">${escapeHtml(copy.refreshNow)}</button>
+  </div>`;
+}
+
+function pendingBar(copy: ShellCopy, snap: Snapshot): string {
+  const pending = snap.pendingConfirmation;
+  if (!pending) return "";
+  return `<div class="refresh-bar" data-kind="pending">
+    <span>${escapeHtml(copy.pendingConfirmation)} · ${escapeHtml(pending.issueId)} · ${formatCountdown(pending.remainingMs)}</span>
+    <button type="button" data-act="veto-advance" data-id="${escapeHtml(pending.projectId)}">${escapeHtml(copy.vetoAdvance)}</button>
   </div>`;
 }
 
@@ -2198,6 +2267,11 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "veto-advance" && target.dataset.id) {
+    await rpc("vetoPendingConfirmation", { projectId: target.dataset.id });
+    render();
+    return;
+  }
   if (act === "center-view" && target.dataset.id) {
     await rpc("setCenterView", { view: target.dataset.id });
     render();
@@ -2290,6 +2364,43 @@ app.addEventListener("change", async (event) => {
     }
     await rpc("setNotificationPrefs", { desktop, sound });
     render();
+  }
+  if (target.getAttribute("data-field") === "hostAutoAdvance" && "checked" in target) {
+    await rpc("setHostAutoAdvance", {
+      enabled: (target as HTMLInputElement).checked,
+    });
+    render();
+  }
+  if (target.getAttribute("data-field") === "projectAutoAdvance" && "checked" in target) {
+    const projectId = snapshot.focusedProjectId;
+    if (projectId) {
+      await rpc("setProjectAutoAdvance", {
+        projectId,
+        enabled: (target as HTMLInputElement).checked,
+      });
+      render();
+    }
+  }
+  if (target.getAttribute("data-field") === "restoreAutoAdvance" && "checked" in target) {
+    const projectId = snapshot.focusedProjectId;
+    if (projectId) {
+      await rpc("setProjectRestoreAutoAdvance", {
+        projectId,
+        enabled: (target as HTMLInputElement).checked,
+      });
+      render();
+    }
+  }
+  if (target.getAttribute("data-field") === "restoreDelay" && "value" in target) {
+    const projectId = snapshot.focusedProjectId;
+    const seconds = Number((target as HTMLInputElement).value);
+    if (projectId && Number.isFinite(seconds)) {
+      await rpc("setProjectRestoreDelay", {
+        projectId,
+        delayMs: Math.max(0, seconds) * 1000,
+      });
+      render();
+    }
   }
   const launchId = target.getAttribute("data-launch");
   if (launchId && launchDraft) {

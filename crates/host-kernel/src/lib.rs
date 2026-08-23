@@ -1,5 +1,6 @@
 //! Host 内核：桌面窗口、浏览器和以后的远程 Client 都走这一条接缝。
 
+mod advance;
 mod agent;
 mod board;
 mod changes;
@@ -24,12 +25,14 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+pub use advance::{PendingConfirmation, DEFAULT_RESTORE_DELAY_MS, PENDING_CONFIRM_MS};
 pub use agent::{
     builtin_agents, intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort,
-    AgentSummary, AntigravityAdapter, ClaudeAdapter, CodexAdapter, GrokAdapter, IntentOption,
-    MemoryAgent, PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
-    ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID,
-    CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
+    AgentSummary, AntigravityAdapter, ClaudeAdapter, CodexAdapter, CompletionHookPlan,
+    CompletionSignals, GrokAdapter, IntentOption, MemoryAgent, PrefillSource, ProbeResult,
+    RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
+    CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN,
+    GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -233,6 +236,24 @@ pub enum Command {
     DeleteChangeNote {
         note_id: String,
     },
+    SetHostAutoAdvance {
+        enabled: bool,
+    },
+    SetProjectAutoAdvance {
+        project_id: String,
+        enabled: bool,
+    },
+    SetProjectRestoreAutoAdvance {
+        project_id: String,
+        enabled: bool,
+    },
+    SetProjectRestoreDelay {
+        project_id: String,
+        delay_ms: u64,
+    },
+    VetoPendingConfirmation {
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +315,23 @@ pub enum HostEvent {
     HostCrashedRecovered {
         #[serde(rename = "runIds")]
         run_ids: Vec<String>,
+    },
+    PendingConfirmationStarted {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "issueId")]
+        issue_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+    },
+    PendingConfirmationEnded {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "issueId")]
+        issue_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+        advanced: bool,
     },
     Notification {
         kind: NotificationKind,
@@ -387,6 +425,12 @@ pub struct ProjectSummary {
     #[serde(default)]
     pub has_execution_stopped: bool,
     pub tracker_synced: bool,
+    #[serde(default)]
+    pub auto_advance: bool,
+    #[serde(default)]
+    pub restore_auto_advance: bool,
+    #[serde(default = "advance::default_restore_delay_ms")]
+    pub restore_delay_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -398,6 +442,10 @@ struct ProjectRecord {
     repository: String,
     connection: ProjectConnection,
     tracker_synced: bool,
+    auto_advance: bool,
+    restore_auto_advance: bool,
+    restore_delay_ms: u64,
+    advance_ready_at_ms: Option<u64>,
 }
 
 impl ProjectRecord {
@@ -413,6 +461,9 @@ impl ProjectRecord {
             has_active_run,
             has_execution_stopped,
             tracker_synced: self.tracker_synced,
+            auto_advance: self.auto_advance,
+            restore_auto_advance: self.restore_auto_advance,
+            restore_delay_ms: self.restore_delay_ms,
         }
     }
 
@@ -423,6 +474,9 @@ impl ProjectRecord {
             local_path: self.local_path.clone(),
             github_host: self.github_host.clone(),
             repository: self.repository.clone(),
+            auto_advance: self.auto_advance,
+            restore_auto_advance: self.restore_auto_advance,
+            restore_delay_ms: self.restore_delay_ms,
         }
     }
 }
@@ -635,6 +689,13 @@ pub struct ShellCopy {
     pub add_change_note: String,
     pub change_note_placeholder: String,
     pub delete_change_note: String,
+    pub auto_advance: String,
+    pub auto_advance_help: String,
+    pub project_auto_advance: String,
+    pub restore_auto_advance: String,
+    pub restore_delay: String,
+    pub pending_confirmation: String,
+    pub veto_advance: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -664,6 +725,9 @@ pub struct HostSnapshot {
     pub show_command_preview: bool,
     pub notify_desktop: bool,
     pub notify_sound: bool,
+    pub auto_advance: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_confirmation: Option<PendingConfirmation>,
 }
 
 pub struct KernelPorts {
@@ -735,6 +799,9 @@ pub struct HostKernel {
     notify_desktop: bool,
     notify_sound: bool,
     change_notes: Vec<ChangeNote>,
+    host_auto_advance: bool,
+    pending_advance: BTreeMap<String, advance::PendingAdvance>,
+    open_view_changes_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -900,6 +967,9 @@ impl HostKernel {
             notify_desktop,
             notify_sound,
             change_notes: Vec::new(),
+            host_auto_advance: settings.auto_advance,
+            pending_advance: BTreeMap::new(),
+            open_view_changes_run_id: None,
         };
         let project_ids: Vec<String> = host
             .projects
@@ -915,6 +985,7 @@ impl HostKernel {
             host.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
         host.pending_events.clear();
+        host.arm_cold_start();
         host.note_crash_recovery(crashed_ids);
         Ok(host)
     }
@@ -927,7 +998,7 @@ impl HostKernel {
             running: self.running,
             window_visible: self.window_visible,
             focused_host_id: self.focused_host_id.clone(),
-            focused_project_id,
+            focused_project_id: focused_project_id.clone(),
             hosts: self.connected_hosts(),
             projects,
             appearance: AppearanceState::from_selection(self.appearance),
@@ -954,6 +1025,11 @@ impl HostKernel {
             show_command_preview: self.show_command_preview,
             notify_desktop: self.notify_desktop,
             notify_sound: self.notify_sound,
+            auto_advance: self.host_auto_advance,
+            pending_confirmation: self
+                .pending_advance
+                .get(&focused_project_id)
+                .map(|pending| pending.to_snapshot(self.now_ms)),
         }
     }
 
@@ -966,6 +1042,10 @@ impl HostKernel {
         pairing: Option<IssuedPairing>,
         inference: Option<ProjectInference>,
     ) -> CommandOutcome {
+        let view_changes = self.open_view_changes_run_id.take().and_then(|run_id| {
+            self.view_changes(Some(&run_id), None, ChangeScope::ThisRound)
+                .ok()
+        });
         CommandOutcome {
             snapshot: self.snapshot(),
             process: if self.running {
@@ -976,7 +1056,7 @@ impl HostKernel {
             pairing,
             inference,
             events: std::mem::take(&mut self.pending_events),
-            view_changes: None,
+            view_changes,
         }
     }
 
@@ -1153,6 +1233,7 @@ impl HostKernel {
             Command::Tick { now_ms } => {
                 self.now_ms = now_ms.unwrap_or_else(refresh::wall_ms);
                 self.maybe_auto_refresh();
+                self.finish_due_pending();
             }
             Command::SetClientView {
                 client_id,
@@ -1172,6 +1253,7 @@ impl HostKernel {
             }
             Command::AutoAdvance { project_id } => {
                 self.require_live_tracker(&project_id)?;
+                self.finish_pending_if_due(&project_id);
             }
             Command::CheckIssueClosed { issue_id } => {
                 self.require_live_tracker_for_issue(&issue_id)?;
@@ -1261,6 +1343,30 @@ impl HostKernel {
             }
             Command::DeleteChangeNote { note_id } => {
                 self.delete_change_note(&note_id)?;
+            }
+            Command::SetHostAutoAdvance { enabled } => {
+                self.set_host_auto_advance(enabled)?;
+            }
+            Command::SetProjectAutoAdvance {
+                project_id,
+                enabled,
+            } => {
+                self.set_project_auto_advance(&project_id, enabled)?;
+            }
+            Command::SetProjectRestoreAutoAdvance {
+                project_id,
+                enabled,
+            } => {
+                self.set_project_restore_auto_advance(&project_id, enabled)?;
+            }
+            Command::SetProjectRestoreDelay {
+                project_id,
+                delay_ms,
+            } => {
+                self.set_project_restore_delay(&project_id, delay_ms)?;
+            }
+            Command::VetoPendingConfirmation { project_id } => {
+                self.veto_pending(&project_id);
             }
         }
         Ok(self.outcome())
@@ -1664,6 +1770,61 @@ impl HostKernel {
                 }
                 self.dispatch(Command::DeleteChangeNote {
                     note_id: required_string(&request, "noteId")?,
+                })
+            }
+            "setHostAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetHostAutoAdvance {
+                    enabled: request
+                        .get("enabled")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "setProjectAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetProjectAutoAdvance {
+                    project_id: required_string(&request, "projectId")?,
+                    enabled: request
+                        .get("enabled")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "setProjectRestoreAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetProjectRestoreAutoAdvance {
+                    project_id: required_string(&request, "projectId")?,
+                    enabled: request
+                        .get("enabled")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "setProjectRestoreDelay" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetProjectRestoreDelay {
+                    project_id: required_string(&request, "projectId")?,
+                    delay_ms: request
+                        .get("delayMs")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(advance::DEFAULT_RESTORE_DELAY_MS),
+                })
+            }
+            "vetoPendingConfirmation" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::VetoPendingConfirmation {
+                    project_id: required_string(&request, "projectId")?,
                 })
             }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
@@ -2085,6 +2246,24 @@ impl HostKernel {
         } else {
             Some(changes::record_baselines(&cwd))
         };
+        let mut hook_plan = None;
+        let mut hook_dir = None;
+        if issue_id.is_some() && agent.completion_hooks_supported() {
+            let dir = self
+                .data
+                .host_dir
+                .join("projects")
+                .join(project_id)
+                .join("hooks")
+                .join(pairing::random_id());
+            if let Ok(mut plan) = agent.attach_completion_hooks(&dir, &project_dir) {
+                plan.extra_env
+                    .entry("AGENT_TASKBOARD_HOOK_SINK".into())
+                    .or_insert_with(|| dir.to_string_lossy().into_owned());
+                hook_dir = Some(dir);
+                hook_plan = Some(plan);
+            }
+        }
         let mut result = run::start_unbound(
             project_id,
             &cwd,
@@ -2097,7 +2276,10 @@ impl HostKernel {
             issue_id.as_deref(),
             previous_run_id.as_deref(),
             resume_session_id.as_deref(),
+            hook_plan.as_ref(),
         );
+        result.record.hook_dir = hook_dir;
+        result.record.hooks_attached = hook_plan.is_some();
         let using_recorded_tree = previous.as_ref().is_some_and(|previous| previous.isolated)
             && isolation_note.is_none()
             && cwd != project_dir;
@@ -2487,6 +2669,16 @@ impl HostKernel {
     }
 
     fn observe_live_runs(&mut self) {
+        self.harvest_live_signals();
+        let stop_failures = self
+            .runs
+            .iter()
+            .filter(|run| run.is_active() && run.stop_failure && !run.self_check_attempted)
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for run_id in stop_failures {
+            self.maybe_inject_self_check(&run_id);
+        }
         self.reap_runs();
         let waiting = self
             .live
@@ -2544,7 +2736,9 @@ impl HostKernel {
     }
 
     fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
+        self.harvest_run_signals(run_id);
         let mut issue_id = None;
+        let mut project_id = None;
         let mut newly_ended = false;
         if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
             if run.status != RunStatus::Ended {
@@ -2552,6 +2746,7 @@ impl HostKernel {
                 run.waiting_for_user = false;
                 run.ended_reason = Some(reason);
                 issue_id = run.issue_id.clone();
+                project_id = Some(run.project_id.clone());
                 newly_ended = true;
             }
         }
@@ -2586,6 +2781,14 @@ impl HostKernel {
             offer.active_run_count = active;
         }
         let _ = self.persist_runs();
+        if newly_ended {
+            if let Some(project_id) = project_id {
+                let live = self.refresh_project(&project_id, RefreshTrigger::RunEnded);
+                if live {
+                    self.consider_auto_advance(run_id);
+                }
+            }
+        }
     }
 
     fn project_has_active_run(&self, project_id: &str) -> bool {
@@ -2745,8 +2948,396 @@ impl HostKernel {
             refresh_interval_ms: self.refresh_interval_ms,
             agent_launch_defaults: self.launch_defaults.clone(),
             last_successful_agent: self.last_successful_agent.clone(),
+            auto_advance: self.host_auto_advance,
         };
         write_json(&self.data.host_settings_path, &file)
+    }
+
+    fn auto_advance_allowed(&self, project_id: &str) -> bool {
+        if !self.host_auto_advance {
+            return false;
+        }
+        self.projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .is_some_and(|project| {
+                project.auto_advance
+                    && project
+                        .advance_ready_at_ms
+                        .is_some_and(|ready| self.now_ms >= ready)
+            })
+    }
+
+    fn arm_cold_start(&mut self) {
+        let boot = self.now_ms;
+        let host_on = self.host_auto_advance;
+        for project in &mut self.projects {
+            project.advance_ready_at_ms =
+                if host_on && project.auto_advance && project.restore_auto_advance {
+                    Some(boot.saturating_add(project.restore_delay_ms))
+                } else {
+                    None
+                };
+        }
+    }
+
+    fn arm_project_now(&mut self, project_id: &str) {
+        let now = self.now_ms;
+        let allowed = self.host_auto_advance
+            && self
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .is_some_and(|project| project.auto_advance);
+        if let Some(project) = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+        {
+            project.advance_ready_at_ms = allowed.then_some(now);
+        }
+        if !allowed {
+            self.clear_pending(project_id, false);
+        }
+    }
+
+    fn set_host_auto_advance(&mut self, enabled: bool) -> Result<(), KernelError> {
+        self.host_auto_advance = enabled;
+        let ids: Vec<String> = self
+            .projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect();
+        for id in ids {
+            self.arm_project_now(&id);
+        }
+        self.persist_host_settings()
+    }
+
+    fn set_project_auto_advance(
+        &mut self,
+        project_id: &str,
+        enabled: bool,
+    ) -> Result<(), KernelError> {
+        let project = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        project.auto_advance = enabled;
+        self.arm_project_now(project_id);
+        self.persist_host_settings()
+    }
+
+    fn set_project_restore_auto_advance(
+        &mut self,
+        project_id: &str,
+        enabled: bool,
+    ) -> Result<(), KernelError> {
+        let project = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        project.restore_auto_advance = enabled;
+        self.persist_host_settings()
+    }
+
+    fn set_project_restore_delay(
+        &mut self,
+        project_id: &str,
+        delay_ms: u64,
+    ) -> Result<(), KernelError> {
+        let project = self
+            .projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        project.restore_delay_ms = advance::clamp_restore_delay_ms(delay_ms);
+        self.persist_host_settings()
+    }
+
+    fn veto_pending(&mut self, project_id: &str) {
+        self.clear_pending(project_id, false);
+    }
+
+    fn clear_pending(&mut self, project_id: &str, advanced: bool) {
+        if let Some(pending) = self.pending_advance.remove(project_id) {
+            self.pending_events
+                .push(HostEvent::PendingConfirmationEnded {
+                    project_id: pending.project_id,
+                    issue_id: pending.issue_id,
+                    run_id: pending.run_id,
+                    advanced,
+                });
+        }
+    }
+
+    fn begin_pending(&mut self, run: &RunSummary, issue_id: &str) {
+        let pending = advance::PendingAdvance {
+            project_id: run.project_id.clone(),
+            issue_id: issue_id.to_string(),
+            run_id: run.id.clone(),
+            agent_id: run.agent_id.clone(),
+            deadline_ms: self.now_ms.saturating_add(advance::PENDING_CONFIRM_MS),
+        };
+        self.pending_events
+            .push(HostEvent::PendingConfirmationStarted {
+                project_id: pending.project_id.clone(),
+                issue_id: pending.issue_id.clone(),
+                run_id: pending.run_id.clone(),
+            });
+        self.pending_advance.insert(run.project_id.clone(), pending);
+    }
+
+    fn finish_due_pending(&mut self) {
+        let due: Vec<String> = self
+            .pending_advance
+            .iter()
+            .filter(|(_, pending)| pending.deadline_ms <= self.now_ms)
+            .map(|(project_id, _)| project_id.clone())
+            .collect();
+        for project_id in due {
+            self.finish_pending_if_due(&project_id);
+        }
+    }
+
+    fn finish_pending_if_due(&mut self, project_id: &str) {
+        let Some(pending) = self.pending_advance.get(project_id).cloned() else {
+            return;
+        };
+        if pending.deadline_ms > self.now_ms {
+            return;
+        }
+        if !self.refresh_project(project_id, RefreshTrigger::Action) {
+            self.clear_pending(project_id, false);
+            return;
+        }
+        let next = self.next_auto_pool(project_id);
+        if let Some(issue_id) = next {
+            match self.start_bound_run_with_agent(&issue_id, &pending.agent_id) {
+                Ok(()) => self.clear_pending(project_id, true),
+                Err(_) => self.clear_pending(project_id, false),
+            }
+        } else {
+            self.clear_pending(project_id, false);
+        }
+    }
+
+    fn next_auto_pool(&self, project_id: &str) -> Option<String> {
+        self.loaded_issues
+            .get(project_id)?
+            .iter()
+            .find(|issue| advance::in_auto_pool(issue))
+            .map(IssueRecord::id)
+    }
+
+    fn harvest_live_signals(&mut self) {
+        let ids: Vec<String> = self.live.keys().cloned().collect();
+        for id in ids {
+            self.harvest_run_signals(&id);
+        }
+    }
+
+    fn harvest_run_signals(&mut self, run_id: &str) {
+        let session_signals = self
+            .live
+            .get(run_id)
+            .map(|session| session.completion_signals())
+            .unwrap_or_default();
+        let (hook_dir, agent_id) = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .map(|run| (run.hook_dir.clone(), run.agent_id.clone()))
+            .unwrap_or((None, String::new()));
+        let file_signals = hook_dir
+            .as_ref()
+            .and_then(|dir| {
+                self.agents
+                    .iter()
+                    .find(|agent| agent.id() == agent_id)
+                    .map(|agent| agent.read_completion_signals(dir))
+            })
+            .unwrap_or_default();
+        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+            run.session_end |= session_signals.session_end || file_signals.session_end;
+            run.stop_failure |= session_signals.stop_failure || file_signals.stop_failure;
+        }
+    }
+
+    fn consider_auto_advance(&mut self, run_id: &str) {
+        let Some(run) = self.runs.iter().find(|run| run.id == run_id).cloned() else {
+            return;
+        };
+        let Some(issue_id) = run.issue_id.clone() else {
+            return;
+        };
+        if matches!(
+            run.ended_reason,
+            Some(RunEndedReason::Stopped | RunEndedReason::Crash)
+        ) {
+            return;
+        }
+        if !self.auto_advance_allowed(&run.project_id) || !run.hooks_attached {
+            return;
+        }
+        let issue_closed = self.issue_by_id(&issue_id).is_some_and(|issue| !issue.open);
+        let process_ok = run.ended_reason == Some(RunEndedReason::Exited);
+        let normal = advance::normal_completion(
+            issue_closed,
+            run.hooks_attached,
+            run.session_end,
+            run.stop_failure,
+            process_ok,
+        );
+        if run.self_check {
+            if normal {
+                self.begin_pending(&run, &issue_id);
+            }
+            return;
+        }
+        if normal {
+            self.begin_pending(&run, &issue_id);
+            return;
+        }
+        if issue_closed {
+            self.open_view_changes_run_id = Some(run.id.clone());
+            return;
+        }
+        self.launch_self_check_run(&run, &issue_id);
+    }
+
+    fn launch_self_check_run(&mut self, previous: &RunSummary, issue_id: &str) {
+        if previous.self_check {
+            return;
+        }
+        if let Some(run) = self.runs.iter_mut().find(|run| run.id == previous.id) {
+            run.self_check_attempted = true;
+        }
+        let agent = match self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == previous.agent_id)
+            .cloned()
+        {
+            Some(agent) => agent,
+            None => return,
+        };
+        let values = self
+            .launch_defaults
+            .get(&previous.project_id)
+            .and_then(|agents| agents.get(&previous.agent_id))
+            .cloned()
+            .unwrap_or_else(|| agent.seed_config());
+        let opening = advance::self_check_text(self.appearance.language);
+        if self
+            .start_unbound_run(
+                &previous.project_id,
+                RunLaunchConfig {
+                    agent_id: previous.agent_id.clone(),
+                    values,
+                    opening_text: opening,
+                },
+                Some(issue_id.to_string()),
+                false,
+                Some(PreviousRun {
+                    id: previous.id.clone(),
+                    native_session_id: previous.native_session_id.clone(),
+                    working_directory: previous.working_directory.clone(),
+                    isolated: previous.isolated,
+                }),
+            )
+            .is_err()
+        {
+            return;
+        }
+        if let Some(run) = self
+            .runs
+            .iter_mut()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id))
+        {
+            run.self_check = true;
+            run.self_check_attempted = true;
+        }
+    }
+
+    fn maybe_inject_self_check(&mut self, run_id: &str) {
+        let Some(run) = self.runs.iter().find(|run| run.id == run_id).cloned() else {
+            return;
+        };
+        if !run.is_active() || !run.stop_failure || run.self_check_attempted {
+            return;
+        }
+        if !self.auto_advance_allowed(&run.project_id) || !run.hooks_attached {
+            return;
+        }
+        if !self.refresh_project(&run.project_id, RefreshTrigger::Action) {
+            return;
+        }
+        if run
+            .issue_id
+            .as_ref()
+            .and_then(|issue_id| self.issue_by_id(issue_id))
+            .is_some_and(|issue| !issue.open)
+        {
+            return;
+        }
+        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+            run.self_check = true;
+            run.self_check_attempted = true;
+        }
+        let text = format!("{}\n", advance::self_check_text(self.appearance.language));
+        if self.write_pty(run_id, text.as_bytes()).is_ok() {
+            return;
+        }
+        let previous = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .unwrap_or(run);
+        self.mark_run_ended(run_id, RunEndedReason::Abnormal);
+        if let Some(issue_id) = previous.issue_id.clone() {
+            self.launch_self_check_run(&previous, &issue_id);
+        }
+    }
+
+    fn start_bound_run_with_agent(
+        &mut self,
+        issue_id: &str,
+        agent_id: &str,
+    ) -> Result<(), KernelError> {
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let issue = self
+            .issue_by_id(issue_id)
+            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let mut values = self
+            .launch_defaults
+            .get(&project_id)
+            .and_then(|agents| agents.get(agent.id()))
+            .cloned()
+            .unwrap_or_else(|| agent.seed_config());
+        let opening = format!("{}\n{}", issue.title, issue.url);
+        values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
+        self.start_unbound_run(
+            &project_id,
+            RunLaunchConfig {
+                agent_id: agent.id().to_string(),
+                values,
+                opening_text: opening,
+            },
+            Some(issue_id.to_string()),
+            false,
+            None,
+        )
     }
 
     fn forward_if_remote(
@@ -2815,6 +3406,10 @@ impl HostKernel {
             repository,
             connection,
             tracker_synced: false,
+            auto_advance: false,
+            restore_auto_advance: false,
+            restore_delay_ms: advance::DEFAULT_RESTORE_DELAY_MS,
+            advance_ready_at_ms: None,
         };
         let project_id = record.id.clone();
         self.focused_project_id = Some(project_id.clone());
@@ -2901,6 +3496,7 @@ impl HostKernel {
         {
             self.focused_run_id = self.runs.last().map(|run| run.id.clone());
         }
+        self.clear_pending(project_id, false);
         refresh::remove_project_data(&self.data.host_dir, project_id);
         let _ = self.persist_runs();
         if was_current {
@@ -3516,6 +4112,13 @@ impl ShellCopy {
                 add_change_note: "写下改动备注".into(),
                 change_note_placeholder: "一句话，下次开跑才带上".into(),
                 delete_change_note: "删掉备注".into(),
+                auto_advance: "自动推进".into(),
+                auto_advance_help: "Host 总开关。还要在 Project 上打开才会领下一张 ready-for-agent。".into(),
+                project_auto_advance: "这个 Project 自动推进".into(),
+                restore_auto_advance: "冷启动后恢复自动推进".into(),
+                restore_delay: "冷启动后等待秒数".into(),
+                pending_confirmation: "待确认：即将领下一张 ready-for-agent".into(),
+                veto_advance: "否决".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -3675,6 +4278,13 @@ impl ShellCopy {
                 add_change_note: "Add a change note".into(),
                 change_note_placeholder: "One sentence. It goes into the next opening.".into(),
                 delete_change_note: "Delete note".into(),
+                auto_advance: "Auto-advance".into(),
+                auto_advance_help: "Host master switch. A Project still has to turn it on before the next ready-for-agent is claimed.".into(),
+                project_auto_advance: "Auto-advance this Project".into(),
+                restore_auto_advance: "Restore auto-advance after cold start".into(),
+                restore_delay: "Seconds to wait after cold start".into(),
+                pending_confirmation: "Pending confirmation: about to claim the next ready-for-agent".into(),
+                veto_advance: "Veto".into(),
             },
         }
     }
@@ -3695,6 +4305,8 @@ struct HostSettingsFile {
     agent_launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     last_successful_agent: BTreeMap<String, String>,
+    #[serde(default)]
+    auto_advance: bool,
 }
 
 impl Default for HostSettingsFile {
@@ -3706,6 +4318,7 @@ impl Default for HostSettingsFile {
             refresh_interval_ms: refresh::DEFAULT_REFRESH_INTERVAL_MS,
             agent_launch_defaults: BTreeMap::new(),
             last_successful_agent: BTreeMap::new(),
+            auto_advance: false,
         }
     }
 }
@@ -3722,6 +4335,12 @@ struct StoredProject {
     local_path: PathBuf,
     github_host: String,
     repository: String,
+    #[serde(default)]
+    auto_advance: bool,
+    #[serde(default)]
+    restore_auto_advance: bool,
+    #[serde(default = "advance::default_restore_delay_ms")]
+    restore_delay_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -4045,6 +4664,10 @@ fn probe_record(
         repository: stored.repository,
         connection: connection_from_probe(outcome, secrets_path, language),
         tracker_synced: false,
+        auto_advance: stored.auto_advance,
+        restore_auto_advance: stored.restore_auto_advance,
+        restore_delay_ms: stored.restore_delay_ms,
+        advance_ready_at_ms: None,
     }
 }
 
