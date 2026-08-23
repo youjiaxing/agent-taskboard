@@ -185,6 +185,18 @@ type ShellCopy = {
   vetoAdvance: string;
   usage: string;
   usageHint: string;
+  hostOverview: string;
+  hostOverviewHint: string;
+  returnToBoard: string;
+  showSidebar: string;
+  hideSidebar: string;
+  showIssueDetail: string;
+  hideIssueDetail: string;
+  showEndedRuns: string;
+  runGroupWaiting: string;
+  runGroupRunning: string;
+  runGroupStopped: string;
+  runGroupEnded: string;
   range24Hours: string;
   rangeToday: string;
   range7Days: string;
@@ -346,6 +358,7 @@ type DependencyGraph = {
 };
 
 type CenterView = "board" | "graph";
+type WorkspaceView = "project" | "host-overview" | "run";
 
 type BoardSnapshot = {
   projectId: string;
@@ -403,6 +416,7 @@ type Snapshot = {
   board: BoardSnapshot | null;
   recentCompletedLimit: number;
   centerView: CenterView;
+  workspaceView: WorkspaceView;
   runs: RunSummary[];
   focusedRunId: string;
   quitOffer: QuitOffer | null;
@@ -710,6 +724,11 @@ let noteTarget: { repo: string; path: string; line: number } | null = null;
 let telemetryExpanded = false;
 let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
+let sidebarVisible = true;
+let issueDetailVisible = true;
+let overviewProjectId = "";
+let overviewShowEnded = false;
+let sidebarBeforeLift = true;
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -852,6 +871,7 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   const result = (await response.json()) as RpcResult;
   result.snapshot.runs = result.snapshot.runs ?? [];
   result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
+  result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
   result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
   result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
   result.snapshot.notifySound = result.snapshot.notifySound ?? true;
@@ -972,6 +992,8 @@ function render(): void {
 
   const host = hosts.find((item) => item.id === snapshot?.focusedHostId) ?? hosts[0];
   const empty = snapshot.emptyActions.length > 0;
+  const runLifted = snap.workspaceView === "run" && Boolean(focusedRun(snap));
+  const showSidebar = sidebarVisible && !runLifted;
   if (!pairingAddress) {
     pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
@@ -979,14 +1001,18 @@ function render(): void {
   app.innerHTML = `
     <div class="frame">
       <header class="chrome">
+        <button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
+        <button type="button" class="ghost" data-act="toggle-issue" aria-label="${escapeHtml(issueDetailVisible ? copy.hideIssueDetail : copy.showIssueDetail)}">▱</button>
+        ${!showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
+        ${runLifted ? `<button type="button" class="ghost" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
         <button type="button" class="ghost" data-act="settings">${escapeHtml(copy.settings)}</button>
         <span class="chrome-trail">
           <button type="button" class="ghost ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
           <button type="button" class="ghost ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
         </span>
       </header>
-      <div class="body">
-        <aside class="side">
+      <div class="body ${showSidebar ? "" : "side-collapsed"}">
+        ${showSidebar ? `<aside class="side">
           <div>
             <div class="group-name">${escapeHtml(copy.hosts)}</div>
             ${
@@ -995,6 +1021,7 @@ function render(): void {
                     <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
                     <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
                   </div>
+                  <button type="button" class="item ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>
                   <button type="button" class="item ${snap.usageOpen ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
                 : ""
             }
@@ -1022,8 +1049,8 @@ function render(): void {
                 : `<div class="nested">${escapeHtml(copy.noProjectTitle)}</div>`
             }
           </div>
-        </aside>
-        <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && focusedRun(snap) ? " has-run" : ""}">
+        </aside>` : ""}
+        <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
           ${
             empty
               ? `<div class="empty">
@@ -1041,7 +1068,11 @@ function render(): void {
                 </div>`
               : snap.usageOpen
                 ? usagePage(copy, snap)
-                : `${projectMain(copy, snap)}${runDock(copy, snap)}`
+                : snap.workspaceView === "host-overview"
+                  ? hostOverviewPage(copy, snap)
+                  : runLifted
+                    ? liftedRunView(copy, snap)
+                    : `${projectMain(copy, snap)}${runDock(copy, snap)}`
           }
         </main>
       </div>
@@ -1213,8 +1244,7 @@ function currentProject(snap: Snapshot): Project | undefined {
 }
 
 function focusedRun(snap: Snapshot): RunSummary | undefined {
-  const runs = snap.runs ?? [];
-  return runs.find((run) => run.id === snap.focusedRunId) ?? runs.find((run) => run.status !== "ended");
+  return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
 }
 
 function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
@@ -1418,6 +1448,58 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
+function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+  const visibleRuns = (snap.runs ?? []).filter(
+    (run) => !overviewProjectId || run.projectId === overviewProjectId,
+  );
+  const groups: Array<[string, string, RunSummary[]]> = [
+    ["waiting", copy.runGroupWaiting, visibleRuns.filter((run) => run.status !== "ended" && Boolean(run.waitingForUser))],
+    ["running", copy.runGroupRunning, visibleRuns.filter((run) => run.status !== "ended" && !run.waitingForUser)],
+    ["stopped", copy.runGroupStopped, visibleRuns.filter((run) => run.status === "ended" && Boolean(run.endedReason) && run.endedReason !== "exited")],
+    ["ended", copy.runGroupEnded, visibleRuns.filter((run) => run.status === "ended" && (!run.endedReason || run.endedReason === "exited"))],
+  ];
+  const projectOptions = snap.projects
+    .map(
+      (project) => `<option value="${escapeHtml(project.id)}" ${project.id === overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
+    )
+    .join("");
+  return `<div class="overview-page">
+    <div class="board-head">
+      <div class="board-head-row">
+        <div><h1>${escapeHtml(copy.hostOverview)}</h1><p>${escapeHtml(copy.hostOverviewHint)}</p></div>
+        <button type="button" data-act="return-board">${escapeHtml(copy.returnToBoard)}</button>
+      </div>
+    </div>
+    <div class="overview-controls">
+      <label>${escapeHtml(copy.filterProject)}
+        <select data-overview-filter="project"><option value="">${escapeHtml(copy.filterAll)}</option>${projectOptions}</select>
+      </label>
+      <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
+    </div>
+    <div class="overview-groups">
+      ${groups
+        .filter(([id]) => id !== "ended" || overviewShowEnded)
+        .map(
+          ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
+            <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
+            <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+          </section>`,
+        )
+        .join("")}
+    </div>
+  </div>`;
+}
+
+function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
+  const project = snap.projects.find((item) => item.id === run.projectId);
+  const action = run.recentAction?.trim() || run.failure?.trim() || "";
+  return `<button type="button" class="run-thumbnail" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+    <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
+    <b>${escapeHtml(runIdentity(copy, run))}</b>
+    <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
+  </button>`;
+}
+
 function usageTrend(
   label: string,
   buckets: UsageBucket[],
@@ -1470,35 +1552,44 @@ function toLocalInput(ms: number): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function runDock(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!run) return "";
+function runControls(copy: ShellCopy, run: RunSummary): string {
+  return `<div class="actions">
+    <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
+    <button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>
+    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+  </div>`;
+}
+
+function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
   const identity = runIdentity(copy, run);
-  return `<section class="run-dock">
+  return `<div class="${className}">
     <header class="run-dock-hd">
-      <div>
-        <b>${escapeHtml(run.agentName)}</b>
-        <span>${escapeHtml(identity)}</span>
-      </div>
-      <div class="actions">
-        <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
-        <button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>
-        <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
-      </div>
+      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
+      ${runControls(copy, run)}
     </header>
     ${telemetryBar(copy, run)}
     ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${
-      run.status === "ended"
-        ? ""
-        : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}">
-            <input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" />
-            <button type="submit">${escapeHtml(copy.injectLine)}</button>
-          </form>`
-    }
+    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+  </div>`;
+}
+
+function runDock(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!run || run.status === "ended") return "";
+  const selectedIssueId = snap.board?.selected?.id;
+  if (!run.unbound && run.issueId !== selectedIssueId) return "";
+  return terminalPanel(copy, run, "run-dock");
+}
+
+function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!run) return projectMain(copy, snap);
+  return `<section class="lifted-run ${issueDetailVisible ? "" : "issue-collapsed"}">
+    ${terminalPanel(copy, run, "lifted-terminal")}
+    ${issueDetailVisible ? `<aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board) : ""}</aside>` : ""}
   </section>`;
 }
 
@@ -1684,7 +1775,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
   }
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
-  return `<div class="board-shell" data-center-view="${onGraph ? "graph" : "board"}">
+  return `<div class="board-shell ${issueDetailVisible ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -1696,7 +1787,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
       </div>
       ${onGraph ? dependencyGraphView(copy, board) : boardLanes(copy, board)}
     </div>
-    <aside class="issue-detail">${issueDetail(copy, board)}</aside>
+    ${issueDetailVisible ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
   </div>`;
 }
 
@@ -1804,8 +1895,8 @@ function issueCard(
   ]
     .filter(Boolean)
     .join("");
-  const cardAction = lane === "inProgress" && issue.runId ? "focus-run" : "focus-issue";
-  const actionTargetId = lane === "inProgress" && issue.runId ? issue.runId : issue.id;
+  const cardAction = "focus-issue";
+  const actionTargetId = issue.id;
   const actions = lane === "frontier"
     ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
     : lane === "inProgress" && issue.runId
@@ -2303,6 +2394,28 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "toggle-sidebar") {
+    sidebarVisible = !sidebarVisible;
+    render();
+    return;
+  }
+  if (act === "toggle-issue") {
+    issueDetailVisible = !issueDetailVisible;
+    render();
+    return;
+  }
+  if (act === "open-overview") {
+    sidebarVisible = true;
+    await rpc("openHostOverview");
+    render();
+    return;
+  }
+  if (act === "return-board") {
+    sidebarVisible = sidebarBeforeLift;
+    await rpc("returnToBoard");
+    render();
+    return;
+  }
   if (act === "settings") {
     settingsOpen = true;
     pairingOpen = false;
@@ -2376,6 +2489,7 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-project" && target.dataset.id) {
     projectMenuId = "";
+    sidebarVisible = true;
     await rpc("focusProject", { projectId: target.dataset.id });
     await reportClientView();
     render();
@@ -2460,7 +2574,9 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
+    sidebarBeforeLift = sidebarVisible;
     await rpc("focusRun", { runId: target.dataset.id });
+    sidebarVisible = false;
     render();
     return;
   }
@@ -2723,6 +2839,11 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-issue" && target.dataset.id) {
     await rpc("focusIssue", { issueId: target.dataset.id });
+    if (target.closest(".issue-card") && snapshot.focusedRunId) {
+      sidebarBeforeLift = sidebarVisible;
+      await rpc("focusRun", { runId: snapshot.focusedRunId });
+      sidebarVisible = false;
+    }
     render();
     return;
   }
@@ -2790,6 +2911,10 @@ app.addEventListener("change", async (event) => {
     const limit = Number((target as HTMLInputElement).value);
     if (!Number.isFinite(limit)) return;
     await rpc("setRecentCompletedLimit", { limit });
+    render();
+  }
+  if (target.getAttribute("data-field") === "showEndedRuns" && "checked" in target) {
+    overviewShowEnded = (target as HTMLInputElement).checked;
     render();
   }
   if (target.getAttribute("data-field") === "closedContext" && "checked" in target) {
@@ -2909,6 +3034,11 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
+  if (target?.getAttribute("data-overview-filter") === "project" && target instanceof HTMLSelectElement) {
+    overviewProjectId = target.value;
+    render();
+    return;
+  }
   const filter = target?.getAttribute("data-usage-filter");
   if (!filter || !snapshot?.usage || !(target instanceof HTMLSelectElement)) return;
   const next = {

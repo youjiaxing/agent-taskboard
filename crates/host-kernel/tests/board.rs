@@ -646,15 +646,42 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
         IssueRecord::open("you/garden", 7, "just closed").closed_at("2026-08-22T10:00:00Z"),
     );
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "you/garden");
+    let garden_project_id = register(&mut host, &dir, "you/garden");
     host.handle(serde_json::json!({
         "op": "startBoundRun",
         "issueId": "you/garden#10",
     }))
     .unwrap();
+    let stopped_run_id = host
+        .handle(serde_json::json!({
+            "op": "startBoundRun",
+            "issueId": "you/garden#7",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
     host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/garden#7",
+        "op": "stopRun",
+        "runId": stopped_run_id,
+    }))
+    .unwrap();
+    let tools_dir = make_dir(tmp.path(), "work/tools");
+    tracker.add_issue(IssueRecord::open("you/tools", 1, "tool ready"));
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": "tools",
+        "localPath": tools_dir,
+        "repository": "you/tools",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": host.snapshot().focused_project_id,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "focusProject",
+        "projectId": garden_project_id,
     }))
     .unwrap();
     let kernel = Arc::new(Mutex::new(host));

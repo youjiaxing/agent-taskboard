@@ -152,8 +152,82 @@ if (await page.$(".graph-node:has-text('just closed')")) {
   throw new Error("closed context should only add dependency neighbors");
 }
 
+await page.click(".graph-node:has-text('active work')");
+await page.waitForSelector(".detail-hd:has-text('active work')");
+if (await page.$(".lifted-run")) {
+  throw new Error("dependency graph nodes should only change Issue details");
+}
+
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
+
+await page.click("button[data-act='open-overview']");
+await page.waitForSelector(".overview-page");
+if (await page.$(".lanes")) {
+  throw new Error("Host overview should replace the Project board");
+}
+for (const group of ["running", "stopped"]) {
+  if (!(await page.$(`[data-run-group="${group}"]`))) {
+    throw new Error(`Host overview missing ${group} group`);
+  }
+}
+if (await page.$('[data-run-group="ended"]')) {
+  throw new Error("ended Runs should be hidden by default");
+}
+const overviewProjects = await page.$$eval(".run-thumbnail .run-project", (nodes) => nodes.map((node) => node.textContent));
+if (!overviewProjects.includes("garden") || !overviewProjects.includes("tools")) {
+  throw new Error(`Host overview should include Runs from all Projects, got ${JSON.stringify(overviewProjects)}`);
+}
+await page.selectOption('[data-overview-filter="project"]', { label: "garden" });
+const filteredProjects = await page.$$eval(".run-thumbnail .run-project", (nodes) => nodes.map((node) => node.textContent));
+if (filteredProjects.some((name) => name !== "garden")) {
+  throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
+}
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
+
+await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
+await page.waitForSelector(".lifted-run");
+if (await page.$(".lanes")) {
+  throw new Error("lifting a Run should replace the board");
+}
+if (await page.$(".side")) {
+  throw new Error("lifting a Run should remove the sidebar from layout");
+}
+await page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
+const liftedWidths = await page.evaluate(() => {
+  const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
+  const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
+  return { terminal, detail };
+});
+if (liftedWidths.terminal < liftedWidths.detail * 1.8 || liftedWidths.terminal > liftedWidths.detail * 2.2) {
+  throw new Error(`lifted Run should use about a 2:1 split, got ${JSON.stringify(liftedWidths)}`);
+}
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
+await page.waitForSelector(".side");
+if (!(await page.$(".run-dock"))) {
+  throw new Error("returning to the board should restore the active Issue terminal dock");
+}
+await page.click(".issue-card:has-text('child ready') .issue-card-main");
+await page.waitForSelector(".detail-hd:has-text('child ready')");
+if (await page.$(".run-dock")) {
+  throw new Error("selecting an Issue without an active Run should remove the terminal dock");
+}
+
+await page.click("button[data-act='toggle-sidebar']");
+if (await page.$(".side")) {
+  throw new Error("the sidebar toggle should remove the sidebar from layout");
+}
+await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
+await page.waitForSelector(".lifted-run");
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
+if (await page.$(".side")) {
+  throw new Error("returning should preserve a sidebar that was already collapsed");
+}
+await page.click("button[data-act='toggle-sidebar']");
+await page.waitForSelector(".side");
 
 await page.click("button[data-act='open-usage']");
 await page.waitForSelector(".usage-page");
@@ -227,7 +301,7 @@ if (await page.$(".keyboard-help")) {
   throw new Error("terminal focus should keep ? in the official TUI");
 }
 await page.click(".run-dock button[data-act='stop-run']");
-await page.waitForFunction(() => document.querySelector(".run-dock button[data-act='stop-run']")?.disabled);
+await page.waitForFunction(() => !document.querySelector(".run-dock"));
 
 await page.click("button:has-text('设置')");
 await page.waitForSelector("#recent-limit");

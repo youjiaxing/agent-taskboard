@@ -101,6 +101,7 @@ body {
   grid-template-columns: 252px 1fr;
   min-height: 0;
 }
+.body.side-collapsed { grid-template-columns: 1fr; }
 
 .side {
   background: var(--paper-2);
@@ -263,6 +264,7 @@ html[data-theme="plain-night"] button.danger.primary {
   flex: 1;
 }
 .board-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.board-shell.issue-collapsed { grid-template-columns: 1fr; }
 .board-hint {
   display: flex;
   align-items: center;
@@ -454,6 +456,9 @@ html[data-theme="plain-night"] button.danger.primary {
   .lanes { grid-template-columns: 1fr; }
   .issue-search select { flex: 1; min-width: 0; }
   button[data-act="view-changes"] { display: none; }
+  .lifted-run { grid-template-columns: 1fr; overflow: auto; }
+  .lifted-terminal { min-height: 56vh; }
+  .run-thumbnails { grid-template-columns: 1fr; }
 }
 .notice.ok { border-color: var(--dot); }
 .notice.bad { border-color: var(--accent); }
@@ -609,6 +614,46 @@ html[data-theme="plain-night"] button.danger.primary {
 .run-dock-hd b { margin-right: 8px; }
 .run-dock-hd span { color: var(--muted); font-size: 12px; }
 .run-dock-hd .actions { margin-top: 0; }
+.lifted-run {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 14px;
+  padding: 14px;
+}
+.lifted-run.issue-collapsed { grid-template-columns: 1fr; }
+.lifted-terminal {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.lifted-terminal .pty-slot { min-height: 320px; }
+.overview-page {
+  align-self: stretch;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.overview-controls { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; }
+.overview-controls > label:first-child { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.overview-controls select { min-width: 180px; }
+.overview-groups { display: grid; gap: 14px; }
+.overview-group { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--paper-2); }
+.run-thumbnails { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.run-thumbnail { display: grid; gap: 4px; text-align: left; padding: 10px; background: var(--paper); }
+.run-thumbnail span { color: var(--muted); font-size: 11px; }
 .changes-sheet { width: min(820px, calc(100% - 24px)); }
 .change-repo { margin-top: 14px; }
 .change-repo h3 { margin: 0 0 8px; font-size: 13px; }
