@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::issue::{DependencyRef, IssueRecord, IssueRef};
+use crate::issue::{parse_issue_id, DependencyRef, IssueRecord, IssueRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -101,9 +101,40 @@ pub enum TrackerReadError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackerWriteError {
+    Auth {
+        source: Option<CredentialSource>,
+        kind: AuthFailureKind,
+        cli_detected: bool,
+        detail: Option<String>,
+    },
+    Offline {
+        source: Option<CredentialSource>,
+        cli_detected: bool,
+        detail: Option<String>,
+    },
+    RateLimited {
+        retry_after_ms: Option<u64>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 pub trait TrackerPort: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
     fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError>;
+    fn claim_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn release_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
 }
 
 pub const GITHUB_APP_ENV: &str = "AGENT_TASKBOARD_GITHUB_TOKEN";
@@ -147,11 +178,15 @@ enum ReadScript {
     RateLimited { retry_after_ms: Option<u64> },
 }
 
+pub const MEMORY_TRACKER_ACTOR: &str = "me";
+
 pub struct MemoryTracker {
     failures: Mutex<BTreeSet<String>>,
     read_scripts: Mutex<BTreeMap<String, ReadScript>>,
     read_counts: Mutex<BTreeMap<String, u64>>,
     issues: Mutex<BTreeMap<String, Vec<IssueRecord>>>,
+    write_fail: Mutex<BTreeMap<String, String>>,
+    actor: String,
     source: CredentialSource,
 }
 
@@ -162,7 +197,39 @@ impl MemoryTracker {
             read_scripts: Mutex::new(BTreeMap::new()),
             read_counts: Mutex::new(BTreeMap::new()),
             issues: Mutex::new(BTreeMap::new()),
+            write_fail: Mutex::new(BTreeMap::new()),
+            actor: MEMORY_TRACKER_ACTOR.into(),
             source: CredentialSource::Cli,
+        }
+    }
+
+    pub fn fail_claim(&self, repository: impl Into<String>) {
+        self.write_fail
+            .lock()
+            .expect("memory tracker")
+            .insert(repository.into(), "cannot claim issue".into());
+    }
+
+    pub fn assignees(&self, repository: &str, number: u64) -> Vec<String> {
+        self.issues
+            .lock()
+            .expect("memory tracker")
+            .get(repository)
+            .and_then(|items| items.iter().find(|issue| issue.number == number))
+            .map(|issue| issue.assignees.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn close_issue(&self, repository: &str, number: u64) {
+        let mut issues = self.issues.lock().expect("memory tracker");
+        if let Some(issue) = issues
+            .get_mut(repository)
+            .and_then(|items| items.iter_mut().find(|issue| issue.number == number))
+        {
+            issue.open = false;
+            if issue.closed_at.is_none() {
+                issue.closed_at = Some("2026-08-23T00:00:00Z".into());
+            }
         }
     }
 
@@ -306,6 +373,63 @@ impl TrackerPort for MemoryTracker {
             .cloned()
             .unwrap_or_default())
     }
+
+    fn claim_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        self.write_issue(ctx, issue_id, true)
+    }
+
+    fn release_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        self.write_issue(ctx, issue_id, false)
+    }
+}
+
+impl MemoryTracker {
+    fn write_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        claim: bool,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        if let Some(message) = self
+            .write_fail
+            .lock()
+            .expect("memory tracker")
+            .get(ctx.repository)
+            .cloned()
+        {
+            return Err(TrackerWriteError::Failed { message });
+        }
+        let Some((repository, number)) = parse_issue_id(issue_id) else {
+            return Err(TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            });
+        };
+        let mut issues = self.issues.lock().expect("memory tracker");
+        let Some(issue) = issues
+            .get_mut(&repository)
+            .and_then(|items| items.iter_mut().find(|issue| issue.number == number))
+        else {
+            return Err(TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            });
+        };
+        if claim {
+            if !issue.assignees.iter().any(|login| login == &self.actor) {
+                issue.assignees.push(self.actor.clone());
+            }
+        } else {
+            issue.assignees.retain(|login| login != &self.actor);
+        }
+        Ok(issue.clone())
+    }
 }
 
 trait EnvSource: Send + Sync {
@@ -325,6 +449,23 @@ trait GitHubApi: Send + Sync {
         repository: &str,
         token: &str,
     ) -> Result<Vec<Value>, ProbeError>;
+    fn viewer_login(&self, host: &str, token: &str) -> Result<String, ProbeError>;
+    fn add_assignees(
+        &self,
+        host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError>;
+    fn remove_assignees(
+        &self,
+        host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError>;
 }
 
 enum ProbeError {
@@ -350,6 +491,8 @@ pub struct ScriptedGitHub {
     pub read_unauthorized: bool,
     pub rate_limited: bool,
     pub retry_after_ms: Option<u64>,
+    pub viewer_login: String,
+    pub write_fail: bool,
 }
 
 impl GitHubTracker {
@@ -371,10 +514,16 @@ impl GitHubTracker {
             api: Box::new(MapApi {
                 accept: script.accept_tokens.clone(),
                 unreachable: script.unreachable,
-                issues: script.issues.clone(),
+                issues: Mutex::new(script.issues.clone()),
                 read_unauthorized: script.read_unauthorized,
                 rate_limited: script.rate_limited,
                 retry_after_ms: script.retry_after_ms,
+                viewer_login: if script.viewer_login.trim().is_empty() {
+                    MEMORY_TRACKER_ACTOR.to_string()
+                } else {
+                    script.viewer_login
+                },
+                write_fail: script.write_fail,
             }),
         }
     }
@@ -466,6 +615,95 @@ impl TrackerPort for GitHubTracker {
                     TrackerReadError::RateLimited { retry_after_ms }
                 }
             }),
+        }
+    }
+
+    fn claim_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        self.write_assignees(ctx, issue_id, true)
+    }
+
+    fn release_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        self.write_assignees(ctx, issue_id, false)
+    }
+}
+
+impl GitHubTracker {
+    fn write_assignees(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        claim: bool,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        let (token, source, cli_detected) =
+            self.authorize(ctx).map_err(|outcome| match outcome {
+                ProbeOutcome::Failed {
+                    source,
+                    kind,
+                    cli_detected,
+                    detail,
+                } => TrackerWriteError::Auth {
+                    source,
+                    kind,
+                    cli_detected,
+                    detail,
+                },
+                ProbeOutcome::Ready { .. } => TrackerWriteError::Auth {
+                    source: None,
+                    kind: AuthFailureKind::MissingCredentials,
+                    cli_detected: self.gh.detected(),
+                    detail: None,
+                },
+            })?;
+        let Some((_repository, number)) = parse_issue_id(issue_id) else {
+            return Err(TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            });
+        };
+        let login = self
+            .api
+            .viewer_login(ctx.github_host, &token)
+            .map_err(|err| probe_write_error(err, source, cli_detected))?;
+        let node = if claim {
+            self.api
+                .add_assignees(ctx.github_host, ctx.repository, number, &token, &[login])
+        } else {
+            self.api
+                .remove_assignees(ctx.github_host, ctx.repository, number, &token, &[login])
+        }
+        .map_err(|err| probe_write_error(err, source, cli_detected))?;
+        map_github_issue_node(&node, ctx.repository).ok_or_else(|| TrackerWriteError::Failed {
+            message: "cannot map GitHub issue".into(),
+        })
+    }
+}
+
+fn probe_write_error(
+    err: ProbeError,
+    source: CredentialSource,
+    cli_detected: bool,
+) -> TrackerWriteError {
+    match err {
+        ProbeError::Unauthorized => TrackerWriteError::Auth {
+            source: Some(source),
+            kind: AuthFailureKind::Rejected,
+            cli_detected,
+            detail: None,
+        },
+        ProbeError::Unreachable(detail) => TrackerWriteError::Offline {
+            source: Some(source),
+            cli_detected,
+            detail: Some(detail),
+        },
+        ProbeError::RateLimited { retry_after_ms } => {
+            TrackerWriteError::RateLimited { retry_after_ms }
         }
     }
 }
@@ -630,6 +868,100 @@ impl GitHubApi for LiveGitHubApi {
         }
         Ok(nodes)
     }
+
+    fn viewer_login(&self, host: &str, token: &str) -> Result<String, ProbeError> {
+        let url = github_user_url(host);
+        let payload = github_json("GET", &url, token, None)?;
+        payload
+            .get("login")
+            .and_then(Value::as_str)
+            .filter(|login| !login.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| ProbeError::Unreachable("GitHub user has no login".into()))
+    }
+
+    fn add_assignees(
+        &self,
+        host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError> {
+        let url = github_assignees_url(host, repository, number);
+        let body = serde_json::json!({ "assignees": logins });
+        github_json("POST", &url, token, Some(&body))
+    }
+
+    fn remove_assignees(
+        &self,
+        host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError> {
+        let url = github_assignees_url(host, repository, number);
+        let body = serde_json::json!({ "assignees": logins });
+        github_json("DELETE", &url, token, Some(&body))
+    }
+}
+
+fn github_user_url(host: &str) -> String {
+    if host.eq_ignore_ascii_case("github.com") {
+        "https://api.github.com/user".into()
+    } else {
+        format!("https://{host}/api/v3/user")
+    }
+}
+
+fn github_assignees_url(host: &str, repository: &str, number: u64) -> String {
+    format!(
+        "{}/issues/{number}/assignees",
+        github_repo_url(host, repository)
+    )
+}
+
+fn github_json(
+    method: &str,
+    url: &str,
+    token: &str,
+    body: Option<&Value>,
+) -> Result<Value, ProbeError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build();
+    let request = agent
+        .request(method, url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", "Agent-Taskboard")
+        .set("Accept", "application/vnd.github+json");
+    let response = match body {
+        Some(body) => request
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string()),
+        None => request.call(),
+    };
+    let response = match response {
+        Ok(response) => response,
+        Err(ureq::Error::Status(401 | 403 | 404, _)) => return Err(ProbeError::Unauthorized),
+        Err(ureq::Error::Status(429, response)) => {
+            return Err(ProbeError::RateLimited {
+                retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
+            });
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
+        }
+        Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
+    };
+    let payload: Value = serde_json::from_str(
+        &response
+            .into_string()
+            .map_err(|err| ProbeError::Unreachable(err.to_string()))?,
+    )
+    .map_err(|err| ProbeError::Unreachable(err.to_string()))?;
+    Ok(payload)
 }
 
 const GITHUB_ISSUES_QUERY: &str = r#"
@@ -713,10 +1045,12 @@ impl GhAuth for MapGh {
 struct MapApi {
     accept: BTreeSet<String>,
     unreachable: bool,
-    issues: BTreeMap<String, Vec<Value>>,
+    issues: Mutex<BTreeMap<String, Vec<Value>>>,
     read_unauthorized: bool,
     rate_limited: bool,
     retry_after_ms: Option<u64>,
+    viewer_login: String,
+    write_fail: bool,
 }
 
 impl GitHubApi for MapApi {
@@ -751,7 +1085,107 @@ impl GitHubApi for MapApi {
         if self.read_unauthorized || !self.accept.contains(token) {
             return Err(ProbeError::Unauthorized);
         }
-        Ok(self.issues.get(repository).cloned().unwrap_or_default())
+        Ok(self
+            .issues
+            .lock()
+            .expect("scripted github")
+            .get(repository)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn viewer_login(&self, _host: &str, token: &str) -> Result<String, ProbeError> {
+        self.guard_write(token)?;
+        Ok(self.viewer_login.clone())
+    }
+
+    fn add_assignees(
+        &self,
+        _host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError> {
+        self.mutate_assignees(repository, number, token, logins, true)
+    }
+
+    fn remove_assignees(
+        &self,
+        _host: &str,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+    ) -> Result<Value, ProbeError> {
+        self.mutate_assignees(repository, number, token, logins, false)
+    }
+}
+
+impl MapApi {
+    fn guard_write(&self, token: &str) -> Result<(), ProbeError> {
+        if self.unreachable {
+            return Err(ProbeError::Unreachable("unreachable".into()));
+        }
+        if self.rate_limited {
+            return Err(ProbeError::RateLimited {
+                retry_after_ms: self.retry_after_ms,
+            });
+        }
+        if self.write_fail || self.read_unauthorized || !self.accept.contains(token) {
+            return Err(ProbeError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    fn mutate_assignees(
+        &self,
+        repository: &str,
+        number: u64,
+        token: &str,
+        logins: &[String],
+        add: bool,
+    ) -> Result<Value, ProbeError> {
+        self.guard_write(token)?;
+        let mut issues = self.issues.lock().expect("scripted github");
+        let Some(node) = issues.get_mut(repository).and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| item.get("number").and_then(Value::as_u64) == Some(number))
+        }) else {
+            return Err(ProbeError::Unreachable("unknown issue".into()));
+        };
+        mutate_assignee_logins(node, logins, add);
+        Ok(node.clone())
+    }
+}
+
+fn mutate_assignee_logins(node: &mut Value, logins: &[String], add: bool) {
+    let Some(assignees) = node.get_mut("assignees") else {
+        node["assignees"] = serde_json::json!({ "nodes": [] });
+        return mutate_assignee_logins(node, logins, add);
+    };
+    if let Some(items) = assignees.as_array_mut() {
+        apply_login_delta(items, logins, add);
+        return;
+    }
+    if let Some(items) = assignees.get_mut("nodes").and_then(Value::as_array_mut) {
+        apply_login_delta(items, logins, add);
+    }
+}
+
+fn apply_login_delta(items: &mut Vec<Value>, logins: &[String], add: bool) {
+    for login in logins {
+        if add {
+            if !items
+                .iter()
+                .any(|item| item.get("login").and_then(Value::as_str) == Some(login))
+            {
+                items.push(serde_json::json!({ "login": login }));
+            }
+        } else {
+            items.retain(|item| item.get("login").and_then(Value::as_str) != Some(login.as_str()));
+        }
     }
 }
 

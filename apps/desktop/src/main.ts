@@ -60,6 +60,10 @@ type ShellCopy = {
   removeConfirm: string;
   cannotRemoveActiveRun: string;
   cannotRemoveActiveRunBody: string;
+  removeKeepClaimsBody: string;
+  continueRun: string;
+  releaseClaim: string;
+  executionStopped: string;
   gotIt: string;
   authFailed: string;
   repairCli: string;
@@ -181,6 +185,7 @@ type Project = {
   repository: string;
   connection: ProjectConnection;
   hasActiveRun: boolean;
+  hasExecutionStopped?: boolean;
   trackerSynced: boolean;
 };
 
@@ -232,6 +237,8 @@ type IssueDetail = {
   children: IssueLink[];
   blockedBy: IssueLink[];
   blocking: IssueLink[];
+  executionStopped?: boolean;
+  activeRunId?: string | null;
 };
 
 type BoardColumns = {
@@ -393,6 +400,9 @@ type RunSummary = {
   status: RunStatus;
   recentAction?: string | null;
   failure?: string | null;
+  previousRunId?: string | null;
+  nativeSessionId?: string | null;
+  endedReason?: "exited" | "stopped" | "abnormal" | "crash" | null;
 };
 
 type QuitOffer = {
@@ -1039,19 +1049,22 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
   const claim = issue.claimedBy.length
     ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
     : copy.unclaimed;
-  const hasActive = (snapshot?.runs ?? []).some(
+  const hasActive = Boolean(issue.activeRunId) || (snapshot?.runs ?? []).some(
     (run) => run.issueId === issue.id && run.status !== "ended",
   );
+  const actions = hasActive
+    ? ""
+    : issue.executionStopped
+      ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
+         <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
+      : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
   return `
     <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
     <div class="detail-meta">
       ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
       <span class="tag">${escapeHtml(claim)}</span>
-      ${
-        hasActive
-          ? ""
-          : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
-      }
+      ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
+      ${actions}
     </div>
     <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
@@ -1337,6 +1350,7 @@ function removeDialog(copy: ShellCopy, project: Project): string {
     <div class="sheet" data-act="form-noop">
       <h2>${escapeHtml(copy.removeConfirmTitle)}</h2>
       <p class="notice">${escapeHtml(copy.removeConfirmBody)}</p>
+      ${project.hasExecutionStopped ? `<p class="notice">${escapeHtml(copy.removeKeepClaimsBody)}</p>` : ""}
       <div class="actions">
         <button type="button" data-act="close-remove">${escapeHtml(copy.cancel)}</button>
         <button type="button" class="danger primary" data-act="confirm-remove">${escapeHtml(copy.removeConfirm)}</button>
@@ -1571,6 +1585,16 @@ app.addEventListener("click", async (event) => {
       projectId: snapshot.focusedProjectId,
       issueId: target.dataset.id,
     });
+    render();
+    return;
+  }
+  if (act === "continue-run" && target.dataset.id) {
+    await rpc("continueRun", { issueId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "release-claim" && target.dataset.id) {
+    await rpc("releaseIssue", { issueId: target.dataset.id });
     render();
     return;
   }

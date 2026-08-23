@@ -347,6 +347,10 @@ fn english_copy_uses_new_for_the_plus_button() {
     h.host.dispatch(Command::SetLanguage(Language::En)).unwrap();
     let snap = h.host.snapshot();
     assert_eq!(snap.copy.new_run, "New");
+    assert_eq!(snap.copy.execute_run, "Run");
+    assert_eq!(snap.copy.continue_run, "Continue");
+    assert_eq!(snap.copy.release_claim, "Release claim");
+    assert_eq!(snap.copy.execution_stopped, "Execution stopped");
     assert_eq!(snap.copy.unbound_issue, "Unbound Issue");
     assert_eq!(snap.copy.stop_run, "Stop");
 }

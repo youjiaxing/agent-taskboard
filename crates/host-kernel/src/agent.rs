@@ -180,6 +180,19 @@ pub trait AgentPort: Send + Sync {
         None
     }
 
+    fn native_session_id(&self) -> Option<String> {
+        None
+    }
+
+    fn assemble_argv_for_resume(
+        &self,
+        executable: &Path,
+        values: &BTreeMap<String, String>,
+        _session_id: &str,
+    ) -> Vec<String> {
+        self.assemble_argv_for(executable, values)
+    }
+
     fn native_isolation(&self) -> bool {
         false
     }
@@ -259,6 +272,7 @@ pub struct MemoryAgent {
     fields: Vec<AgentField>,
     seed: BTreeMap<String, String>,
     native_isolation: bool,
+    native_session_id: Mutex<Option<String>>,
 }
 
 impl MemoryAgent {
@@ -279,6 +293,7 @@ impl MemoryAgent {
             fields: grok_fields(),
             seed: grok_seed(),
             native_isolation: false,
+            native_session_id: Mutex::new(None),
         }
     }
 
@@ -306,6 +321,10 @@ impl MemoryAgent {
 
     pub fn set_recent_action(&self, action: Option<String>) {
         *self.recent_action.lock().expect("memory agent") = action;
+    }
+
+    pub fn set_native_session_id(&self, session_id: Option<String>) {
+        *self.native_session_id.lock().expect("memory agent") = session_id;
     }
 }
 
@@ -362,6 +381,22 @@ impl AgentPort for MemoryAgent {
 
     fn recent_action(&self) -> Option<String> {
         self.recent_action.lock().expect("memory agent").clone()
+    }
+
+    fn native_session_id(&self) -> Option<String> {
+        self.native_session_id.lock().expect("memory agent").clone()
+    }
+
+    fn assemble_argv_for_resume(
+        &self,
+        executable: &Path,
+        values: &BTreeMap<String, String>,
+        session_id: &str,
+    ) -> Vec<String> {
+        let mut argv = grok_argv(executable, values);
+        argv.push("--resume".into());
+        argv.push(session_id.to_string());
+        argv
     }
 
     fn native_isolation(&self) -> bool {

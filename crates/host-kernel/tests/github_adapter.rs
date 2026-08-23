@@ -224,6 +224,126 @@ fn github_adapter_maps_rate_limit_with_retry_after() {
 }
 
 #[test]
+fn github_adapter_claim_and_release_use_viewer_assignee() {
+    let mut host = scripted_host(vec![node(serde_json::json!({
+        "assignees": { "nodes": [] },
+        "issueDependenciesSummary": { "blockedBy": 0 },
+        "blockedBy": { "nodes": [] },
+    }))]);
+    assert_eq!(
+        host.snapshot()
+            .board
+            .unwrap()
+            .columns
+            .unwrap()
+            .frontier
+            .iter()
+            .map(|card| card.id.clone())
+            .collect::<Vec<_>>(),
+        vec!["you/garden#50"]
+    );
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#50",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#50",
+    }))
+    .unwrap();
+    let detail = host.snapshot().board.unwrap().selected.unwrap();
+    assert_eq!(detail.claimed_by, vec!["me"]);
+    assert_eq!(detail.parent.unwrap().id, "you/garden#45");
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .frontier
+        .is_empty());
+
+    host.handle(serde_json::json!({
+        "op": "releaseIssue",
+        "issueId": "you/garden#50",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#50",
+    }))
+    .unwrap();
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .selected
+        .unwrap()
+        .claimed_by
+        .is_empty());
+}
+
+#[test]
+fn github_adapter_claim_failure_does_not_claim() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("work/garden");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tracker = GitHubTracker::scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "tok".into())].into(),
+        accept_tokens: ["tok".into()].into(),
+        issues: BTreeMap::from([(
+            "you/garden".into(),
+            vec![node(serde_json::json!({
+                "assignees": { "nodes": [] },
+                "issueDependenciesSummary": { "blockedBy": 0 },
+                "blockedBy": { "nodes": [] },
+            }))],
+        )]),
+        write_fail: true,
+        ..Default::default()
+    });
+    let mut host = HostKernel::boot_with(
+        BootRequest {
+            app_local_data_dir: tmp.path().to_path_buf(),
+            app_log_dir: tmp.path().join("logs"),
+            system_locale: "en-US".into(),
+            system_appearance: SystemAppearance::Light,
+            host_display_name: "Studio".into(),
+        },
+        Arc::new(tracker),
+    )
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": "garden",
+        "localPath": dir,
+        "repository": "you/garden",
+    }))
+    .unwrap();
+    let err = host
+        .handle(serde_json::json!({
+            "op": "claimIssue",
+            "issueId": "you/garden#50",
+        }))
+        .unwrap_err();
+    assert!(matches!(err, host_kernel::KernelError::Denied(_)));
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#50",
+    }))
+    .unwrap();
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .selected
+        .unwrap()
+        .claimed_by
+        .is_empty());
+}
+
+#[test]
 fn map_github_issue_node_ignores_related_payload() {
     let mapped = host_kernel::map_github_issue_node(&node(serde_json::json!({})), "you/garden")
         .expect("issue");

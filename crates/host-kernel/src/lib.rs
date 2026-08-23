@@ -44,7 +44,7 @@ pub use local_rpc::{
 pub use pairing::{IssuedPairing, PairedClient, PairingOffer};
 pub use project::ProjectInference;
 pub use refresh::DEFAULT_REFRESH_INTERVAL_MS;
-pub use run::{QuitOffer, RunStatus, RunSummary};
+pub use run::{QuitOffer, RunEndedReason, RunStatus, RunSummary};
 pub use session::{
     AgentSession, MemorySession, MemorySessionFactory, PtyChunk, PtySessionFactory, SessionFactory,
     SpawnRequest,
@@ -176,6 +176,9 @@ pub enum Command {
         issue_id: String,
     },
     StartBoundRun {
+        issue_id: String,
+    },
+    ContinueRun {
         issue_id: String,
     },
     StartUnboundRun {
@@ -321,6 +324,8 @@ pub struct ProjectSummary {
     pub repository: String,
     pub connection: ProjectConnection,
     pub has_active_run: bool,
+    #[serde(default)]
+    pub has_execution_stopped: bool,
     pub tracker_synced: bool,
 }
 
@@ -336,7 +341,7 @@ struct ProjectRecord {
 }
 
 impl ProjectRecord {
-    fn summary(&self, has_active_run: bool) -> ProjectSummary {
+    fn summary(&self, has_active_run: bool, has_execution_stopped: bool) -> ProjectSummary {
         ProjectSummary {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -346,6 +351,7 @@ impl ProjectRecord {
             repository: self.repository.clone(),
             connection: self.connection.clone(),
             has_active_run,
+            has_execution_stopped,
             tracker_synced: self.tracker_synced,
         }
     }
@@ -465,6 +471,10 @@ pub struct ShellCopy {
     pub remove_confirm: String,
     pub cannot_remove_active_run: String,
     pub cannot_remove_active_run_body: String,
+    pub remove_keep_claims_body: String,
+    pub continue_run: String,
+    pub release_claim: String,
+    pub execution_stopped: String,
     pub got_it: String,
     pub auth_failed: String,
     pub repair_cli: String,
@@ -669,6 +679,11 @@ struct ClientView {
     visible: bool,
 }
 
+struct PreviousRun {
+    id: String,
+    native_session_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefreshTrigger {
     Immediate,
@@ -806,6 +821,7 @@ impl HostKernel {
         for project_id in &project_ids {
             host.load_persisted_snapshot(project_id);
         }
+        host.load_persisted_runs();
         if let Some(project_id) = host.focused_project_id.clone() {
             host.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
@@ -887,8 +903,12 @@ impl HostKernel {
         Ok(self.pty_session(run_id)?.read_after(after, wait))
     }
 
-    pub fn note_run_exit(&mut self, run_id: &str, _code: i32) {
-        self.mark_run_ended(run_id);
+    pub fn note_run_exit(&mut self, run_id: &str, code: i32) {
+        let stopped = self
+            .live
+            .get(run_id)
+            .is_some_and(|session| session.was_stopped());
+        self.mark_run_ended(run_id, RunEndedReason::from_exit(code, stopped));
     }
 
     pub fn write_pty(&self, run_id: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -1009,7 +1029,10 @@ impl HostKernel {
                 return Ok(self.outcome_with(None, inference));
             }
             Command::FocusIssue { issue_id } => {
-                self.selected_issue_id = Some(issue_id);
+                self.selected_issue_id = Some(issue_id.clone());
+                if let Some(run_id) = self.active_run_id_for_issue(&issue_id) {
+                    self.focused_run_id = Some(run_id);
+                }
             }
             Command::FilterParent { issue_id } => {
                 self.parent_filter = Some(issue_id);
@@ -1049,10 +1072,10 @@ impl HostKernel {
                 self.refresh_project(&project_id, RefreshTrigger::RunEnded);
             }
             Command::ClaimIssue { issue_id } => {
-                self.require_live_tracker_for_issue(&issue_id)?;
+                self.claim_issue(&issue_id)?;
             }
             Command::ReleaseIssue { issue_id } => {
-                self.require_live_tracker_for_issue(&issue_id)?;
+                self.release_issue(&issue_id)?;
             }
             Command::AutoAdvance { project_id } => {
                 self.require_live_tracker(&project_id)?;
@@ -1061,7 +1084,10 @@ impl HostKernel {
                 self.require_live_tracker_for_issue(&issue_id)?;
             }
             Command::StartBoundRun { issue_id } => {
-                self.require_live_tracker_for_issue(&issue_id)?;
+                self.start_bound_run(&issue_id)?;
+            }
+            Command::ContinueRun { issue_id } => {
+                self.continue_run(&issue_id)?;
             }
             Command::PrepareRunLaunch {
                 project_id,
@@ -1085,6 +1111,7 @@ impl HostKernel {
                     },
                     None,
                     false,
+                    None,
                 )?;
             }
             Command::StartUnboundRunWithConfig {
@@ -1092,7 +1119,7 @@ impl HostKernel {
                 config,
                 issue_id,
             } => {
-                self.start_unbound_run(&project_id, config, issue_id, true)?;
+                self.start_unbound_run(&project_id, config, issue_id, true, None)?;
             }
             Command::SetShowCommandPreview { show } => {
                 self.show_command_preview = show;
@@ -1372,6 +1399,14 @@ impl HostKernel {
                     issue_id: required_string(&request, "issueId")?,
                 })
             }
+            "continueRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ContinueRun {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
             "prepareRunLaunch" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -1541,7 +1576,12 @@ impl HostKernel {
         let projects = self
             .projects
             .iter()
-            .map(|project| project.summary(self.project_has_active_run(&project.id)))
+            .map(|project| {
+                project.summary(
+                    self.project_has_active_run(&project.id),
+                    self.project_has_execution_stopped(&project.id),
+                )
+            })
             .collect();
         let focused_project_id = self.focused_project_id.clone().unwrap_or_default();
         (projects, focused_project_id, empty_actions)
@@ -1765,6 +1805,7 @@ impl HostKernel {
         config: RunLaunchConfig,
         issue_id: Option<String>,
         from_form: bool,
+        previous: Option<PreviousRun>,
     ) -> Result<(), KernelError> {
         let cwd = self
             .projects
@@ -1797,8 +1838,25 @@ impl HostKernel {
                 return Err(KernelError::Protocol(err));
             }
         }
+        let (previous_run_id, resume_session_id) = match previous {
+            Some(previous) => (Some(previous.id), previous.native_session_id),
+            None => (None, None),
+        };
         if let Some(issue_id) = issue_id.as_deref() {
-            self.require_live_tracker_for_issue(issue_id)?;
+            if self.active_run_id_for_issue(issue_id).is_some() {
+                return Err(KernelError::Denied(
+                    "issue already has an active Run".into(),
+                ));
+            }
+            if previous_run_id.is_none() {
+                if let Err(err) = self.claim_issue(issue_id) {
+                    if let Some(form) = &mut self.launch_form {
+                        form.error = Some(err.to_string());
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
+            }
         }
         let result = run::start_unbound(
             project_id,
@@ -1810,6 +1868,8 @@ impl HostKernel {
             &[],
             &config,
             issue_id.as_deref(),
+            previous_run_id.as_deref(),
+            resume_session_id.as_deref(),
         );
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
@@ -1824,7 +1884,164 @@ impl HostKernel {
             form.error = result.record.failure.clone();
         }
         self.runs.push(result.record);
+        self.persist_runs()?;
         Ok(())
+    }
+
+    fn start_bound_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let issue = self
+            .issue_by_id(issue_id)
+            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
+        let agent = self.default_agent_for_project(&project_id)?;
+        let mut values = self
+            .launch_defaults
+            .get(&project_id)
+            .and_then(|agents| agents.get(agent.id()))
+            .cloned()
+            .unwrap_or_else(|| agent.seed_config());
+        let opening = format!("{}\n{}", issue.title, issue.url);
+        values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
+        self.start_unbound_run(
+            &project_id,
+            RunLaunchConfig {
+                agent_id: agent.id().to_string(),
+                values,
+                opening_text: opening,
+            },
+            Some(issue_id.to_string()),
+            false,
+            None,
+        )
+    }
+
+    fn continue_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        if !self.execution_stopped(issue_id) {
+            return Err(KernelError::Denied("issue is not execution-stopped".into()));
+        }
+        let last = self
+            .last_bound_run(issue_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == last.agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let values = self
+            .launch_defaults
+            .get(&last.project_id)
+            .and_then(|agents| agents.get(&last.agent_id))
+            .cloned()
+            .unwrap_or_else(|| agent.seed_config());
+        self.start_unbound_run(
+            &last.project_id,
+            RunLaunchConfig {
+                agent_id: last.agent_id.clone(),
+                values,
+                opening_text: String::new(),
+            },
+            Some(issue_id.to_string()),
+            false,
+            Some(PreviousRun {
+                id: last.id.clone(),
+                native_session_id: last.native_session_id.clone(),
+            }),
+        )
+    }
+
+    fn claim_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        self.require_live_tracker_for_issue(issue_id)?;
+        self.write_claim(issue_id, true)
+    }
+
+    fn release_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        self.require_live_tracker_for_issue(issue_id)?;
+        self.write_claim(issue_id, false)
+    }
+
+    fn write_claim(&mut self, issue_id: &str, claim: bool) -> Result<(), KernelError> {
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
+        let ctx = tracker::ProbeContext {
+            github_host: &project.github_host,
+            repository: &project.repository,
+            secrets_pat: pat.as_deref(),
+            secrets_path: &self.data.host_secrets_path,
+        };
+        let updated = if claim {
+            self.tracker.claim_issue(&ctx, issue_id)
+        } else {
+            self.tracker.release_issue(&ctx, issue_id)
+        }
+        .map_err(|err| write_tracker_error(err))?;
+        self.merge_issue(&project_id, updated);
+        Ok(())
+    }
+
+    fn merge_issue(&mut self, project_id: &str, updated: IssueRecord) {
+        let issues = self
+            .loaded_issues
+            .entry(project_id.to_string())
+            .or_default();
+        if let Some(existing) = issues.iter_mut().find(|issue| issue.id() == updated.id()) {
+            existing.assignees = updated.assignees;
+            existing.open = updated.open;
+            existing.title = updated.title;
+            existing.url = updated.url;
+            existing.closed_at = updated.closed_at;
+        } else {
+            issues.push(updated);
+        }
+        if let Some(fetched_at_ms) = self
+            .refresh
+            .get(project_id)
+            .and_then(|state| state.fetched_at_ms)
+        {
+            let _ = refresh::save_snapshot(
+                &refresh::snapshot_path(&self.data.host_dir, project_id),
+                &refresh::StoredTrackerSnapshot {
+                    fetched_at_ms,
+                    issues: issues.clone(),
+                },
+            );
+        }
+        self.pending_events.push(HostEvent::BoardUpdated {
+            project_id: project_id.to_string(),
+        });
+    }
+
+    fn persist_runs(&self) -> Result<(), KernelError> {
+        write_json(&self.data.host_dir.join("runs.json"), &self.runs)
+    }
+
+    fn load_persisted_runs(&mut self) {
+        let path = self.data.host_dir.join("runs.json");
+        let Ok(raw) = fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(mut runs) = serde_json::from_str::<Vec<RunSummary>>(&raw) else {
+            return;
+        };
+        let mut crashed = false;
+        for run in &mut runs {
+            if run.is_active() {
+                run.status = RunStatus::Ended;
+                run.ended_reason = Some(RunEndedReason::Crash);
+                crashed = true;
+            }
+        }
+        self.runs = runs;
+        if crashed {
+            let _ = self.persist_runs();
+        }
     }
 
     fn remember_launch(
@@ -1847,7 +2064,7 @@ impl HostKernel {
             session.stop();
         }
         if self.runs.iter().any(|run| run.id == run_id) {
-            self.mark_run_ended(run_id);
+            self.mark_run_ended(run_id, RunEndedReason::Stopped);
         }
         Ok(())
     }
@@ -1876,35 +2093,79 @@ impl HostKernel {
         let ended = self
             .live
             .iter()
-            .filter_map(|(id, session)| session.exit_code().map(|_| id.clone()))
+            .filter_map(|(id, session)| {
+                session.exit_code().map(|code| {
+                    (
+                        id.clone(),
+                        RunEndedReason::from_exit(code, session.was_stopped()),
+                    )
+                })
+            })
             .collect::<Vec<_>>();
-        for id in ended {
-            self.mark_run_ended(&id);
+        for (id, reason) in ended {
+            self.mark_run_ended(&id, reason);
         }
     }
 
-    fn mark_run_ended(&mut self, run_id: &str) {
+    fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
         if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
             if run.status != RunStatus::Ended {
                 run.status = RunStatus::Ended;
+                run.ended_reason = Some(reason);
                 self.pending_events.push(HostEvent::RunStatusChanged {
                     run_id: run_id.to_string(),
                     status: RunStatus::Ended,
                 });
             }
         }
+        self.live.remove(run_id);
         let active = self.active_run_count();
         if active == 0 {
             self.quit_offer = None;
         } else if let Some(offer) = &mut self.quit_offer {
             offer.active_run_count = active;
         }
+        let _ = self.persist_runs();
     }
 
     fn project_has_active_run(&self, project_id: &str) -> bool {
         self.runs
             .iter()
             .any(|run| run.project_id == project_id && run.is_active())
+    }
+
+    fn project_has_execution_stopped(&self, project_id: &str) -> bool {
+        self.loaded_issues
+            .get(project_id)
+            .into_iter()
+            .flatten()
+            .any(|issue| self.execution_stopped(&issue.id()))
+    }
+
+    fn active_run_id_for_issue(&self, issue_id: &str) -> Option<String> {
+        self.runs
+            .iter()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .map(|run| run.id.clone())
+    }
+
+    fn last_bound_run(&self, issue_id: &str) -> Option<&RunSummary> {
+        self.runs
+            .iter()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id))
+    }
+
+    fn execution_stopped(&self, issue_id: &str) -> bool {
+        let claimed = self
+            .issue_by_id(issue_id)
+            .is_some_and(|issue| issue.claimed());
+        if !claimed || self.active_run_id_for_issue(issue_id).is_some() {
+            return false;
+        }
+        self.last_bound_run(issue_id)
+            .and_then(|run| run.ended_reason)
+            .is_some_and(RunEndedReason::execution_stopped)
     }
 
     fn active_run_count(&self) -> u32 {
@@ -2163,7 +2424,22 @@ impl HostKernel {
         let _removed = self.projects.remove(index);
         self.refresh.remove(project_id);
         self.loaded_issues.remove(project_id);
+        self.live.retain(|run_id, _| {
+            !self
+                .runs
+                .iter()
+                .any(|run| run.id == *run_id && run.project_id == project_id)
+        });
+        self.runs.retain(|run| run.project_id != project_id);
+        if self
+            .focused_run_id
+            .as_ref()
+            .is_some_and(|id| !self.runs.iter().any(|run| run.id == *id))
+        {
+            self.focused_run_id = self.runs.last().map(|run| run.id.clone());
+        }
         refresh::remove_project_data(&self.data.host_dir, project_id);
+        let _ = self.persist_runs();
         if was_current {
             self.selected_issue_id = None;
             self.parent_filter = None;
@@ -2221,7 +2497,7 @@ impl HostKernel {
             .loaded_issues
             .get(focused_project_id)
             .map(Vec::as_slice);
-        Some(board::project_board(
+        let mut board = board::project_board(
             focused_project_id,
             loaded,
             self.parent_filter.as_deref(),
@@ -2229,7 +2505,12 @@ impl HostKernel {
             self.recent_limit,
             self.refresh_status_for(focused_project_id),
             self.show_closed_graph_context,
-        ))
+        );
+        if let Some(selected) = board.selected.as_mut() {
+            selected.active_run_id = self.active_run_id_for_issue(&selected.id);
+            selected.execution_stopped = self.execution_stopped(&selected.id);
+        }
+        Some(board)
     }
 
     fn load_persisted_snapshot(&mut self, project_id: &str) {
@@ -2662,6 +2943,10 @@ impl ShellCopy {
                 remove_confirm: "只移除登记".into(),
                 cannot_remove_active_run: "现在不能移除".into(),
                 cannot_remove_active_run_body: "这个 Project 有活跃 Run。先停止或结束 Run，再回来移除。关闭 Client 或切换 Project 都不会停止 Run。".into(),
+                remove_keep_claims_body: "这个 Project 有执行已停的票。移除只取消本机登记，Tracker 上的认领不会自动释放。".into(),
+                continue_run: "继续".into(),
+                release_claim: "释放认领".into(),
+                execution_stopped: "执行已停".into(),
                 got_it: "知道了".into(),
                 auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
                 repair_cli: "用 gh 登录".into(),
@@ -2801,6 +3086,10 @@ impl ShellCopy {
                 remove_confirm: "Remove registration only".into(),
                 cannot_remove_active_run: "Cannot remove now".into(),
                 cannot_remove_active_run_body: "This Project has an active Run. Stop or finish the Run first. Closing a Client or switching Project does not stop the Run.".into(),
+                remove_keep_claims_body: "This Project has execution-stopped issues. Removing only unregisters it here; Tracker claims are not released.".into(),
+                continue_run: "Continue".into(),
+                release_claim: "Release claim".into(),
+                execution_stopped: "Execution stopped".into(),
                 got_it: "Got it".into(),
                 auth_failed: "GitHub credentials for this Project are not available.".into(),
                 repair_cli: "Sign in with gh".into(),
@@ -3308,6 +3597,21 @@ pub enum KernelError {
     Json(serde_json::Error),
     Protocol(String),
     Denied(String),
+}
+
+fn write_tracker_error(err: tracker::TrackerWriteError) -> KernelError {
+    match err {
+        tracker::TrackerWriteError::Failed { message } => KernelError::Denied(message),
+        tracker::TrackerWriteError::Offline { .. } => {
+            KernelError::Denied("cannot write to tracker: offline".into())
+        }
+        tracker::TrackerWriteError::Auth { .. } => {
+            KernelError::Denied("cannot write to tracker: auth-failed".into())
+        }
+        tracker::TrackerWriteError::RateLimited { .. } => {
+            KernelError::Denied("cannot write to tracker: rate-limited".into())
+        }
+    }
 }
 
 impl std::fmt::Display for KernelError {

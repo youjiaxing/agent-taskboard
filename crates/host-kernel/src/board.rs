@@ -63,6 +63,10 @@ pub struct IssueDetail {
     pub children: Vec<IssueLink>,
     pub blocked_by: Vec<IssueLink>,
     pub blocking: Vec<IssueLink>,
+    #[serde(default)]
+    pub execution_stopped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,6 +542,8 @@ fn detail(issue: &IssueRecord, mapping_active: bool) -> IssueDetail {
         children: issue.children.iter().map(known_link).collect(),
         blocked_by: issue.blocked_by.iter().map(dependency_link).collect(),
         blocking: issue.blocking.iter().map(known_link).collect(),
+        execution_stopped: false,
+        active_run_id: None,
     }
 }
 
@@ -559,6 +565,8 @@ fn link_detail(issue: &IssueRef) -> IssueDetail {
         children: Vec::new(),
         blocked_by: Vec::new(),
         blocking: Vec::new(),
+        execution_stopped: false,
+        active_run_id: None,
     }
 }
 
@@ -578,6 +586,8 @@ fn unclear_detail(repository: Option<&str>, number: Option<u64>) -> IssueDetail 
         children: Vec::new(),
         blocked_by: Vec::new(),
         blocking: Vec::new(),
+        execution_stopped: false,
+        active_run_id: None,
     }
 }
 
