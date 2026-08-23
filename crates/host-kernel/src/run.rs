@@ -94,6 +94,8 @@ pub struct RunSummary {
     pub started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub telemetry: Vec<crate::usage::RunTelemetryLane>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recent_output: String,
 }
 
 impl RunSummary {
@@ -156,6 +158,7 @@ pub fn start_unbound(
         hook_dir: None,
         started_at_ms: 0,
         telemetry: Vec::new(),
+        recent_output: String::new(),
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,

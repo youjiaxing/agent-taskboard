@@ -645,11 +645,49 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     tracker.add_issue(
         IssueRecord::open("you/garden", 7, "just closed").closed_at("2026-08-22T10:00:00Z"),
     );
-    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let sessions = host_kernel::MemorySessionFactory::new();
+    let agent = Arc::new(host_kernel::MemoryAgent::installed_grok());
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::clone(&tracker) as _,
+            agents: vec![Arc::clone(&agent) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
     let garden_project_id = register(&mut host, &dir, "you/garden");
     host.handle(serde_json::json!({
         "op": "startBoundRun",
         "issueId": "you/garden#10",
+    }))
+    .unwrap();
+    sessions
+        .last_session()
+        .expect("active Run session")
+        .push_output(b"mobile recent output\n");
+    let active_run_id = host.snapshot().focused_run_id;
+    agent.push_telemetry(host_kernel::TelemetrySample {
+        run_id: active_run_id,
+        project_id: String::new(),
+        agent_id: String::new(),
+        model: "grok-4.6".into(),
+        lane: host_kernel::TelemetryLane::Main,
+        tokens: host_kernel::TokenCounts {
+            input: Some(12),
+            output: Some(8),
+            cache_read: Some(4),
+            cache_write: Some(0),
+            reasoning: Some(2),
+            total: Some(26),
+        },
+        ttft_ms: Some(180),
+        tokens_per_sec: Some(40),
+        at_ms: 1_787_486_400_000,
+    });
+    host.handle(serde_json::json!({
+        "op": "snapshot",
     }))
     .unwrap();
     let stopped_run_id = host
@@ -660,11 +698,24 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
         .unwrap()
         .snapshot
         .focused_run_id;
-    host.handle(serde_json::json!({
-        "op": "stopRun",
-        "runId": stopped_run_id,
-    }))
-    .unwrap();
+    sessions
+        .last_session()
+        .expect("stopped Run session")
+        .push_output(b"ended recent output\n");
+    let stopped = host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": stopped_run_id,
+        }))
+        .unwrap();
+    assert!(stopped
+        .snapshot
+        .runs
+        .iter()
+        .find(|run| run.id == stopped_run_id)
+        .expect("stopped Run")
+        .recent_output
+        .ends_with("ended recent output\n"));
     let tools_dir = make_dir(tmp.path(), "work/tools");
     tracker.add_issue(IssueRecord::open("you/tools", 1, "tool ready"));
     host.handle(serde_json::json!({

@@ -7,7 +7,8 @@ if (!url) {
 }
 
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
+const context = await browser.newContext({ locale: "zh-CN" });
+const page = await context.newPage();
 page.on("pageerror", (error) => {
   console.error("pageerror", error);
 });
@@ -39,6 +40,7 @@ await page.waitForSelector(".keyboard-help");
 await page.keyboard.press("?");
 await page.waitForFunction(() => !document.querySelector(".keyboard-help"));
 await page.keyboard.press("j");
+await page.waitForFunction(() => document.activeElement?.classList.contains("issue-card-main"));
 const keyboardFocusedCard = await page.evaluate(() => document.activeElement?.classList.contains("issue-card-main"));
 if (!keyboardFocusedCard) {
   throw new Error("j should focus a board card");
@@ -312,10 +314,27 @@ await page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2
 await page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-settings']"));
 
 await page.setViewportSize({ width: 390, height: 844 });
-await page.waitForSelector(".lanes");
-const mobileColumns = await page.$eval(".lanes", (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
-if (mobileColumns !== 1) {
-  throw new Error(`mobile board should use one column, got ${mobileColumns}`);
+await page.waitForSelector(".mobile-nav");
+const mobileNavLabels = await page.$$eval(".mobile-nav button", (nodes) => nodes.map((node) => node.textContent?.trim()));
+if (mobileNavLabels.join("|") !== "看板|票|Run") {
+  throw new Error(`mobile bottom navigation should be 看板 | 票 | Run, got ${JSON.stringify(mobileNavLabels)}`);
+}
+if (await page.$(".side")) {
+  throw new Error("mobile should move Host and Project lists out of the main layout");
+}
+const mobileProjectOrder = await page.$$eval(".project-board > *", (nodes) =>
+  nodes.map((node) => node.className).filter(Boolean),
+);
+const refreshIndex = mobileProjectOrder.findIndex((name) => name.includes("refresh-bar"));
+const lanesIndex = mobileProjectOrder.findIndex((name) => name.includes("board-shell"));
+if (refreshIndex < 0 || lanesIndex < 0 || refreshIndex > lanesIndex) {
+  throw new Error(`mobile refresh status should precede work lanes, got ${JSON.stringify(mobileProjectOrder)}`);
+}
+const visibleMobileLanes = await page.$$eval(".lane", (nodes) =>
+  nodes.filter((node) => getComputedStyle(node).display !== "none").map((node) => node.getAttribute("data-lane")),
+);
+if (visibleMobileLanes.join("|") !== "inProgress|frontier") {
+  throw new Error(`mobile board should prioritize in progress then Frontier, got ${JSON.stringify(visibleMobileLanes)}`);
 }
 const mobileChangesButtons = await page.$$eval('button[data-act="view-changes"]', (nodes) =>
   nodes.filter((node) => getComputedStyle(node).display !== "none").length,
@@ -323,27 +342,162 @@ const mobileChangesButtons = await page.$$eval('button[data-act="view-changes"]'
 if (mobileChangesButtons !== 0) {
   throw new Error(`mobile should not expose full view changes, got ${mobileChangesButtons} buttons`);
 }
-await page.fill("#issue-title-search", "unparented ready");
-await page.press("#issue-title-search", "Enter");
-await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 1);
-await page.click("button[data-act='keyboard-help']");
-await page.waitForSelector(".keyboard-help");
-await page.keyboard.press("Escape");
-await page.waitForFunction(() => !document.querySelector(".keyboard-help"));
-await page.fill("#issue-title-search", "");
-await page.press("#issue-title-search", "Enter");
-await page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
-await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
-await page.waitForSelector(".lifted-run");
-const mobileLiftColumns = await page.$eval(".lifted-run", (node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
-if (mobileLiftColumns !== 1) {
-  throw new Error(`mobile lifted Run should use one column, got ${mobileLiftColumns}`);
+if (await page.$('button[data-act="view-changes"]')) {
+  throw new Error("mobile should not render full view changes actions");
 }
-if (!(await page.$(".lifted-run .issue-detail")) || await page.$(".side")) {
-  throw new Error("mobile lifted Run should retain Issue details and remove the sidebar");
+
+const mobileFrontierCard = page.locator('[data-lane="frontier"] .issue-card').first();
+const mobileFrontierIssueId = await mobileFrontierCard.getAttribute("data-issue-id");
+await mobileFrontierCard.locator('button[data-act="execute-run"]').click();
+await page.waitForSelector(".launch-sheet");
+const mobileAgentPick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
+if (await mobileAgentPick.count()) {
+  await mobileAgentPick.click();
+  await page.waitForSelector("form[data-form='launch']");
 }
-await page.click("button[data-act='return-board']");
-await page.waitForSelector(".lanes");
+await page.click("form[data-form='launch'] button[type='submit']");
+await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
+await page.waitForTimeout(100);
+const startedIssueRun = await page.evaluate(async ({ protocol, issueId }) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot" }),
+  });
+  const snapshot = (await response.json()).snapshot;
+  return snapshot.runs.find((run) => run.issueId === issueId) ?? { debug: snapshot.runs };
+}, { protocol: url, issueId: mobileFrontierIssueId });
+if (!startedIssueRun?.id || startedIssueRun.status !== "running") {
+  throw new Error(`mobile should start a Frontier Run through the normal launch form: ${JSON.stringify(startedIssueRun)}`);
+}
+await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ op: "focusRun", runId }),
+}), startedIssueRun.id);
+await page.click("button[data-act='mobile-run']");
+await page.waitForSelector(".mobile-run-view");
+await page.click(".mobile-run-view button[data-act='stop-run']");
+await page.waitForSelector(".mobile-board-view");
+
+await page.click("button[data-act='mobile-scope']");
+await page.waitForSelector(".mobile-scope-sheet");
+if (!(await page.$(".mobile-scope-hosts button[data-act='focus-host']"))) {
+  throw new Error("mobile scope switcher should expose the Host list");
+}
+for (const action of ["register", "edit-project", "remove-project"]) {
+  if (!(await page.$(`.mobile-scope-sheet [data-act="${action}"]`))) {
+    throw new Error(`mobile scope switcher should expose ${action}`);
+  }
+}
+await page.click(".mobile-scope-sheet button[data-act='edit-project']");
+await page.waitForSelector("form[data-form='project']");
+await page.click("form[data-form='project'] button[data-act='close-form']");
+await page.click("button[data-act='mobile-scope']");
+await page.click(".mobile-scope-sheet button[data-act='remove-project']");
+await page.waitForSelector(".overlay[data-act='close-remove']");
+await page.click("button[data-act='close-remove']");
+
+await page.click("button[data-act='mobile-issue']");
+await page.waitForSelector(".mobile-issue-view .issue-detail");
+await page.click("button[data-act='mobile-board']");
+await page.waitForSelector(".mobile-board-view");
+
+await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") button[data-act="focus-run"]');
+await page.waitForSelector(".mobile-run-view");
+if (await page.$(".mobile-run-view .pty-slot")) {
+  throw new Error("mobile Run should show recent output before the live terminal escape hatch");
+}
+await page.waitForFunction(() => document.querySelector(".mobile-run-output")?.textContent?.includes("mobile recent output"));
+const recentOutput = await page.$eval(".mobile-run-output", (node) => node.textContent ?? "");
+if (!recentOutput.includes("mobile recent output")) {
+  throw new Error(`mobile Run should expose recent read-only output, got ${recentOutput}`);
+}
+await page.fill(".mobile-run-view .inject-row input", "mobile answer");
+await page.click(".mobile-run-view .inject-row button[type='submit']");
+await page.waitForFunction(() => document.querySelector(".mobile-run-view .inject-row input")?.value === "");
+const injectedOutput = await page.evaluate(async ({ protocol, runId }) => {
+  const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
+  if (!response.ok) return "";
+  const json = await response.json();
+  return new TextDecoder().decode(Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0)));
+}, { protocol: url, runId: await page.$eval(".mobile-run-output", (node) => node.getAttribute("data-run")) });
+if (!injectedOutput.includes("mobile answer")) {
+  throw new Error(`mobile should inject one line into the active Run, got ${injectedOutput}`);
+}
+if (!(await page.$(".telemetry-mobile .capsule")) || !(await page.$(".telemetry-mobile .telemetry-simple"))) {
+  throw new Error("mobile telemetry should keep the main model capsule and simple multi-model list");
+}
+await page.click("button[data-act='mobile-live-terminal']");
+await page.waitForSelector(".mobile-run-view .pty-slot");
+const endedRunId = await page.$eval(".mobile-run-view .pty-slot", (node) => node.getAttribute("data-run"));
+await page.click(".mobile-run-view button[data-act='stop-run']");
+await page.waitForSelector(".mobile-board-view");
+await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ op: "focusRun", runId }),
+}), endedRunId);
+await page.click("button[data-act='mobile-run']");
+await page.waitForSelector(".mobile-run-view");
+const endedRecentOutput = await page.$eval(".mobile-run-output", (node) => node.textContent ?? "");
+if (!endedRecentOutput.includes("mobile recent output") || !endedRecentOutput.includes("mobile answer")) {
+  throw new Error(`mobile should retain recent output after a Run ends, got ${endedRecentOutput}`);
+}
+await page.click("button[data-act='mobile-board']");
+await page.waitForSelector(".mobile-board-view");
+
+await page.click("button[data-act='mobile-scope']");
+if (!(await page.$(".mobile-scope-sheet button[data-act='open-usage']"))) {
+  throw new Error("mobile usage should stay reachable from the scope switcher");
+}
+await page.click(".mobile-scope-sheet button[data-act='open-usage']");
+await page.waitForSelector(".usage-page");
+for (const selector of [".usage-ranges", ".usage-filters", ".usage-trend-block", ".usage-full"]) {
+  const visible = await page.$eval(selector, (node) => getComputedStyle(node).display !== "none");
+  if (visible) throw new Error(`mobile usage should hide ${selector}`);
+}
+if (!(await page.$(".token-row.totals"))) {
+  throw new Error("mobile usage should retain current totals");
+}
+const compactProjects = await page.$$eval(".usage-compact .usage-row", (nodes) => nodes.length);
+if (compactProjects < 1 || compactProjects > 3) {
+  throw new Error(`mobile usage should show one to three Project rows, got ${compactProjects}`);
+}
+await page.click("button[data-act='close-usage']");
+
+await page.click("button[data-act='settings']");
+for (const forbidden of ["notifyDesktop", "notifySound", "hostAutoAdvance"]) {
+  if (await page.$(`[data-field="${forbidden}"]`)) {
+    throw new Error(`mobile settings should not expose ${forbidden}`);
+  }
+}
+if (await page.$("button[data-act='quit']")) {
+  throw new Error("mobile settings should not expose Host quit");
+}
+await page.click("button[data-act='language'][data-id='en']");
+await page.click("button[data-act='theme'][data-id='plain-night']");
+const storedMobileAppearance = await page.evaluate(() => localStorage.getItem("agent-taskboard-mobile-appearance"));
+if (!storedMobileAppearance?.includes('"language":"en"') || !storedMobileAppearance.includes('"theme":"plain-night"')) {
+  throw new Error(`mobile appearance should persist in this browser Client, got ${storedMobileAppearance}`);
+}
+const hostAppearance = await page.evaluate(async (protocol) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot" }),
+  });
+  return (await response.json()).snapshot.appearance;
+}, url);
+if (hostAppearance.language !== "zh-CN" || hostAppearance.theme === "plain-night") {
+  throw new Error(`mobile appearance must not overwrite the Host Client, got ${JSON.stringify(hostAppearance)}`);
+}
+const mobileNotificationPermission = await page.evaluate(() =>
+  typeof Notification === "undefined" ? "unavailable" : Notification.permission,
+);
+if (mobileNotificationPermission === "granted") {
+  throw new Error("mobile browser must not request lock-screen notification permission");
+}
 
 await browser.close();
 console.log("board e2e ok");

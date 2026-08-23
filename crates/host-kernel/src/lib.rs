@@ -84,7 +84,7 @@ pub enum SystemAppearance {
     Dark,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Language {
     #[serde(rename = "zh-CN")]
     ZhCn,
@@ -789,6 +789,12 @@ pub struct ShellCopy {
     pub lane_switched: String,
     pub usage_empty: String,
     pub close_usage: String,
+    pub mobile_switch_scope: String,
+    pub mobile_board: String,
+    pub mobile_issue: String,
+    pub mobile_run: String,
+    pub mobile_recent_output: String,
+    pub mobile_live_terminal: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -803,6 +809,7 @@ pub struct HostSnapshot {
     pub appearance: AppearanceState,
     pub data: DataLayout,
     pub copy: ShellCopy,
+    pub copy_catalog: BTreeMap<Language, ShellCopy>,
     pub empty_actions: Vec<EmptyAction>,
     pub loopback_page: LoopbackPage,
     pub pairing_offer: Option<PairingOffer>,
@@ -1114,6 +1121,10 @@ impl HostKernel {
             appearance: AppearanceState::from_selection(self.appearance),
             data: self.data.clone(),
             copy: ShellCopy::for_language(self.appearance.language),
+            copy_catalog: BTreeMap::from([
+                (Language::ZhCn, ShellCopy::for_language(Language::ZhCn)),
+                (Language::En, ShellCopy::for_language(Language::En)),
+            ]),
             empty_actions,
             loopback_page: self.loopback_page(),
             pairing_offer: self
@@ -3204,6 +3215,17 @@ impl HostKernel {
 
     fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
         self.harvest_run_signals(run_id);
+        let recent_output = self.live.get(run_id).map(|session| {
+            let chunk = session.read_after(0, Duration::ZERO);
+            String::from_utf8_lossy(&chunk.data)
+                .chars()
+                .rev()
+                .take(16_000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        });
         let mut issue_id = None;
         let mut project_id = None;
         let mut newly_ended = false;
@@ -3212,6 +3234,9 @@ impl HostKernel {
                 run.status = RunStatus::Ended;
                 run.waiting_for_user = false;
                 run.ended_reason = Some(reason);
+                if let Some(output) = &recent_output {
+                    run.recent_output = output.clone();
+                }
                 issue_id = run.issue_id.clone();
                 project_id = Some(run.project_id.clone());
                 newly_ended = true;
@@ -4649,6 +4674,12 @@ impl ShellCopy {
                 lane_switched: "已停用".into(),
                 usage_empty: "这段时间没有 Run 用量。".into(),
                 close_usage: "返回看板".into(),
+                mobile_switch_scope: "切换范围".into(),
+                mobile_board: "看板".into(),
+                mobile_issue: "票".into(),
+                mobile_run: "Run".into(),
+                mobile_recent_output: "最近输出".into(),
+                mobile_live_terminal: "打开活终端".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -4867,6 +4898,12 @@ impl ShellCopy {
                 lane_switched: "Retired".into(),
                 usage_empty: "No Run usage in this window.".into(),
                 close_usage: "Back to board".into(),
+                mobile_switch_scope: "Switch scope".into(),
+                mobile_board: "Board".into(),
+                mobile_issue: "Issue".into(),
+                mobile_run: "Run".into(),
+                mobile_recent_output: "Recent output".into(),
+                mobile_live_terminal: "Open live terminal".into(),
             },
         }
     }

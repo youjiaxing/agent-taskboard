@@ -968,9 +968,73 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .telemetry-meta { font-size: 12px; color: var(--muted); margin: 6px 0; }
 @media (max-width: 640px) {
-  .usage-full, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
+  .frame { grid-template-rows: 44px minmax(0, 1fr) 58px; }
+  .chrome { padding: 0 8px; }
+  .chrome-trail { gap: 2px; }
+  .body, .body.side-collapsed { grid-template-columns: 1fr; min-height: 0; }
+  .workspace { min-height: 0; overflow: auto; padding-bottom: env(safe-area-inset-bottom); }
+  .project-board, .usage-page { padding: 12px 12px 18px; }
+  .board-head p, .board-hint, .issue-search, .view-switch { display: none; }
+  .board-shell { display: block; }
+  .board-main { gap: 10px; }
+  .lanes { display: flex; flex-direction: column; gap: 10px; }
+  .lane { min-height: 0; }
+  .lane[data-lane="inProgress"] { order: 0; }
+  .lane[data-lane="frontier"] { order: 1; }
+  .lane[data-lane="blocked"], .lane[data-lane="recentlyCompleted"] { display: none; }
+  .board-shell > .issue-detail { display: none; }
+  .usage-ranges, .usage-custom, .usage-full, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
   .usage-compact { display: grid; gap: 8px; }
   .telemetry-mobile { display: block; }
+  button[data-act="view-changes"] { display: none; }
+  .mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+    z-index: 10;
+  }
+  .mobile-nav button { min-height: 38px; }
+  .mobile-scope-sheet { width: min(100%, 480px); max-height: 82vh; overflow: auto; }
+  .mobile-scope-hosts, .mobile-scope-projects { display: grid; gap: 8px; }
+  .mobile-scope-hosts { margin-bottom: 12px; }
+  .mobile-scope-project {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 5px;
+  }
+  .mobile-scope-project.active { background: var(--sel); }
+  .mobile-issue-view, .mobile-run-view { width: 100%; min-height: 100%; padding: 12px; }
+  .mobile-issue-view .issue-detail { display: block; }
+  .mobile-run-view { display: flex; flex-direction: column; gap: 8px; }
+  .mobile-output-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+  .mobile-run-output {
+    flex: 1;
+    min-height: 260px;
+    max-height: 48vh;
+    overflow: auto;
+    margin: 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: #1c1b19;
+    color: #f4f2ee;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .mobile-run-view .pty-slot { min-height: 52vh; }
+  .mobile-run-view .inject-row { padding: 4px 0; }
+  .mobile-terminal-escape { align-self: flex-start; }
+}
+@media (min-width: 641px) {
+  .mobile-nav, .mobile-scope-sheet, .mobile-issue-view, .mobile-run-view { display: none; }
 }
 @media (max-width: 600px) {
   .lifted-run { grid-template-columns: 1fr; overflow: auto; }
