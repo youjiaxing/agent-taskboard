@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::usage::TelemetrySample;
 use crate::{Language, LaunchEnvironment};
 
 mod antigravity;
@@ -236,6 +237,10 @@ pub trait AgentPort: Send + Sync {
     fn read_completion_signals(&self, sink_dir: &Path) -> CompletionSignals {
         hooks::read_signals(sink_dir)
     }
+
+    fn drain_telemetry(&self) -> Vec<TelemetrySample> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -332,6 +337,7 @@ pub struct MemoryAgent {
     isolation_tree: Mutex<Option<PathBuf>>,
     hooks_supported: Mutex<bool>,
     attach_fail: Mutex<bool>,
+    telemetry: Mutex<Vec<TelemetrySample>>,
 }
 
 impl MemoryAgent {
@@ -356,6 +362,7 @@ impl MemoryAgent {
             isolation_tree: Mutex::new(None),
             hooks_supported: Mutex::new(true),
             attach_fail: Mutex::new(false),
+            telemetry: Mutex::new(Vec::new()),
         }
     }
 
@@ -399,6 +406,10 @@ impl MemoryAgent {
 
     pub fn fail_attach_hooks(&self) {
         *self.attach_fail.lock().expect("memory agent") = true;
+    }
+
+    pub fn push_telemetry(&self, sample: TelemetrySample) {
+        self.telemetry.lock().expect("memory agent").push(sample);
     }
 }
 
@@ -502,6 +513,10 @@ impl AgentPort for MemoryAgent {
             extra_argv: Vec::new(),
             extra_env: hooks::sink_env(sink_dir),
         })
+    }
+
+    fn drain_telemetry(&self) -> Vec<TelemetrySample> {
+        std::mem::take(&mut *self.telemetry.lock().expect("memory agent"))
     }
 }
 

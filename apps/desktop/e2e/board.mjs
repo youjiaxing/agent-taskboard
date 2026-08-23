@@ -111,6 +111,22 @@ if (await page.$(".graph-node:has-text('just closed')")) {
 
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
+
+await page.click("button[data-act='open-usage']");
+await page.waitForSelector(".usage-page");
+if (await page.$(".lanes")) {
+  throw new Error("usage page should replace the board, not sit as a tab or overlay");
+}
+const usageTitle = await page.$eval(".usage-page h1", (node) => node.textContent ?? "");
+if (usageTitle !== "用量" && usageTitle !== "Usage") {
+  throw new Error(`usage page title, got ${usageTitle}`);
+}
+if (!(await page.$("button.active[data-act='usage-range'][data-id='today']"))) {
+  throw new Error("usage range should default to today");
+}
+await page.click("button[data-act='close-usage']");
+await page.waitForSelector(".lanes");
+
 const afterGraphFrontier = await page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
   nodes.map((node) => node.textContent),
 );

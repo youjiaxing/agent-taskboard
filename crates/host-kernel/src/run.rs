@@ -90,6 +90,10 @@ pub struct RunSummary {
     pub self_check_attempted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_dir: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub telemetry: Vec<crate::usage::RunTelemetryLane>,
 }
 
 impl RunSummary {
@@ -150,6 +154,8 @@ pub fn start_unbound(
         self_check: false,
         self_check_attempted: false,
         hook_dir: None,
+        started_at_ms: 0,
+        telemetry: Vec::new(),
     };
     let captured = match launch_env.capture(cwd) {
         Ok(env) => env,

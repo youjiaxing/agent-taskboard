@@ -15,6 +15,7 @@ mod refresh;
 mod run;
 mod session;
 mod tracker;
+mod usage;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -60,6 +61,10 @@ pub use session::{
 pub use tracker::{
     map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
     ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
+};
+pub use usage::{
+    BucketKind, RunTelemetryLane, TelemetryLane, TelemetryPoint, TelemetrySample, TokenCounts,
+    UsageFilter, UsagePage, UsageRange, RING_LEN,
 };
 
 const LOCAL_HOST_ID: &str = "local";
@@ -254,6 +259,24 @@ pub enum Command {
     VetoPendingConfirmation {
         project_id: String,
     },
+    OpenUsage,
+    CloseUsage,
+    SetUsageRange {
+        range: UsageRange,
+        custom_from_ms: Option<u64>,
+        custom_to_ms: Option<u64>,
+    },
+    SetUsageFilter {
+        project_id: Option<String>,
+        agent_id: Option<String>,
+        model: Option<String>,
+    },
+    OpenUsageForRun {
+        run_id: String,
+    },
+    OpenRunFromUsage {
+        run_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +364,10 @@ pub enum HostEvent {
         issue_id: Option<String>,
         #[serde(rename = "projectId")]
         project_id: String,
+    },
+    Telemetry {
+        #[serde(rename = "runId")]
+        run_id: String,
     },
 }
 
@@ -696,6 +723,35 @@ pub struct ShellCopy {
     pub restore_delay: String,
     pub pending_confirmation: String,
     pub veto_advance: String,
+    pub usage: String,
+    pub usage_hint: String,
+    pub range_24_hours: String,
+    pub range_today: String,
+    pub range_7_days: String,
+    pub range_30_days: String,
+    pub range_custom: String,
+    pub filter_all: String,
+    pub filter_project: String,
+    pub filter_agent: String,
+    pub filter_model: String,
+    pub token_input: String,
+    pub token_output: String,
+    pub token_cache_read: String,
+    pub token_cache_write: String,
+    pub token_reasoning: String,
+    pub token_total: String,
+    pub ttft: String,
+    pub gen_rate: String,
+    pub cache_hit: String,
+    pub spike: String,
+    pub proxy_disclaimer: String,
+    pub open_host_usage: String,
+    pub open_this_run: String,
+    pub lane_main: String,
+    pub lane_subagent: String,
+    pub lane_switched: String,
+    pub usage_empty: String,
+    pub close_usage: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -728,6 +784,8 @@ pub struct HostSnapshot {
     pub auto_advance: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_confirmation: Option<PendingConfirmation>,
+    pub usage_open: bool,
+    pub usage: UsagePage,
 }
 
 pub struct KernelPorts {
@@ -802,6 +860,9 @@ pub struct HostKernel {
     host_auto_advance: bool,
     pending_advance: BTreeMap<String, advance::PendingAdvance>,
     open_view_changes_run_id: Option<String>,
+    usage_open: bool,
+    usage_query: usage::UsageQuery,
+    usage_samples: Vec<TelemetrySample>,
 }
 
 #[derive(Debug, Clone)]
@@ -853,6 +914,8 @@ struct RemoteView {
     focused_run_id: String,
     quit_offer: Option<QuitOffer>,
     launch_form: Option<RunLaunchForm>,
+    usage_open: bool,
+    usage: UsagePage,
 }
 
 impl HostKernel {
@@ -970,6 +1033,9 @@ impl HostKernel {
             host_auto_advance: settings.auto_advance,
             pending_advance: BTreeMap::new(),
             open_view_changes_run_id: None,
+            usage_open: false,
+            usage_query: usage::UsageQuery::default(),
+            usage_samples: Vec::new(),
         };
         let project_ids: Vec<String> = host
             .projects
@@ -980,6 +1046,7 @@ impl HostKernel {
             host.load_persisted_snapshot(project_id);
         }
         let crashed_ids = host.load_persisted_runs();
+        host.load_usage_samples();
         host.load_change_notes();
         if let Some(project_id) = host.focused_project_id.clone() {
             host.refresh_project(&project_id, RefreshTrigger::Immediate);
@@ -1030,6 +1097,8 @@ impl HostKernel {
                 .pending_advance
                 .get(&focused_project_id)
                 .map(|pending| pending.to_snapshot(self.now_ms)),
+            usage_open: self.usage_open_for_focus(),
+            usage: self.usage_for_focus(),
         }
     }
 
@@ -1195,6 +1264,8 @@ impl HostKernel {
                 self.remove_project(&project_id)?;
             }
             Command::FocusProject { project_id } => {
+                self.usage_open = false;
+                self.usage_query.highlighted_run_id = None;
                 self.focus_project(&project_id)?;
             }
             Command::InferProject { local_path } => {
@@ -1309,6 +1380,8 @@ impl HostKernel {
                 self.stop_run(&run_id)?;
             }
             Command::FocusRun { run_id } => {
+                self.usage_open = false;
+                self.usage_query.highlighted_run_id = None;
                 self.focus_run(&run_id)?;
             }
             Command::InjectRunInput { run_id, text } => {
@@ -1367,6 +1440,37 @@ impl HostKernel {
             }
             Command::VetoPendingConfirmation { project_id } => {
                 self.veto_pending(&project_id);
+            }
+            Command::OpenUsage => {
+                self.usage_open = true;
+            }
+            Command::CloseUsage => {
+                self.usage_open = false;
+                self.usage_query.highlighted_run_id = None;
+            }
+            Command::SetUsageRange {
+                range,
+                custom_from_ms,
+                custom_to_ms,
+            } => {
+                self.usage_query.range = range;
+                self.usage_query.custom_from_ms = custom_from_ms;
+                self.usage_query.custom_to_ms = custom_to_ms;
+            }
+            Command::SetUsageFilter {
+                project_id,
+                agent_id,
+                model,
+            } => {
+                self.usage_query.filter.project_id = project_id;
+                self.usage_query.filter.agent_id = agent_id;
+                self.usage_query.filter.model = model;
+            }
+            Command::OpenUsageForRun { run_id } => {
+                self.open_usage_for_run(&run_id)?;
+            }
+            Command::OpenRunFromUsage { run_id } => {
+                self.open_run_from_usage(&run_id)?;
             }
         }
         Ok(self.outcome())
@@ -1827,6 +1931,72 @@ impl HostKernel {
                     project_id: required_string(&request, "projectId")?,
                 })
             }
+            "openUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenUsage)
+            }
+            "closeUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CloseUsage)
+            }
+            "setUsageRange" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let range = serde_json::from_value(
+                    request
+                        .get("range")
+                        .cloned()
+                        .ok_or_else(|| KernelError::Protocol("missing range".into()))?,
+                )?;
+                self.dispatch(Command::SetUsageRange {
+                    range,
+                    custom_from_ms: request.get("fromMs").and_then(|value| value.as_u64()),
+                    custom_to_ms: request.get("toMs").and_then(|value| value.as_u64()),
+                })
+            }
+            "setUsageFilter" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetUsageFilter {
+                    project_id: request
+                        .get("projectId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    agent_id: request
+                        .get("agentId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    model: request
+                        .get("model")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                })
+            }
+            "openUsageForRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenUsageForRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "openRunFromUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenRunFromUsage {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
     }
@@ -1991,6 +2161,20 @@ impl HostKernel {
                 Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
                 _ => None,
             },
+            usage_open: snapshot
+                .get("usageOpen")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            usage: match snapshot.get("usage") {
+                Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+                _ => usage::build_usage_page(
+                    &usage::UsageQuery::default(),
+                    0,
+                    0,
+                    &[],
+                    &[],
+                ),
+            },
         });
         Ok(())
     }
@@ -2019,7 +2203,7 @@ impl HostKernel {
             }
         }
         (
-            self.runs.clone(),
+            self.decorate_runs(&self.runs),
             self.focused_run_id.clone().unwrap_or_default(),
             self.quit_offer.clone(),
         )
@@ -2294,6 +2478,7 @@ impl HostKernel {
                 result.record.working_directory = tree.display().to_string();
             }
         }
+        result.record.started_at_ms = self.now_ms;
         result.record.git_baselines = if isolate {
             let recorded_cwd = PathBuf::from(&result.record.working_directory);
             if recorded_cwd.exists() {
@@ -2456,6 +2641,149 @@ impl HostKernel {
 
     fn persist_runs(&self) -> Result<(), KernelError> {
         write_json(&self.data.host_dir.join("runs.json"), &self.runs)
+    }
+
+    fn usage_samples_path(&self) -> PathBuf {
+        self.data.host_dir.join("usage-samples.json")
+    }
+
+    fn persist_usage_samples(&self) -> Result<(), KernelError> {
+        write_json(&self.usage_samples_path(), &self.usage_samples)
+    }
+
+    fn load_usage_samples(&mut self) {
+        let Ok(raw) = fs::read_to_string(self.usage_samples_path()) else {
+            return;
+        };
+        if let Ok(samples) = serde_json::from_str(&raw) {
+            self.usage_samples = samples;
+        }
+    }
+
+    fn decorate_runs(&self, runs: &[RunSummary]) -> Vec<RunSummary> {
+        runs.iter()
+            .map(|run| {
+                let mut run = run.clone();
+                run.telemetry = usage::run_telemetry(&self.usage_samples, &run.id);
+                run
+            })
+            .collect()
+    }
+
+    fn usage_open_for_focus(&self) -> bool {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            return self
+                .remote_view
+                .as_ref()
+                .filter(|view| view.host_id == self.focused_host_id)
+                .map(|view| view.usage_open)
+                .unwrap_or(false);
+        }
+        self.usage_open
+    }
+
+    fn usage_for_focus(&self) -> UsagePage {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            if let Some(view) = &self.remote_view {
+                if view.host_id == self.focused_host_id {
+                    return view.usage.clone();
+                }
+            }
+        }
+        self.build_usage()
+    }
+
+    fn build_usage(&self) -> UsagePage {
+        let runs = self
+            .runs
+            .iter()
+            .map(|run| usage::UsageRun {
+                id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                project_name: self
+                    .projects
+                    .iter()
+                    .find(|project| project.id == run.project_id)
+                    .map(|project| project.name.clone())
+                    .unwrap_or_else(|| run.project_id.clone()),
+                agent_id: run.agent_id.clone(),
+                agent_name: run.agent_name.clone(),
+                issue_id: run.issue_id.clone(),
+                started_at_ms: run.started_at_ms,
+            })
+            .collect::<Vec<_>>();
+        usage::build_usage_page(
+            &self.usage_query,
+            self.now_ms,
+            usage::local_offset_secs(),
+            &runs,
+            &self.usage_samples,
+        )
+    }
+
+    fn ingest_telemetry(&mut self) {
+        let incoming: Vec<TelemetrySample> = self
+            .agents
+            .iter()
+            .flat_map(|agent| agent.drain_telemetry())
+            .collect();
+        if incoming.is_empty() {
+            return;
+        }
+        let mut seen = Vec::new();
+        for mut sample in incoming {
+            let Some(run) = self.runs.iter().find(|run| run.id == sample.run_id) else {
+                continue;
+            };
+            sample.project_id = run.project_id.clone();
+            sample.agent_id = run.agent_id.clone();
+            if sample.at_ms == 0 {
+                sample.at_ms = self.now_ms;
+            }
+            if !seen.contains(&sample.run_id) {
+                seen.push(sample.run_id.clone());
+            }
+            self.usage_samples.push(sample);
+        }
+        let keep_after = self.now_ms.saturating_sub(usage::SAMPLE_RETENTION_MS);
+        self.usage_samples
+            .retain(|sample| sample.at_ms >= keep_after);
+        for run_id in seen {
+            self.pending_events.push(HostEvent::Telemetry { run_id });
+        }
+        let _ = self.persist_usage_samples();
+    }
+
+    fn open_usage_for_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        if !self.runs.iter().any(|run| run.id == run_id) {
+            return Err(KernelError::Protocol("unknown run".into()));
+        }
+        self.usage_open = true;
+        self.usage_query.highlighted_run_id = Some(run_id.to_string());
+        Ok(())
+    }
+
+    fn open_run_from_usage(&mut self, run_id: &str) -> Result<(), KernelError> {
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.usage_open = false;
+        self.usage_query.highlighted_run_id = None;
+        self.focused_run_id = Some(run.id.clone());
+        if self
+            .projects
+            .iter()
+            .any(|project| project.id == run.project_id)
+        {
+            self.focused_project_id = Some(run.project_id.clone());
+        }
+        if let Some(issue_id) = run.issue_id {
+            self.selected_issue_id = Some(issue_id);
+        }
+        Ok(())
     }
 
     fn change_notes_path(&self) -> PathBuf {
@@ -2669,6 +2997,7 @@ impl HostKernel {
     }
 
     fn observe_live_runs(&mut self) {
+        self.ingest_telemetry();
         self.harvest_live_signals();
         let stop_failures = self
             .runs
@@ -3489,6 +3818,9 @@ impl HostKernel {
                 .any(|run| run.id == *run_id && run.project_id == project_id)
         });
         self.runs.retain(|run| run.project_id != project_id);
+        self.usage_samples
+            .retain(|sample| sample.project_id != project_id);
+        let _ = self.persist_usage_samples();
         if self
             .focused_run_id
             .as_ref()
@@ -4119,6 +4451,35 @@ impl ShellCopy {
                 restore_delay: "冷启动后等待秒数".into(),
                 pending_confirmation: "待确认：即将领下一张 ready-for-agent".into(),
                 veto_advance: "否决".into(),
+                usage: "用量".into(),
+                usage_hint: "这台 Host 上全部 Project 的 token 流水。不估美元，不管账号额度。".into(),
+                range_24_hours: "24 小时".into(),
+                range_today: "今天".into(),
+                range_7_days: "7 天".into(),
+                range_30_days: "30 天".into(),
+                range_custom: "自定义".into(),
+                filter_all: "全部".into(),
+                filter_project: "Project".into(),
+                filter_agent: "Agent".into(),
+                filter_model: "模型".into(),
+                token_input: "input".into(),
+                token_output: "output".into(),
+                token_cache_read: "cache read".into(),
+                token_cache_write: "cache write".into(),
+                token_reasoning: "reasoning".into(),
+                token_total: "total".into(),
+                ttft: "首字".into(),
+                gen_rate: "生成速率".into(),
+                cache_hit: "缓存命中".into(),
+                spike: "偏慢".into(),
+                proxy_disclaimer: "看板不管理 Clash 等节点。通路抖动时请到你自己的代理工具里换节点。".into(),
+                open_host_usage: "Host 用量 ↗".into(),
+                open_this_run: "打开此 Run 终端 ↗".into(),
+                lane_main: "主会话".into(),
+                lane_subagent: "子代理".into(),
+                lane_switched: "已停用".into(),
+                usage_empty: "这段时间没有 Run 用量。".into(),
+                close_usage: "返回看板".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -4285,6 +4646,35 @@ impl ShellCopy {
                 restore_delay: "Seconds to wait after cold start".into(),
                 pending_confirmation: "Pending confirmation: about to claim the next ready-for-agent".into(),
                 veto_advance: "Veto".into(),
+                usage: "Usage".into(),
+                usage_hint: "Token traffic for every Project on this Host. No dollar estimates and no account quotas.".into(),
+                range_24_hours: "24 hours".into(),
+                range_today: "Today".into(),
+                range_7_days: "7 days".into(),
+                range_30_days: "30 days".into(),
+                range_custom: "Custom".into(),
+                filter_all: "All".into(),
+                filter_project: "Project".into(),
+                filter_agent: "Agent".into(),
+                filter_model: "Model".into(),
+                token_input: "input".into(),
+                token_output: "output".into(),
+                token_cache_read: "cache read".into(),
+                token_cache_write: "cache write".into(),
+                token_reasoning: "reasoning".into(),
+                token_total: "total".into(),
+                ttft: "TTFT".into(),
+                gen_rate: "Generation rate".into(),
+                cache_hit: "Cache hit".into(),
+                spike: "Slow".into(),
+                proxy_disclaimer: "The board does not manage Clash or other proxies. If the path is jittery, change nodes in your own proxy tool.".into(),
+                open_host_usage: "Host usage ↗".into(),
+                open_this_run: "Open this Run terminal ↗".into(),
+                lane_main: "Main".into(),
+                lane_subagent: "Subagent".into(),
+                lane_switched: "Retired".into(),
+                usage_empty: "No Run usage in this window.".into(),
+                close_usage: "Back to board".into(),
             },
         }
     }

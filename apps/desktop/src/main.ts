@@ -171,6 +171,35 @@ type ShellCopy = {
   restoreDelay: string;
   pendingConfirmation: string;
   vetoAdvance: string;
+  usage: string;
+  usageHint: string;
+  range24Hours: string;
+  rangeToday: string;
+  range7Days: string;
+  range30Days: string;
+  rangeCustom: string;
+  filterAll: string;
+  filterProject: string;
+  filterAgent: string;
+  filterModel: string;
+  tokenInput: string;
+  tokenOutput: string;
+  tokenCacheRead: string;
+  tokenCacheWrite: string;
+  tokenReasoning: string;
+  tokenTotal: string;
+  ttft: string;
+  genRate: string;
+  cacheHit: string;
+  spike: string;
+  proxyDisclaimer: string;
+  openHostUsage: string;
+  openThisRun: string;
+  laneMain: string;
+  laneSubagent: string;
+  laneSwitched: string;
+  usageEmpty: string;
+  closeUsage: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -365,6 +394,8 @@ type Snapshot = {
   notifySound?: boolean;
   autoAdvance?: boolean;
   pendingConfirmation?: PendingConfirmation | null;
+  usageOpen?: boolean;
+  usage?: UsagePage;
 };
 
 type PendingConfirmation = {
@@ -500,6 +531,85 @@ type RunSummary = {
   workingDirectory?: string;
   isolated?: boolean;
   isolationNote?: string | null;
+  startedAtMs?: number;
+  telemetry?: RunTelemetryLane[];
+};
+
+type TokenCounts = {
+  input?: number | null;
+  output?: number | null;
+  cacheRead?: number | null;
+  cacheWrite?: number | null;
+  reasoning?: number | null;
+  total?: number | null;
+};
+
+type TelemetryLaneKind = "main" | "subagent" | "switched";
+
+type TelemetryPoint = {
+  atMs: number;
+  ttftMs?: number | null;
+  tokensPerSec?: number | null;
+  spike: boolean;
+};
+
+type RunTelemetryLane = {
+  model: string;
+  lane: TelemetryLaneKind;
+  tokens: TokenCounts;
+  ttftMs?: number | null;
+  tokensPerSec?: number | null;
+  recent: TelemetryPoint[];
+  spike: boolean;
+};
+
+type UsageRange = "today" | "24-hours" | "7-days" | "30-days" | "custom";
+
+type UsageFilter = {
+  projectId?: string | null;
+  agentId?: string | null;
+  model?: string | null;
+};
+
+type UsageOption = { id: string; name: string };
+
+type UsageRunRow = {
+  runId: string;
+  projectId: string;
+  projectName: string;
+  agentId: string;
+  agentName: string;
+  issueId?: string | null;
+  startedAtMs: number;
+  models: string[];
+  tokens: TokenCounts;
+  highlighted: boolean;
+};
+
+type UsageBucket = {
+  startMs: number;
+  tokens: TokenCounts;
+  ttftMs?: number | null;
+  tokensPerSec?: number | null;
+  slow: boolean;
+};
+
+type UsagePage = {
+  range: UsageRange;
+  customFromMs?: number | null;
+  customToMs?: number | null;
+  filter: UsageFilter;
+  bucketKind: "hour" | "day";
+  fromMs: number;
+  toMs: number;
+  runs: UsageRunRow[];
+  buckets: UsageBucket[];
+  totals: TokenCounts;
+  cacheHitRate?: number | null;
+  highlightedRunId?: string | null;
+  projects: UsageOption[];
+  agents: UsageOption[];
+  models: string[];
 };
 
 type QuitOffer = {
@@ -534,7 +644,8 @@ type HostEvent =
       runId: string;
       issueId?: string | null;
       projectId: string;
-    };
+    }
+  | { type: "telemetry"; runId: string };
 
 type RpcResult = {
   snapshot: Snapshot;
@@ -578,6 +689,7 @@ let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
 let noteDraft = "";
 let noteTarget: { repo: string; path: string; line: number } | null = null;
+let telemetryExpanded = false;
 const clientId = sessionClientId();
 
 function sessionClientId(): string {
@@ -715,6 +827,7 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
   result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
   result.snapshot.notifySound = result.snapshot.notifySound ?? true;
+  result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
   result.events = result.events ?? [];
   syncLaunchDraft(result.snapshot);
   deliverHostEvents(result.events, result.snapshot);
@@ -853,7 +966,8 @@ function render(): void {
                 ? `<div class="host-line">
                     <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
                     <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
-                  </div>`
+                  </div>
+                  <button type="button" class="item ${snap.usageOpen ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
                 : ""
             }
             ${
@@ -881,7 +995,7 @@ function render(): void {
             }
           </div>
         </aside>
-        <main class="workspace ${empty ? "" : "board-open"}${focusedRun(snap) ? " has-run" : ""}">
+        <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && focusedRun(snap) ? " has-run" : ""}">
           ${
             empty
               ? `<div class="empty">
@@ -897,7 +1011,9 @@ function render(): void {
                       .join("")}
                   </div>
                 </div>`
-              : `${projectMain(copy, snap)}${runDock(copy, snap)}`
+              : snap.usageOpen
+                ? usagePage(copy, snap)
+                : `${projectMain(copy, snap)}${runDock(copy, snap)}`
           }
         </main>
       </div>
@@ -1133,6 +1249,198 @@ function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
   </button>`;
 }
 
+function dash(value?: number | null): string {
+  return value == null ? "—" : String(value);
+}
+
+function laneLabel(copy: ShellCopy, lane: TelemetryLaneKind): string {
+  if (lane === "subagent") return copy.laneSubagent;
+  if (lane === "switched") return copy.laneSwitched;
+  return copy.laneMain;
+}
+
+function tokenCells(copy: ShellCopy, tokens: TokenCounts): string {
+  const cells: Array<[string, number | null | undefined]> = [
+    [copy.tokenInput, tokens.input],
+    [copy.tokenOutput, tokens.output],
+    [copy.tokenCacheRead, tokens.cacheRead],
+    [copy.tokenCacheWrite, tokens.cacheWrite],
+    [copy.tokenReasoning, tokens.reasoning],
+    [copy.tokenTotal, tokens.total],
+  ];
+  return cells
+    .map(([label, value]) => `<span class="token-cell"><i>${escapeHtml(label)}</i>${dash(value)}</span>`)
+    .join("");
+}
+
+function sparkline(points: TelemetryPoint[], field: "ttftMs" | "tokensPerSec"): string {
+  const values = points.map((point) => point[field] ?? 0);
+  const max = Math.max(...values, 1);
+  return `<span class="spark">${points
+    .map((point) => {
+      const value = point[field] ?? 0;
+      const height = Math.max(8, Math.round((value / max) * 28));
+      return `<i class="${point.spike ? "slow" : ""}" style="height:${height}px"></i>`;
+    })
+    .join("")}</span>`;
+}
+
+function telemetryBar(copy: ShellCopy, run: RunSummary): string {
+  const lanes = run.telemetry ?? [];
+  if (!lanes.length) return "";
+  const capsule = (lane: RunTelemetryLane) =>
+    `<button type="button" class="capsule ${lane.spike ? "slow" : ""}" data-act="toggle-telemetry">${escapeHtml(lane.model)}<small>${escapeHtml(laneLabel(copy, lane.lane))}</small></button>`;
+  const main = lanes.find((lane) => lane.lane === "main") ?? lanes[0];
+  const capsules = lanes.map(capsule).join("");
+  const simple = `<div class="telemetry-mobile">${capsule(main)}<ul class="telemetry-simple">${lanes
+    .map(
+      (lane) =>
+        `<li>${escapeHtml(lane.model)} · ${escapeHtml(laneLabel(copy, lane.lane))} · ${copy.tokenTotal} ${dash(lane.tokens.total)}</li>`,
+    )
+    .join("")}</ul></div>`;
+  const cards = telemetryExpanded
+    ? `<div class="telemetry-cards">${lanes
+        .map(
+          (lane) => `<article class="telemetry-card ${lane.spike ? "slow" : ""}">
+            <header><b>${escapeHtml(lane.model)}</b><span>${escapeHtml(laneLabel(copy, lane.lane))}</span></header>
+            <div class="token-row">${tokenCells(copy, lane.tokens)}</div>
+            <div class="telemetry-meta">${escapeHtml(copy.ttft)} ${dash(lane.ttftMs)} · ${escapeHtml(copy.genRate)} ${dash(lane.tokensPerSec)}</div>
+            ${sparkline(lane.recent, "ttftMs")}
+          </article>`,
+        )
+        .join("")}<p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p></div>`
+    : "";
+  return `<div class="telemetry-bar"><div class="telemetry-desktop">${capsules}</div>${simple}${cards}</div>`;
+}
+
+function usagePage(copy: ShellCopy, snap: Snapshot): string {
+  const usage = snap.usage;
+  if (!usage) return "";
+  const range = usage.range;
+  const rangeBtn = (id: UsageRange, label: string) =>
+    `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
+  const optionList = (items: UsageOption[], selected: string | null | undefined) =>
+    `<option value="">${escapeHtml(copy.filterAll)}</option>${items
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`,
+      )
+      .join("")}`;
+  const rows = usage.runs.length
+    ? usage.runs
+        .map(
+          (row) => `<article class="usage-row ${row.highlighted ? "sel" : ""}">
+            <header>
+              <div>
+                <b>${escapeHtml(row.projectName)}</b>
+                <span>${escapeHtml(row.agentName)}${row.models.length ? ` · ${escapeHtml(row.models.join(", "))}` : ""}</span>
+              </div>
+              <button type="button" data-act="open-run-usage" data-id="${escapeHtml(row.runId)}">${escapeHtml(copy.openThisRun)}</button>
+            </header>
+            <div class="token-row">${tokenCells(copy, row.tokens)}</div>
+          </article>`,
+        )
+        .join("")
+    : `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
+  const trend = `${usageTrend(copy.ttft, usage.buckets, "ttftMs")}${usageTrend(copy.genRate, usage.buckets, "tokensPerSec")}`;
+  const hit =
+    usage.cacheHitRate == null ? "—" : `${Math.round(usage.cacheHitRate * 1000) / 10}%`;
+  return `<div class="usage-page">
+    <div class="board-head">
+      <div class="board-head-row">
+        <div>
+          <h1>${escapeHtml(copy.usage)}</h1>
+          <p>${escapeHtml(copy.usageHint)}</p>
+        </div>
+        <button type="button" data-act="close-usage">${escapeHtml(copy.closeUsage)}</button>
+      </div>
+    </div>
+    <div class="choices usage-ranges">
+      ${rangeBtn("24-hours", copy.range24Hours)}
+      ${rangeBtn("today", copy.rangeToday)}
+      ${rangeBtn("7-days", copy.range7Days)}
+      ${rangeBtn("30-days", copy.range30Days)}
+      ${rangeBtn("custom", copy.rangeCustom)}
+    </div>
+    ${
+      range === "custom"
+        ? `<form class="usage-custom" data-act="usage-custom">
+            <input type="datetime-local" name="from" value="${escapeHtml(toLocalInput(usage.fromMs))}" />
+            <input type="datetime-local" name="to" value="${escapeHtml(toLocalInput(usage.toMs))}" />
+            <button type="submit">${escapeHtml(copy.rangeCustom)}</button>
+          </form>`
+        : ""
+    }
+    <div class="usage-filters">
+      <label>${escapeHtml(copy.filterProject)}<select data-usage-filter="projectId">${optionList(usage.projects, usage.filter.projectId)}</select></label>
+      <label>${escapeHtml(copy.filterAgent)}<select data-usage-filter="agentId">${optionList(usage.agents, usage.filter.agentId)}</select></label>
+      <label>${escapeHtml(copy.filterModel)}<select data-usage-filter="model"><option value="">${escapeHtml(copy.filterAll)}</option>${usage.models
+        .map(
+          (model) =>
+            `<option value="${escapeHtml(model)}" ${model === usage.filter.model ? "selected" : ""}>${escapeHtml(model)}</option>`,
+        )
+        .join("")}</select></label>
+    </div>
+    <div class="token-row totals">${tokenCells(copy, usage.totals)}<span class="token-cell"><i>${escapeHtml(copy.cacheHit)}</i>${hit}</span></div>
+    ${trend}
+    <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
+    <div class="usage-list usage-full">${rows}</div>
+    <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
+  </div>`;
+}
+
+function usageTrend(
+  label: string,
+  buckets: UsageBucket[],
+  field: "ttftMs" | "tokensPerSec",
+): string {
+  const max = Math.max(...buckets.map((bucket) => bucket[field] ?? 0), 1);
+  return `<div class="usage-trend-block"><span class="tiny">${escapeHtml(label)}</span><div class="usage-trend">${buckets
+    .map((bucket) => {
+      const height = Math.max(4, Math.round(((bucket[field] ?? 0) / max) * 48));
+      return `<i class="${bucket.slow ? "slow" : ""}" style="height:${height}px" title="${dash(bucket[field])}"></i>`;
+    })
+    .join("")}</div></div>`;
+}
+
+function usageCompact(copy: ShellCopy, usage: UsagePage): string {
+  const byProject = new Map<string, { name: string; tokens: TokenCounts }>();
+  for (const row of usage.runs) {
+    const current = byProject.get(row.projectId);
+    if (!current) {
+      byProject.set(row.projectId, { name: row.projectName, tokens: row.tokens });
+    } else {
+      current.tokens = {
+        input: addOpt(current.tokens.input, row.tokens.input),
+        output: addOpt(current.tokens.output, row.tokens.output),
+        cacheRead: addOpt(current.tokens.cacheRead, row.tokens.cacheRead),
+        cacheWrite: addOpt(current.tokens.cacheWrite, row.tokens.cacheWrite),
+        reasoning: addOpt(current.tokens.reasoning, row.tokens.reasoning),
+        total: addOpt(current.tokens.total, row.tokens.total),
+      };
+    }
+  }
+  const lines = [...byProject.values()].slice(0, 3);
+  if (!lines.length) return `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
+  return lines
+    .map(
+      (line) =>
+        `<article class="usage-row"><header><b>${escapeHtml(line.name)}</b></header><div class="token-row">${tokenCells(copy, line.tokens)}</div></article>`,
+    )
+    .join("");
+}
+
+function addOpt(left?: number | null, right?: number | null): number | null {
+  if (left == null || right == null) return null;
+  return left + right;
+}
+
+function toLocalInput(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function runDock(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return "";
@@ -1144,10 +1452,12 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
         <span>${escapeHtml(identity)}</span>
       </div>
       <div class="actions">
+        <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
         <button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>
         <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
       </div>
     </header>
+    ${telemetryBar(copy, run)}
     ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
@@ -2053,6 +2363,39 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "open-usage") {
+    settingsOpen = false;
+    pairingOpen = false;
+    formOpen = null;
+    await rpc("openUsage");
+    render();
+    return;
+  }
+  if (act === "close-usage") {
+    await rpc("closeUsage");
+    render();
+    return;
+  }
+  if (act === "usage-range" && target.dataset.id) {
+    await rpc("setUsageRange", { range: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "open-usage-run" && target.dataset.id) {
+    await rpc("openUsageForRun", { runId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "open-run-usage" && target.dataset.id) {
+    await rpc("openRunFromUsage", { runId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "toggle-telemetry") {
+    telemetryExpanded = !telemetryExpanded;
+    render();
+    return;
+  }
   if (act === "stop-run" && target.dataset.id) {
     await rpc("stopRun", { runId: target.dataset.id });
     render();
@@ -2449,7 +2792,34 @@ app.addEventListener("input", (event) => {
   }
 });
 
+app.addEventListener("change", async (event) => {
+  const target = event.target as HTMLElement | null;
+  const filter = target?.getAttribute("data-usage-filter");
+  if (!filter || !snapshot?.usage || !(target instanceof HTMLSelectElement)) return;
+  const next = {
+    projectId: snapshot.usage.filter.projectId ?? "",
+    agentId: snapshot.usage.filter.agentId ?? "",
+    model: snapshot.usage.filter.model ?? "",
+  };
+  if (filter === "projectId") next.projectId = target.value;
+  if (filter === "agentId") next.agentId = target.value;
+  if (filter === "model") next.model = target.value;
+  await rpc("setUsageFilter", next);
+  render();
+});
+
 app.addEventListener("submit", async (event) => {
+  const custom = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-act='usage-custom']");
+  if (custom) {
+    event.preventDefault();
+    const data = new FormData(custom);
+    const from = Date.parse(String(data.get("from") ?? ""));
+    const to = Date.parse(String(data.get("to") ?? ""));
+    if (Number.isNaN(from) || Number.isNaN(to)) return;
+    await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
+    render();
+    return;
+  }
   const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
   if (launch && snapshot && launchDraft) {
     event.preventDefault();
