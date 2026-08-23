@@ -64,3 +64,20 @@ fn claude_adapter_passes_worktree_without_inventing_a_name() {
         assert!(next.starts_with('-'), "{argv:?}");
     }
 }
+
+#[test]
+fn claude_attach_hooks_passes_settings_inside_sink() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sink = tmp.path().join("sink");
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    assert!(ClaudeAdapter.completion_hooks_supported());
+    let plan = ClaudeAdapter
+        .attach_completion_hooks(&sink, &project)
+        .unwrap();
+    assert!(plan.extra_argv.windows(2).any(|pair| {
+        pair[0] == "--settings" && pair[1].starts_with(&sink.to_string_lossy().into_owned())
+    }));
+    assert!(sink.join("claude-settings.json").is_file());
+    assert!(!project.join(".claude").exists());
+}

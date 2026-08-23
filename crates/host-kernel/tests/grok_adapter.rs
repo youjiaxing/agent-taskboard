@@ -145,3 +145,19 @@ fn probe_binary_prefers_known_install_location() {
         other => panic!("expected found, got {other:?}"),
     }
 }
+
+#[test]
+fn grok_attach_hooks_stays_inside_sink_and_sets_grok_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sink = tmp.path().join("sink");
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    assert!(GrokAdapter.completion_hooks_supported());
+    let plan = GrokAdapter
+        .attach_completion_hooks(&sink, &project)
+        .unwrap();
+    let home = PathBuf::from(plan.extra_env.get("GROK_HOME").expect("GROK_HOME"));
+    assert!(home.starts_with(&sink), "{home:?}");
+    assert!(home.join("hooks").join("agent-taskboard.json").is_file());
+    assert!(!project.join(".grok").exists());
+}

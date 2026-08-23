@@ -108,3 +108,13 @@ fn antigravity_adapter_assembles_mode_not_permission_flag() {
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--print"));
     assert!(!argv.iter().any(|arg| arg == "gemini"));
 }
+
+#[test]
+fn antigravity_does_not_claim_per_run_completion_hooks() {
+    assert!(!AntigravityAdapter.completion_hooks_supported());
+    let tmp = tempfile::tempdir().unwrap();
+    let err = AntigravityAdapter
+        .attach_completion_hooks(&tmp.path().join("sink"), tmp.path())
+        .unwrap_err();
+    assert!(!err.is_empty());
+}

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -8,10 +9,12 @@ use crate::{Language, LaunchEnvironment};
 mod antigravity;
 mod claude;
 mod codex;
+mod hooks;
 
 pub use antigravity::{AntigravityAdapter, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME};
 pub use claude::{ClaudeAdapter, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME};
 pub use codex::{CodexAdapter, CODEX_BIN, CODEX_ID, CODEX_NAME};
+pub use hooks::{CompletionHookPlan, CompletionSignals};
 
 pub const GROK_BUILD_ID: &str = "grok-build";
 pub const GROK_BUILD_NAME: &str = "Grok Build";
@@ -213,6 +216,26 @@ pub trait AgentPort: Send + Sync {
     ) -> Option<PathBuf> {
         None
     }
+
+    fn completion_hooks_supported(&self) -> bool {
+        false
+    }
+
+    fn inject_supported(&self) -> bool {
+        true
+    }
+
+    fn attach_completion_hooks(
+        &self,
+        _sink_dir: &Path,
+        _project_dir: &Path,
+    ) -> Result<CompletionHookPlan, String> {
+        Err("completion hooks unsupported".into())
+    }
+
+    fn read_completion_signals(&self, sink_dir: &Path) -> CompletionSignals {
+        hooks::read_signals(sink_dir)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +291,29 @@ impl AgentPort for GrokAdapter {
     fn native_isolation(&self) -> bool {
         true
     }
+
+    fn completion_hooks_supported(&self) -> bool {
+        true
+    }
+
+    fn attach_completion_hooks(
+        &self,
+        sink_dir: &Path,
+        _project_dir: &Path,
+    ) -> Result<CompletionHookPlan, String> {
+        let recorder = hooks::write_recorder(sink_dir)?;
+        let overlay = hooks::grok_home_overlay(sink_dir)?;
+        hooks::write_json_hooks(
+            &overlay.join("hooks").join("agent-taskboard.json"),
+            &recorder,
+        )?;
+        let mut extra_env = hooks::sink_env(sink_dir);
+        extra_env.insert("GROK_HOME".into(), overlay.to_string_lossy().into_owned());
+        Ok(CompletionHookPlan {
+            extra_argv: Vec::new(),
+            extra_env,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -284,6 +330,8 @@ pub struct MemoryAgent {
     native_isolation: bool,
     native_session_id: Mutex<Option<String>>,
     isolation_tree: Mutex<Option<PathBuf>>,
+    hooks_supported: Mutex<bool>,
+    attach_fail: Mutex<bool>,
 }
 
 impl MemoryAgent {
@@ -306,6 +354,8 @@ impl MemoryAgent {
             native_isolation: false,
             native_session_id: Mutex::new(None),
             isolation_tree: Mutex::new(None),
+            hooks_supported: Mutex::new(true),
+            attach_fail: Mutex::new(false),
         }
     }
 
@@ -341,6 +391,14 @@ impl MemoryAgent {
 
     pub fn set_isolation_tree(&self, path: Option<PathBuf>) {
         *self.isolation_tree.lock().expect("memory agent") = path;
+    }
+
+    pub fn set_hooks_supported(&self, supported: bool) {
+        *self.hooks_supported.lock().expect("memory agent") = supported;
+    }
+
+    pub fn fail_attach_hooks(&self) {
+        *self.attach_fail.lock().expect("memory agent") = true;
     }
 }
 
@@ -425,6 +483,25 @@ impl AgentPort for MemoryAgent {
         _before: &[PathBuf],
     ) -> Option<PathBuf> {
         self.isolation_tree.lock().expect("memory agent").clone()
+    }
+
+    fn completion_hooks_supported(&self) -> bool {
+        *self.hooks_supported.lock().expect("memory agent")
+    }
+
+    fn attach_completion_hooks(
+        &self,
+        sink_dir: &Path,
+        _project_dir: &Path,
+    ) -> Result<CompletionHookPlan, String> {
+        if !self.completion_hooks_supported() || *self.attach_fail.lock().expect("memory agent") {
+            return Err("completion hooks unavailable".into());
+        }
+        fs::create_dir_all(sink_dir).map_err(|err| err.to_string())?;
+        Ok(CompletionHookPlan {
+            extra_argv: Vec::new(),
+            extra_env: hooks::sink_env(sink_dir),
+        })
     }
 }
 
@@ -676,7 +753,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(super) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

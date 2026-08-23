@@ -89,3 +89,18 @@ fn codex_adapter_omits_empty_profile_and_effort() {
         .any(|arg| arg == "-c" || arg.contains("model_reasoning_effort")));
     assert!(!argv.iter().any(|arg| arg == "--profile"));
 }
+
+#[test]
+fn codex_attach_hooks_uses_per_run_config_not_home() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sink = tmp.path().join("sink");
+    let project = tmp.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    assert!(CodexAdapter.completion_hooks_supported());
+    let plan = CodexAdapter
+        .attach_completion_hooks(&sink, &project)
+        .unwrap();
+    assert!(plan.extra_argv.iter().any(|arg| arg == "-c"));
+    assert!(plan.extra_argv.iter().any(|arg| arg.contains("SessionEnd")));
+    assert!(!project.join(".codex").exists());
+}

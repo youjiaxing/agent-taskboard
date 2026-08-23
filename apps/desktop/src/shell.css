@@ -246,6 +246,7 @@ html[data-theme="plain-night"] button.danger.primary {
 .refresh-bar[data-kind="rate-limited"] { border-color: var(--accent); color: var(--accent-ink); }
 .refresh-bar[data-kind="auth-failed"] { border-color: var(--accent); color: var(--accent-ink); }
 .refresh-bar[data-kind="refreshing"] { border-color: var(--dot); }
+.refresh-bar[data-kind="pending"] { border-color: var(--accent); color: var(--accent-ink); }
 .board-empty {
   margin-top: 12px;
   padding: 16px;
