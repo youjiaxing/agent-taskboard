@@ -34,6 +34,16 @@ pub struct IssueCard {
     pub claimed_by: Vec<String>,
     pub triage_role: Option<TriageRole>,
     pub open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<IssueActivity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IssueActivity {
+    Running,
+    Waiting,
+    ExecutionStopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +75,8 @@ pub struct IssueDetail {
     pub blocking: Vec<IssueLink>,
     #[serde(default)]
     pub execution_stopped: bool,
+    #[serde(default)]
+    pub waiting_for_user: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_run_id: Option<String>,
 }
@@ -490,6 +502,7 @@ fn card(issue: &IssueRecord, mapping_active: bool) -> IssueCard {
             None
         },
         open: issue.open,
+        activity: None,
     }
 }
 
@@ -543,6 +556,7 @@ fn detail(issue: &IssueRecord, mapping_active: bool) -> IssueDetail {
         blocked_by: issue.blocked_by.iter().map(dependency_link).collect(),
         blocking: issue.blocking.iter().map(known_link).collect(),
         execution_stopped: false,
+        waiting_for_user: false,
         active_run_id: None,
     }
 }
@@ -566,6 +580,7 @@ fn link_detail(issue: &IssueRef) -> IssueDetail {
         blocked_by: Vec::new(),
         blocking: Vec::new(),
         execution_stopped: false,
+        waiting_for_user: false,
         active_run_id: None,
     }
 }
@@ -587,6 +602,7 @@ fn unclear_detail(repository: Option<&str>, number: Option<u64>) -> IssueDetail 
         blocked_by: Vec::new(),
         blocking: Vec::new(),
         execution_stopped: false,
+        waiting_for_user: false,
         active_run_id: None,
     }
 }

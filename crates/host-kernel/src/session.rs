@@ -30,6 +30,9 @@ pub trait AgentSession: Send + Sync {
     fn was_stopped(&self) -> bool {
         false
     }
+    fn waiting_for_user(&self) -> bool {
+        false
+    }
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -92,6 +95,8 @@ pub struct MemorySession {
     output: Mutex<Vec<u8>>,
     exit: Mutex<Option<i32>>,
     stopped: AtomicBool,
+    waiting: AtomicBool,
+    write_fail: Mutex<Option<String>>,
     pulse: Condvar,
 }
 
@@ -101,8 +106,18 @@ impl MemorySession {
             output: Mutex::new(Vec::new()),
             exit: Mutex::new(None),
             stopped: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
+            write_fail: Mutex::new(None),
             pulse: Condvar::new(),
         }
+    }
+
+    pub fn set_waiting(&self, waiting: bool) {
+        self.waiting.store(waiting, Ordering::SeqCst);
+    }
+
+    pub fn fail_next_write(&self, message: impl Into<String>) {
+        *self.write_fail.lock().expect("memory session") = Some(message.into());
     }
 
     pub fn push_output(&self, bytes: &[u8]) {
@@ -128,6 +143,9 @@ impl AgentSession for MemorySession {
         if self.exit_code().is_some() {
             return Err(io::Error::other("run has ended"));
         }
+        if let Some(message) = self.write_fail.lock().expect("memory session").take() {
+            return Err(io::Error::other(message));
+        }
         self.push_output(data);
         Ok(())
     }
@@ -145,6 +163,10 @@ impl AgentSession for MemorySession {
 
     fn was_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
+    }
+
+    fn waiting_for_user(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst)
     }
 
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk {

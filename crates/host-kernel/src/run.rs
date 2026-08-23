@@ -55,6 +55,8 @@ pub struct RunSummary {
     pub issue_id: Option<String>,
     pub unbound: bool,
     pub status: RunStatus,
+    #[serde(default)]
+    pub waiting_for_user: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_action: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +114,7 @@ pub fn start_unbound(
         issue_id: issue_id.filter(|id| !id.is_empty()).map(ToOwned::to_owned),
         unbound: issue_id.map(|id| id.is_empty()).unwrap_or(true),
         status: RunStatus::Starting,
+        waiting_for_user: false,
         recent_action: agent.recent_action().filter(|text| !text.is_empty()),
         failure: None,
         previous_run_id: previous_run_id

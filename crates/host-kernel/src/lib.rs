@@ -32,8 +32,8 @@ pub use agent::{
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
-    FrontierEmptyReason, GraphEdge, GraphNode, IssueCard, IssueDetail, IssueLink, RefreshStatus,
-    DEFAULT_RECENT_LIMIT,
+    FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail, IssueLink,
+    RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use issue::{IssueRecord, TriageRole};
 pub use launch_env::{LaunchEnvPort, LaunchEnvironment, MemoryLaunchEnv, ShellLaunchEnv};
@@ -214,6 +214,10 @@ pub enum Command {
     SetShowCommandPreview {
         show: bool,
     },
+    SetNotificationPrefs {
+        desktop: bool,
+        sound: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +266,38 @@ pub enum HostEvent {
         run_id: String,
         status: RunStatus,
     },
+    Waiting {
+        #[serde(rename = "runId")]
+        run_id: String,
+    },
+    ExecutionStopped {
+        #[serde(rename = "issueId")]
+        issue_id: String,
+        #[serde(rename = "runId")]
+        run_id: String,
+    },
+    HostCrashedRecovered {
+        #[serde(rename = "runIds")]
+        run_ids: Vec<String>,
+    },
+    Notification {
+        kind: NotificationKind,
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "issueId")]
+        issue_id: Option<String>,
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotificationKind {
+    Waiting,
+    Completed,
+    AbnormalStop,
+    CrashRecovered,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -475,6 +511,16 @@ pub struct ShellCopy {
     pub continue_run: String,
     pub release_claim: String,
     pub execution_stopped: String,
+    pub waiting: String,
+    pub running: String,
+    pub inject_line: String,
+    pub inject_placeholder: String,
+    pub notify_desktop: String,
+    pub notify_sound: String,
+    pub notify_waiting: String,
+    pub notify_completed: String,
+    pub notify_abnormal: String,
+    pub notify_crash: String,
     pub got_it: String,
     pub auth_failed: String,
     pub repair_cli: String,
@@ -586,6 +632,8 @@ pub struct HostSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_form: Option<RunLaunchForm>,
     pub show_command_preview: bool,
+    pub notify_desktop: bool,
+    pub notify_sound: bool,
 }
 
 pub struct KernelPorts {
@@ -654,6 +702,8 @@ pub struct HostKernel {
     last_successful_agent: BTreeMap<String, String>,
     launch_form: Option<RunLaunchForm>,
     show_command_preview: bool,
+    notify_desktop: bool,
+    notify_sound: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -738,6 +788,8 @@ impl HostKernel {
             recent_limit,
             center_view,
             show_command_preview,
+            notify_desktop,
+            notify_sound,
         ) = load_or_init_appearance(
             &data.desktop_client_settings_path,
             &request.system_locale,
@@ -814,6 +866,8 @@ impl HostKernel {
             last_successful_agent: settings.last_successful_agent,
             launch_form: None,
             show_command_preview,
+            notify_desktop,
+            notify_sound,
         };
         let project_ids: Vec<String> = host
             .projects
@@ -823,11 +877,12 @@ impl HostKernel {
         for project_id in &project_ids {
             host.load_persisted_snapshot(project_id);
         }
-        host.load_persisted_runs();
+        let crashed_ids = host.load_persisted_runs();
         if let Some(project_id) = host.focused_project_id.clone() {
             host.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
         host.pending_events.clear();
+        host.note_crash_recovery(crashed_ids);
         Ok(host)
     }
 
@@ -864,6 +919,8 @@ impl HostKernel {
             quit_offer,
             launch_form: self.launch_form_for_focus(),
             show_command_preview: self.show_command_preview,
+            notify_desktop: self.notify_desktop,
+            notify_sound: self.notify_sound,
         }
     }
 
@@ -953,7 +1010,7 @@ impl HostKernel {
     }
 
     pub fn dispatch(&mut self, command: Command) -> Result<CommandOutcome, KernelError> {
-        self.reap_runs();
+        self.observe_live_runs();
         match command {
             Command::HideWindow => self.window_visible = false,
             Command::ShowWindow => {
@@ -1127,6 +1184,11 @@ impl HostKernel {
                 self.show_command_preview = show;
                 self.persist_client_settings(&self.appearance.clone())?;
             }
+            Command::SetNotificationPrefs { desktop, sound } => {
+                self.notify_desktop = desktop;
+                self.notify_sound = sound;
+                self.persist_client_settings(&self.appearance.clone())?;
+            }
             Command::StopRun { run_id } => {
                 self.stop_run(&run_id)?;
             }
@@ -1165,7 +1227,7 @@ impl HostKernel {
             .unwrap_or("snapshot");
         match op {
             "snapshot" => {
-                self.reap_runs();
+                self.observe_live_runs();
                 Ok(self.outcome())
             }
             "hideWindow" => self.dispatch(Command::HideWindow),
@@ -1465,6 +1527,16 @@ impl HostKernel {
                     .and_then(|value| value.as_bool())
                     .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
             }),
+            "setNotificationPrefs" => self.dispatch(Command::SetNotificationPrefs {
+                desktop: request
+                    .get("desktop")
+                    .and_then(|value| value.as_bool())
+                    .ok_or_else(|| KernelError::Protocol("missing desktop".into()))?,
+                sound: request
+                    .get("sound")
+                    .and_then(|value| value.as_bool())
+                    .ok_or_else(|| KernelError::Protocol("missing sound".into()))?,
+            }),
             "stopRun" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -1529,6 +1601,8 @@ impl HostKernel {
             recent_completed_limit: self.recent_limit,
             center_view: self.center_view,
             show_command_preview: self.show_command_preview,
+            notify_desktop: self.notify_desktop,
+            notify_sound: self.notify_sound,
         };
         write_json(&self.data.desktop_client_settings_path, &file)?;
         let secrets = ClientSecretsFile {
@@ -2085,25 +2159,39 @@ impl HostKernel {
         write_json(&self.data.host_dir.join("runs.json"), &self.runs)
     }
 
-    fn load_persisted_runs(&mut self) {
+    fn load_persisted_runs(&mut self) -> Vec<String> {
         let path = self.data.host_dir.join("runs.json");
         let Ok(raw) = fs::read_to_string(&path) else {
-            return;
+            return Vec::new();
         };
         let Ok(mut runs) = serde_json::from_str::<Vec<RunSummary>>(&raw) else {
-            return;
+            return Vec::new();
         };
-        let mut crashed = false;
+        let mut crashed_ids = Vec::new();
         for run in &mut runs {
             if run.is_active() {
                 run.status = RunStatus::Ended;
+                run.waiting_for_user = false;
                 run.ended_reason = Some(RunEndedReason::Crash);
-                crashed = true;
+                crashed_ids.push(run.id.clone());
             }
         }
         self.runs = runs;
-        if crashed {
+        if !crashed_ids.is_empty() {
             let _ = self.persist_runs();
+        }
+        crashed_ids
+    }
+
+    fn note_crash_recovery(&mut self, crashed_ids: Vec<String>) {
+        if crashed_ids.is_empty() {
+            return;
+        }
+        self.pending_events.push(HostEvent::HostCrashedRecovered {
+            run_ids: crashed_ids.clone(),
+        });
+        for run_id in crashed_ids {
+            self.push_notification(NotificationKind::CrashRecovered, &run_id);
         }
     }
 
@@ -2170,18 +2258,99 @@ impl HostKernel {
         }
     }
 
+    fn observe_live_runs(&mut self) {
+        self.reap_runs();
+        let waiting = self
+            .live
+            .iter()
+            .map(|(id, session)| (id.clone(), session.waiting_for_user()))
+            .collect::<Vec<_>>();
+        let mut became_waiting = Vec::new();
+        for (id, is_waiting) in waiting {
+            let Some(run) = self.runs.iter_mut().find(|run| run.id == id) else {
+                continue;
+            };
+            if !run.is_active() || run.waiting_for_user == is_waiting {
+                continue;
+            }
+            run.waiting_for_user = is_waiting;
+            if is_waiting {
+                became_waiting.push(id);
+            }
+        }
+        for id in became_waiting {
+            self.pending_events
+                .push(HostEvent::Waiting { run_id: id.clone() });
+            self.push_notification(NotificationKind::Waiting, &id);
+        }
+    }
+
+    fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
+        let Some(run) = self.runs.iter().find(|run| run.id == run_id) else {
+            return;
+        };
+        self.pending_events.push(HostEvent::Notification {
+            kind,
+            run_id: run.id.clone(),
+            issue_id: run.issue_id.clone(),
+            project_id: run.project_id.clone(),
+        });
+    }
+
+    fn issue_waiting(&self, issue_id: &str) -> bool {
+        self.runs.iter().any(|run| {
+            run.issue_id.as_deref() == Some(issue_id) && run.is_active() && run.waiting_for_user
+        })
+    }
+
+    fn issue_activity(&self, issue_id: &str) -> Option<IssueActivity> {
+        if self.issue_waiting(issue_id) {
+            Some(IssueActivity::Waiting)
+        } else if self.active_run_id_for_issue(issue_id).is_some() {
+            Some(IssueActivity::Running)
+        } else if self.execution_stopped(issue_id) {
+            Some(IssueActivity::ExecutionStopped)
+        } else {
+            None
+        }
+    }
+
     fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
+        let mut issue_id = None;
+        let mut newly_ended = false;
         if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
             if run.status != RunStatus::Ended {
                 run.status = RunStatus::Ended;
+                run.waiting_for_user = false;
                 run.ended_reason = Some(reason);
-                self.pending_events.push(HostEvent::RunStatusChanged {
-                    run_id: run_id.to_string(),
-                    status: RunStatus::Ended,
-                });
+                issue_id = run.issue_id.clone();
+                newly_ended = true;
+            }
+        }
+        if newly_ended {
+            self.pending_events.push(HostEvent::RunStatusChanged {
+                run_id: run_id.to_string(),
+                status: RunStatus::Ended,
+            });
+            match reason {
+                RunEndedReason::Exited => {
+                    self.push_notification(NotificationKind::Completed, run_id);
+                }
+                RunEndedReason::Abnormal => {
+                    self.push_notification(NotificationKind::AbnormalStop, run_id);
+                }
+                RunEndedReason::Stopped | RunEndedReason::Crash => {}
             }
         }
         self.live.remove(run_id);
+        if let Some(issue_id) = issue_id {
+            if self.execution_stopped(&issue_id) {
+                self.pending_events.push(HostEvent::ExecutionStopped {
+                    issue_id,
+                    run_id: run_id.to_string(),
+                });
+            }
+        }
         let active = self.active_run_count();
         if active == 0 {
             self.quit_offer = None;
@@ -2569,9 +2738,15 @@ impl HostKernel {
             self.refresh_status_for(focused_project_id),
             self.show_closed_graph_context,
         );
+        if let Some(columns) = board.columns.as_mut() {
+            for card in &mut columns.in_progress {
+                card.activity = self.issue_activity(&card.id);
+            }
+        }
         if let Some(selected) = board.selected.as_mut() {
             selected.active_run_id = self.active_run_id_for_issue(&selected.id);
             selected.execution_stopped = self.execution_stopped(&selected.id);
+            selected.waiting_for_user = self.issue_waiting(&selected.id);
         }
         Some(board)
     }
@@ -3010,6 +3185,16 @@ impl ShellCopy {
                 continue_run: "继续".into(),
                 release_claim: "释放认领".into(),
                 execution_stopped: "执行已停".into(),
+                waiting: "等待操作".into(),
+                running: "运行中".into(),
+                inject_line: "注入".into(),
+                inject_placeholder: "注入一行".into(),
+                notify_desktop: "桌面通知".into(),
+                notify_sound: "通知声音".into(),
+                notify_waiting: "等待操作".into(),
+                notify_completed: "Run 已正常完成".into(),
+                notify_abnormal: "Run 异常停止".into(),
+                notify_crash: "Host 崩溃后已捡回".into(),
                 got_it: "知道了".into(),
                 auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
                 repair_cli: "用 gh 登录".into(),
@@ -3153,6 +3338,16 @@ impl ShellCopy {
                 continue_run: "Continue".into(),
                 release_claim: "Release claim".into(),
                 execution_stopped: "Execution stopped".into(),
+                waiting: "Waiting".into(),
+                running: "Running".into(),
+                inject_line: "Inject".into(),
+                inject_placeholder: "Inject a line".into(),
+                notify_desktop: "Desktop notifications".into(),
+                notify_sound: "Notification sound".into(),
+                notify_waiting: "Waiting for you".into(),
+                notify_completed: "Run finished".into(),
+                notify_abnormal: "Run stopped abnormally".into(),
+                notify_crash: "Recovered after Host crash".into(),
                 got_it: "Got it".into(),
                 auth_failed: "GitHub credentials for this Project are not available.".into(),
                 repair_cli: "Sign in with gh".into(),
@@ -3334,6 +3529,10 @@ struct ClientSettingsFile {
     center_view: CenterView,
     #[serde(default = "default_true")]
     show_command_preview: bool,
+    #[serde(default = "default_true")]
+    notify_desktop: bool,
+    #[serde(default = "default_true")]
+    notify_sound: bool,
 }
 
 fn default_true() -> bool {
@@ -3366,6 +3565,8 @@ fn load_or_init_appearance(
         u32,
         CenterView,
         bool,
+        bool,
+        bool,
     ),
     KernelError,
 > {
@@ -3384,6 +3585,8 @@ fn load_or_init_appearance(
                 board::clamp_recent_limit(file.recent_completed_limit),
                 file.center_view,
                 file.show_command_preview,
+                file.notify_desktop,
+                file.notify_sound,
             ));
         }
         if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
@@ -3394,6 +3597,8 @@ fn load_or_init_appearance(
                 Vec::new(),
                 board::DEFAULT_RECENT_LIMIT,
                 CenterView::Board,
+                true,
+                true,
                 true,
             ));
         }
@@ -3417,6 +3622,8 @@ fn load_or_init_appearance(
         recent_completed_limit: board::DEFAULT_RECENT_LIMIT,
         center_view: CenterView::Board,
         show_command_preview: true,
+        notify_desktop: true,
+        notify_sound: true,
     };
     write_json(path, &file)?;
     Ok((
@@ -3425,6 +3632,8 @@ fn load_or_init_appearance(
         Vec::new(),
         board::DEFAULT_RECENT_LIMIT,
         CenterView::Board,
+        true,
+        true,
         true,
     ))
 }
