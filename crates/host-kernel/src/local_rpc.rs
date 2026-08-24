@@ -40,6 +40,24 @@ pub struct LoopbackServer {
 }
 
 impl LoopbackServer {
+    pub fn attach_client_transport(
+        kernel: Arc<Mutex<HostKernel>>,
+        on_outcome: impl Fn(CommandOutcome) + Send + Sync + 'static,
+    ) -> io::Result<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = listener.local_addr()?.port();
+        let protocol_url = format!("http://127.0.0.1:{port}");
+        spawn_local_rpc_inner(
+            listener,
+            kernel,
+            LoopbackAssets::Builtin,
+            Arc::clone(&stop),
+            on_outcome,
+        );
+        Ok(Self { protocol_url, stop })
+    }
+
     pub fn attach(
         kernel: Arc<Mutex<HostKernel>>,
         page_port: u16,
@@ -155,7 +173,7 @@ fn spawn_local_rpc_inner(
         .name("host-local-rpc".into())
         .spawn(move || {
             let _ = listener.set_nonblocking(true);
-            while !stop.load(Ordering::Relaxed) && kernel_running(&kernel) {
+            while !stop.load(Ordering::Relaxed) && kernel_process_alive(&kernel) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let _ = stream.set_nonblocking(false);
@@ -186,10 +204,10 @@ fn spawn_local_rpc_inner(
         .expect("host local rpc thread");
 }
 
-fn kernel_running(kernel: &Mutex<HostKernel>) -> bool {
+fn kernel_process_alive(kernel: &Mutex<HostKernel>) -> bool {
     kernel
         .lock()
-        .map(|host| host.snapshot().running)
+        .map(|host| host.process_alive())
         .unwrap_or(false)
 }
 
@@ -270,7 +288,15 @@ fn serve_connection(
     }
 
     if request.method == "GET" || request.method == "HEAD" {
-        serve_loopback_get(&mut stream, &request, origin, assets)?;
+        let host_running = kernel
+            .lock()
+            .map(|host| host.snapshot().running)
+            .unwrap_or(false);
+        if !host_running {
+            write_json(&mut stream, 404, origin, r#"{"error":"not found"}"#)?;
+        } else {
+            serve_loopback_get(&mut stream, &request, origin, assets)?;
+        }
         return Ok(None);
     }
 
