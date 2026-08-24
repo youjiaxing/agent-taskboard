@@ -12,6 +12,10 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WindowEvent};
+use tauri_plugin_log::RotationStrategy;
+
+const LOG_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
+const LOG_FILE_COUNT: usize = 5;
 
 struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
@@ -22,6 +26,12 @@ struct AppState {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .max_file_size(LOG_FILE_SIZE_BYTES)
+                .rotation_strategy(RotationStrategy::KeepSome(LOG_FILE_COUNT))
+                .build(),
+        )
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("com.youjiaxing.agent-taskboard")
