@@ -314,7 +314,21 @@ if (await pick.count()) {
   await pick.click();
   await page.waitForSelector("textarea[data-field='openingText']");
 }
-await page.fill("textarea[data-field='openingText']", "e2e unbound run");
+await page.click(".launch-sheet button[data-act='intent'][data-id='modify']");
+const openingText = page.locator("textarea[data-field='openingText']");
+await openingText.fill("");
+await openingText.pressSequentially("e2e unbound run");
+const customIntent = await page.$eval(".launch-sheet button[data-act='intent-custom']", (node) => ({
+  text: node.textContent?.trim(),
+  active: node.classList.contains("active"),
+  hidden: node.hidden,
+}));
+if (customIntent.hidden || !customIntent.active || (customIntent.text !== "自定义" && customIntent.text !== "Custom")) {
+  throw new Error(`editing an intent prefix should show Custom, got ${JSON.stringify(customIntent)}`);
+}
+if ((await openingText.inputValue()) !== "e2e unbound run" || !(await openingText.evaluate((node) => node === document.activeElement))) {
+  throw new Error("editing an intent prefix should preserve the textarea and its focus");
+}
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForSelector(".run-dock");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
@@ -342,6 +356,19 @@ if (!browserUpdateText?.includes("浏览器 Client 不能给 Host 换包")) {
 if (await page.$("button[data-act='check-updates']") || await page.$("button[data-act='install-update']")) {
   throw new Error("browser Client must not expose updater actions");
 }
+const initialPreviewSetting = await page.$eval("input[data-field='commandPreview']", (node) => node.checked);
+if (!initialPreviewSetting) {
+  throw new Error("command preview should be enabled by default");
+}
+await page.locator("input[data-field='commandPreview']").uncheck();
+await page.waitForFunction(async (protocol) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot" }),
+  });
+  return (await response.json()).snapshot.showCommandPreview === false;
+}, url);
 const browserStartupText = await page.$eval(".startup-settings", (node) => node.textContent?.replace(/\s+/g, " ").trim());
 if (!browserStartupText?.includes("只能在桌面应用中修改")) {
   throw new Error(`browser Client should explain the desktop startup boundary: ${browserStartupText}`);

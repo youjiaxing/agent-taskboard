@@ -167,6 +167,18 @@ fn prepare_form_uses_cli_seed_concrete_values() {
     assert!(form.fields.iter().any(|field| field.id == "sandbox"));
     assert!(form.isolation_reason.contains("隔离"));
     assert!(!form.isolation_supported);
+    assert_eq!(
+        form.command_preview,
+        "grok --model grok-4.6 --effort high --sandbox off"
+    );
+    assert!(out.snapshot.show_command_preview);
+    h.host
+        .handle(serde_json::json!({
+            "op": "setShowCommandPreview",
+            "show": false,
+        }))
+        .unwrap();
+    assert!(!h.host.snapshot().show_command_preview);
     assert_eq!(out.snapshot.copy.opening_placeholder, "要 Agent 做什么");
 }
 

@@ -947,6 +947,21 @@ function refreshLaunchWarnings(): void {
   node.hidden = warnings.length === 0;
 }
 
+function refreshIntentChoices(): void {
+  if (!app || !launchDraft) return;
+  for (const button of app.querySelectorAll<HTMLButtonElement>(".launch-sheet button[data-act='intent']")) {
+    button.classList.toggle(
+      "active",
+      !launchDraft.custom && (button.dataset.id ?? "") === launchDraft.intentId,
+    );
+  }
+  const custom = app.querySelector<HTMLButtonElement>(".launch-sheet button[data-act='intent-custom']");
+  if (custom) {
+    custom.hidden = !launchDraft.custom;
+    custom.classList.toggle("active", launchDraft.custom);
+  }
+}
+
 function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
   const prefix = form.intents.find((intent) => intent.id === draft.intentId)?.prefix ?? "";
   const body = (draft.values["initial-instruction"] ?? "").trim();
@@ -2640,7 +2655,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
                 `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
             )
             .join("")}
-          ${draft.custom ? `<button type="button" class="active" data-act="intent-custom">${escapeHtml(copy.intentCustom)}</button>` : ""}
+          <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
         </div>
       </div>
       <div class="field">
@@ -3763,6 +3778,7 @@ app.addEventListener("input", (event) => {
     } else if (snapshot?.launchForm) {
       launchDraft.custom =
         launchDraft.openingText.trim() !== expectedOpening(snapshot.launchForm, launchDraft).trim();
+      refreshIntentChoices();
     }
   }
   const launchId = target.getAttribute("data-launch");

@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 
-const [config, desktopPackage, cargo] = await Promise.all([
+const [config, desktopPackage, packageLock, cargo] = await Promise.all([
   readJson(new URL("../src-tauri/tauri.conf.json", import.meta.url)),
   readJson(new URL("../package.json", import.meta.url)),
+  readJson(new URL("../package-lock.json", import.meta.url)),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
 ]);
 
@@ -16,6 +17,16 @@ if (versions.some((version) => !version) || new Set(versions).size !== 1) {
 const tag = process.argv[2] || process.env.RELEASE_TAG;
 if (tag && tag !== `v${config.version}`) {
   fail(`release tag ${tag} does not match app version v${config.version}`);
+}
+
+for (const platformPackage of [
+  "@tauri-apps/cli-darwin-arm64",
+  "@tauri-apps/cli-darwin-x64",
+  "@tauri-apps/cli-win32-x64-msvc",
+]) {
+  if (!packageLock.packages?.[`node_modules/${platformPackage}`]) {
+    fail(`package-lock.json is missing ${platformPackage}`);
+  }
 }
 
 if (config.bundle?.active !== true) fail("bundle.active must be true");

@@ -457,6 +457,28 @@ fn recent_action_stays_empty_when_adapter_has_none() {
 }
 
 #[test]
+fn recent_action_uses_only_the_adapter_observation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    h.agent
+        .set_recent_action(Some("正在运行 cargo test".into()));
+    let project_id = register(&mut h.host, &dir);
+
+    let run = &h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .snapshot
+        .runs[0];
+
+    assert_eq!(run.recent_action.as_deref(), Some("正在运行 cargo test"));
+}
+
+#[test]
 fn pty_bytes_round_trip_through_host() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
