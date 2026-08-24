@@ -57,6 +57,10 @@ impl LaunchEnvironment {
 
 pub trait LaunchEnvPort: Send + Sync {
     fn capture(&self, cwd: &Path) -> Result<LaunchEnvironment, String>;
+
+    fn refresh(&self, cwd: &Path) -> Result<LaunchEnvironment, String> {
+        self.capture(cwd)
+    }
 }
 
 #[derive(Debug)]
@@ -164,31 +168,40 @@ impl LaunchEnvPort for ShellLaunchEnv {
         if let Some(cached) = self.cached(cwd) {
             return Ok(cached);
         }
-        match capture_shell(&self.shell, cwd, self.timeout) {
-            Ok(env) => {
-                self.cache
-                    .lock()
-                    .expect("launch env cache")
-                    .insert(cwd.to_path_buf(), (Instant::now(), env.clone()));
-                Ok(env)
-            }
-            Err(err) => {
-                if let Some(cached) = self.cached(cwd) {
-                    Ok(cached)
-                } else {
-                    Err(err)
-                }
-            }
+        match self.capture_fresh(cwd) {
+            Ok(env) => Ok(env),
+            Err(err) => self.cached_any(cwd).ok_or(err),
         }
+    }
+
+    fn refresh(&self, cwd: &Path) -> Result<LaunchEnvironment, String> {
+        self.capture_fresh(cwd)
     }
 }
 
 impl ShellLaunchEnv {
+    fn capture_fresh(&self, cwd: &Path) -> Result<LaunchEnvironment, String> {
+        let env = capture_shell(&self.shell, cwd, self.timeout)?;
+        self.cache
+            .lock()
+            .expect("launch env cache")
+            .insert(cwd.to_path_buf(), (Instant::now(), env.clone()));
+        Ok(env)
+    }
+
     fn cached(&self, cwd: &Path) -> Option<LaunchEnvironment> {
         let cache = self.cache.lock().expect("launch env cache");
         cache
             .get(cwd)
             .and_then(|(at, env)| (at.elapsed() < Duration::from_secs(30)).then(|| env.clone()))
+    }
+
+    fn cached_any(&self, cwd: &Path) -> Option<LaunchEnvironment> {
+        self.cache
+            .lock()
+            .expect("launch env cache")
+            .get(cwd)
+            .map(|(_, env)| env.clone())
     }
 }
 

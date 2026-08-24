@@ -326,6 +326,19 @@ if (!browserUpdateText?.includes("浏览器 Client 不能给 Host 换包")) {
 if (await page.$("button[data-act='check-updates']") || await page.$("button[data-act='install-update']")) {
   throw new Error("browser Client must not expose updater actions");
 }
+const browserStartupText = await page.$eval(".startup-settings", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!browserStartupText?.includes("只能在桌面应用中修改")) {
+  throw new Error(`browser Client should explain the desktop startup boundary: ${browserStartupText}`);
+}
+if (await page.$("button[data-act='host-mode']") || await page.$("input[data-field='startAtLogin']")) {
+  throw new Error("browser Client must not expose Host mode or system autostart controls");
+}
+await page.click("button[data-act='refresh-launch-environment']");
+await page.waitForSelector('[data-launch-environment-status="ready"]');
+const launchEnvironmentText = await page.$eval("[data-launch-environment-status]", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!launchEnvironmentText?.includes("启动环境已更新")) {
+  throw new Error(`launch environment refresh should report success: ${launchEnvironmentText}`);
+}
 await page.fill("#recent-limit", "1");
 await page.locator("#recent-limit").dispatchEvent("change");
 await page.waitForFunction(() => document.querySelectorAll('[data-lane="recentlyCompleted"] .issue-card').length === 1);
