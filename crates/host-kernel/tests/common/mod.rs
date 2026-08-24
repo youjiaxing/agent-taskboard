@@ -51,6 +51,15 @@ impl SeamTracker {
             .insert(repository.to_string(), issues);
     }
 
+    pub fn add_issue(&self, issue: IssueRecord) {
+        self.issues
+            .lock()
+            .expect("seam tracker")
+            .entry(issue.repository.clone())
+            .or_default()
+            .push(issue);
+    }
+
     pub fn set_read_mode(&self, repository: &str, mode: ReadMode) {
         self.read_modes
             .lock()
@@ -130,6 +139,7 @@ impl SeamTracker {
                         number: item.number,
                         title: item.title.clone(),
                         open,
+                        url: item.url.clone(),
                     }
                 })
                 .collect();
@@ -194,6 +204,7 @@ impl SeamTracker {
                     number: item.number,
                     title: item.title.clone(),
                     open: None,
+                    url: item.url.clone(),
                 });
             }
             TrackerWriteOp::SetBlockedBy { .. } | TrackerWriteOp::CreateIssue { .. } => {

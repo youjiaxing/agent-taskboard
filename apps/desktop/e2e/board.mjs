@@ -34,6 +34,18 @@ try {
   throw error;
 }
 await page.waitForSelector(".refresh-bar");
+if (await page.$('.refresh-bar[data-kind="incomplete"]')) {
+  const incompleteText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
+  if (!incompleteText.includes("数据不完整") || !incompleteText.includes("pagination stopped early")) {
+    throw new Error(`incomplete refresh detail missing: ${incompleteText}`);
+  }
+  if (await page.$(".lanes") || await page.$(".dep-graph")) {
+    throw new Error("incomplete tracker data must hide Frontier lanes and the dependency graph");
+  }
+  await page.waitForSelector('[data-empty="incomplete-read"]');
+  await page.click('.refresh-bar button[data-act="refresh"]');
+  await page.waitForSelector(".lanes");
+}
 
 await page.keyboard.press("?");
 await page.waitForSelector(".keyboard-help");

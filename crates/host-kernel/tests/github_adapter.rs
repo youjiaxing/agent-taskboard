@@ -605,25 +605,51 @@ fn github_adapter_paginates_blocked_by_blocking_and_sub_issues_to_end() {
 
 #[test]
 fn github_adapter_graphql_business_error_keeps_detail() {
-    let tracker = scripted(ScriptedGitHub {
+    let message = "Could not resolve to a Repository with the name 'you/garden'.";
+    let script = ScriptedGitHub {
         env: [("GH_TOKEN".into(), "tok".into())].into(),
         accept_tokens: ["tok".into()].into(),
-        graphql_business_error: Some(
-            "Could not resolve to a Repository with the name 'you/garden'.".into(),
-        ),
+        graphql_business_error: Some(message.into()),
         ..Default::default()
-    });
+    };
+    let tracker = scripted(script.clone());
     let ctx = probe_ctx("github.com", "you/garden");
     let err = tracker.read_issues(&ctx).unwrap_err();
     match err {
         host_kernel::TrackerReadError::Failed { detail } => {
-            assert_eq!(
-                detail.as_deref(),
-                Some("Could not resolve to a Repository with the name 'you/garden'.")
-            );
+            assert_eq!(detail.as_deref(), Some(message));
         }
         other => panic!("expected business error, got {other:?}"),
     }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("work/garden");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut host = HostKernel::boot_with(
+        BootRequest {
+            app_local_data_dir: tmp.path().to_path_buf(),
+            app_log_dir: tmp.path().join("logs"),
+            system_locale: "en-US".into(),
+            system_appearance: SystemAppearance::Light,
+            host_display_name: "Studio".into(),
+        },
+        Arc::new(GitHubTracker::scripted(script)),
+    )
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": "garden",
+        "localPath": dir,
+        "repository": "you/garden",
+    }))
+    .unwrap();
+    let board = host.snapshot().board.unwrap();
+    assert_eq!(board.empty, Some(host_kernel::BoardEmptyReason::NoData));
+    assert!(matches!(
+        board.refresh,
+        host_kernel::RefreshStatus::TrackerError { detail: Some(detail), .. }
+            if detail == message
+    ));
 }
 
 #[test]
@@ -666,8 +692,28 @@ fn github_adapter_offline_keeps_network_detail() {
 
 #[test]
 fn github_adapter_self_hosted_links_use_registered_host() {
-    let mut self_hosted = plain_node(50, "self hosted");
-    self_hosted.as_object_mut().unwrap().remove("url");
+    let mut self_hosted = node(serde_json::json!({
+        "number": 50,
+        "title": "self hosted",
+        "assignees": { "nodes": [] },
+        "issueDependenciesSummary": { "blockedBy": 1 },
+    }));
+    let object = self_hosted.as_object_mut().unwrap();
+    object.remove("url");
+    object
+        .get_mut("parent")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("url");
+    object["subIssues"]["nodes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("url");
+    object["blockedBy"]["nodes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("url");
     let tracker = scripted(ScriptedGitHub {
         env: [("GH_TOKEN".into(), "tok".into())].into(),
         accept_tokens: ["tok".into()].into(),
@@ -678,6 +724,18 @@ fn github_adapter_self_hosted_links_use_registered_host() {
 
     let read = tracker.read_issues(&ctx).unwrap();
     assert_eq!(read[0].url, "https://ghe.example.com/you/garden/issues/50");
+    assert_eq!(
+        read[0].parent.as_ref().unwrap().url,
+        "https://ghe.example.com/you/garden/issues/45"
+    );
+    assert_eq!(
+        read[0].children[0].url,
+        "https://ghe.example.com/you/garden/issues/51"
+    );
+    let DependencyRef::Known(blocker) = &read[0].blocked_by[0] else {
+        panic!("expected known blocker");
+    };
+    assert_eq!(blocker.url, "https://ghe.example.com/you/other/issues/12");
 
     let created = tracker.create_issue(&ctx, "self", "hosted").unwrap();
     assert_eq!(created.number, 51, "next number after #50");

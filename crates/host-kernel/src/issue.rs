@@ -24,6 +24,8 @@ pub struct IssueRef {
     pub number: u64,
     pub title: String,
     pub open: Option<bool>,
+    #[serde(default)]
+    pub url: String,
 }
 
 impl IssueRef {
@@ -37,6 +39,7 @@ impl IssueRef {
             number,
             title: title.into(),
             open: None,
+            url: String::new(),
         }
     }
 

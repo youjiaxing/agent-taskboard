@@ -15,6 +15,8 @@ pub enum BoardEmptyReason {
     NoData,
     /// 有数据但读取不完整（截断等），不能当作全量数据绘制列。
     IncompleteRead,
+    /// Tracker 返回业务错误；保留已知详情，但不能用旧数据计算 Frontier。
+    TrackerError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +139,18 @@ pub enum RefreshStatus {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    TrackerError {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+        #[serde(
+            rename = "nextRefreshInMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        next_refresh_in_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
 }
 
 impl RefreshStatus {
@@ -149,6 +163,7 @@ impl RefreshStatus {
             Self::RateLimited { .. } => "rate-limited",
             Self::AuthFailed { .. } => "auth-failed",
             Self::Incomplete { .. } => "incomplete",
+            Self::TrackerError { .. } => "tracker-error",
         }
     }
 
@@ -161,12 +176,13 @@ impl RefreshStatus {
             Self::RateLimited { fetched_at_ms, .. } => *fetched_at_ms,
             Self::AuthFailed { fetched_at_ms } => *fetched_at_ms,
             Self::Incomplete { fetched_at_ms, .. } => *fetched_at_ms,
+            Self::TrackerError { fetched_at_ms, .. } => *fetched_at_ms,
         }
     }
 
     /// 当前数据能否当作全量数据使用；不完整时禁止计算 Frontier/依赖图。
     pub fn complete(&self) -> bool {
-        !matches!(self, Self::Incomplete { .. })
+        !matches!(self, Self::Incomplete { .. } | Self::TrackerError { .. })
     }
 }
 
@@ -304,10 +320,15 @@ pub fn project_board(
     // 数据不完整时不能当作全量数据计算 Frontier 与依赖图：
     // 不画四列、不画图，但保留已知数据的详情与父过滤视图。
     if !refresh.complete() {
+        let empty = if matches!(refresh, RefreshStatus::TrackerError { .. }) {
+            BoardEmptyReason::TrackerError
+        } else {
+            BoardEmptyReason::IncompleteRead
+        };
         return BoardSnapshot {
             project_id: project_id.to_string(),
             columns: None,
-            empty: Some(BoardEmptyReason::IncompleteRead),
+            empty: Some(empty),
             frontier_empty: None,
             parent_filter: parent_filter
                 .and_then(|id| issues.iter().find(|issue| issue.id() == id))
@@ -657,10 +678,7 @@ fn link_detail(issue: &IssueRef) -> IssueDetail {
         repository: issue.repository.clone(),
         number: issue.number,
         title: issue.title.clone(),
-        url: format!(
-            "https://github.com/{}/issues/{}",
-            issue.repository, issue.number
-        ),
+        url: issue.url.clone(),
         open: issue.open.unwrap_or(true),
         claimed_by: Vec::new(),
         triage_role: None,

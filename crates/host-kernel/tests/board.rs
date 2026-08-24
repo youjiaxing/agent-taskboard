@@ -645,10 +645,10 @@ fn unknown_move_op_does_not_change_tracker_state() {
 }
 
 #[test]
-fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
+fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
+    let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(
         IssueRecord::open("you/garden", 1, "parent")
             .child("you/garden", 2, "child ready")
@@ -684,6 +684,10 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     tracker.add_issue(
         IssueRecord::open("you/garden", 7, "just closed").closed_at("2026-08-22T10:00:00Z"),
     );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("pagination stopped early".into()),
+    );
     let sessions = host_kernel::MemorySessionFactory::new();
     let agent = Arc::new(host_kernel::MemoryAgent::installed_grok());
     let mut host = HostKernel::boot_with_ports(
@@ -697,6 +701,12 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     )
     .unwrap();
     let garden_project_id = register(&mut host, &dir, "you/garden");
+    assert_eq!(
+        host.snapshot().board.unwrap().empty,
+        Some(BoardEmptyReason::IncompleteRead)
+    );
+    tracker.set_read_mode("you/garden", ReadMode::Complete);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
     host.handle(serde_json::json!({
         "op": "startBoundRun",
         "issueId": "you/garden#10",

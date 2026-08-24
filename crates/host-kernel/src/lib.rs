@@ -719,6 +719,8 @@ pub struct ShellCopy {
     pub no_recent: String,
     pub recent_note: String,
     pub empty_no_data: String,
+    pub empty_incomplete: String,
+    pub empty_tracker_error: String,
     pub family: String,
     pub deps: String,
     pub parent: String,
@@ -746,6 +748,8 @@ pub struct ShellCopy {
     pub refresh_retry: String,
     pub refresh_paused: String,
     pub refresh_auth: String,
+    pub refresh_incomplete: String,
+    pub refresh_tracker_error: String,
     pub new_run: String,
     pub execute_run: String,
     pub start_run: String,
@@ -986,6 +990,7 @@ enum StoredRefreshKind {
     RateLimited,
     AuthFailed,
     Incomplete,
+    TrackerError,
 }
 
 #[derive(Debug, Clone)]
@@ -1986,13 +1991,14 @@ impl HostKernel {
                 let blocked_by = request
                     .get("blockedBy")
                     .and_then(|value| value.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                            .collect::<Vec<_>>()
+                    .ok_or_else(|| KernelError::Protocol("missing blockedBy".into()))?
+                    .iter()
+                    .map(|item| {
+                        item.as_str()
+                            .map(ToOwned::to_owned)
+                            .ok_or_else(|| KernelError::Protocol("invalid blockedBy".into()))
                     })
-                    .unwrap_or_default();
+                    .collect::<Result<Vec<_>, _>>()?;
                 for id in &blocked_by {
                     parse_issue_ref(id)?;
                 }
@@ -3005,9 +3011,6 @@ impl HostKernel {
         issue_id: &str,
         blocked_by: &[String],
     ) -> Result<(), KernelError> {
-        if blocked_by.is_empty() {
-            return Err(KernelError::Protocol("missing blockedBy".into()));
-        }
         self.require_live_tracker_for_issue(issue_id)?;
         let blocked_by = blocked_by
             .iter()
@@ -4628,21 +4631,22 @@ impl HostKernel {
             }
             Err(tracker::TrackerReadError::Failed { detail }) => {
                 let detail = detail.unwrap_or_else(|| "tracker business error".into());
-                let issues = self
-                    .loaded_issues
-                    .get(project_id)
-                    .cloned()
-                    .unwrap_or_default();
-                self.apply_read(
-                    project_id,
-                    index,
-                    &github_host,
-                    &repository,
-                    now,
-                    issues,
-                    false,
-                    Some(detail),
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: previous_fetched,
+                        last_attempt_ms: now,
+                        kind: StoredRefreshKind::TrackerError,
+                        retry_at_ms: None,
+                        complete: false,
+                        detail: Some(detail),
+                    },
                 );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
                 false
             }
         }
@@ -4721,6 +4725,7 @@ impl HostKernel {
             StoredRefreshKind::Ready
             | StoredRefreshKind::Offline
             | StoredRefreshKind::Incomplete
+            | StoredRefreshKind::TrackerError
             | StoredRefreshKind::NeverFetched => {
                 self.now_ms
                     >= state
@@ -4750,6 +4755,13 @@ impl HostKernel {
         // 拿到的是不完整数据时优先表达 incomplete：看板不能当作全量数据计算 Frontier/依赖图；
         // 从未读到过数据（complete=false 且无已加载数据）则按错误状态表达。
         if !state.complete && self.loaded_issues.contains_key(project_id) {
+            if state.kind == StoredRefreshKind::TrackerError {
+                return RefreshStatus::TrackerError {
+                    fetched_at_ms: state.fetched_at_ms,
+                    next_refresh_in_ms: next,
+                    detail: state.detail.clone(),
+                };
+            }
             return RefreshStatus::Incomplete {
                 fetched_at_ms: state.fetched_at_ms,
                 next_refresh_in_ms: next,
@@ -4784,6 +4796,11 @@ impl HostKernel {
                 next_refresh_in_ms: next,
                 detail: state.detail.clone(),
             },
+            StoredRefreshKind::TrackerError => RefreshStatus::TrackerError {
+                fetched_at_ms: state.fetched_at_ms,
+                next_refresh_in_ms: next,
+                detail: state.detail.clone(),
+            },
         }
     }
 
@@ -4797,7 +4814,8 @@ impl HostKernel {
                 .map(|retry_at| retry_at.saturating_sub(self.now_ms)),
             StoredRefreshKind::Ready
             | StoredRefreshKind::Offline
-            | StoredRefreshKind::Incomplete => Some(
+            | StoredRefreshKind::Incomplete
+            | StoredRefreshKind::TrackerError => Some(
                 (state
                     .last_attempt_ms
                     .saturating_add(self.refresh_interval_ms))
@@ -4880,6 +4898,12 @@ impl HostKernel {
                 "cannot write to tracker: never-fetched".into()
             }
             Some(StoredRefreshKind::Incomplete) => "cannot write to tracker: incomplete".into(),
+            Some(StoredRefreshKind::TrackerError) => self
+                .refresh
+                .get(project_id)
+                .and_then(|state| state.detail.as_deref())
+                .map(|detail| format!("cannot write to tracker: tracker-error ({detail})"))
+                .unwrap_or_else(|| "cannot write to tracker: tracker-error".into()),
             _ => "cannot write to tracker: offline".into(),
         }
     }
@@ -5029,6 +5053,8 @@ impl ShellCopy {
                 no_recent: "还没有刚关的".into(),
                 recent_note: "只留最近几张，不是全部已关闭。不能拖进这一列来关票。".into(),
                 empty_no_data: "还没有可显示的数据。".into(),
+                empty_incomplete: "Issue 数据没有完整读完。为避免误判，暂不显示 Frontier 和依赖图。".into(),
+                empty_tracker_error: "Tracker 返回业务错误。为避免使用过期数据误判，暂不显示 Frontier 和依赖图。".into(),
                 family: "属于 / 子票".into(),
                 deps: "挡住它的 / 它挡住的".into(),
                 parent: "属于".into(),
@@ -5056,6 +5082,8 @@ impl ShellCopy {
                 refresh_retry: "大约可再刷新".into(),
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
+                refresh_incomplete: "数据不完整".into(),
+                refresh_tracker_error: "Tracker 业务错误".into(),
                 new_run: "新建".into(),
                 execute_run: "执行".into(),
                 start_run: "启动".into(),
@@ -5266,6 +5294,8 @@ impl ShellCopy {
                 no_recent: "None just closed".into(),
                 recent_note: "Only the last few, not all closed issues. Dragging here does not close.".into(),
                 empty_no_data: "No displayable data yet.".into(),
+                empty_incomplete: "Issue data could not be read completely. Frontier and the dependency graph are hidden to prevent incorrect decisions.".into(),
+                empty_tracker_error: "The Tracker returned a business error. Frontier and the dependency graph are hidden to avoid decisions based on stale data.".into(),
                 family: "Parent / children".into(),
                 deps: "Blocked by / blocking".into(),
                 parent: "Parent".into(),
@@ -5293,6 +5323,8 @@ impl ShellCopy {
                 refresh_retry: "Can retry around".into(),
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
+                refresh_incomplete: "Incomplete data".into(),
+                refresh_tracker_error: "Tracker business error".into(),
                 new_run: "New".into(),
                 execute_run: "Run".into(),
                 start_run: "Start".into(),

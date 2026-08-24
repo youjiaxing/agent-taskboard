@@ -2932,21 +2932,24 @@ pub fn map_github_issue_node(
         .map(ToOwned::to_owned);
     let assignees = logins(node.get("assignees"));
     let labels = label_names(node.get("labels"));
-    let parent = parse_ref(node.get("parent"), &repository);
+    let parent = parse_ref(node.get("parent"), &repository, github_host);
     let children = connection_refs(
         node.get("subIssues").or_else(|| node.get("sub_issues")),
         &repository,
+        github_host,
     );
     let mut blocked_by = connection_deps(
         node.get("blockedBy")
             .or_else(|| node.get("blocked_by"))
             .or_else(|| node.pointer("/dependencies/blocked_by")),
         &repository,
+        github_host,
     );
     let blocking = connection_refs(
         node.get("blocking")
             .or_else(|| node.pointer("/dependencies/blocking")),
         &repository,
+        github_host,
     );
     let summary_open = node
         .pointer("/issueDependenciesSummary/blockedBy")
@@ -3037,17 +3040,25 @@ fn label_names(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn connection_refs(value: Option<&Value>, fallback_repository: &str) -> Vec<IssueRef> {
+fn connection_refs(
+    value: Option<&Value>,
+    fallback_repository: &str,
+    github_host: &str,
+) -> Vec<IssueRef> {
     connection_nodes(value)
         .into_iter()
-        .filter_map(|node| parse_ref(Some(node), fallback_repository))
+        .filter_map(|node| parse_ref(Some(node), fallback_repository, github_host))
         .collect()
 }
 
-fn connection_deps(value: Option<&Value>, fallback_repository: &str) -> Vec<DependencyRef> {
+fn connection_deps(
+    value: Option<&Value>,
+    fallback_repository: &str,
+    github_host: &str,
+) -> Vec<DependencyRef> {
     connection_nodes(value)
         .into_iter()
-        .map(|node| parse_dep(node, fallback_repository))
+        .map(|node| parse_dep(node, fallback_repository, github_host))
         .collect()
 }
 
@@ -3063,7 +3074,11 @@ fn connection_nodes(value: Option<&Value>) -> Vec<&Value> {
     }
 }
 
-fn parse_ref(value: Option<&Value>, fallback_repository: &str) -> Option<IssueRef> {
+fn parse_ref(
+    value: Option<&Value>,
+    fallback_repository: &str,
+    github_host: &str,
+) -> Option<IssueRef> {
     let value = value?;
     if value.is_null() {
         return None;
@@ -3079,16 +3094,22 @@ fn parse_ref(value: Option<&Value>, fallback_repository: &str) -> Option<IssueRe
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let url = value
+        .get("url")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| github_web_issue_url(github_host, &repository, number));
     Some(IssueRef {
         repository,
         number,
         title,
         open: value.get("state").and_then(Value::as_str).map(state_open),
+        url,
     })
 }
 
-fn parse_dep(value: &Value, fallback_repository: &str) -> DependencyRef {
-    match parse_ref(Some(value), fallback_repository) {
+fn parse_dep(value: &Value, fallback_repository: &str, github_host: &str) -> DependencyRef {
+    match parse_ref(Some(value), fallback_repository, github_host) {
         Some(issue) if issue.open.is_some() && !issue.repository.is_empty() => {
             DependencyRef::Known(issue)
         }

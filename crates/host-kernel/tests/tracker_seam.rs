@@ -169,6 +169,15 @@ fn host_commands_cover_create_update_open_comment_parent_and_dependency() {
         .iter()
         .any(|edge| edge.from == "you/garden#9" && edge.to == "you/garden#8"));
 
+    // 空列表表示清空全部阻塞边，票重新进入 Frontier。
+    host.handle(serde_json::json!({
+        "op": "setIssueBlockedBy",
+        "issueId": "you/garden#8",
+        "blockedBy": [],
+    }))
+    .unwrap();
+    assert!(frontier_ids(&host).contains(&"you/garden#8".into()));
+
     // 写操作都走同一个接缝
     let log = tracker.log();
     assert!(log.iter().any(|(_, id, op)| id.is_none()
@@ -363,7 +372,6 @@ fn create_requires_valid_project_and_issue_refs() {
         .handle(serde_json::json!({
             "op": "setIssueBlockedBy",
             "issueId": "you/garden#8",
-            "blockedBy": [],
         }))
         .unwrap_err();
     assert!(matches!(err, KernelError::Protocol(message) if message.contains("missing blockedBy")));
