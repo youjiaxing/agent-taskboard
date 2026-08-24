@@ -741,12 +741,9 @@ fn executable_in(dir: &Path, bin: &str) -> Option<PathBuf> {
     if is_executable(&candidate) {
         return Some(candidate);
     }
-    #[cfg(windows)]
-    {
-        let exe = dir.join(format!("{bin}.exe"));
-        if is_executable(&exe) {
-            return Some(exe);
-        }
+    let exe = dir.join(format!("{bin}.exe"));
+    if exe != candidate && is_executable(&exe) {
+        return Some(exe);
     }
     None
 }
@@ -768,7 +765,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-pub(super) fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

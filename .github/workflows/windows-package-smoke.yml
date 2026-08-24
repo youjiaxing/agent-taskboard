@@ -22,6 +22,8 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - run: npm ci --prefix apps/desktop
+      - name: 跨平台 gh resolver
+        run: cargo test -p host-kernel --test gh_resolver
       - name: 构建 NSIS
         shell: pwsh
         run: |

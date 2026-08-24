@@ -60,9 +60,10 @@ pub use session::{
     SpawnRequest,
 };
 pub use tracker::{
-    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, IssueComment,
-    IssueEdit, MemoryTracker, ProbeContext, ProbeOutcome, ProjectConnection, RepairHint,
-    ScriptedGitHub, TrackerKind, TrackerPort, TrackerReadError, TrackerWriteError,
+    gh_known_install_locations, map_github_issue_node, resolve_gh, AuthFailureKind,
+    CredentialSource, GitHubTracker, IssueComment, IssueEdit, MemoryTracker, ProbeContext,
+    ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
+    TrackerReadError, TrackerWriteError,
 };
 pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
 pub use usage::{
@@ -944,10 +945,11 @@ pub struct KernelPorts {
 
 impl KernelPorts {
     pub fn live() -> Self {
+        let launch_env: Arc<dyn LaunchEnvPort> = Arc::new(ShellLaunchEnv::live());
         Self {
-            tracker: Arc::new(GitHubTracker::live()),
+            tracker: Arc::new(GitHubTracker::live(launch_env.clone())),
             agents: builtin_agents(),
-            launch_env: Arc::new(ShellLaunchEnv::live()),
+            launch_env,
             sessions: Arc::new(PtySessionFactory),
         }
     }

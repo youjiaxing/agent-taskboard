@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent::{home_dir, prepare_launch_env, probe_binary, ProbeResult};
 use crate::issue::{parse_issue_id, DependencyRef, IssueRecord, IssueRef};
+use crate::launch_env::{LaunchEnvPort, LaunchEnvironment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -223,6 +225,60 @@ pub fn repair_hint(cli_detected: bool, secrets_path: &Path) -> RepairHint {
         generic_env: GITHUB_GENERIC_ENV.to_string(),
         suggested_scope: GITHUB_SCOPE.to_string(),
     }
+}
+
+pub fn gh_known_install_locations() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    if let Some(home) = home_dir() {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join("scoop").join("shims"));
+        dirs.push(
+            home.join("AppData")
+                .join("Local")
+                .join("Programs")
+                .join("GitHub CLI"),
+        );
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+            dirs.push(PathBuf::from(root).join("GitHub CLI"));
+        }
+    }
+    dirs.push(PathBuf::from(r"C:\Program Files\GitHub CLI"));
+    dirs.push(PathBuf::from(r"C:\Program Files (x86)\GitHub CLI"));
+    dirs
+}
+
+fn process_environment(cwd: &Path) -> LaunchEnvironment {
+    LaunchEnvironment::from_vars(cwd.to_path_buf(), std::env::vars().collect())
+}
+
+pub fn resolve_gh(
+    launch_env: Arc<dyn LaunchEnvPort>,
+    cwd: &Path,
+    known_locations: &[PathBuf],
+) -> Option<PathBuf> {
+    let captured = launch_env
+        .capture(cwd)
+        .unwrap_or_else(|_| process_environment(cwd));
+    let env = prepare_launch_env(captured, &[], known_locations);
+    match probe_binary("gh", &env, known_locations) {
+        ProbeResult::Found { executable } => Some(executable),
+        ProbeResult::Missing { .. } => None,
+    }
+}
+
+fn capture_for_gh(
+    launch_env: &dyn LaunchEnvPort,
+    cwd: &Path,
+    known_locations: &[PathBuf],
+) -> LaunchEnvironment {
+    let captured = launch_env
+        .capture(cwd)
+        .unwrap_or_else(|_| process_environment(cwd));
+    prepare_launch_env(captured, &[], known_locations)
 }
 
 pub fn resolve_github_token(
@@ -984,11 +1040,46 @@ pub struct ScriptedGitHub {
 }
 
 impl GitHubTracker {
-    pub fn live() -> Self {
+    pub fn live(launch_env: Arc<dyn LaunchEnvPort>) -> Self {
+        Self::live_with(launch_env, gh_known_install_locations())
+    }
+
+    pub fn live_with(launch_env: Arc<dyn LaunchEnvPort>, known_locations: Vec<PathBuf>) -> Self {
+        Self::assembled(launch_env, known_locations, Box::new(LiveGitHubApi))
+    }
+
+    pub fn live_with_script(
+        launch_env: Arc<dyn LaunchEnvPort>,
+        cwd: PathBuf,
+        known_locations: Vec<PathBuf>,
+        script: ScriptedGitHub,
+    ) -> Self {
+        let scripted = Self::scripted(script);
         Self {
-            env: Box::new(ProcessEnv),
-            gh: Box::new(ProcessGh),
-            api: Box::new(LiveGitHubApi),
+            env: Box::new(LaunchEnvSource {
+                launch_env: launch_env.clone(),
+                cwd: cwd.clone(),
+                known_locations: known_locations.clone(),
+            }),
+            gh: Box::new(ResolvedGh::new(launch_env, cwd, known_locations)),
+            api: scripted.api,
+        }
+    }
+
+    fn assembled(
+        launch_env: Arc<dyn LaunchEnvPort>,
+        known_locations: Vec<PathBuf>,
+        api: Box<dyn GitHubApi>,
+    ) -> Self {
+        let cwd = home_dir().unwrap_or_else(|| PathBuf::from("."));
+        Self {
+            env: Box::new(LaunchEnvSource {
+                launch_env: launch_env.clone(),
+                cwd: cwd.clone(),
+                known_locations: known_locations.clone(),
+            }),
+            gh: Box::new(ResolvedGh::new(launch_env, cwd, known_locations)),
+            api,
         }
     }
 
@@ -1573,21 +1664,71 @@ fn probe_error_outcome(
     }
 }
 
-struct ProcessEnv;
+struct LaunchEnvSource {
+    launch_env: Arc<dyn LaunchEnvPort>,
+    cwd: PathBuf,
+    known_locations: Vec<PathBuf>,
+}
 
-impl EnvSource for ProcessEnv {
+impl EnvSource for LaunchEnvSource {
     fn var(&self, key: &str) -> Option<String> {
-        std::env::var(key)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
+        capture_for_gh(self.launch_env.as_ref(), &self.cwd, &self.known_locations)
+            .vars
+            .get(key)
+            .cloned()
+            .and_then(|value| nonempty(Some(&value)))
+            .or_else(|| {
+                std::env::var(key)
+                    .ok()
+                    .and_then(|value| nonempty(Some(&value)))
+            })
     }
 }
 
-struct ProcessGh;
+struct ResolvedGh {
+    executable: Option<PathBuf>,
+    env: LaunchEnvironment,
+}
 
-impl GhAuth for ProcessGh {
+impl ResolvedGh {
+    fn new(
+        launch_env: Arc<dyn LaunchEnvPort>,
+        cwd: PathBuf,
+        known_locations: Vec<PathBuf>,
+    ) -> Self {
+        let env = capture_for_gh(launch_env.as_ref(), &cwd, &known_locations);
+        let executable = match probe_binary("gh", &env, &known_locations) {
+            ProbeResult::Found { executable } => Some(executable),
+            ProbeResult::Missing { .. } => None,
+        };
+        Self { executable, env }
+    }
+
+    fn command(&self) -> Option<Command> {
+        let executable = self.executable.as_ref()?;
+        let mut command = Command::new(executable);
+        command.current_dir(&self.env.cwd);
+        command.env_clear();
+        for (key, value) in &self.env.vars {
+            command.env(key, value);
+        }
+        if !self.env.vars.contains_key("HOME") && !self.env.vars.contains_key("USERPROFILE") {
+            if let Some(home) = home_dir() {
+                command.env("HOME", &home);
+                command.env("USERPROFILE", &home);
+            }
+        }
+        Some(command)
+    }
+}
+
+impl GhAuth for ResolvedGh {
     fn detected(&self) -> bool {
-        Command::new("gh")
+        let mut command = match self.command() {
+            Some(command) => command,
+            None => return false,
+        };
+        command
             .arg("--version")
             .output()
             .map(|output| output.status.success())
@@ -1595,7 +1736,8 @@ impl GhAuth for ProcessGh {
     }
 
     fn token(&self, hostname: &str) -> Option<String> {
-        let output = Command::new("gh")
+        let output = self
+            .command()?
             .args(["auth", "token", "--hostname", hostname])
             .output()
             .ok()?;
