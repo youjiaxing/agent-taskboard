@@ -435,15 +435,14 @@ if (!recentOutput.includes("mobile recent output")) {
 await page.fill(".mobile-run-view .inject-row input", "mobile answer");
 await page.click(".mobile-run-view .inject-row button[type='submit']");
 await page.waitForFunction(() => document.querySelector(".mobile-run-view .inject-row input")?.value === "");
-const injectedOutput = await page.evaluate(async ({ protocol, runId }) => {
+const injectedRunId = await page.$eval(".mobile-run-output", (node) => node.getAttribute("data-run"));
+await page.waitForFunction(async ({ protocol, runId }) => {
   const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
-  if (!response.ok) return "";
+  if (!response.ok) return false;
   const json = await response.json();
-  return new TextDecoder().decode(Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0)));
-}, { protocol: url, runId: await page.$eval(".mobile-run-output", (node) => node.getAttribute("data-run")) });
-if (!injectedOutput.includes("mobile answer")) {
-  throw new Error(`mobile should inject one line into the active Run, got ${injectedOutput}`);
-}
+  const output = new TextDecoder().decode(Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0)));
+  return output.includes("mobile answer");
+}, { protocol: url, runId: injectedRunId });
 if (!(await page.$(".telemetry-mobile .capsule")) || !(await page.$(".telemetry-mobile .telemetry-simple"))) {
   throw new Error("mobile telemetry should keep the main model capsule and simple multi-model list");
 }

@@ -43,7 +43,7 @@ impl<T: TrackerPort> TrackerSeam for T {
     }
 
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
-        TrackerPort::read_issues(self, ctx).map(|issues| TrackerReadOutcome::Complete { issues })
+        TrackerPort::read_all(self, ctx)
     }
 
     fn write_issue(

@@ -4631,6 +4631,10 @@ impl HostKernel {
             }
             Err(tracker::TrackerReadError::Failed { detail }) => {
                 let detail = detail.unwrap_or_else(|| "tracker business error".into());
+                let complete = previous
+                    .as_ref()
+                    .map(|state| state.complete)
+                    .unwrap_or(false);
                 self.refresh.insert(
                     project_id.to_string(),
                     ProjectRefreshState {
@@ -4638,7 +4642,7 @@ impl HostKernel {
                         last_attempt_ms: now,
                         kind: StoredRefreshKind::TrackerError,
                         retry_at_ms: None,
-                        complete: false,
+                        complete,
                         detail: Some(detail),
                     },
                 );
@@ -4758,6 +4762,7 @@ impl HostKernel {
             if state.kind == StoredRefreshKind::TrackerError {
                 return RefreshStatus::TrackerError {
                     fetched_at_ms: state.fetched_at_ms,
+                    data_complete: false,
                     next_refresh_in_ms: next,
                     detail: state.detail.clone(),
                 };
@@ -4798,6 +4803,7 @@ impl HostKernel {
             },
             StoredRefreshKind::TrackerError => RefreshStatus::TrackerError {
                 fetched_at_ms: state.fetched_at_ms,
+                data_complete: state.complete,
                 next_refresh_in_ms: next,
                 detail: state.detail.clone(),
             },

@@ -426,6 +426,37 @@ fn incomplete_read_draws_no_frontier_or_graph_and_keeps_details() {
 }
 
 #[test]
+fn tracker_business_error_keeps_complete_last_data_but_blocks_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Failed("repository rule denied this query".into()),
+    );
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    let board = host.snapshot().board.unwrap();
+    assert!(board.columns.is_some(), "complete last data stays visible");
+    assert!(matches!(
+        board.refresh,
+        RefreshStatus::TrackerError {
+            data_complete: true,
+            detail: Some(detail),
+            ..
+        } if detail == "repository rule denied this query"
+    ));
+    let err = host
+        .handle(serde_json::json!({
+            "op": "claimIssue",
+            "issueId": "you/garden#8",
+        }))
+        .unwrap_err();
+    assert!(matches!(err, KernelError::Denied(message) if message.contains("tracker-error")));
+}
+
+#[test]
 fn incomplete_read_surfaces_an_incomplete_status_event() {
     let tmp = tempfile::tempdir().unwrap();
     let (tracker, dir) = garden_setup(&tmp);

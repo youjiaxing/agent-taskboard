@@ -18,6 +18,7 @@ pub enum ReadMode {
     Auth,
     Offline,
     RateLimited(Option<u64>),
+    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +259,9 @@ impl TrackerSeam for SeamTracker {
             Some(ReadMode::RateLimited(retry_after_ms)) => {
                 Err(TrackerReadError::RateLimited { retry_after_ms })
             }
+            Some(ReadMode::Failed(detail)) => Err(TrackerReadError::Failed {
+                detail: Some(detail),
+            }),
             Some(ReadMode::Incomplete(detail)) => Ok(TrackerReadOutcome::Incomplete {
                 issues: issues(),
                 detail,

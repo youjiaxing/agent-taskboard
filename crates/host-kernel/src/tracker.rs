@@ -142,6 +142,13 @@ pub struct IssueComment {
 pub trait TrackerPort: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
     fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError>;
+    fn read_all(
+        &self,
+        ctx: &ProbeContext<'_>,
+    ) -> Result<crate::tracker_seam::TrackerReadOutcome, TrackerReadError> {
+        self.read_issues(ctx)
+            .map(|issues| crate::tracker_seam::TrackerReadOutcome::Complete { issues })
+    }
     fn create_issue(
         &self,
         ctx: &ProbeContext<'_>,
@@ -970,6 +977,8 @@ pub struct ScriptedGitHub {
     pub write_fail: bool,
     pub issue_page_size: usize,
     pub edge_page_size: usize,
+    pub missing_issue_cursor: bool,
+    pub missing_edge_cursor: bool,
     pub graphql_auth_error: Option<String>,
     pub graphql_business_error: Option<String>,
 }
@@ -1005,6 +1014,8 @@ impl GitHubTracker {
                 write_fail: script.write_fail,
                 issue_page_size: script.issue_page_size,
                 edge_page_size: script.edge_page_size,
+                missing_issue_cursor: script.missing_issue_cursor,
+                missing_edge_cursor: script.missing_edge_cursor,
                 graphql_auth_error: script.graphql_auth_error,
                 graphql_business_error: script.graphql_business_error,
                 comment_seq: Mutex::new(0),
@@ -1103,9 +1114,9 @@ impl GitHubTracker {
         source: CredentialSource,
         cli_detected: bool,
         node: &mut Value,
-    ) -> Result<(), TrackerReadError> {
+    ) -> Result<Option<String>, TrackerReadError> {
         let Some(number) = node.get("number").and_then(Value::as_u64) else {
-            return Ok(());
+            return Ok(None);
         };
         for edges in [
             IssueEdges::BlockedBy,
@@ -1134,13 +1145,17 @@ impl GitHubTracker {
                     break;
                 }
                 let Some(cursor) = page.end_cursor else {
-                    break;
+                    return Ok(Some(format!(
+                        "GitHub {} pagination for Issue #{} ended without a cursor",
+                        edges.field(),
+                        number
+                    )));
                 };
                 after = Some(cursor);
             }
             set_connection_nodes(node, edges.field(), pages);
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -1158,6 +1173,20 @@ impl TrackerPort for GitHubTracker {
     }
 
     fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError> {
+        match self.read_all(ctx)? {
+            crate::tracker_seam::TrackerReadOutcome::Complete { issues } => Ok(issues),
+            crate::tracker_seam::TrackerReadOutcome::Incomplete { detail, .. } => {
+                Err(TrackerReadError::Failed {
+                    detail: Some(detail),
+                })
+            }
+        }
+    }
+
+    fn read_all(
+        &self,
+        ctx: &ProbeContext<'_>,
+    ) -> Result<crate::tracker_seam::TrackerReadOutcome, TrackerReadError> {
         let (token, source, cli_detected) = self.authorized_read(ctx)?;
         let mut nodes: Vec<Value> = Vec::new();
         let mut after: Option<String> = None;
@@ -1171,17 +1200,26 @@ impl TrackerPort for GitHubTracker {
                 break;
             }
             let Some(cursor) = page.end_cursor else {
-                break;
+                return Ok(crate::tracker_seam::TrackerReadOutcome::Incomplete {
+                    issues: map_github_nodes(&nodes, ctx),
+                    detail: "GitHub Issue pagination ended without a cursor".into(),
+                });
             };
             after = Some(cursor);
         }
         for node in nodes.iter_mut() {
-            self.complete_issue_edges(ctx, &token, source, cli_detected, node)?;
+            if let Some(detail) =
+                self.complete_issue_edges(ctx, &token, source, cli_detected, node)?
+            {
+                return Ok(crate::tracker_seam::TrackerReadOutcome::Incomplete {
+                    issues: map_github_nodes(&nodes, ctx),
+                    detail,
+                });
+            }
         }
-        Ok(nodes
-            .iter()
-            .filter_map(|node| map_github_issue_node(node, ctx.repository, ctx.github_host))
-            .collect())
+        Ok(crate::tracker_seam::TrackerReadOutcome::Complete {
+            issues: map_github_nodes(&nodes, ctx),
+        })
     }
 
     fn create_issue(
@@ -1585,15 +1623,7 @@ impl GitHubApi for LiveGitHubApi {
             .call()
         {
             Ok(_) => Ok(()),
-            Err(ureq::Error::Status(401 | 403 | 404, _)) => {
-                Err(ProbeError::Unauthorized { detail: None })
-            }
-            Err(ureq::Error::Status(429, response)) => Err(ProbeError::RateLimited {
-                retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
-            }),
-            Err(ureq::Error::Status(code, _)) => {
-                Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")))
-            }
+            Err(ureq::Error::Status(code, response)) => Err(classify_rest_status(code, response)),
             Err(err) => Err(ProbeError::Unreachable(err.to_string())),
         }
     }
@@ -1954,16 +1984,8 @@ fn github_json(
     };
     let response = match response {
         Ok(response) => response,
-        Err(ureq::Error::Status(401 | 403 | 404, _)) => {
-            return Err(ProbeError::Unauthorized { detail: None });
-        }
-        Err(ureq::Error::Status(429, response)) => {
-            return Err(ProbeError::RateLimited {
-                retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
-            });
-        }
-        Err(ureq::Error::Status(code, _)) => {
-            return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
+        Err(ureq::Error::Status(code, response)) => {
+            return Err(classify_rest_status(code, response));
         }
         Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
     };
@@ -1974,6 +1996,40 @@ fn github_json(
     )
     .map_err(|err| ProbeError::Unreachable(err.to_string()))?;
     Ok(payload)
+}
+
+fn classify_rest_status(code: u16, response: ureq::Response) -> ProbeError {
+    let retry_after_ms = parse_retry_after_ms(response.header("retry-after"));
+    let remaining = response
+        .header("x-ratelimit-remaining")
+        .and_then(|value| value.parse::<u64>().ok());
+    let detail = response.into_string().ok().and_then(|body| {
+        serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| (!body.trim().is_empty()).then(|| body.trim().to_string()))
+    });
+    if code == 429 || (code == 403 && (retry_after_ms.is_some() || remaining == Some(0))) {
+        return ProbeError::RateLimited { retry_after_ms };
+    }
+    if matches!(code, 401 | 403) {
+        return ProbeError::Unauthorized { detail };
+    }
+    if matches!(code, 400 | 404 | 409 | 422) {
+        return ProbeError::GraphQl {
+            detail: detail.unwrap_or_else(|| format!("GitHub HTTP {code}")),
+        };
+    }
+    ProbeError::Unreachable(
+        detail
+            .map(|detail| format!("GitHub HTTP {code}: {detail}"))
+            .unwrap_or_else(|| format!("GitHub HTTP {code}")),
+    )
 }
 
 fn graphql_post(
@@ -2183,6 +2239,8 @@ struct MapApi {
     write_fail: bool,
     issue_page_size: usize,
     edge_page_size: usize,
+    missing_issue_cursor: bool,
+    missing_edge_cursor: bool,
     graphql_auth_error: Option<String>,
     graphql_business_error: Option<String>,
     comment_seq: Mutex<u64>,
@@ -2383,7 +2441,8 @@ impl GitHubApi for MapApi {
         Ok(NodePage {
             nodes,
             has_next_page,
-            end_cursor: has_next_page.then(|| format!("cursor-{next}")),
+            end_cursor: (has_next_page && !self.missing_issue_cursor)
+                .then(|| format!("cursor-{next}")),
         })
     }
 
@@ -2419,7 +2478,8 @@ impl GitHubApi for MapApi {
         Ok(NodePage {
             nodes,
             has_next_page,
-            end_cursor: has_next_page.then(|| format!("cursor-{next}")),
+            end_cursor: (has_next_page && !self.missing_edge_cursor)
+                .then(|| format!("cursor-{next}")),
         })
     }
 
@@ -2760,7 +2820,8 @@ fn github_node(
         "number": number,
         "title": title,
         "state": "OPEN",
-        "url": github_web_issue_url(host, repository, number),
+        "url": format!("{}/issues/{number}", github_repo_url(host, repository)),
+        "html_url": github_web_issue_url(host, repository, number),
         "repository": { "nameWithOwner": repository },
         "assignees": { "nodes": [] },
         "labels": { "nodes": [] },
@@ -2873,6 +2934,13 @@ fn apply_login_delta(items: &mut Vec<Value>, logins: &[String], add: bool) {
     }
 }
 
+fn map_github_nodes(nodes: &[Value], ctx: &ProbeContext<'_>) -> Vec<IssueRecord> {
+    nodes
+        .iter()
+        .filter_map(|node| map_github_issue_node(node, ctx.repository, ctx.github_host))
+        .collect()
+}
+
 fn map_issue_comment(node: &Value, host: &str, repository: &str, number: u64) -> IssueComment {
     let body = node
         .get("body")
@@ -2920,8 +2988,8 @@ pub fn map_github_issue_node(
     let state = node.get("state").and_then(Value::as_str).unwrap_or("OPEN");
     let open = !state.eq_ignore_ascii_case("closed");
     let url = node
-        .get("url")
-        .or_else(|| node.get("html_url"))
+        .get("html_url")
+        .or_else(|| node.get("url"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| github_web_issue_url(github_host, &repository, number));

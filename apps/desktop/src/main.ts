@@ -365,6 +365,7 @@ type RefreshStatus =
   | {
       kind: "incomplete" | "tracker-error";
       fetchedAtMs?: number | null;
+      dataComplete?: boolean;
       nextRefreshInMs?: number | null;
       detail?: string | null;
     };

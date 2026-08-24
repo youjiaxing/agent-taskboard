@@ -142,6 +142,8 @@ pub enum RefreshStatus {
     TrackerError {
         #[serde(rename = "fetchedAtMs")]
         fetched_at_ms: Option<u64>,
+        #[serde(rename = "dataComplete")]
+        data_complete: bool,
         #[serde(
             rename = "nextRefreshInMs",
             default,
@@ -182,7 +184,11 @@ impl RefreshStatus {
 
     /// 当前数据能否当作全量数据使用；不完整时禁止计算 Frontier/依赖图。
     pub fn complete(&self) -> bool {
-        !matches!(self, Self::Incomplete { .. } | Self::TrackerError { .. })
+        match self {
+            Self::Incomplete { .. } => false,
+            Self::TrackerError { data_complete, .. } => *data_complete,
+            _ => true,
+        }
     }
 }
 

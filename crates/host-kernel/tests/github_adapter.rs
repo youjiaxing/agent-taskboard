@@ -102,6 +102,15 @@ fn plain_node(number: u64, title: &str) -> serde_json::Value {
     })
 }
 
+fn issue_ref(number: u64, title: &str) -> serde_json::Value {
+    serde_json::json!({
+        "number": number,
+        "title": title,
+        "state": "OPEN",
+        "repository": { "nameWithOwner": "you/garden" },
+    })
+}
+
 fn probe_ctx<'a>(github_host: &'a str, repository: &'a str) -> ProbeContext<'a> {
     ProbeContext {
         github_host,
@@ -532,6 +541,54 @@ fn github_adapter_reads_more_than_five_hundred_issues_via_cursor_pages() {
     assert_eq!(read.len(), 510, "list must not be capped at 500");
     assert_eq!(read[0].number, 1);
     assert_eq!(read[509].number, 510);
+}
+
+#[test]
+fn github_adapter_marks_missing_issue_cursor_as_incomplete() {
+    let tracker = scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "tok".into())].into(),
+        accept_tokens: ["tok".into()].into(),
+        issues: BTreeMap::from([(
+            "you/garden".into(),
+            vec![plain_node(1, "one"), plain_node(2, "two")],
+        )]),
+        issue_page_size: 1,
+        missing_issue_cursor: true,
+        ..Default::default()
+    });
+    let ctx = probe_ctx("github.com", "you/garden");
+    match TrackerPort::read_all(&tracker, &ctx).unwrap() {
+        host_kernel::TrackerReadOutcome::Incomplete { issues, detail } => {
+            assert_eq!(issues.len(), 1);
+            assert!(detail.contains("without a cursor"));
+        }
+        other => panic!("expected incomplete read, got {other:?}"),
+    }
+}
+
+#[test]
+fn github_adapter_marks_missing_edge_cursor_as_incomplete() {
+    let mut issue = plain_node(1, "one");
+    issue["blockedBy"] = serde_json::json!({
+        "nodes": (2..=102)
+            .map(|number| issue_ref(number, &format!("issue {number}")))
+            .collect::<Vec<_>>()
+    });
+    let tracker = scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "tok".into())].into(),
+        accept_tokens: ["tok".into()].into(),
+        issues: BTreeMap::from([("you/garden".into(), vec![issue])]),
+        edge_page_size: 1,
+        missing_edge_cursor: true,
+        ..Default::default()
+    });
+    let ctx = probe_ctx("github.com", "you/garden");
+    match TrackerPort::read_all(&tracker, &ctx).unwrap() {
+        host_kernel::TrackerReadOutcome::Incomplete { detail, .. } => {
+            assert!(detail.contains("blockedBy"));
+        }
+        other => panic!("expected incomplete read, got {other:?}"),
+    }
 }
 
 #[test]
