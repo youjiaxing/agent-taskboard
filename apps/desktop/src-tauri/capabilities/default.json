@@ -9,6 +9,7 @@
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
     "process:allow-restart",
+    "dialog:allow-open",
     "updater:default",
     "autostart:default",
     {

@@ -361,12 +361,16 @@ fn empty_host_offers_register_and_pair_and_focuses_one_host() {
 
 #[test]
 fn desktop_and_loopback_origins_can_call_the_local_host() {
-    assert!(local_client_origin_allowed(None));
+    assert!(!local_client_origin_allowed(None));
     assert!(local_client_origin_allowed(Some("http://localhost:1420")));
+    assert!(local_client_origin_allowed(Some("http://127.0.0.1:1420")));
     assert!(local_client_origin_allowed(Some("http://127.0.0.1:10529")));
     assert!(local_client_origin_allowed(Some("https://tauri.localhost")));
     assert!(local_client_origin_allowed(Some("http://tauri.localhost")));
     assert!(local_client_origin_allowed(Some("tauri://localhost")));
+    assert!(!local_client_origin_allowed(Some("http://127.0.0.1:10528")));
+    assert!(!local_client_origin_allowed(Some("http://localhost:10529")));
+    assert!(!local_client_origin_allowed(Some("null")));
 }
 
 #[test]
@@ -395,6 +399,13 @@ fn local_rpc_answers_json_on_loopback() {
     assert_eq!(value["process"], "keep-running");
     assert_eq!(value["snapshot"]["running"], true);
     assert_eq!(value["snapshot"]["copy"]["quitHost"], "退出 Host");
+
+    let (status, _) = http_post(addr, "http://127.0.0.1:1421", r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 403);
+    let (status, _) = http_post(addr, "http://localhost:1421", r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 403);
+    let (status, _) = http_post_without_origin(addr, r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 403);
 }
 
 #[test]
@@ -974,6 +985,19 @@ fn a_client_window_can_switch_among_local_and_paired_hosts() {
     );
     assert!(focused.snapshot.projects.is_empty());
 
+    let remote_error = client
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "missing",
+            "localPath": "/definitely/missing/remote-project",
+            "repository": "you/missing",
+        }))
+        .unwrap_err();
+    assert!(remote_error
+        .to_string()
+        .contains("local directory does not exist"));
+    assert!(!remote_error.to_string().contains("not reachable"));
+
     let back = client
         .handle(serde_json::json!({
             "op": "focusHost",
@@ -1070,6 +1094,16 @@ fn http_post(addr: SocketAddr, origin: &str, body: &str) -> (u16, String) {
         None,
         body,
     )
+}
+
+fn http_post_without_origin(addr: SocketAddr, body: &str) -> (u16, String) {
+    let request = format!(
+        "POST /rpc HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        addr.port(),
+        body.len()
+    );
+    let (status, _, body) = http_exchange(addr, &request);
+    (status, body)
 }
 
 fn http_rpc(

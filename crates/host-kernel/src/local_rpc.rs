@@ -172,6 +172,10 @@ fn spawn_local_rpc_inner(
     std::thread::Builder::new()
         .name("host-local-rpc".into())
         .spawn(move || {
+            let server_port = listener
+                .local_addr()
+                .map(|addr| addr.port())
+                .unwrap_or(LOCAL_RPC_PORT);
             let _ = listener.set_nonblocking(true);
             while !stop.load(Ordering::Relaxed) && kernel_process_alive(&kernel) {
                 match listener.accept() {
@@ -183,15 +187,17 @@ fn spawn_local_rpc_inner(
                         let assets = assets.clone();
                         let _ = std::thread::Builder::new()
                             .name("host-local-rpc-conn".into())
-                            .spawn(move || match serve_connection(stream, &kernel, &assets) {
-                                Ok(Some(outcome)) => {
-                                    if outcome.process == ProcessIntent::Exit {
-                                        stop.store(true, Ordering::Relaxed);
+                            .spawn(move || {
+                                match serve_connection(stream, &kernel, &assets, server_port) {
+                                    Ok(Some(outcome)) => {
+                                        if outcome.process == ProcessIntent::Exit {
+                                            stop.store(true, Ordering::Relaxed);
+                                        }
+                                        on_outcome(outcome);
                                     }
-                                    on_outcome(outcome);
+                                    Ok(None) => {}
+                                    Err(err) => eprintln!("local rpc: {err}"),
                                 }
-                                Ok(None) => {}
-                                Err(err) => eprintln!("local rpc: {err}"),
                             });
                     }
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -212,51 +218,87 @@ fn kernel_process_alive(kernel: &Mutex<HostKernel>) -> bool {
 }
 
 pub fn local_client_origin_allowed(origin: Option<&str>) -> bool {
-    match origin {
-        None => true,
-        Some(origin) => origin_is_desktop_or_loopback(origin),
-    }
+    origin.is_some_and(|origin| {
+        origin_is_desktop(origin) || origin_is_loopback_page(origin, LOCAL_RPC_PORT)
+    })
 }
 
-fn origin_is_desktop_or_loopback(origin: &str) -> bool {
-    let origin = origin.trim();
-    if origin.eq_ignore_ascii_case("null") || origin.eq_ignore_ascii_case("tauri://localhost") {
-        return true;
-    }
-    let Some((scheme, rest)) = origin.split_once("://") else {
-        return false;
-    };
-    if !matches!(scheme, "http" | "https" | "tauri") {
-        return false;
-    }
-    let hostport = rest.split('/').next().unwrap_or(rest);
+fn local_client_origin_allowed_for_port(origin: Option<&str>, port: u16) -> bool {
+    origin.is_some_and(|origin| origin_is_desktop(origin) || origin_is_loopback_page(origin, port))
+}
+
+fn origin_is_desktop(origin: &str) -> bool {
     matches!(
-        hostname_of(hostport),
-        "127.0.0.1" | "localhost" | "::1" | "tauri.localhost"
+        origin.trim(),
+        "http://localhost:1420"
+            | "http://127.0.0.1:1420"
+            | "tauri://localhost"
+            | "http://tauri.localhost"
+            | "https://tauri.localhost"
     )
 }
 
-fn hostname_of(hostport: &str) -> &str {
-    if let Some(rest) = hostport.strip_prefix('[') {
-        return rest.split(']').next().unwrap_or(rest);
+fn origin_is_http(origin: &str) -> bool {
+    origin
+        .trim()
+        .split_once("://")
+        .is_some_and(|(scheme, _)| matches!(scheme, "http" | "https"))
+}
+
+fn origin_is_loopback_page(origin: &str, port: u16) -> bool {
+    let origin = origin.trim();
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme != "http" {
+        return false;
     }
-    match hostport.rsplit_once(':') {
-        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
-        _ => hostport,
-    }
+    let hostport = rest.split('/').next().unwrap_or(rest);
+    let Some((host, raw_port)) = hostport.rsplit_once(':') else {
+        return false;
+    };
+    host == "127.0.0.1" && raw_port.parse::<u16>().ok() == Some(port)
+}
+
+fn static_client_request(request: &HttpRequest) -> bool {
+    matches!(request.method.as_str(), "GET" | "HEAD")
+        && !request.path.starts_with("/rpc")
+        && parse_run_route(&request.path).is_none()
+}
+
+fn browser_same_origin_request(request: &HttpRequest, server_port: u16) -> bool {
+    let same_origin = request
+        .header("sec-fetch-site")
+        .is_some_and(|value| value.eq_ignore_ascii_case("same-origin"));
+    let referer = request.header("referer");
+    same_origin && referer.is_some_and(|value| origin_is_loopback_page(value, server_port))
 }
 
 fn serve_connection(
     mut stream: TcpStream,
     kernel: &Mutex<HostKernel>,
     assets: &LoopbackAssets,
+    server_port: u16,
 ) -> io::Result<Option<CommandOutcome>> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let peer = stream.peer_addr().ok();
     let request = read_request(&mut stream)?;
     let origin = request.header("origin");
-    let allowed = authorize(&request, kernel, peer)?;
+    let local_origin = local_client_origin_allowed_for_port(origin, server_port);
+    let allowed = authorize(&request, kernel, peer, server_port)?;
+    let response_origin = origin.filter(|_| {
+        local_origin
+            || (request.method == "OPTIONS" && origin.is_some_and(origin_is_http))
+            || (allowed
+                && (is_redeem_rpc(&request)
+                    || bearer_token(&request).is_some_and(|token| {
+                        kernel
+                            .lock()
+                            .map(|host| host.pairing_token_valid(token))
+                            .unwrap_or(false)
+                    })))
+    });
     if !allowed {
         let message = kernel
             .lock()
@@ -269,21 +311,16 @@ fn serve_connection(
             "error": "pairing required",
             "message": message,
         });
-        write_json(
-            &mut stream,
-            403,
-            origin.filter(|_| local_client_origin_allowed(origin)),
-            &body.to_string(),
-        )?;
+        write_json(&mut stream, 403, response_origin, &body.to_string())?;
         return Ok(None);
     }
 
     if request.method == "OPTIONS" {
-        write_empty(&mut stream, 204, origin)?;
+        write_empty(&mut stream, 204, response_origin)?;
         return Ok(None);
     }
 
-    if let Some(outcome) = serve_run_io(&mut stream, &request, origin, kernel)? {
+    if let Some(outcome) = serve_run_io(&mut stream, &request, response_origin, kernel)? {
         return Ok(outcome);
     }
 
@@ -293,9 +330,14 @@ fn serve_connection(
             .map(|host| host.snapshot().running)
             .unwrap_or(false);
         if !host_running {
-            write_json(&mut stream, 404, origin, r#"{"error":"not found"}"#)?;
+            write_json(
+                &mut stream,
+                404,
+                response_origin,
+                r#"{"error":"not found"}"#,
+            )?;
         } else {
-            serve_loopback_get(&mut stream, &request, origin, assets)?;
+            serve_loopback_get(&mut stream, &request, response_origin, assets)?;
         }
         return Ok(None);
     }
@@ -307,7 +349,7 @@ fn serve_connection(
                 write_json(
                     &mut stream,
                     400,
-                    origin,
+                    response_origin,
                     &format!(
                         r#"{{"error":{}}}"#,
                         serde_json::to_string(&err.to_string()).unwrap()
@@ -322,7 +364,7 @@ fn serve_connection(
         match kernel.handle(value) {
             Ok(outcome) => {
                 let body = serde_json::to_string(&outcome.to_json())?;
-                write_json(&mut stream, 200, origin, &body)?;
+                write_json(&mut stream, 200, response_origin, &body)?;
                 return Ok(Some(outcome));
             }
             Err(err) => {
@@ -334,7 +376,7 @@ fn serve_connection(
                 write_json(
                     &mut stream,
                     status,
-                    origin,
+                    response_origin,
                     &format!(
                         r#"{{"error":{}}}"#,
                         serde_json::to_string(&err.to_string()).unwrap()
@@ -345,7 +387,12 @@ fn serve_connection(
         }
     }
 
-    write_json(&mut stream, 404, origin, r#"{"error":"not found"}"#)?;
+    write_json(
+        &mut stream,
+        404,
+        response_origin,
+        r#"{"error":"not found"}"#,
+    )?;
     Ok(None)
 }
 
@@ -797,13 +844,23 @@ fn authorize(
     request: &HttpRequest,
     kernel: &Mutex<HostKernel>,
     peer: Option<SocketAddr>,
+    server_port: u16,
 ) -> io::Result<bool> {
     let origin = request.header("origin");
     let peer_loopback = peer.map(|addr| addr.ip().is_loopback()).unwrap_or(false);
-    if peer_loopback && local_client_origin_allowed(origin) {
+    let local_origin = local_client_origin_allowed_for_port(origin, server_port);
+    if peer_loopback && local_origin {
         return Ok(true);
     }
-    if request.method == "OPTIONS" && local_client_origin_allowed(origin) {
+    // A browser navigation has no Origin header. It may load the local shell,
+    // but every RPC and PTY route still requires an exact Client origin or token.
+    if peer_loopback
+        && origin.is_none()
+        && (static_client_request(request) || browser_same_origin_request(request, server_port))
+    {
+        return Ok(true);
+    }
+    if request.method == "OPTIONS" && origin.is_some_and(origin_is_http) {
         return Ok(true);
     }
     if is_redeem_rpc(request) {
@@ -843,14 +900,10 @@ fn bearer_token(request: &HttpRequest) -> Option<&str> {
 
 fn cors_headers(origin: Option<&str>) -> String {
     match origin {
-        Some(origin)
-            if local_client_origin_allowed(Some(origin))
-                || origin.starts_with("http://")
-                || origin.starts_with("https://") =>
-        {
+        Some(origin) if origin_is_http(origin) || origin_is_desktop(origin) => {
             format!(
-            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, authorization\r\nVary: Origin\r\n"
-        )
+                "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, authorization\r\nVary: Origin\r\n"
+            )
         }
         _ => String::new(),
     }

@@ -72,6 +72,11 @@ pub fn save_snapshot(path: &Path, snapshot: &StoredTrackerSnapshot) -> io::Resul
     owner::replace_file(&tmp, path)
 }
 
-pub fn remove_project_data(host_dir: &Path, project_id: &str) {
-    let _ = fs::remove_dir_all(host_dir.join("projects").join(project_id));
+pub fn remove_project_data(host_dir: &Path, project_id: &str) -> io::Result<()> {
+    let path = host_dir.join("projects").join(project_id);
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }

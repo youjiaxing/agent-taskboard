@@ -291,6 +291,22 @@ const newLabel = await page.$eval("button[data-act='new-run']", (node) => node.g
 if (newLabel !== "新建" && newLabel !== "New") {
   throw new Error(`project row plus should be New, got ${newLabel}`);
 }
+await page.click("button[data-act='register']");
+await page.waitForSelector("form[data-form='project']");
+if (await page.$("button[data-act='choose-project-directory']")) {
+  throw new Error("browser Client should keep manual local-directory input instead of rendering a native picker action");
+}
+await page.fill("#project-name", "failed draft");
+await page.fill("#project-path", "/definitely/missing/project-directory");
+await page.fill("#project-repo", "you/failed-draft");
+await page.click("form[data-form='project'] button[type='submit']");
+await page.waitForSelector("form[data-form='project'] .notice.bad");
+const failedDraft = await page.$eval("#project-name", (node) => node.value);
+if (failedDraft !== "failed draft") {
+  throw new Error(`failed registration should preserve its draft, got ${failedDraft}`);
+}
+await page.click("form[data-form='project'] button[data-act='close-form']");
+await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await page.click("button[data-act='new-run']");
 await page.waitForSelector(".launch-sheet");
 const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
