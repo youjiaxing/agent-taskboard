@@ -1,4 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { invoke } from "@tauri-apps/api/core";
+import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -6,6 +8,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
+import { startupCopy, type StartupCopy } from "./startup-copy";
 
 type Language = "zh-CN" | "en";
 type Theme = "warm-paper" | "plain-paper" | "plain-night";
@@ -437,6 +440,7 @@ type LoopbackPage =
 type Snapshot = {
   running: boolean;
   windowVisible: boolean;
+  hostMode: "host-and-client" | "client-only";
   focusedHostId: string;
   focusedProjectId: string;
   hosts: { id: string; displayName: string; local: boolean }[];
@@ -735,9 +739,16 @@ type HostEvent =
     }
   | { type: "telemetry"; runId: string };
 
+type LaunchEnvironmentState = {
+  status: "idle" | "ready" | "failed";
+  refreshedDirectories: number;
+  message?: string | null;
+};
+
 type RpcResult = {
   snapshot: Snapshot;
   process: "keep-running" | "exit";
+  launchEnvironment?: LaunchEnvironmentState;
   inference?: ProjectDraft;
   updateInstallGate?: UpdateInstallGate;
   events?: HostEvent[];
@@ -751,6 +762,13 @@ if (!app) {
 
 let snapshot: Snapshot | null = null;
 let settingsOpen = false;
+let startAtLogin: boolean | null = null;
+let startupSettingsError = "";
+let launchEnvironmentState: LaunchEnvironmentState = {
+  status: "idle",
+  refreshedDirectories: 0,
+};
+let launchEnvironmentError = "";
 let updateState: UpdateState = { kind: "idle" };
 let pendingUpdate: Update | null = null;
 let pendingUpdateDownloaded = false;
@@ -986,6 +1004,47 @@ async function chooseProjectDirectory(): Promise<void> {
     formError = error instanceof Error ? error.message : String(error);
   }
   render();
+}
+
+async function loadStartupSettings(): Promise<void> {
+  startupSettingsError = "";
+  if (!desktopUpdateAvailable()) {
+    startAtLogin = null;
+    return;
+  }
+  try {
+    startAtLogin = await isEnabled();
+  } catch (error) {
+    startupSettingsError = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function setHostMode(mode: Snapshot["hostMode"]): Promise<void> {
+  startupSettingsError = "";
+  try {
+    if (mode === "client-only") {
+      const gate = await readUpdateInstallGate("updateInstallGate");
+      if (!gate.allowed) {
+        startupSettingsError = startupCopy(snapshot?.appearance.language ?? "en").hostModeActiveRuns;
+        return;
+      }
+    }
+    await invoke("set_host_mode", { mode });
+    await relaunch();
+  } catch (error) {
+    startupSettingsError = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function setStartAtLogin(enabled: boolean): Promise<void> {
+  startupSettingsError = "";
+  try {
+    if (enabled) await enable();
+    else await disable();
+    startAtLogin = await isEnabled();
+  } catch (error) {
+    startupSettingsError = error instanceof Error ? error.message : String(error);
+  }
 }
 
 async function checkForUpdates(manual: boolean): Promise<void> {
@@ -1373,6 +1432,11 @@ function render(): void {
                     )
                     .join("")}
                 </div>
+              </div>
+              ${startupSettings(startupCopy(appearance.language), snap)}
+              <div class="field">
+                <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(startupCopy(appearance.language).rereadLaunchEnvironment)}</button>
+                ${launchEnvironmentStatus(startupCopy(appearance.language))}
               </div>
               ${updateSettings(copy)}
               <div class="field">
@@ -2049,6 +2113,37 @@ function quitOfferDialog(copy: ShellCopy): string {
         <button type="button" class="danger primary" data-act="confirm-quit">${escapeHtml(copy.quitStopAll)}</button>
       </div>
     </div>
+  </div>`;
+}
+
+function launchEnvironmentStatus(copy: StartupCopy): string {
+  const state = launchEnvironmentState;
+  const text = state.status === "ready"
+    ? copy.launchEnvironmentReady
+    : state.status === "failed"
+      ? copy.launchEnvironmentFailed
+      : copy.launchEnvironmentIdle;
+  const detail = launchEnvironmentError || state.message || "";
+  return `<p class="hint ${state.status === "failed" || detail ? "notice bad" : ""}" data-launch-environment-status="${state.status}">${escapeHtml(text)}${detail ? `<br>${escapeHtml(detail)}` : ""}</p>`;
+}
+
+function startupSettings(copy: StartupCopy, snap: Snapshot): string {
+  if (!desktopUpdateAvailable()) {
+    return `<div class="field startup-settings"><div class="label">${escapeHtml(copy.hostStartup)}</div><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
+  }
+  return `<div class="field startup-settings">
+    <div class="label">${escapeHtml(copy.hostStartup)}</div>
+    <div class="choices">
+      <button type="button" class="${snap.hostMode === "host-and-client" ? "active" : ""}" data-act="host-mode" data-id="host-and-client">${escapeHtml(copy.hostAndClient)}</button>
+      <button type="button" class="${snap.hostMode === "client-only" ? "active" : ""}" data-act="host-mode" data-id="client-only">${escapeHtml(copy.clientOnly)}</button>
+    </div>
+    <p class="hint">${escapeHtml(copy.hostModeHelp)} ${escapeHtml(copy.restartToApply)}</p>
+    <label class="graph-opt">
+      <input type="checkbox" data-field="startAtLogin" ${startAtLogin ? "checked" : ""} ${startAtLogin == null ? "disabled" : ""} />
+      ${escapeHtml(copy.startAtLogin)}
+    </label>
+    <p class="hint">${escapeHtml(copy.startAtLoginHelp)}</p>
+    ${startupSettingsError ? `<p class="notice bad">${escapeHtml(startupSettingsError)}</p>` : ""}
   </div>`;
 }
 
@@ -2951,10 +3046,34 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "settings") {
     settingsOpen = true;
+    await loadStartupSettings();
     pairingOpen = false;
     formOpen = null;
     removeProject = null;
     projectMenuId = "";
+    render();
+    return;
+  }
+  if (act === "host-mode" && target.dataset.id) {
+    const mode = target.dataset.id as Snapshot["hostMode"];
+    if (mode !== snapshot.hostMode) {
+      await setHostMode(mode);
+    }
+    render();
+    return;
+  }
+  if (act === "refresh-launch-environment") {
+    launchEnvironmentError = "";
+    try {
+      const result = await rpc("refreshLaunchEnvironment");
+      launchEnvironmentState = result.launchEnvironment ?? launchEnvironmentState;
+    } catch (error) {
+      launchEnvironmentState = {
+        status: "failed",
+        refreshedDirectories: 0,
+      };
+      launchEnvironmentError = error instanceof Error ? error.message : String(error);
+    }
     render();
     return;
   }
@@ -3520,6 +3639,10 @@ app.addEventListener("submit", async (event) => {
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
   if (!target || !snapshot) return;
+  if (target.getAttribute("data-field") === "startAtLogin" && "checked" in target) {
+    await setStartAtLogin((target as HTMLInputElement).checked);
+    render();
+  }
   if (target.getAttribute("data-field") === "recentLimit" && "value" in target) {
     const limit = Number((target as HTMLInputElement).value);
     if (!Number.isFinite(limit)) return;

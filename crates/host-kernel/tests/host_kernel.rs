@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use host_kernel::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, BootRequest, Command,
-    EmptyAction, HostKernel, Language, LoopbackAssets, LoopbackPage, LoopbackServer, ProcessIntent,
-    SystemAppearance, Theme, LOCAL_RPC_PORT,
+    EmptyAction, HostKernel, HostMode, Language, LoopbackAssets, LoopbackPage, LoopbackServer,
+    ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -27,6 +27,142 @@ fn opening_the_desktop_app_starts_the_local_host() {
     let snap = host.snapshot();
     assert!(snap.running);
     assert!(snap.window_visible);
+}
+
+#[test]
+fn client_only_cold_start_can_use_the_saved_remote_host() {
+    let host_dir = tempfile::tempdir().unwrap();
+    let client_dir = tempfile::tempdir().unwrap();
+    let mut host_req = boot_req(host_dir.path());
+    host_req.host_display_name = "Mini".into();
+    let host = Arc::new(Mutex::new(HostKernel::boot(host_req).unwrap()));
+    let server = LoopbackServer::attach(Arc::clone(&host), 0, |_| {}).unwrap();
+    let address = server.protocol_url().trim_end_matches('/').to_string();
+    let code = host
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+    let mut client = HostKernel::boot(boot_req(client_dir.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": address,
+            "code": code,
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    client
+        .handle(serde_json::json!({ "op": "focusHost", "hostId": remote_id }))
+        .unwrap();
+    drop(client);
+
+    let mut client = HostKernel::boot_client_only(boot_req(client_dir.path())).unwrap();
+    let snap = client.snapshot();
+    assert_eq!(snap.host_mode, HostMode::ClientOnly);
+    assert_eq!(snap.hosts.len(), 1);
+    assert_eq!(snap.hosts[0].display_name, "Mini");
+    assert_eq!(snap.focused_host_id, snap.hosts[0].id);
+    assert!(snap.hosts.iter().all(|host| !host.local));
+    assert_eq!(
+        client
+            .handle(serde_json::json!({ "op": "snapshot" }))
+            .unwrap()
+            .process,
+        ProcessIntent::KeepRunning
+    );
+}
+
+#[test]
+fn client_only_cold_start_preserves_existing_host_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let settings_path = host.snapshot().data.host_settings_path;
+    let before = std::fs::read(&settings_path).unwrap();
+    drop(host);
+
+    let client = HostKernel::boot_client_only(boot_req(tmp.path())).unwrap();
+    assert!(client.snapshot().projects.is_empty());
+    drop(client);
+    assert_eq!(std::fs::read(&settings_path).unwrap(), before);
+}
+
+#[test]
+fn client_only_cold_start_has_no_local_host_or_loopback_page() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = HostKernel::boot_client_only(boot_req(tmp.path())).unwrap();
+    let snap = host.snapshot();
+
+    assert!(!snap.running);
+    assert!(snap.window_visible);
+    assert_eq!(snap.host_mode, HostMode::ClientOnly);
+    assert!(snap.hosts.iter().all(|host| !host.local));
+    assert!(snap.projects.is_empty());
+    assert!(snap.runs.is_empty());
+    assert!(snap.data.host_dir.is_dir());
+    assert!(snap.data.desktop_client_dir.is_dir());
+
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+    assert_eq!(server.protocol_url(), "");
+    assert!(matches!(
+        kernel.lock().unwrap().snapshot().loopback_page,
+        LoopbackPage::HostNotRunning { .. }
+    ));
+}
+
+#[test]
+fn client_only_desktop_transport_is_private_and_keeps_the_client_process_alive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(
+        HostKernel::boot_client_only(boot_req(tmp.path())).unwrap(),
+    ));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&kernel), |_| {}).unwrap();
+    let addr: SocketAddr = server
+        .protocol_url()
+        .trim_start_matches("http://")
+        .parse()
+        .unwrap();
+
+    assert!(addr.ip().is_loopback());
+    assert_ne!(addr.port(), LOCAL_RPC_PORT);
+    let (status, body) = http_post(addr, "tauri://localhost", r#"{"op":"snapshot"}"#);
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["process"], "keep-running");
+    assert_eq!(value["snapshot"]["running"], false);
+    assert_eq!(value["snapshot"]["hostMode"], "client-only");
+    let (status, _, _) = http_get(addr, Some("tauri://localhost"), "/");
+    assert_eq!(status, 404);
+}
+
+#[test]
+fn client_only_window_can_hide_and_reopen_without_starting_a_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut client = HostKernel::boot_client_only(boot_req(tmp.path())).unwrap();
+
+    let hidden = client.dispatch(Command::HideWindow).unwrap();
+    assert!(!hidden.snapshot.window_visible);
+    assert_eq!(hidden.process, ProcessIntent::KeepRunning);
+    let reopened = client.dispatch(Command::ShowWindow).unwrap();
+    assert!(reopened.snapshot.window_visible);
+    assert!(!reopened.snapshot.running);
+    assert_eq!(reopened.snapshot.host_mode, HostMode::ClientOnly);
+    assert_eq!(reopened.process, ProcessIntent::KeepRunning);
 }
 
 #[test]

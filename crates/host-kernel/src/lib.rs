@@ -87,6 +87,13 @@ pub enum SystemAppearance {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostMode {
+    HostAndClient,
+    ClientOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Language {
     #[serde(rename = "zh-CN")]
@@ -165,6 +172,7 @@ pub enum Command {
     SetRecentCompletedLimit {
         limit: u32,
     },
+    RefreshLaunchEnvironment,
     SearchIssues {
         project_id: String,
         search: IssueSearch,
@@ -425,7 +433,7 @@ pub enum NotificationKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandOutcome {
-    pub snapshot: HostSnapshot,
+    pub snapshot: Box<HostSnapshot>,
     pub process: ProcessIntent,
     pub pairing: Option<IssuedPairing>,
     pub inference: Option<ProjectInference>,
@@ -443,6 +451,12 @@ pub struct CommandOutcome {
         skip_serializing_if = "Option::is_none"
     )]
     pub view_changes: Option<ViewChanges>,
+    #[serde(
+        rename = "launchEnvironment",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub launch_environment: Option<LaunchEnvironmentStatus>,
 }
 
 impl CommandOutcome {
@@ -465,6 +479,10 @@ impl CommandOutcome {
         }
         if let Some(view_changes) = &self.view_changes {
             value["viewChanges"] = serde_json::to_value(view_changes).expect("view changes json");
+        }
+        if let Some(status) = &self.launch_environment {
+            value["launchEnvironment"] =
+                serde_json::to_value(status).expect("launch environment json");
         }
         value
     }
@@ -866,6 +884,7 @@ pub struct ShellCopy {
 pub struct HostSnapshot {
     pub running: bool,
     pub window_visible: bool,
+    pub host_mode: HostMode,
     pub focused_host_id: String,
     pub focused_project_id: String,
     pub hosts: Vec<HostSummary>,
@@ -895,6 +914,25 @@ pub struct HostSnapshot {
     pub pending_confirmation: Option<PendingConfirmation>,
     pub usage_open: bool,
     pub usage: UsagePage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchEnvironmentStatus {
+    pub status: &'static str,
+    pub refreshed_directories: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl Default for LaunchEnvironmentStatus {
+    fn default() -> Self {
+        Self {
+            status: "idle",
+            refreshed_directories: 0,
+            message: None,
+        }
+    }
 }
 
 pub struct KernelPorts {
@@ -927,6 +965,8 @@ impl KernelPorts {
 pub struct HostKernel {
     running: bool,
     window_visible: bool,
+    host_mode: HostMode,
+    exiting: bool,
     host_display_name: String,
     data: DataLayout,
     appearance: AppearanceSelection,
@@ -1039,7 +1079,11 @@ struct RemoteView {
 
 impl HostKernel {
     pub fn boot(request: BootRequest) -> Result<Self, KernelError> {
-        Self::boot_with_ports(request, KernelPorts::live())
+        Self::boot_with_mode(request, KernelPorts::live(), HostMode::HostAndClient)
+    }
+
+    pub fn boot_client_only(request: BootRequest) -> Result<Self, KernelError> {
+        Self::boot_with_mode(request, KernelPorts::live(), HostMode::ClientOnly)
     }
 
     pub fn boot_with(
@@ -1050,6 +1094,14 @@ impl HostKernel {
     }
 
     pub fn boot_with_ports(request: BootRequest, ports: KernelPorts) -> Result<Self, KernelError> {
+        Self::boot_with_mode(request, ports, HostMode::HostAndClient)
+    }
+
+    fn boot_with_mode(
+        request: BootRequest,
+        ports: KernelPorts,
+        host_mode: HostMode,
+    ) -> Result<Self, KernelError> {
         let KernelPorts {
             tracker,
             agents,
@@ -1097,19 +1149,34 @@ impl HostKernel {
 
         let language = appearance.language;
         let secrets_path = data.host_secrets_path.clone();
-        let projects = settings
-            .projects
-            .into_iter()
-            .map(|stored| probe_record(stored, tracker.as_ref(), &secrets_path, language))
-            .collect::<Vec<_>>();
+        let projects = if host_mode == HostMode::HostAndClient {
+            settings
+                .projects
+                .into_iter()
+                .map(|stored| probe_record(stored, tracker.as_ref(), &secrets_path, language))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let focused_project_id = settings
             .focused_project_id
             .filter(|id| projects.iter().any(|project| project.id == *id))
             .or_else(|| projects.first().map(|project| project.id.clone()));
+        let focused_host_id =
+            if host_mode == HostMode::ClientOnly && focused_host_id == LOCAL_HOST_ID {
+                remote_hosts
+                    .first()
+                    .map(|host| host.id.clone())
+                    .unwrap_or_default()
+            } else {
+                focused_host_id
+            };
 
         let mut host = Self {
-            running: true,
+            running: host_mode == HostMode::HostAndClient,
             window_visible: true,
+            host_mode,
+            exiting: false,
             host_display_name: request.host_display_name,
             data,
             appearance,
@@ -1167,11 +1234,21 @@ impl HostKernel {
         for project_id in &project_ids {
             host.load_persisted_snapshot(project_id);
         }
-        let crashed_ids = host.load_persisted_runs();
-        host.load_usage_samples();
-        host.load_change_notes();
-        if let Some(project_id) = host.focused_project_id.clone() {
-            host.refresh_project(&project_id, RefreshTrigger::Immediate);
+        let crashed_ids = if host.host_mode == HostMode::HostAndClient {
+            let crashed_ids = host.load_persisted_runs();
+            host.load_usage_samples();
+            host.load_change_notes();
+            crashed_ids
+        } else {
+            Vec::new()
+        };
+        if host.host_mode == HostMode::HostAndClient {
+            if let Some(project_id) = host.focused_project_id.clone() {
+                host.refresh_project(&project_id, RefreshTrigger::Immediate);
+            }
+        } else if !host.focused_host_id.is_empty() {
+            let focused = host.focused_host_id.clone();
+            let _ = host.refresh_remote_view(&focused);
         }
         host.pending_events.clear();
         host.arm_cold_start();
@@ -1186,6 +1263,7 @@ impl HostKernel {
         HostSnapshot {
             running: self.running,
             window_visible: self.window_visible,
+            host_mode: self.host_mode,
             focused_host_id: self.focused_host_id.clone(),
             focused_project_id: focused_project_id.clone(),
             hosts: self.connected_hosts(),
@@ -1243,8 +1321,8 @@ impl HostKernel {
                 .ok()
         });
         CommandOutcome {
-            snapshot: self.snapshot(),
-            process: if self.running {
+            snapshot: Box::new(self.snapshot()),
+            process: if self.process_alive() {
                 ProcessIntent::KeepRunning
             } else {
                 ProcessIntent::Exit
@@ -1254,7 +1332,12 @@ impl HostKernel {
             update_install_gate: None,
             events: std::mem::take(&mut self.pending_events),
             view_changes,
+            launch_environment: None,
         }
+    }
+
+    pub fn process_alive(&self) -> bool {
+        !self.exiting
     }
 
     pub fn pty_session(&self, run_id: &str) -> Result<Arc<dyn AgentSession>, KernelError> {
@@ -1288,6 +1371,14 @@ impl HostKernel {
             allowed: active_run_count == 0,
             active_run_count,
         }
+    }
+
+    pub fn begin_client_only_switch(&mut self) -> UpdateInstallGate {
+        let gate = self.update_install_gate();
+        if gate.allowed {
+            self.update_installing = true;
+        }
+        gate
     }
 
     pub fn write_pty(&self, run_id: &str, data: &[u8]) -> Result<(), KernelError> {
@@ -1334,10 +1425,15 @@ impl HostKernel {
         match command {
             Command::HideWindow => self.window_visible = false,
             Command::ShowWindow => {
-                if self.running {
+                if self.process_alive() {
                     self.window_visible = true;
-                    if let Some(project_id) = self.focused_project_id.clone() {
-                        self.refresh_project(&project_id, RefreshTrigger::Immediate);
+                    if self.running {
+                        if let Some(project_id) = self.focused_project_id.clone() {
+                            self.refresh_project(&project_id, RefreshTrigger::Immediate);
+                        }
+                    } else if !self.focused_host_id.is_empty() {
+                        let focused = self.focused_host_id.clone();
+                        let _ = self.refresh_remote_view(&focused);
                     }
                 }
             }
@@ -1349,6 +1445,7 @@ impl HostKernel {
                 } else {
                     self.running = false;
                     self.window_visible = false;
+                    self.exiting = true;
                     self.loopback_kind = LoopbackKind::HostNotRunning;
                 }
             }
@@ -1432,6 +1529,12 @@ impl HostKernel {
             Command::SetRecentCompletedLimit { limit } => {
                 self.recent_limit = board::clamp_recent_limit(limit);
                 self.persist_client_settings(&self.appearance.clone())?;
+            }
+            Command::RefreshLaunchEnvironment => {
+                let status = self.refresh_launch_environment()?;
+                let mut outcome = self.outcome();
+                outcome.launch_environment = Some(status);
+                return Ok(outcome);
             }
             Command::SearchIssues { project_id, search } => {
                 if !self.projects.iter().any(|project| project.id == project_id) {
@@ -1591,6 +1694,7 @@ impl HostKernel {
                 self.quit_offer = None;
                 self.running = false;
                 self.window_visible = false;
+                self.exiting = true;
                 self.loopback_kind = LoopbackKind::HostNotRunning;
             }
             Command::SetRefreshInterval { interval_ms } => {
@@ -1859,6 +1963,14 @@ impl HostKernel {
                     .ok_or_else(|| KernelError::Protocol("missing limit".into()))?
                     as u32,
             }),
+            "refreshLaunchEnvironment" => {
+                if self.focused_host_id != LOCAL_HOST_ID {
+                    return Err(KernelError::Denied(
+                        "switch to this machine to reread its launch environment".into(),
+                    ));
+                }
+                self.dispatch(Command::RefreshLaunchEnvironment)
+            }
             "searchIssues" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -2370,11 +2482,15 @@ impl HostKernel {
     }
 
     fn connected_hosts(&self) -> Vec<HostSummary> {
-        let mut hosts = vec![HostSummary {
-            id: LOCAL_HOST_ID.to_string(),
-            display_name: self.host_display_name.clone(),
-            local: true,
-        }];
+        let mut hosts = if self.host_mode == HostMode::HostAndClient {
+            vec![HostSummary {
+                id: LOCAL_HOST_ID.to_string(),
+                display_name: self.host_display_name.clone(),
+                local: true,
+            }]
+        } else {
+            Vec::new()
+        };
         hosts.extend(self.remote_hosts.iter().map(|host| HostSummary {
             id: host.id.clone(),
             display_name: host.display_name.clone(),
@@ -2563,6 +2679,46 @@ impl HostKernel {
             .find(|agent| agent.id() == selected)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))
+    }
+
+    fn refresh_launch_environment(&mut self) -> Result<LaunchEnvironmentStatus, KernelError> {
+        let directories = if self.projects.is_empty() {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(PathBuf::from)
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            self.projects
+                .iter()
+                .map(|project| project.local_path.clone())
+                .collect::<Vec<_>>()
+        };
+        if directories.is_empty() {
+            return Ok(LaunchEnvironmentStatus {
+                status: "ready",
+                refreshed_directories: 0,
+                message: None,
+            });
+        }
+
+        let mut failures = Vec::new();
+        let mut refreshed = 0;
+        for directory in directories {
+            match self.launch_env.refresh(&directory) {
+                Ok(_) => refreshed += 1,
+                Err(err) => failures.push(format!("{}: {err}", directory.display())),
+            }
+        }
+        if failures.is_empty() {
+            Ok(LaunchEnvironmentStatus {
+                status: "ready",
+                refreshed_directories: refreshed,
+                message: None,
+            })
+        } else {
+            Err(KernelError::Denied(failures.join("\n")))
+        }
     }
 
     fn prepare_run_launch(

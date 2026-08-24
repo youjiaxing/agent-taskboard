@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use host_kernel::{
-    BootRequest, Command, HostKernel, KernelPorts, Language, MemoryAgent, MemoryLaunchEnv,
-    MemorySessionFactory, MemoryTracker, ProcessIntent, RunStatus, SystemAppearance,
+    BootRequest, Command, HostKernel, KernelPorts, Language, LaunchEnvironment, MemoryAgent,
+    MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, ProcessIntent, RunStatus,
+    SystemAppearance,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -132,6 +134,68 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     assert_eq!(out.snapshot.focused_run_id, run.id);
     assert_eq!(h.launch_env.capture_count(), 2);
     assert_eq!(h.launch_env.captured_dirs(), vec![dir.clone(), dir.clone()]);
+}
+
+#[test]
+fn manual_environment_refresh_updates_later_agent_probes_and_run_spawns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/before/bin");
+    let project_id = register(&mut h.host, &dir);
+    h.launch_env.set(
+        dir.clone(),
+        LaunchEnvironment::from_vars(
+            dir.clone(),
+            BTreeMap::from([("PATH".into(), "/after/bin".into())]),
+        ),
+    );
+
+    let refreshed = h
+        .host
+        .handle(serde_json::json!({ "op": "refreshLaunchEnvironment" }))
+        .unwrap();
+    let launch_environment = refreshed.launch_environment.unwrap();
+    assert_eq!(launch_environment.status, "ready");
+    assert_eq!(launch_environment.refreshed_directories, 1);
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert!(form.agents[0].installed);
+    h.host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    assert!(h.sessions.last_spawn().unwrap().env["PATH"].contains("/after/bin"));
+}
+
+#[test]
+fn client_only_switch_reserves_the_process_against_new_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+
+    let gate = h.host.begin_client_only_switch();
+    assert!(gate.allowed);
+    let err = h
+        .host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+        }))
+        .unwrap_err();
+    assert!(err.to_string().contains("update install is starting"));
+    assert_eq!(h.sessions.spawn_count(), 0);
 }
 
 #[test]

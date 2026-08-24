@@ -1,9 +1,12 @@
+mod startup;
+
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use host_kernel::{
-    BootRequest, Command, HostKernel, HostSnapshot, LoopbackAssets, LoopbackServer, ProcessIntent,
-    SystemAppearance, LOCAL_RPC_PORT,
+    BootRequest, Command, HostKernel, HostMode, HostSnapshot, LoopbackAssets, LoopbackServer,
+    ProcessIntent, SystemAppearance, LOCAL_RPC_PORT,
 };
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -13,44 +16,60 @@ use tauri::{AppHandle, Manager, WindowEvent};
 struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
     protocol_url: String,
+    startup_settings_path: PathBuf,
     _loopback: LoopbackServer,
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("com.youjiaxing.agent-taskboard")
+                .args(["--autostart"])
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![set_host_mode])
         .setup(|app| {
-            let kernel = boot_kernel(app.handle())?;
+            let startup_settings_path = startup_settings_path(app.handle())?;
+            let host_mode = startup::requested_host_mode(&startup_settings_path, std::env::args());
+            let kernel = boot_kernel(app.handle(), host_mode)?;
             let kernel = Arc::new(Mutex::new(kernel));
             let app_handle = app.handle().clone();
-            let loopback = LoopbackServer::attach_with(
-                Arc::clone(&kernel),
-                LOCAL_RPC_PORT,
-                loopback_assets(app.handle()),
-                move |outcome| {
-                    let _ = refresh_shell(&app_handle, &outcome.snapshot);
-                    if outcome.snapshot.window_visible {
-                        if let Some(window) = app_handle.get_webview_window("main") {
-                            if !window.is_visible().unwrap_or(true) {
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
+            let on_outcome = move |outcome: host_kernel::CommandOutcome| {
+                let _ = refresh_shell(&app_handle, &outcome.snapshot);
+                if outcome.snapshot.window_visible {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
                         }
                     }
-                    if outcome.process == ProcessIntent::Exit {
-                        app_handle.exit(0);
-                    }
-                },
-            )?;
+                }
+                if outcome.process == ProcessIntent::Exit {
+                    app_handle.exit(0);
+                }
+            };
+            let loopback = if host_mode == HostMode::ClientOnly {
+                LoopbackServer::attach_client_transport(Arc::clone(&kernel), on_outcome)?
+            } else {
+                LoopbackServer::attach_with(
+                    Arc::clone(&kernel),
+                    LOCAL_RPC_PORT,
+                    loopback_assets(app.handle()),
+                    on_outcome,
+                )?
+            };
             let protocol_url = loopback.protocol_url().to_string();
             let snapshot = kernel.lock().map_err(|err| err.to_string())?.snapshot();
             app.manage(AppState {
                 kernel,
                 protocol_url: protocol_url.clone(),
+                startup_settings_path,
                 _loopback: loopback,
             });
             build_tray(app.handle())?;
@@ -122,7 +141,48 @@ fn inject_protocol_url(window: &tauri::WebviewWindow, url: &str) {
     let _ = window.eval(format!("window.__HOST_PROTOCOL__ = {encoded};"));
 }
 
-fn boot_kernel(app: &AppHandle) -> Result<HostKernel, Box<dyn std::error::Error>> {
+fn startup_settings_path(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = app
+        .path()
+        .app_local_data_dir()?
+        .join("desktop-client/startup.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn set_host_mode(mode: &str, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let client_only = match mode {
+        "client-only" => true,
+        "host-and-client" => false,
+        _ => return Err("unknown Host mode".into()),
+    };
+    if client_only
+        && !state
+            .kernel
+            .lock()
+            .map_err(|err| err.to_string())?
+            .begin_client_only_switch()
+            .allowed
+    {
+        return Err("active Runs must finish or stop before enabling Client only".into());
+    }
+    startup::write_host_mode(
+        &state.startup_settings_path,
+        if client_only {
+            HostMode::ClientOnly
+        } else {
+            HostMode::HostAndClient
+        },
+    )
+}
+
+fn boot_kernel(
+    app: &AppHandle,
+    host_mode: HostMode,
+) -> Result<HostKernel, Box<dyn std::error::Error>> {
     let app_local_data_dir = app.path().app_local_data_dir()?;
     let app_log_dir = app.path().app_log_dir()?;
     let system_locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_string());
@@ -133,13 +193,17 @@ fn boot_kernel(app: &AppHandle) -> Result<HostKernel, Box<dyn std::error::Error>
         Some(tauri::Theme::Dark) => SystemAppearance::Dark,
         _ => SystemAppearance::Light,
     };
-    Ok(HostKernel::boot(BootRequest {
+    let request = BootRequest {
         app_local_data_dir,
         app_log_dir,
         system_locale,
         system_appearance,
         host_display_name: host_display_name(),
-    })?)
+    };
+    Ok(match host_mode {
+        HostMode::HostAndClient => HostKernel::boot(request)?,
+        HostMode::ClientOnly => HostKernel::boot_client_only(request)?,
+    })
 }
 
 fn host_display_name() -> String {
