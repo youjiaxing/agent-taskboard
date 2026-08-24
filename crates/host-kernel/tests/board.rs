@@ -1,7 +1,10 @@
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+use common::{ReadMode, SeamTracker};
 use host_kernel::{
     BoardEmptyReason, BootRequest, CenterView, FrontierEmptyReason, HostKernel, IssueRecord,
     LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TriageRole,
@@ -25,6 +28,10 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
+    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
     HostKernel::boot_with(boot_req(root), tracker).unwrap()
 }
 
@@ -585,6 +592,38 @@ fn focusing_a_graph_node_only_changes_details() {
 }
 
 #[test]
+fn incomplete_read_does_not_compute_frontier_or_dependency_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 3, "ready work").label("ready-for-agent"),
+            IssueRecord::open("you/garden", 4, "claimed work")
+                .label("ready-for-agent")
+                .assignee("ada"),
+            IssueRecord::open("you/garden", 7, "closed").closed_at("2026-08-22T10:00:00Z"),
+        ],
+    );
+    tracker.set_read_mode("you/garden", ReadMode::Incomplete("page cut off".into()));
+    let mut host = boot_seam(tmp.path(), tracker);
+    register(&mut host, &dir, "you/garden");
+    let board = host.snapshot().board.unwrap();
+    assert_eq!(
+        board.empty,
+        Some(host_kernel::BoardEmptyReason::IncompleteRead)
+    );
+    assert!(board.columns.is_none());
+    assert!(board.graph.is_none());
+    assert!(board.frontier_empty.is_none());
+    assert!(matches!(
+        board.refresh,
+        host_kernel::RefreshStatus::Incomplete { .. }
+    ));
+}
+
+#[test]
 fn unknown_move_op_does_not_change_tracker_state() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
@@ -606,10 +645,10 @@ fn unknown_move_op_does_not_change_tracker_state() {
 }
 
 #[test]
-fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
+fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
+    let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(
         IssueRecord::open("you/garden", 1, "parent")
             .child("you/garden", 2, "child ready")
@@ -645,6 +684,10 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     tracker.add_issue(
         IssueRecord::open("you/garden", 7, "just closed").closed_at("2026-08-22T10:00:00Z"),
     );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("pagination stopped early".into()),
+    );
     let sessions = host_kernel::MemorySessionFactory::new();
     let agent = Arc::new(host_kernel::MemoryAgent::installed_grok());
     let mut host = HostKernel::boot_with_ports(
@@ -658,6 +701,12 @@ fn browser_renders_four_columns_and_keeps_filter_separate_from_details() {
     )
     .unwrap();
     let garden_project_id = register(&mut host, &dir, "you/garden");
+    assert_eq!(
+        host.snapshot().board.unwrap().empty,
+        Some(BoardEmptyReason::IncompleteRead)
+    );
+    tracker.set_read_mode("you/garden", ReadMode::Complete);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
     host.handle(serde_json::json!({
         "op": "startBoundRun",
         "issueId": "you/garden#10",

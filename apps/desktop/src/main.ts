@@ -116,6 +116,8 @@ type ShellCopy = {
   noRecent: string;
   recentNote: string;
   emptyNoData: string;
+  emptyIncomplete: string;
+  emptyTrackerError: string;
   family: string;
   deps: string;
   parent: string;
@@ -143,6 +145,8 @@ type ShellCopy = {
   refreshRetry: string;
   refreshPaused: string;
   refreshAuth: string;
+  refreshIncomplete: string;
+  refreshTrackerError: string;
   newRun: string;
   executeRun: string;
   startRun: string;
@@ -357,7 +361,14 @@ type RefreshStatus =
   | { kind: "offline"; fetchedAtMs: number; nextRefreshInMs?: number | null }
   | { kind: "never-fetched" }
   | { kind: "rate-limited"; fetchedAtMs?: number | null; retryAtMs?: number | null }
-  | { kind: "auth-failed"; fetchedAtMs?: number | null };
+  | { kind: "auth-failed"; fetchedAtMs?: number | null }
+  | {
+      kind: "incomplete" | "tracker-error";
+      fetchedAtMs?: number | null;
+      dataComplete?: boolean;
+      nextRefreshInMs?: number | null;
+      detail?: string | null;
+    };
 
 type GraphNode = {
   id: string;
@@ -384,7 +395,7 @@ type WorkspaceView = "project" | "host-overview" | "run";
 type BoardSnapshot = {
   projectId: string;
   columns: BoardColumns | null;
-  empty: "no-data" | null;
+  empty: "no-data" | "incomplete-read" | "tracker-error" | null;
   frontierEmpty: "all-blocked" | "all-claimed" | "no-open" | null;
   parentFilter: IssueCard | null;
   selected: IssueDetail | null;
@@ -2121,6 +2132,16 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
 
 function boardView(copy: ShellCopy, snap: Snapshot): string {
   const board = snap.board;
+  if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
+    const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
+      ? board.refresh.detail
+      : null;
+    const message = board.empty === "tracker-error" ? copy.emptyTrackerError : copy.emptyIncomplete;
+    return `<div class="board-empty" data-empty="${board.empty}">
+      <b>${escapeHtml(message)}</b>
+      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+    </div>`;
+  }
   if (!board || board.empty === "no-data" || !board.columns) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
@@ -2366,6 +2387,17 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
     parts.push(copy.refreshAuth);
     if (status.fetchedAtMs) {
       parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    }
+  } else if (status.kind === "incomplete" || status.kind === "tracker-error") {
+    parts.push(status.kind === "tracker-error" ? copy.refreshTrackerError : copy.refreshIncomplete);
+    if (status.detail) {
+      parts.push(status.detail);
+    }
+    if (status.fetchedAtMs) {
+      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    }
+    if (status.nextRefreshInMs != null) {
+      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
     }
   } else if (status.kind === "ready") {
     parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);

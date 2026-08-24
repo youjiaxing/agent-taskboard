@@ -34,6 +34,18 @@ try {
   throw error;
 }
 await page.waitForSelector(".refresh-bar");
+if (await page.$('.refresh-bar[data-kind="incomplete"]')) {
+  const incompleteText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
+  if (!incompleteText.includes("数据不完整") || !incompleteText.includes("pagination stopped early")) {
+    throw new Error(`incomplete refresh detail missing: ${incompleteText}`);
+  }
+  if (await page.$(".lanes") || await page.$(".dep-graph")) {
+    throw new Error("incomplete tracker data must hide Frontier lanes and the dependency graph");
+  }
+  await page.waitForSelector('[data-empty="incomplete-read"]');
+  await page.click('.refresh-bar button[data-act="refresh"]');
+  await page.waitForSelector(".lanes");
+}
 
 await page.keyboard.press("?");
 await page.waitForSelector(".keyboard-help");
@@ -423,15 +435,14 @@ if (!recentOutput.includes("mobile recent output")) {
 await page.fill(".mobile-run-view .inject-row input", "mobile answer");
 await page.click(".mobile-run-view .inject-row button[type='submit']");
 await page.waitForFunction(() => document.querySelector(".mobile-run-view .inject-row input")?.value === "");
-const injectedOutput = await page.evaluate(async ({ protocol, runId }) => {
+const injectedRunId = await page.$eval(".mobile-run-output", (node) => node.getAttribute("data-run"));
+await page.waitForFunction(async ({ protocol, runId }) => {
   const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
-  if (!response.ok) return "";
+  if (!response.ok) return false;
   const json = await response.json();
-  return new TextDecoder().decode(Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0)));
-}, { protocol: url, runId: await page.$eval(".mobile-run-output", (node) => node.getAttribute("data-run")) });
-if (!injectedOutput.includes("mobile answer")) {
-  throw new Error(`mobile should inject one line into the active Run, got ${injectedOutput}`);
-}
+  const output = new TextDecoder().decode(Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0)));
+  return output.includes("mobile answer");
+}, { protocol: url, runId: injectedRunId });
 if (!(await page.$(".telemetry-mobile .capsule")) || !(await page.$(".telemetry-mobile .telemetry-simple"))) {
   throw new Error("mobile telemetry should keep the main model capsule and simple multi-model list");
 }

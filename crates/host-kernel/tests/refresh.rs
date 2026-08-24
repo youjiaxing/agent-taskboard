@@ -1,6 +1,9 @@
+mod common;
+
 use std::path::Path;
 use std::sync::Arc;
 
+use common::{ReadMode, SeamTracker};
 use host_kernel::{
     BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, MemoryTracker,
     RefreshStatus, SystemAppearance, DEFAULT_REFRESH_INTERVAL_MS,
@@ -23,6 +26,10 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
+    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
     HostKernel::boot_with(boot_req(root), tracker).unwrap()
 }
 
@@ -603,6 +610,67 @@ fn refresh_interval_is_configurable_and_survives_reboot() {
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+}
+
+#[test]
+fn incomplete_read_persists_snapshot_and_board_across_reboot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![IssueRecord::open("you/garden", 1, "ready")],
+    );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("truncated at 500 issues".into()),
+    );
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+
+    let board = host.snapshot().board.unwrap();
+    assert_eq!(board.empty, Some(BoardEmptyReason::IncompleteRead));
+    assert!(board.columns.is_none());
+    let fetched = match board.refresh {
+        RefreshStatus::Incomplete {
+            fetched_at_ms: Some(fetched),
+            next_refresh_in_ms,
+            detail,
+        } => {
+            assert_eq!(next_refresh_in_ms, Some(DEFAULT_REFRESH_INTERVAL_MS));
+            assert_eq!(detail.as_deref(), Some("truncated at 500 issues"));
+            fetched
+        }
+        other => panic!("expected incomplete, got {other:?}"),
+    };
+
+    // 快照标记不完整并保留详情
+    let path = snapshot_path(&host, &project_id);
+    let stored: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(stored["complete"], false);
+    assert_eq!(stored["detail"], "truncated at 500 issues");
+    assert_eq!(stored["issues"][0]["number"], 1);
+
+    // 到点自动重试，未完整前看板一直不画 Frontier
+    let baseline = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+    assert!(host.snapshot().board.unwrap().columns.is_none());
+
+    // 重启后仍是不完整状态
+    drop(host);
+    let host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let board = host.snapshot().board.unwrap();
+    assert!(board.columns.is_none());
+    match board.refresh {
+        RefreshStatus::Incomplete { .. } => {}
+        other => panic!("expected incomplete after reboot, got {other:?}"),
+    }
 }
 
 #[test]

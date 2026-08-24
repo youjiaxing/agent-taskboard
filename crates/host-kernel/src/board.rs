@@ -13,6 +13,10 @@ pub const MAX_RECENT_LIMIT: u32 = 50;
 #[serde(rename_all = "kebab-case")]
 pub enum BoardEmptyReason {
     NoData,
+    /// 有数据但读取不完整（截断等），不能当作全量数据绘制列。
+    IncompleteRead,
+    /// Tracker 返回业务错误；保留已知详情，但不能用旧数据计算 Frontier。
+    TrackerError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +126,33 @@ pub enum RefreshStatus {
         #[serde(rename = "fetchedAtMs")]
         fetched_at_ms: Option<u64>,
     },
+    /// 拿到数据但不完整（分页截断等）；不能当作全量数据计算 Frontier/依赖图。
+    Incomplete {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+        #[serde(
+            rename = "nextRefreshInMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        next_refresh_in_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    TrackerError {
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: Option<u64>,
+        #[serde(rename = "dataComplete")]
+        data_complete: bool,
+        #[serde(
+            rename = "nextRefreshInMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        next_refresh_in_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
 }
 
 impl RefreshStatus {
@@ -133,6 +164,8 @@ impl RefreshStatus {
             Self::NeverFetched => "never-fetched",
             Self::RateLimited { .. } => "rate-limited",
             Self::AuthFailed { .. } => "auth-failed",
+            Self::Incomplete { .. } => "incomplete",
+            Self::TrackerError { .. } => "tracker-error",
         }
     }
 
@@ -144,6 +177,17 @@ impl RefreshStatus {
             Self::NeverFetched => None,
             Self::RateLimited { fetched_at_ms, .. } => *fetched_at_ms,
             Self::AuthFailed { fetched_at_ms } => *fetched_at_ms,
+            Self::Incomplete { fetched_at_ms, .. } => *fetched_at_ms,
+            Self::TrackerError { fetched_at_ms, .. } => *fetched_at_ms,
+        }
+    }
+
+    /// 当前数据能否当作全量数据使用；不完整时禁止计算 Frontier/依赖图。
+    pub fn complete(&self) -> bool {
+        match self {
+            Self::Incomplete { .. } => false,
+            Self::TrackerError { data_complete, .. } => *data_complete,
+            _ => true,
         }
     }
 }
@@ -279,6 +323,32 @@ pub fn project_board(
     };
 
     let mapping_active = label_mapping_active(issues);
+    // 数据不完整时不能当作全量数据计算 Frontier 与依赖图：
+    // 不画四列、不画图，但保留已知数据的详情与父过滤视图。
+    if !refresh.complete() {
+        let empty = if matches!(refresh, RefreshStatus::TrackerError { .. }) {
+            BoardEmptyReason::TrackerError
+        } else {
+            BoardEmptyReason::IncompleteRead
+        };
+        return BoardSnapshot {
+            project_id: project_id.to_string(),
+            columns: None,
+            empty: Some(empty),
+            frontier_empty: None,
+            parent_filter: parent_filter
+                .and_then(|id| issues.iter().find(|issue| issue.id() == id))
+                .map(|issue| card(issue, mapping_active)),
+            selected: selected_id.and_then(|id| select_issue(issues, id, mapping_active)),
+            label_mapping_active: mapping_active,
+            recent_limit,
+            refresh,
+            graph: None,
+            show_closed_graph_context,
+            search,
+        };
+    }
+
     let filter = parent_filter.and_then(|id| issues.iter().find(|issue| issue.id() == id));
     let visible: Vec<&IssueRecord> = issues
         .iter()
@@ -614,10 +684,7 @@ fn link_detail(issue: &IssueRef) -> IssueDetail {
         repository: issue.repository.clone(),
         number: issue.number,
         title: issue.title.clone(),
-        url: format!(
-            "https://github.com/{}/issues/{}",
-            issue.repository, issue.number
-        ),
+        url: issue.url.clone(),
         open: issue.open.unwrap_or(true),
         claimed_by: Vec::new(),
         triage_role: None,

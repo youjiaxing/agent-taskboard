@@ -24,7 +24,17 @@ pub fn clamp_refresh_interval_ms(interval_ms: u64) -> u64 {
 #[serde(rename_all = "camelCase")]
 pub struct StoredTrackerSnapshot {
     pub fetched_at_ms: u64,
+    /// 读取是否完整；不完整时不能当作全量数据计算 Frontier/依赖图。
+    #[serde(default = "default_complete")]
+    pub complete: bool,
+    /// 不完整读取的可读详情（例如截断原因）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     pub issues: Vec<IssueRecord>,
+}
+
+fn default_complete() -> bool {
+    true
 }
 
 pub fn wall_ms() -> u64 {

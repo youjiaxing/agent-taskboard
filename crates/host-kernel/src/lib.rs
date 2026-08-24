@@ -15,6 +15,7 @@ mod refresh;
 mod run;
 mod session;
 mod tracker;
+mod tracker_seam;
 mod usage;
 
 use std::collections::BTreeMap;
@@ -44,7 +45,7 @@ pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
     GitBaseline, ViewChanges,
 };
-pub use issue::{IssueRecord, TriageRole};
+pub use issue::{parse_issue_id, DependencyRef, IssueRecord, IssueRef, TriageRole};
 pub use launch_env::{LaunchEnvPort, LaunchEnvironment, MemoryLaunchEnv, ShellLaunchEnv};
 pub use local_rpc::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, LoopbackAssets, LoopbackServer,
@@ -59,9 +60,11 @@ pub use session::{
     SpawnRequest,
 };
 pub use tracker::{
-    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
-    ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
+    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, IssueComment,
+    IssueEdit, MemoryTracker, ProbeContext, ProbeOutcome, ProjectConnection, RepairHint,
+    ScriptedGitHub, TrackerKind, TrackerPort, TrackerReadError, TrackerWriteError,
 };
+pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
 pub use usage::{
     BucketKind, RunTelemetryLane, TelemetryLane, TelemetryPoint, TelemetrySample, TokenCounts,
     UsageFilter, UsagePage, UsageRange, RING_LEN,
@@ -185,6 +188,32 @@ pub enum Command {
     },
     ReleaseIssue {
         issue_id: String,
+    },
+    CreateIssue {
+        project_id: String,
+        title: String,
+        body: String,
+    },
+    UpdateIssue {
+        issue_id: String,
+        title: String,
+        body: String,
+    },
+    SetIssueOpen {
+        issue_id: String,
+        open: bool,
+    },
+    AddIssueComment {
+        issue_id: String,
+        body: String,
+    },
+    SetIssueParent {
+        issue_id: String,
+        parent: Option<String>,
+    },
+    SetIssueBlockedBy {
+        issue_id: String,
+        blocked_by: Vec<String>,
     },
     AutoAdvance {
         project_id: String,
@@ -488,6 +517,7 @@ struct ProjectRecord {
     id: String,
     name: String,
     local_path: PathBuf,
+    tracker: TrackerKind,
     github_host: String,
     repository: String,
     connection: ProjectConnection,
@@ -504,7 +534,7 @@ impl ProjectRecord {
             id: self.id.clone(),
             name: self.name.clone(),
             local_path: self.local_path.clone(),
-            tracker: TrackerKind::Github,
+            tracker: self.tracker,
             github_host: self.github_host.clone(),
             repository: self.repository.clone(),
             connection: self.connection.clone(),
@@ -522,6 +552,7 @@ impl ProjectRecord {
             id: self.id.clone(),
             name: self.name.clone(),
             local_path: self.local_path.clone(),
+            tracker: self.tracker,
             github_host: self.github_host.clone(),
             repository: self.repository.clone(),
             auto_advance: self.auto_advance,
@@ -688,6 +719,8 @@ pub struct ShellCopy {
     pub no_recent: String,
     pub recent_note: String,
     pub empty_no_data: String,
+    pub empty_incomplete: String,
+    pub empty_tracker_error: String,
     pub family: String,
     pub deps: String,
     pub parent: String,
@@ -715,6 +748,8 @@ pub struct ShellCopy {
     pub refresh_retry: String,
     pub refresh_paused: String,
     pub refresh_auth: String,
+    pub refresh_incomplete: String,
+    pub refresh_tracker_error: String,
     pub new_run: String,
     pub execute_run: String,
     pub start_run: String,
@@ -856,7 +891,7 @@ pub struct HostSnapshot {
 }
 
 pub struct KernelPorts {
-    pub tracker: Arc<dyn TrackerPort>,
+    pub tracker: Arc<dyn TrackerSeam>,
     pub agents: Vec<Arc<dyn AgentPort>>,
     pub launch_env: Arc<dyn LaunchEnvPort>,
     pub sessions: Arc<dyn SessionFactory>,
@@ -872,7 +907,7 @@ impl KernelPorts {
         }
     }
 
-    pub fn for_tests(tracker: Arc<dyn TrackerPort>) -> Self {
+    pub fn for_tests(tracker: Arc<dyn TrackerSeam>) -> Self {
         Self {
             tracker,
             agents: vec![Arc::new(MemoryAgent::installed_grok())],
@@ -890,7 +925,7 @@ pub struct HostKernel {
     appearance: AppearanceSelection,
     projects: Vec<ProjectRecord>,
     focused_project_id: Option<String>,
-    tracker: Arc<dyn TrackerPort>,
+    tracker: Arc<dyn TrackerSeam>,
     agents: Vec<Arc<dyn AgentPort>>,
     launch_env: Arc<dyn LaunchEnvPort>,
     sessions: Arc<dyn SessionFactory>,
@@ -941,6 +976,10 @@ struct ProjectRefreshState {
     last_attempt_ms: u64,
     kind: StoredRefreshKind,
     retry_at_ms: Option<u64>,
+    /// 最近一次成功读取是否完整；不完整时不能当作全量数据计算 Frontier/依赖图。
+    complete: bool,
+    /// 不完整读取的可读详情。
+    detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -950,6 +989,8 @@ enum StoredRefreshKind {
     NeverFetched,
     RateLimited,
     AuthFailed,
+    Incomplete,
+    TrackerError,
 }
 
 #[derive(Debug, Clone)]
@@ -996,7 +1037,7 @@ impl HostKernel {
 
     pub fn boot_with(
         request: BootRequest,
-        tracker: Arc<dyn TrackerPort>,
+        tracker: Arc<dyn TrackerSeam>,
     ) -> Result<Self, KernelError> {
         Self::boot_with_ports(request, KernelPorts::for_tests(tracker))
     }
@@ -1420,6 +1461,35 @@ impl HostKernel {
             }
             Command::ReleaseIssue { issue_id } => {
                 self.release_issue(&issue_id)?;
+            }
+            Command::CreateIssue {
+                project_id,
+                title,
+                body,
+            } => {
+                self.create_issue(&project_id, &title, &body)?;
+            }
+            Command::UpdateIssue {
+                issue_id,
+                title,
+                body,
+            } => {
+                self.update_issue(&issue_id, &title, &body)?;
+            }
+            Command::SetIssueOpen { issue_id, open } => {
+                self.set_issue_open(&issue_id, open)?;
+            }
+            Command::AddIssueComment { issue_id, body } => {
+                self.add_issue_comment(&issue_id, &body)?;
+            }
+            Command::SetIssueParent { issue_id, parent } => {
+                self.set_issue_parent(&issue_id, parent.as_deref())?;
+            }
+            Command::SetIssueBlockedBy {
+                issue_id,
+                blocked_by,
+            } => {
+                self.set_issue_blocked_by(&issue_id, &blocked_by)?;
             }
             Command::AutoAdvance { project_id } => {
                 self.require_live_tracker(&project_id)?;
@@ -1854,6 +1924,87 @@ impl HostKernel {
                 }
                 self.dispatch(Command::ReleaseIssue {
                     issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "createIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CreateIssue {
+                    project_id: required_string(&request, "projectId")?,
+                    title: required_string(&request, "title")?,
+                    body: optional_string(&request, "body"),
+                })
+            }
+            "updateIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::UpdateIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                    title: required_string(&request, "title")?,
+                    body: optional_string(&request, "body"),
+                })
+            }
+            "setIssueOpen" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetIssueOpen {
+                    issue_id: required_string(&request, "issueId")?,
+                    open: request
+                        .get("open")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing open".into()))?,
+                })
+            }
+            "addIssueComment" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::AddIssueComment {
+                    issue_id: required_string(&request, "issueId")?,
+                    body: required_string(&request, "body")?,
+                })
+            }
+            "setIssueParent" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let parent = request
+                    .get("parent")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned);
+                if let Some(id) = parent.as_deref() {
+                    parse_issue_ref(id)?;
+                }
+                self.dispatch(Command::SetIssueParent {
+                    issue_id: required_string(&request, "issueId")?,
+                    parent,
+                })
+            }
+            "setIssueBlockedBy" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let blocked_by = request
+                    .get("blockedBy")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| KernelError::Protocol("missing blockedBy".into()))?
+                    .iter()
+                    .map(|item| {
+                        item.as_str()
+                            .map(ToOwned::to_owned)
+                            .ok_or_else(|| KernelError::Protocol("invalid blockedBy".into()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for id in &blocked_by {
+                    parse_issue_ref(id)?;
+                }
+                self.dispatch(Command::SetIssueBlockedBy {
+                    issue_id: required_string(&request, "issueId")?,
+                    blocked_by,
                 })
             }
             "autoAdvance" => {
@@ -2763,6 +2914,122 @@ impl HostKernel {
 
     fn write_claim(&mut self, issue_id: &str, claim: bool) -> Result<(), KernelError> {
         let project_id = self.project_id_for_issue(issue_id)?;
+        let op = if claim {
+            tracker_seam::TrackerWriteOp::Claim
+        } else {
+            tracker_seam::TrackerWriteOp::Release
+        };
+        self.write_issue_op(&project_id, Some(issue_id), op)?;
+        Ok(())
+    }
+
+    fn create_issue(
+        &mut self,
+        project_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), KernelError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(KernelError::Protocol("missing title".into()));
+        }
+        if !self.projects.iter().any(|project| project.id == project_id) {
+            return Err(KernelError::Protocol("unknown project".into()));
+        }
+        self.require_live_tracker(project_id)?;
+        self.write_issue_op(
+            project_id,
+            None,
+            tracker_seam::TrackerWriteOp::CreateIssue {
+                title: title.to_string(),
+                body: body.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    fn update_issue(&mut self, issue_id: &str, title: &str, body: &str) -> Result<(), KernelError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(KernelError::Protocol("missing title".into()));
+        }
+        self.require_live_tracker_for_issue(issue_id)?;
+        self.write_issue_op(
+            &self.project_id_for_issue(issue_id)?,
+            Some(issue_id),
+            tracker_seam::TrackerWriteOp::UpdateIssue {
+                title: title.to_string(),
+                body: body.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    fn set_issue_open(&mut self, issue_id: &str, open: bool) -> Result<(), KernelError> {
+        self.require_live_tracker_for_issue(issue_id)?;
+        self.write_issue_op(
+            &self.project_id_for_issue(issue_id)?,
+            Some(issue_id),
+            tracker_seam::TrackerWriteOp::SetOpen { open },
+        )?;
+        Ok(())
+    }
+
+    fn add_issue_comment(&mut self, issue_id: &str, body: &str) -> Result<(), KernelError> {
+        let body = body.trim();
+        if body.is_empty() {
+            return Err(KernelError::Protocol("missing body".into()));
+        }
+        self.require_live_tracker_for_issue(issue_id)?;
+        self.write_issue_op(
+            &self.project_id_for_issue(issue_id)?,
+            Some(issue_id),
+            tracker_seam::TrackerWriteOp::AddComment {
+                body: body.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    fn set_issue_parent(
+        &mut self,
+        issue_id: &str,
+        parent: Option<&str>,
+    ) -> Result<(), KernelError> {
+        self.require_live_tracker_for_issue(issue_id)?;
+        let parent = parent.map(parse_issue_ref).transpose()?;
+        self.write_issue_op(
+            &self.project_id_for_issue(issue_id)?,
+            Some(issue_id),
+            tracker_seam::TrackerWriteOp::SetParent { parent },
+        )?;
+        Ok(())
+    }
+
+    fn set_issue_blocked_by(
+        &mut self,
+        issue_id: &str,
+        blocked_by: &[String],
+    ) -> Result<(), KernelError> {
+        self.require_live_tracker_for_issue(issue_id)?;
+        let blocked_by = blocked_by
+            .iter()
+            .map(|id| parse_issue_ref(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.write_issue_op(
+            &self.project_id_for_issue(issue_id)?,
+            Some(issue_id),
+            tracker_seam::TrackerWriteOp::SetBlockedBy { blocked_by },
+        )?;
+        Ok(())
+    }
+
+    fn write_issue_op(
+        &mut self,
+        project_id: &str,
+        issue_id: Option<&str>,
+        op: tracker_seam::TrackerWriteOp,
+    ) -> Result<IssueRecord, KernelError> {
         let project = self
             .projects
             .iter()
@@ -2776,42 +3043,66 @@ impl HostKernel {
             secrets_pat: pat.as_deref(),
             secrets_path: &self.data.host_secrets_path,
         };
-        let updated = if claim {
-            self.tracker.claim_issue(&ctx, issue_id)
-        } else {
-            self.tracker.release_issue(&ctx, issue_id)
-        }
-        .map_err(|err| write_tracker_error(err))?;
-        self.merge_issue(&project_id, updated);
-        Ok(())
+        let updated = self
+            .tracker
+            .write_issue(&ctx, issue_id, &op)
+            .map_err(write_tracker_error)?;
+        self.merge_issue(project_id, updated.clone(), &op);
+        Ok(updated)
     }
 
-    fn merge_issue(&mut self, project_id: &str, updated: IssueRecord) {
+    fn merge_issue(
+        &mut self,
+        project_id: &str,
+        updated: IssueRecord,
+        op: &tracker_seam::TrackerWriteOp,
+    ) {
         let issues = self
             .loaded_issues
             .entry(project_id.to_string())
             .or_default();
         if let Some(existing) = issues.iter_mut().find(|issue| issue.id() == updated.id()) {
-            existing.assignees = updated.assignees;
-            existing.open = updated.open;
-            existing.title = updated.title;
-            existing.url = updated.url;
-            existing.closed_at = updated.closed_at;
+            // 按操作合并对应字段，避免用适配器响应里缺失的关系字段覆盖本地已知数据。
+            match op {
+                tracker_seam::TrackerWriteOp::CreateIssue { .. } => {}
+                tracker_seam::TrackerWriteOp::UpdateIssue { .. } => {
+                    existing.title = updated.title;
+                    existing.url = updated.url;
+                }
+                tracker_seam::TrackerWriteOp::SetOpen { .. } => {
+                    existing.open = updated.open;
+                    existing.closed_at = updated.closed_at;
+                }
+                tracker_seam::TrackerWriteOp::AddComment { .. } => {}
+                tracker_seam::TrackerWriteOp::Claim | tracker_seam::TrackerWriteOp::Release => {
+                    existing.assignees = updated.assignees;
+                    existing.open = updated.open;
+                    existing.title = updated.title;
+                    existing.url = updated.url;
+                    existing.closed_at = updated.closed_at;
+                }
+                tracker_seam::TrackerWriteOp::SetParent { .. } => {
+                    existing.parent = updated.parent;
+                }
+                tracker_seam::TrackerWriteOp::SetBlockedBy { .. } => {
+                    existing.blocked_by = updated.blocked_by;
+                }
+            }
         } else {
             issues.push(updated);
         }
-        if let Some(fetched_at_ms) = self
-            .refresh
-            .get(project_id)
-            .and_then(|state| state.fetched_at_ms)
-        {
-            let _ = refresh::save_snapshot(
-                &refresh::snapshot_path(&self.data.host_dir, project_id),
-                &refresh::StoredTrackerSnapshot {
-                    fetched_at_ms,
-                    issues: issues.clone(),
-                },
-            );
+        if let Some(state) = self.refresh.get(project_id) {
+            if let Some(fetched_at_ms) = state.fetched_at_ms {
+                let _ = refresh::save_snapshot(
+                    &refresh::snapshot_path(&self.data.host_dir, project_id),
+                    &refresh::StoredTrackerSnapshot {
+                        fetched_at_ms,
+                        complete: state.complete,
+                        detail: state.detail.clone(),
+                        issues: issues.clone(),
+                    },
+                );
+            }
         }
         self.pending_events.push(HostEvent::BoardUpdated {
             project_id: project_id.to_string(),
@@ -3950,6 +4241,7 @@ impl HostKernel {
             id: pairing::random_id(),
             name,
             local_path,
+            tracker: TrackerKind::Github,
             github_host,
             repository,
             connection,
@@ -4150,15 +4442,21 @@ impl HostKernel {
             .iter_mut()
             .find(|project| project.id == project_id)
         {
-            project.tracker_synced = true;
+            project.tracker_synced = stored.complete;
         }
         self.refresh.insert(
             project_id.to_string(),
             ProjectRefreshState {
                 fetched_at_ms: Some(stored.fetched_at_ms),
                 last_attempt_ms: stored.fetched_at_ms,
-                kind: StoredRefreshKind::Ready,
+                kind: if stored.complete {
+                    StoredRefreshKind::Ready
+                } else {
+                    StoredRefreshKind::Incomplete
+                },
                 retry_at_ms: None,
+                complete: stored.complete,
+                detail: stored.detail,
             },
         );
     }
@@ -4171,10 +4469,8 @@ impl HostKernel {
         else {
             return false;
         };
-        let previous_fetched = self
-            .refresh
-            .get(project_id)
-            .and_then(|state| state.fetched_at_ms);
+        let previous = self.refresh.get(project_id).cloned();
+        let previous_fetched = previous.as_ref().and_then(|state| state.fetched_at_ms);
         self.pending_events.push(HostEvent::RefreshStatusChanged {
             project_id: project_id.to_string(),
             status: RefreshStatus::Refreshing {
@@ -4185,37 +4481,44 @@ impl HostKernel {
         let repository = self.projects[index].repository.clone();
         let pat = read_github_pat(&self.data.host_secrets_path, &github_host);
         let now = self.now_ms;
-        let result = self.tracker.read_issues(&tracker::ProbeContext {
+        let result = self.tracker.read_all(&tracker::ProbeContext {
             github_host: &github_host,
             repository: &repository,
             secrets_pat: pat.as_deref(),
             secrets_path: &self.data.host_secrets_path,
         });
         match result {
-            Ok(issues) => {
-                if !matches!(
-                    self.projects[index].connection,
-                    ProjectConnection::Ready { .. }
-                ) {
-                    self.projects[index].connection = self.probe_github(&github_host, &repository);
-                }
-                self.projects[index].tracker_synced = true;
-                let _ = refresh::save_snapshot(
-                    &refresh::snapshot_path(&self.data.host_dir, project_id),
-                    &refresh::StoredTrackerSnapshot {
-                        fetched_at_ms: now,
-                        issues: issues.clone(),
-                    },
+            Ok(tracker_seam::TrackerReadOutcome::Complete { issues }) => {
+                self.apply_read(
+                    project_id,
+                    index,
+                    &github_host,
+                    &repository,
+                    now,
+                    issues,
+                    true,
+                    None,
                 );
-                self.loaded_issues.insert(project_id.to_string(), issues);
-                self.refresh.insert(
-                    project_id.to_string(),
-                    ProjectRefreshState {
-                        fetched_at_ms: Some(now),
-                        last_attempt_ms: now,
-                        kind: StoredRefreshKind::Ready,
-                        retry_at_ms: None,
-                    },
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                self.pending_events.push(HostEvent::BoardUpdated {
+                    project_id: project_id.to_string(),
+                });
+                true
+            }
+            Ok(tracker_seam::TrackerReadOutcome::Incomplete { issues, detail }) => {
+                self.apply_read(
+                    project_id,
+                    index,
+                    &github_host,
+                    &repository,
+                    now,
+                    issues,
+                    false,
+                    Some(detail),
                 );
                 let status = self.refresh_status_for(project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
@@ -4235,6 +4538,11 @@ impl HostKernel {
                         last_attempt_ms: now,
                         kind: StoredRefreshKind::RateLimited,
                         retry_at_ms: retry_after_ms.map(|ms| now.saturating_add(ms)),
+                        complete: previous
+                            .as_ref()
+                            .map(|state| state.complete)
+                            .unwrap_or(false),
+                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
                     },
                 );
                 let status = self.refresh_status_for(project_id);
@@ -4270,6 +4578,11 @@ impl HostKernel {
                             StoredRefreshKind::NeverFetched
                         },
                         retry_at_ms: None,
+                        complete: previous
+                            .as_ref()
+                            .map(|state| state.complete)
+                            .unwrap_or(false),
+                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
                     },
                 );
                 let status = self.refresh_status_for(project_id);
@@ -4302,6 +4615,35 @@ impl HostKernel {
                         last_attempt_ms: now,
                         kind: StoredRefreshKind::AuthFailed,
                         retry_at_ms: None,
+                        complete: previous
+                            .as_ref()
+                            .map(|state| state.complete)
+                            .unwrap_or(false),
+                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
+                    },
+                );
+                let status = self.refresh_status_for(project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: project_id.to_string(),
+                    status,
+                });
+                false
+            }
+            Err(tracker::TrackerReadError::Failed { detail }) => {
+                let detail = detail.unwrap_or_else(|| "tracker business error".into());
+                let complete = previous
+                    .as_ref()
+                    .map(|state| state.complete)
+                    .unwrap_or(false);
+                self.refresh.insert(
+                    project_id.to_string(),
+                    ProjectRefreshState {
+                        fetched_at_ms: previous_fetched,
+                        last_attempt_ms: now,
+                        kind: StoredRefreshKind::TrackerError,
+                        retry_at_ms: None,
+                        complete,
+                        detail: Some(detail),
                     },
                 );
                 let status = self.refresh_status_for(project_id);
@@ -4312,6 +4654,52 @@ impl HostKernel {
                 false
             }
         }
+    }
+
+    /// 记录一次成功读取（完整或不完整）的结果并持久化快照。
+    fn apply_read(
+        &mut self,
+        project_id: &str,
+        index: usize,
+        github_host: &str,
+        repository: &str,
+        now: u64,
+        issues: Vec<IssueRecord>,
+        complete: bool,
+        detail: Option<String>,
+    ) {
+        if !matches!(
+            self.projects[index].connection,
+            ProjectConnection::Ready { .. }
+        ) {
+            self.projects[index].connection = self.probe_github(github_host, repository);
+        }
+        self.projects[index].tracker_synced = complete;
+        let _ = refresh::save_snapshot(
+            &refresh::snapshot_path(&self.data.host_dir, project_id),
+            &refresh::StoredTrackerSnapshot {
+                fetched_at_ms: now,
+                complete,
+                detail: detail.clone(),
+                issues: issues.clone(),
+            },
+        );
+        self.loaded_issues.insert(project_id.to_string(), issues);
+        self.refresh.insert(
+            project_id.to_string(),
+            ProjectRefreshState {
+                fetched_at_ms: Some(now),
+                last_attempt_ms: now,
+                kind: if complete {
+                    StoredRefreshKind::Ready
+                } else {
+                    StoredRefreshKind::Incomplete
+                },
+                retry_at_ms: None,
+                complete,
+                detail,
+            },
+        );
     }
 
     fn maybe_auto_refresh(&mut self) {
@@ -4340,6 +4728,8 @@ impl HostKernel {
             StoredRefreshKind::AuthFailed => false,
             StoredRefreshKind::Ready
             | StoredRefreshKind::Offline
+            | StoredRefreshKind::Incomplete
+            | StoredRefreshKind::TrackerError
             | StoredRefreshKind::NeverFetched => {
                 self.now_ms
                     >= state
@@ -4366,6 +4756,23 @@ impl HostKernel {
             return RefreshStatus::NeverFetched;
         };
         let next = self.next_refresh_in_ms(project_id, state);
+        // 拿到的是不完整数据时优先表达 incomplete：看板不能当作全量数据计算 Frontier/依赖图；
+        // 从未读到过数据（complete=false 且无已加载数据）则按错误状态表达。
+        if !state.complete && self.loaded_issues.contains_key(project_id) {
+            if state.kind == StoredRefreshKind::TrackerError {
+                return RefreshStatus::TrackerError {
+                    fetched_at_ms: state.fetched_at_ms,
+                    data_complete: false,
+                    next_refresh_in_ms: next,
+                    detail: state.detail.clone(),
+                };
+            }
+            return RefreshStatus::Incomplete {
+                fetched_at_ms: state.fetched_at_ms,
+                next_refresh_in_ms: next,
+                detail: state.detail.clone(),
+            };
+        }
         match state.kind {
             StoredRefreshKind::Ready => match state.fetched_at_ms {
                 Some(fetched_at_ms) => RefreshStatus::Ready {
@@ -4389,6 +4796,17 @@ impl HostKernel {
             StoredRefreshKind::AuthFailed => RefreshStatus::AuthFailed {
                 fetched_at_ms: state.fetched_at_ms,
             },
+            StoredRefreshKind::Incomplete => RefreshStatus::Incomplete {
+                fetched_at_ms: state.fetched_at_ms,
+                next_refresh_in_ms: next,
+                detail: state.detail.clone(),
+            },
+            StoredRefreshKind::TrackerError => RefreshStatus::TrackerError {
+                fetched_at_ms: state.fetched_at_ms,
+                data_complete: state.complete,
+                next_refresh_in_ms: next,
+                detail: state.detail.clone(),
+            },
         }
     }
 
@@ -4400,7 +4818,10 @@ impl HostKernel {
             StoredRefreshKind::RateLimited => state
                 .retry_at_ms
                 .map(|retry_at| retry_at.saturating_sub(self.now_ms)),
-            StoredRefreshKind::Ready | StoredRefreshKind::Offline => Some(
+            StoredRefreshKind::Ready
+            | StoredRefreshKind::Offline
+            | StoredRefreshKind::Incomplete
+            | StoredRefreshKind::TrackerError => Some(
                 (state
                     .last_attempt_ms
                     .saturating_add(self.refresh_interval_ms))
@@ -4466,11 +4887,29 @@ impl HostKernel {
 
     fn write_block_reason(&self, project_id: &str) -> String {
         match self.refresh.get(project_id).map(|state| state.kind) {
-            Some(StoredRefreshKind::RateLimited) => "cannot write to tracker: rate-limited".into(),
+            Some(StoredRefreshKind::RateLimited) => {
+                match self
+                    .refresh
+                    .get(project_id)
+                    .and_then(|state| state.retry_at_ms)
+                {
+                    Some(retry_at_ms) => format!(
+                        "cannot write to tracker: rate-limited (retry after {retry_at_ms}ms)"
+                    ),
+                    None => "cannot write to tracker: rate-limited".into(),
+                }
+            }
             Some(StoredRefreshKind::AuthFailed) => "cannot write to tracker: auth-failed".into(),
             Some(StoredRefreshKind::NeverFetched) | None => {
                 "cannot write to tracker: never-fetched".into()
             }
+            Some(StoredRefreshKind::Incomplete) => "cannot write to tracker: incomplete".into(),
+            Some(StoredRefreshKind::TrackerError) => self
+                .refresh
+                .get(project_id)
+                .and_then(|state| state.detail.as_deref())
+                .map(|detail| format!("cannot write to tracker: tracker-error ({detail})"))
+                .unwrap_or_else(|| "cannot write to tracker: tracker-error".into()),
             _ => "cannot write to tracker: offline".into(),
         }
     }
@@ -4620,6 +5059,8 @@ impl ShellCopy {
                 no_recent: "还没有刚关的".into(),
                 recent_note: "只留最近几张，不是全部已关闭。不能拖进这一列来关票。".into(),
                 empty_no_data: "还没有可显示的数据。".into(),
+                empty_incomplete: "Issue 数据没有完整读完。为避免误判，暂不显示 Frontier 和依赖图。".into(),
+                empty_tracker_error: "Tracker 返回业务错误。为避免使用过期数据误判，暂不显示 Frontier 和依赖图。".into(),
                 family: "属于 / 子票".into(),
                 deps: "挡住它的 / 它挡住的".into(),
                 parent: "属于".into(),
@@ -4647,6 +5088,8 @@ impl ShellCopy {
                 refresh_retry: "大约可再刷新".into(),
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
+                refresh_incomplete: "数据不完整".into(),
+                refresh_tracker_error: "Tracker 业务错误".into(),
                 new_run: "新建".into(),
                 execute_run: "执行".into(),
                 start_run: "启动".into(),
@@ -4857,6 +5300,8 @@ impl ShellCopy {
                 no_recent: "None just closed".into(),
                 recent_note: "Only the last few, not all closed issues. Dragging here does not close.".into(),
                 empty_no_data: "No displayable data yet.".into(),
+                empty_incomplete: "Issue data could not be read completely. Frontier and the dependency graph are hidden to prevent incorrect decisions.".into(),
+                empty_tracker_error: "The Tracker returned a business error. Frontier and the dependency graph are hidden to avoid decisions based on stale data.".into(),
                 family: "Parent / children".into(),
                 deps: "Blocked by / blocking".into(),
                 parent: "Parent".into(),
@@ -4884,6 +5329,8 @@ impl ShellCopy {
                 refresh_retry: "Can retry around".into(),
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
+                refresh_incomplete: "Incomplete data".into(),
+                refresh_tracker_error: "Tracker business error".into(),
                 new_run: "New".into(),
                 execute_run: "Run".into(),
                 start_run: "Start".into(),
@@ -5028,12 +5475,19 @@ fn default_refresh_interval_ms() -> u64 {
     refresh::DEFAULT_REFRESH_INTERVAL_MS
 }
 
+fn default_tracker_kind() -> TrackerKind {
+    TrackerKind::Github
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredProject {
     id: String,
     name: String,
     local_path: PathBuf,
+    /// Tracker 类型；旧数据缺失时默认 GitHub。
+    #[serde(default = "default_tracker_kind")]
+    tracker: TrackerKind,
     github_host: String,
     repository: String,
     #[serde(default)]
@@ -5324,6 +5778,12 @@ fn optional_string(request: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
+fn parse_issue_ref(id: &str) -> Result<IssueRef, KernelError> {
+    let (repository, number) = parse_issue_id(id)
+        .ok_or_else(|| KernelError::Protocol(format!("invalid issue id: {id}")))?;
+    Ok(IssueRef::new(repository, number, ""))
+}
+
 fn read_github_pats(path: &Path) -> Result<BTreeMap<String, String>, KernelError> {
     if !path.exists() {
         return Ok(BTreeMap::new());
@@ -5346,7 +5806,7 @@ fn read_github_pat(path: &Path, host: &str) -> Option<String> {
 
 fn probe_record(
     stored: StoredProject,
-    tracker: &dyn TrackerPort,
+    tracker: &dyn TrackerSeam,
     secrets_path: &Path,
     language: Language,
 ) -> ProjectRecord {
@@ -5361,6 +5821,7 @@ fn probe_record(
         id: stored.id,
         name: stored.name,
         local_path: stored.local_path,
+        tracker: stored.tracker,
         github_host: stored.github_host,
         repository: stored.repository,
         connection: connection_from_probe(outcome, secrets_path, language),
@@ -5441,15 +5902,29 @@ pub enum KernelError {
 fn write_tracker_error(err: tracker::TrackerWriteError) -> KernelError {
     match err {
         tracker::TrackerWriteError::Failed { message } => KernelError::Denied(message),
-        tracker::TrackerWriteError::Offline { .. } => {
-            KernelError::Denied("cannot write to tracker: offline".into())
+        tracker::TrackerWriteError::Offline { detail, .. } => {
+            KernelError::Denied(write_error_with_detail("offline", detail))
         }
-        tracker::TrackerWriteError::Auth { .. } => {
-            KernelError::Denied("cannot write to tracker: auth-failed".into())
+        tracker::TrackerWriteError::Auth { detail, .. } => {
+            KernelError::Denied(write_error_with_detail("auth-failed", detail))
         }
-        tracker::TrackerWriteError::RateLimited { .. } => {
-            KernelError::Denied("cannot write to tracker: rate-limited".into())
+        tracker::TrackerWriteError::RateLimited { retry_after_ms } => {
+            KernelError::Denied(match retry_after_ms {
+                Some(ms) => {
+                    format!("cannot write to tracker: rate-limited (retry after {ms}ms)")
+                }
+                None => "cannot write to tracker: rate-limited".into(),
+            })
         }
+    }
+}
+
+fn write_error_with_detail(kind: &str, detail: Option<String>) -> String {
+    match detail {
+        Some(detail) if !detail.is_empty() => {
+            format!("cannot write to tracker: {kind} ({detail})")
+        }
+        _ => format!("cannot write to tracker: {kind}"),
     }
 }
 
