@@ -1,16 +1,8 @@
-//! Host 接缝：Tracker 扩展能力的最小公共类型。
-//!
-//! Issue #87 会把 `TrackerPort` 扩展为 create/update/set_open/add_comment/claim/release/
-//! parent/dependency，并把读取结果改为能表达 complete/incomplete 及详情。
-//! 在 `tracker.rs` 完成扩展前，这里先定义 Host 内核消费的最小公共类型与接缝 trait，
-//! 主代理随后统一冲突（届时可直接把这些方法并入 `TrackerPort` 的扩展）。
-
-use crate::issue::{IssueRecord, IssueRef};
+use crate::issue::{DependencyRef, IssueRecord, IssueRef};
 use crate::tracker::{
-    ProbeContext, ProbeOutcome, TrackerPort, TrackerReadError, TrackerWriteError,
+    IssueEdit, ProbeContext, ProbeOutcome, TrackerPort, TrackerReadError, TrackerWriteError,
 };
 
-/// 一次 Issue 写操作，与 TrackerPort 即将扩展的方法一一对应。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackerWriteOp {
     CreateIssue { title: String, body: String },
@@ -23,7 +15,6 @@ pub enum TrackerWriteOp {
     SetBlockedBy { blocked_by: Vec<IssueRef> },
 }
 
-/// 读取结果：必须能表达完整 / 不完整（分页截断等），不完整时保留可读详情。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackerReadOutcome {
     Complete {
@@ -35,11 +26,6 @@ pub enum TrackerReadOutcome {
     },
 }
 
-/// Host 消费的 Tracker 接缝。
-///
-/// 现在的 `TrackerPort` 只有 probe/read/claim/release，`TrackerSeam` 把读取改为可表达
-/// 完整性的 `read_all`，并补齐全部写操作；`TrackerPort` 的实现通过下方默认实现兼容，
-/// 未实现的写操作明确报错而不是静默成功。
 pub trait TrackerSeam: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError>;
@@ -66,15 +52,106 @@ impl<T: TrackerPort> TrackerSeam for T {
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {
-        let issue_id = issue_id.ok_or_else(|| TrackerWriteError::Failed {
-            message: "issue id is required for this operation".into(),
-        })?;
         match op {
-            TrackerWriteOp::Claim => self.claim_issue(ctx, issue_id),
-            TrackerWriteOp::Release => self.release_issue(ctx, issue_id),
-            other => Err(TrackerWriteError::Failed {
-                message: format!("tracker does not support {other:?} yet"),
-            }),
+            TrackerWriteOp::CreateIssue { title, body } => self.create_issue(ctx, title, body),
+            TrackerWriteOp::UpdateIssue { title, body } => self.update_issue(
+                ctx,
+                required_issue_id(issue_id)?,
+                IssueEdit {
+                    title: Some(title),
+                    body: Some(body),
+                },
+            ),
+            TrackerWriteOp::SetOpen { open: true } => {
+                self.reopen_issue(ctx, required_issue_id(issue_id)?)
+            }
+            TrackerWriteOp::SetOpen { open: false } => {
+                TrackerPort::close_issue(self, ctx, required_issue_id(issue_id)?)
+            }
+            TrackerWriteOp::AddComment { body } => {
+                let issue_id = required_issue_id(issue_id)?;
+                self.add_comment(ctx, issue_id, body)?;
+                read_issue(self, ctx, issue_id)
+            }
+            TrackerWriteOp::Claim => self.claim_issue(ctx, required_issue_id(issue_id)?),
+            TrackerWriteOp::Release => self.release_issue(ctx, required_issue_id(issue_id)?),
+            TrackerWriteOp::SetParent { parent } => {
+                let issue_id = required_issue_id(issue_id)?;
+                self.set_parent(ctx, issue_id, parent.as_ref().map(IssueRef::id).as_deref())?;
+                read_issue(self, ctx, issue_id)
+            }
+            TrackerWriteOp::SetBlockedBy { blocked_by } => {
+                let issue_id = required_issue_id(issue_id)?;
+                let current = read_issue(self, ctx, issue_id)?;
+                let current_ids: Vec<String> = current
+                    .blocked_by
+                    .iter()
+                    .filter_map(|item| match item {
+                        DependencyRef::Known(issue) => Some(issue.id()),
+                        DependencyRef::Unclear { .. } => None,
+                    })
+                    .collect();
+                let wanted_ids: Vec<String> = blocked_by.iter().map(IssueRef::id).collect();
+                for blocker in current_ids.iter().filter(|id| !wanted_ids.contains(id)) {
+                    self.remove_blocked_by(ctx, issue_id, blocker)?;
+                }
+                for blocker in wanted_ids.iter().filter(|id| !current_ids.contains(id)) {
+                    self.add_blocked_by(ctx, issue_id, blocker)?;
+                }
+                read_issue(self, ctx, issue_id)
+            }
         }
+    }
+}
+
+fn required_issue_id(issue_id: Option<&str>) -> Result<&str, TrackerWriteError> {
+    issue_id.ok_or_else(|| TrackerWriteError::Failed {
+        message: "issue id is required for this operation".into(),
+    })
+}
+
+fn read_issue<T: TrackerPort + ?Sized>(
+    tracker: &T,
+    ctx: &ProbeContext<'_>,
+    issue_id: &str,
+) -> Result<IssueRecord, TrackerWriteError> {
+    tracker
+        .read_issues(ctx)
+        .map_err(read_as_write_error)?
+        .into_iter()
+        .find(|issue| issue.id() == issue_id)
+        .ok_or_else(|| TrackerWriteError::Failed {
+            message: "tracker did not return the updated issue".into(),
+        })
+}
+
+fn read_as_write_error(error: TrackerReadError) -> TrackerWriteError {
+    match error {
+        TrackerReadError::Auth {
+            source,
+            kind,
+            cli_detected,
+            detail,
+        } => TrackerWriteError::Auth {
+            source,
+            kind,
+            cli_detected,
+            detail,
+        },
+        TrackerReadError::Offline {
+            source,
+            cli_detected,
+            detail,
+        } => TrackerWriteError::Offline {
+            source,
+            cli_detected,
+            detail,
+        },
+        TrackerReadError::RateLimited { retry_after_ms } => {
+            TrackerWriteError::RateLimited { retry_after_ms }
+        }
+        TrackerReadError::Failed { detail } => TrackerWriteError::Failed {
+            message: detail.unwrap_or_else(|| "tracker business error".into()),
+        },
     }
 }

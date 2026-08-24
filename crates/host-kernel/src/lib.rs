@@ -60,9 +60,9 @@ pub use session::{
     SpawnRequest,
 };
 pub use tracker::{
-    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, MemoryTracker,
-    ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind,
-    TrackerPort, TrackerReadError, TrackerWriteError,
+    map_github_issue_node, AuthFailureKind, CredentialSource, GitHubTracker, IssueComment,
+    IssueEdit, MemoryTracker, ProbeContext, ProbeOutcome, ProjectConnection, RepairHint,
+    ScriptedGitHub, TrackerKind, TrackerPort, TrackerReadError, TrackerWriteError,
 };
 pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
 pub use usage::{
@@ -4624,6 +4624,25 @@ impl HostKernel {
                     project_id: project_id.to_string(),
                     status,
                 });
+                false
+            }
+            Err(tracker::TrackerReadError::Failed { detail }) => {
+                let detail = detail.unwrap_or_else(|| "tracker business error".into());
+                let issues = self
+                    .loaded_issues
+                    .get(project_id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.apply_read(
+                    project_id,
+                    index,
+                    &github_host,
+                    &repository,
+                    now,
+                    issues,
+                    false,
+                    Some(detail),
+                );
                 false
             }
         }
