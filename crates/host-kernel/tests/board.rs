@@ -1,7 +1,10 @@
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+use common::{ReadMode, SeamTracker};
 use host_kernel::{
     BoardEmptyReason, BootRequest, CenterView, FrontierEmptyReason, HostKernel, IssueRecord,
     LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TriageRole,
@@ -25,6 +28,10 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
+    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
     HostKernel::boot_with(boot_req(root), tracker).unwrap()
 }
 
@@ -582,6 +589,38 @@ fn focusing_a_graph_node_only_changes_details() {
     assert_eq!(board.selected.unwrap().id, "you/garden#9");
     assert!(board.parent_filter.is_none());
     assert!(ids(&board.columns.unwrap().frontier).contains(&"you/garden#4".into()));
+}
+
+#[test]
+fn incomplete_read_does_not_compute_frontier_or_dependency_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 3, "ready work").label("ready-for-agent"),
+            IssueRecord::open("you/garden", 4, "claimed work")
+                .label("ready-for-agent")
+                .assignee("ada"),
+            IssueRecord::open("you/garden", 7, "closed").closed_at("2026-08-22T10:00:00Z"),
+        ],
+    );
+    tracker.set_read_mode("you/garden", ReadMode::Incomplete("page cut off".into()));
+    let mut host = boot_seam(tmp.path(), tracker);
+    register(&mut host, &dir, "you/garden");
+    let board = host.snapshot().board.unwrap();
+    assert_eq!(
+        board.empty,
+        Some(host_kernel::BoardEmptyReason::IncompleteRead)
+    );
+    assert!(board.columns.is_none());
+    assert!(board.graph.is_none());
+    assert!(board.frontier_empty.is_none());
+    assert!(matches!(
+        board.refresh,
+        host_kernel::RefreshStatus::Incomplete { .. }
+    ));
 }
 
 #[test]

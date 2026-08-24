@@ -99,6 +99,32 @@ fn registered_project_is_persisted_without_storing_a_token() {
 }
 
 #[test]
+fn project_persists_tracker_kind_and_old_settings_default_to_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut host = boot_memory(tmp.path());
+    register(&mut host, "garden", &dir, "you/garden");
+    let settings_path = host.snapshot().data.host_settings_path.clone();
+    drop(host);
+
+    // 新注册的项目在设置里显式持久化 tracker 类型
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(settings["projects"][0]["tracker"], "github");
+
+    // 模拟旧数据：缺少 tracker 字段时默认 GitHub，不硬编码在模型里
+    settings["projects"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("tracker");
+    std::fs::write(&settings_path, settings.to_string()).unwrap();
+    let host = boot_memory(tmp.path());
+    let project = &host.snapshot().projects[0];
+    assert_eq!(project.tracker, host_kernel::TrackerKind::Github);
+    assert_eq!(project.repository, "you/garden");
+}
+
+#[test]
 fn editing_a_project_updates_the_registration() {
     let tmp = tempfile::tempdir().unwrap();
     let garden = make_dir(tmp.path(), "work/garden");
