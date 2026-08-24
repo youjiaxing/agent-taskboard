@@ -121,6 +121,29 @@ fn successful_refresh_persists_last_data_and_keeps_it_when_offline() {
 }
 
 #[test]
+fn snapshot_persistence_failure_is_reported_as_incomplete_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let path = snapshot_path(&host, &project_id);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+
+    match refresh_status(&host) {
+        RefreshStatus::TrackerError { detail, .. } => assert!(detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("could not be persisted"))),
+        other => panic!("expected tracker-error, got {other:?}"),
+    }
+    assert!(!host.snapshot().projects[0].tracker_synced);
+}
+
+#[test]
 fn refresh_emits_refreshing_then_a_terminal_status() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

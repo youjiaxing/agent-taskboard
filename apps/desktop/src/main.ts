@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -64,6 +65,12 @@ type ShellCopy = {
   editProjectTitle: string;
   displayName: string;
   localDirectory: string;
+  chooseDirectory: string;
+  activeProjectEditHint: string;
+  remoteProjectHint: string;
+  operationPending: string;
+  inferencePending: string;
+  removalPending: string;
   githubHost: string;
   repository: string;
   inferFromDirectory: string;
@@ -92,6 +99,7 @@ type ShellCopy = {
   notifyCrash: string;
   gotIt: string;
   authFailed: string;
+  connectionUnavailable: string;
   repairCli: string;
   repairSecrets: string;
   repairEnv: string;
@@ -758,6 +766,9 @@ let formProjectId = "";
 let formDraft: ProjectDraft = emptyDraft();
 let inferred: ProjectDraft | null = null;
 let formError = "";
+let removeError = "";
+let inferenceRequestId = 0;
+let projectOperation: "save" | "infer" | "remove" | null = null;
 let removeProject: Project | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
@@ -945,6 +956,36 @@ function isLoopbackPage(): boolean {
 
 function desktopUpdateAvailable(): boolean {
   return "__TAURI_INTERNALS__" in window;
+}
+
+function focusedHostIsLocal(): boolean {
+  const snap = snapshot;
+  return Boolean(snap?.hosts.find((host) => host.id === snap.focusedHostId)?.local);
+}
+
+function canChooseProjectDirectory(): boolean {
+  return desktopUpdateAvailable() && focusedHostIsLocal();
+}
+
+async function chooseProjectDirectory(): Promise<void> {
+  if (!canChooseProjectDirectory()) return;
+  formError = "";
+  try {
+    const selected = await openDirectory({
+      directory: true,
+      multiple: false,
+      title: snapshot?.copy.localDirectory,
+      defaultPath: formDraft.localPath.trim() || undefined,
+      canCreateDirectories: false,
+    });
+    if (typeof selected !== "string" || !selected) return;
+    formDraft = { ...formDraft, localPath: selected };
+    inferred = null;
+    inferenceRequestId += 1;
+  } catch (error) {
+    formError = error instanceof Error ? error.message : String(error);
+  }
+  render();
 }
 
 async function checkForUpdates(manual: boolean): Promise<void> {
@@ -1568,7 +1609,7 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
       <b>${escapeHtml(project.name)}</b>
       <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
     </button>
-    ${degraded ? `<span class="dot warn" title="${escapeHtml(copy.authFailed)}"></span>` : ""}
+    ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
     <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
@@ -2439,8 +2480,14 @@ function formatCountdown(ms: number): string {
 }
 
 function connectionPanel(copy: ShellCopy, project: Project): string {
-  if (project.connection.status !== "auth-failed") {
+  if (project.connection.status === "ready") {
     return "";
+  }
+  if (project.connection.status === "unreachable") {
+    return `<div class="notice bad">
+      <b>${escapeHtml(copy.connectionUnavailable)}</b>
+      <p>${escapeHtml(project.connection.message)}</p>
+    </div>`;
   }
   const repair = project.connection.repair;
   return `<div class="notice bad">
@@ -2449,7 +2496,7 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
     <ul class="repair">
       <li>${escapeHtml(copy.repairCli)}${repair.cliDetected ? "" : ` — ${escapeHtml(copy.noGhDetected)}`}</li>
       <li>${escapeHtml(copy.repairSecrets)}：<code>${escapeHtml(repair.secretsPath)}</code></li>
-      <li>${escapeHtml(copy.repairEnv)}：<code>${escapeHtml(repair.appEnv)}</code> / <code>${escapeHtml(repair.genericEnv)}</code></li>
+      <li>${escapeHtml(copy.repairEnv)}：<code>${escapeHtml(repair.appEnv)} / ${escapeHtml(repair.genericEnv)}</code></li>
     </ul>
     <p class="tiny">${escapeHtml(repair.suggestedScope)}</p>
   </div>`;
@@ -2570,43 +2617,56 @@ function launchField(field: AgentField, value: string): string {
 
 function projectForm(copy: ShellCopy): string {
   const editing = formOpen === "edit";
+  const activeRun = Boolean(
+    snapshot?.projects.find((project) => project.id === formProjectId)?.hasActiveRun,
+  );
+  const lockedRegistration = editing && activeRun;
+  const pending = projectOperation !== null;
   return `<div class="overlay modal" data-act="close-form">
     <form class="sheet form-sheet" data-act="form-noop" data-form="project">
       <h2>${escapeHtml(editing ? copy.editProjectTitle : copy.registerProjectTitle)}</h2>
-      <p class="hint">${escapeHtml(copy.inferenceHint)}</p>
+      <p class="hint">${escapeHtml(focusedHostIsLocal() ? copy.inferenceHint : copy.remoteProjectHint)}</p>
+      ${lockedRegistration ? `<p class="notice">${escapeHtml(copy.activeProjectEditHint)}</p>` : ""}
       <div class="field">
         <label class="label" for="project-name">${escapeHtml(copy.displayName)}</label>
-        <input id="project-name" data-field="name" required value="${escapeHtml(formDraft.name)}" />
+        <input id="project-name" data-field="name" ${pending ? "disabled" : "required"} value="${escapeHtml(formDraft.name)}" />
       </div>
       <div class="field">
         <label class="label" for="project-path">${escapeHtml(copy.localDirectory)}</label>
-        <input id="project-path" data-field="localPath" required value="${escapeHtml(formDraft.localPath)}" />
+        <div class="path-picker">
+          <input id="project-path" data-field="localPath" ${lockedRegistration || pending ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" />
+          ${canChooseProjectDirectory() && !lockedRegistration
+            ? `<button type="button" data-act="choose-project-directory" ${pending ? "disabled" : ""}>${escapeHtml(copy.chooseDirectory)}</button>`
+            : ""}
+        </div>
       </div>
       <div class="field">
         <label class="label" for="project-host">${escapeHtml(copy.githubHost)}</label>
-        <input id="project-host" data-field="githubHost" value="${escapeHtml(formDraft.githubHost)}" />
+        <input id="project-host" data-field="githubHost" ${lockedRegistration || pending ? "disabled" : ""} value="${escapeHtml(formDraft.githubHost)}" />
       </div>
       <div class="field">
         <label class="label" for="project-repo">${escapeHtml(copy.repository)}</label>
-        <input id="project-repo" data-field="repository" required placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
+        <input id="project-repo" data-field="repository" ${lockedRegistration || pending ? "disabled" : "required"} placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
       </div>
-      <div class="inference">
-        <button type="button" data-act="infer">${escapeHtml(copy.inferFromDirectory)}</button>
+      ${lockedRegistration
+        ? ""
+        : `<div class="inference">
+        <button type="button" data-act="infer" ${pending ? "disabled" : ""}>${escapeHtml(projectOperation === "infer" ? copy.inferencePending : copy.inferFromDirectory)}</button>
         ${
           inferred
             ? `<div class="notice" style="margin-top:8px">
                 <b>${escapeHtml(inferred.githubHost)}/${escapeHtml(inferred.repository)}</b>
                 <div class="actions">
-                  <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
+                  <button type="button" data-act="apply-infer" ${pending ? "disabled" : ""}>${escapeHtml(copy.useInference)}</button>
                 </div>
               </div>`
             : ""
         }
-      </div>
+      </div>`}
       ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
       <div class="actions">
-        <button type="button" data-act="close-form">${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary">${escapeHtml(editing ? copy.saveRegistration : copy.addProject)}</button>
+        <button type="button" data-act="close-form" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(projectOperation === "save" ? copy.operationPending : editing ? copy.saveRegistration : copy.addProject)}</button>
       </div>
     </form>
   </div>`;
@@ -2629,9 +2689,10 @@ function removeDialog(copy: ShellCopy, project: Project): string {
       <h2>${escapeHtml(copy.removeConfirmTitle)}</h2>
       <p class="notice">${escapeHtml(copy.removeConfirmBody)}</p>
       ${project.hasExecutionStopped ? `<p class="notice">${escapeHtml(copy.removeKeepClaimsBody)}</p>` : ""}
+      ${removeError ? `<p class="notice bad">${escapeHtml(removeError)}</p>` : ""}
       <div class="actions">
-        <button type="button" data-act="close-remove">${escapeHtml(copy.cancel)}</button>
-        <button type="button" class="danger primary" data-act="confirm-remove">${escapeHtml(copy.removeConfirm)}</button>
+        <button type="button" data-act="close-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="button" class="danger primary" data-act="confirm-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(projectOperation === "remove" ? copy.removalPending : copy.removeConfirm)}</button>
       </div>
     </div>
   </div>`;
@@ -2939,6 +3000,8 @@ app.addEventListener("click", async (event) => {
     formDraft = emptyDraft();
     inferred = null;
     formError = "";
+    removeError = "";
+    inferenceRequestId += 1;
     projectMenuId = "";
     pairingOpen = false;
     settingsOpen = false;
@@ -2964,9 +3027,11 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
+    if (projectOperation) return;
     formOpen = null;
     inferred = null;
     formError = "";
+    inferenceRequestId += 1;
     render();
     return;
   }
@@ -3197,6 +3262,8 @@ app.addEventListener("click", async (event) => {
     };
     inferred = null;
     formError = "";
+    removeError = "";
+    inferenceRequestId += 1;
     projectMenuId = "";
     render();
     return;
@@ -3204,36 +3271,58 @@ app.addEventListener("click", async (event) => {
   if (act === "remove-project" && target.dataset.id) {
     mobileScopeOpen = false;
     removeProject = snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
+    removeError = "";
     projectMenuId = "";
     render();
     return;
   }
   if (act === "close-remove" && (event.target === target || target.tagName === "BUTTON")) {
+    if (projectOperation) return;
     removeProject = null;
+    removeError = "";
     render();
     return;
   }
   if (act === "confirm-remove" && removeProject) {
+    if (projectOperation) return;
+    removeError = "";
+    projectOperation = "remove";
+    render();
     try {
       await rpc("removeProject", { projectId: removeProject.id });
       removeProject = null;
     } catch (error) {
-      formError = error instanceof Error ? error.message : String(error);
+      removeError = error instanceof Error ? error.message : String(error);
+    } finally {
+      projectOperation = null;
     }
     render();
     return;
   }
+  if (act === "choose-project-directory") {
+    await chooseProjectDirectory();
+    return;
+  }
   if (act === "infer") {
+    if (projectOperation) return;
     formError = "";
+    projectOperation = "infer";
+    const requestedPath = formDraft.localPath.trim();
+    const requestId = ++inferenceRequestId;
+    render();
     try {
-      const result = await rpc("inferProject", { localPath: formDraft.localPath });
+      const result = await rpc("inferProject", { localPath: requestedPath });
+      if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
       inferred = result.inference ?? null;
       if (!inferred) {
         formError = snapshot.copy.inferenceHint;
       }
     } catch (error) {
+      if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
       inferred = null;
       formError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (projectOperation === "infer") projectOperation = null;
     }
     render();
     return;
@@ -3241,7 +3330,7 @@ app.addEventListener("click", async (event) => {
   if (act === "apply-infer" && inferred) {
     formDraft = {
       name: formDraft.name || inferred.name,
-      localPath: formDraft.localPath || inferred.localPath,
+      localPath: inferred.localPath,
       githubHost: inferred.githubHost,
       repository: inferred.repository,
     };
@@ -3538,6 +3627,10 @@ app.addEventListener("input", (event) => {
     "value" in target
   ) {
     formDraft = { ...formDraft, [field]: (target as HTMLInputElement).value };
+    if (field === "localPath") {
+      inferred = null;
+      inferenceRequestId += 1;
+    }
   }
   if (field === "openingText" && launchDraft && "value" in target) {
     launchDraft.openingText = (target as HTMLTextAreaElement).value;
@@ -3605,7 +3698,10 @@ app.addEventListener("submit", async (event) => {
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");
   if (!form || !snapshot) return;
   event.preventDefault();
+  if (projectOperation) return;
   formError = "";
+  projectOperation = "save";
+  render();
   try {
     if (formOpen === "edit") {
       await rpc("editProject", { projectId: formProjectId, ...formDraft });
@@ -3616,6 +3712,8 @@ app.addEventListener("submit", async (event) => {
     inferred = null;
   } catch (error) {
     formError = error instanceof Error ? error.message : String(error);
+  } finally {
+    projectOperation = null;
   }
   render();
 });

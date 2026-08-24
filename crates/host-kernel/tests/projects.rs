@@ -162,6 +162,55 @@ fn editing_a_project_updates_the_registration() {
 }
 
 #[test]
+fn editing_only_the_name_preserves_tracker_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "garden", &dir, "you/garden");
+    assert!(host.snapshot().projects[0].tracker_synced);
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "editProject",
+            "projectId": id,
+            "name": "renamed",
+            "localPath": dir,
+            "repository": "you/garden",
+        }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.projects[0].name, "renamed");
+    assert!(out.snapshot.projects[0].tracker_synced);
+}
+
+#[test]
+fn equivalent_paths_cannot_register_the_same_directory_twice() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let alias = tmp
+        .path()
+        .join("work")
+        .join("nested")
+        .join("..")
+        .join("garden");
+    std::fs::create_dir_all(alias.parent().unwrap()).unwrap();
+    let mut host = boot_memory(tmp.path());
+    register(&mut host, "garden", &project_dir, "you/garden");
+
+    let error = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "alias",
+            "localPath": alias,
+            "repository": "you/alias",
+        }))
+        .unwrap_err();
+    assert!(
+        matches!(error, KernelError::Protocol(message) if message.contains("already registered"))
+    );
+}
+
+#[test]
 fn inference_is_only_a_candidate_until_register() {
     let tmp = tempfile::tempdir().unwrap();
     let project_dir = make_dir(tmp.path(), "work/garden");
@@ -278,6 +327,152 @@ fn a_project_that_never_synced_the_tracker_can_still_be_removed() {
         }))
         .unwrap();
     assert!(out.snapshot.projects.is_empty());
+}
+
+#[test]
+fn removing_a_project_preserves_ended_run_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/history");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "history", &dir, "you/history");
+    let run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": id,
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    host.handle(serde_json::json!({
+        "op": "stopRun",
+        "runId": run_id,
+    }))
+    .unwrap();
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": id,
+        }))
+        .unwrap();
+
+    assert!(out.snapshot.projects.is_empty());
+    assert_eq!(out.snapshot.runs.len(), 1);
+    assert_eq!(out.snapshot.runs[0].project_id, id);
+    let tracker_snapshot = out
+        .snapshot
+        .data
+        .host_dir
+        .join("projects")
+        .join(&id)
+        .join("tracker-snapshot");
+    assert!(tracker_snapshot.is_file());
+    drop(host);
+    assert_eq!(boot_memory(tmp.path()).snapshot().runs.len(), 1);
+}
+
+#[test]
+fn project_registration_changes_roll_back_when_settings_cannot_be_persisted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = make_dir(tmp.path(), "work/first");
+    let second = make_dir(tmp.path(), "work/second");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "first", &first, "you/first");
+    let data = host.snapshot().data;
+    let tracker_snapshot = data
+        .host_dir
+        .join("projects")
+        .join(&id)
+        .join("tracker-snapshot");
+    assert!(tracker_snapshot.is_file());
+    let settings_tmp = data.host_settings_path.with_extension("json.tmp");
+    std::fs::create_dir(&settings_tmp).unwrap();
+
+    let register_error = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "second",
+            "localPath": second,
+            "repository": "you/second",
+        }))
+        .unwrap_err();
+    assert!(matches!(register_error, KernelError::Io(_)));
+    assert_eq!(host.snapshot().projects.len(), 1);
+
+    let edit_error = host
+        .handle(serde_json::json!({
+            "op": "editProject",
+            "projectId": id,
+            "name": "renamed",
+            "localPath": first,
+            "repository": "you/first",
+        }))
+        .unwrap_err();
+    assert!(matches!(edit_error, KernelError::Io(_)));
+    assert_eq!(host.snapshot().projects[0].name, "first");
+    assert!(tracker_snapshot.is_file());
+
+    let remove_error = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": id,
+        }))
+        .unwrap_err();
+    assert!(matches!(remove_error, KernelError::Io(_)));
+    assert_eq!(host.snapshot().projects.len(), 1);
+}
+
+#[test]
+fn active_run_allows_changing_only_the_project_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/first");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "first", &dir, "you/first");
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": id,
+    }))
+    .unwrap();
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "editProject",
+            "projectId": id,
+            "name": "renamed",
+            "localPath": dir,
+            "repository": "you/first",
+        }))
+        .unwrap();
+
+    assert_eq!(out.snapshot.projects[0].name, "renamed");
+    assert_eq!(out.snapshot.projects[0].repository, "you/first");
+    assert!(out.snapshot.projects[0].has_active_run);
+}
+
+#[test]
+fn active_run_blocks_changing_project_location_or_tracker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = make_dir(tmp.path(), "work/first");
+    let second = make_dir(tmp.path(), "work/second");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "first", &first, "you/first");
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": id,
+    }))
+    .unwrap();
+
+    let error = host
+        .handle(serde_json::json!({
+            "op": "editProject",
+            "projectId": id,
+            "name": "renamed",
+            "localPath": second,
+            "repository": "you/second",
+        }))
+        .unwrap_err();
+    assert!(matches!(error, KernelError::Denied(message) if message.contains("active Run")));
+    assert_eq!(host.snapshot().projects[0].name, "first");
 }
 
 #[test]

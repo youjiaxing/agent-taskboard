@@ -58,6 +58,13 @@ pub(crate) fn require_local_directory(raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+pub(crate) fn same_local_directory(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 pub(crate) fn require_name(raw: &str) -> Result<String, String> {
     let name = raw.trim();
     if name.is_empty() {

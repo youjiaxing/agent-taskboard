@@ -197,12 +197,32 @@ pub(crate) fn post_rpc(
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(0);
     if status == 403 {
-        return Err(KernelError::Denied("invalid pairing code".into()));
+        return Err(KernelError::Denied(remote_error_message(
+            body,
+            "invalid pairing code",
+        )));
     }
     if status != 200 {
-        return Err(KernelError::Protocol(format!("pairing failed ({status})")));
+        return Err(KernelError::Protocol(remote_error_message(
+            body,
+            &format!("pairing failed ({status})"),
+        )));
     }
     Ok(serde_json::from_str(body)?)
+}
+
+fn remote_error_message(body: &str, fallback: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("message")
+                .or_else(|| value.get("error"))
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn rpc_target(address: &str) -> Result<(std::net::SocketAddr, String), KernelError> {

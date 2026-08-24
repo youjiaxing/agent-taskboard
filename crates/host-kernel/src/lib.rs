@@ -667,6 +667,12 @@ pub struct ShellCopy {
     pub edit_project_title: String,
     pub display_name: String,
     pub local_directory: String,
+    pub choose_directory: String,
+    pub active_project_edit_hint: String,
+    pub remote_project_hint: String,
+    pub operation_pending: String,
+    pub inference_pending: String,
+    pub removal_pending: String,
     pub github_host: String,
     pub repository: String,
     pub infer_from_directory: String,
@@ -695,6 +701,7 @@ pub struct ShellCopy {
     pub notify_crash: String,
     pub got_it: String,
     pub auth_failed: String,
+    pub connection_unavailable: String,
     pub repair_cli: String,
     pub repair_secrets: String,
     pub repair_env: String,
@@ -2427,9 +2434,7 @@ impl HostKernel {
             &serde_json::json!({ "op": "snapshot" }),
         )
         .map_err(|err| match err {
-            KernelError::Io(_) | KernelError::Denied(_) => {
-                KernelError::Protocol("address is not reachable".into())
-            }
+            KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
             other => other,
         })?;
         let snapshot = response
@@ -3780,10 +3785,18 @@ impl HostKernel {
     }
 
     fn persist_host_settings(&self) -> Result<(), KernelError> {
+        self.persist_host_settings_state(&self.projects, self.focused_project_id.as_deref())
+    }
+
+    fn persist_host_settings_state(
+        &self,
+        projects: &[ProjectRecord],
+        focused_project_id: Option<&str>,
+    ) -> Result<(), KernelError> {
         let file = HostSettingsFile {
             id: self.host_id.clone(),
-            focused_project_id: self.focused_project_id.clone(),
-            projects: self.projects.iter().map(ProjectRecord::stored).collect(),
+            focused_project_id: focused_project_id.map(ToOwned::to_owned),
+            projects: projects.iter().map(ProjectRecord::stored).collect(),
             refresh_interval_ms: self.refresh_interval_ms,
             agent_launch_defaults: self.launch_defaults.clone(),
             last_successful_agent: self.last_successful_agent.clone(),
@@ -4195,9 +4208,7 @@ impl HostKernel {
         let response =
             pairing::post_rpc(&remote.address, Some(&remote.token), request).map_err(|err| {
                 match err {
-                    KernelError::Io(_) | KernelError::Denied(_) => {
-                        KernelError::Protocol("address is not reachable".into())
-                    }
+                    KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
                     other => other,
                 }
             })?;
@@ -4230,7 +4241,7 @@ impl HostKernel {
         if self
             .projects
             .iter()
-            .any(|project| project.local_path == local_path)
+            .any(|project| project::same_local_directory(&project.local_path, &local_path))
         {
             return Err(KernelError::Protocol(
                 "a Project is already registered for this directory".into(),
@@ -4252,12 +4263,15 @@ impl HostKernel {
             advance_ready_at_ms: None,
         };
         let project_id = record.id.clone();
+        let mut projects = self.projects.clone();
+        projects.push(record);
+        self.persist_host_settings_state(&projects, Some(&project_id))?;
+        self.projects = projects;
         self.focused_project_id = Some(project_id.clone());
-        self.projects.push(record);
         self.selected_issue_id = None;
         self.parent_filter = None;
         self.refresh_project(&project_id, RefreshTrigger::Immediate);
-        self.persist_host_settings()
+        Ok(())
     }
 
     fn edit_project(
@@ -4275,36 +4289,64 @@ impl HostKernel {
             project::normalize_github_host(github_host).map_err(KernelError::Protocol)?;
         let repository =
             project::normalize_repository(repository).map_err(KernelError::Protocol)?;
-        if self
-            .projects
-            .iter()
-            .any(|project| project.id != project_id && project.local_path == local_path)
-        {
+        if self.project_has_active_run(project_id) {
+            let current = self
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+            if current.local_path != local_path
+                || current.github_host != github_host
+                || current.repository != repository
+            {
+                return Err(KernelError::Denied(
+                    "cannot change the directory or GitHub connection while a Project has an active Run".into(),
+                ));
+            }
+        }
+        if self.projects.iter().any(|project| {
+            project.id != project_id
+                && project::same_local_directory(&project.local_path, &local_path)
+        }) {
             return Err(KernelError::Protocol(
                 "a Project is already registered for this directory".into(),
             ));
         }
-        let connection = self.probe_github(&github_host, &repository);
-        let project = self
+        let current = self
             .projects
-            .iter_mut()
+            .iter()
             .find(|project| project.id == project_id)
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let registration_changed = current.local_path != local_path
+            || current.github_host != github_host
+            || current.repository != repository;
+        let connection = registration_changed.then(|| self.probe_github(&github_host, &repository));
+        let mut projects = self.projects.clone();
+        let project = projects
+            .iter_mut()
+            .find(|project| project.id == project_id)
+            .expect("validated project");
         project.name = name;
-        project.local_path = local_path;
-        project.github_host = github_host;
-        project.repository = repository;
-        project.connection = connection;
-        project.tracker_synced = false;
-        self.loaded_issues.remove(project_id);
-        self.refresh.remove(project_id);
-        refresh::remove_project_data(&self.data.host_dir, project_id);
-        if self.focused_project_id.as_deref() == Some(project_id) {
-            self.selected_issue_id = None;
-            self.parent_filter = None;
-            self.refresh_project(project_id, RefreshTrigger::Immediate);
+        if registration_changed {
+            project.local_path = local_path;
+            project.github_host = github_host;
+            project.repository = repository;
+            project.connection = connection.expect("changed registration connection");
+            project.tracker_synced = false;
         }
-        self.persist_host_settings()
+        self.persist_host_settings_state(&projects, self.focused_project_id.as_deref())?;
+        self.projects = projects;
+        if registration_changed {
+            self.loaded_issues.remove(project_id);
+            self.refresh.remove(project_id);
+            refresh::remove_project_data(&self.data.host_dir, project_id)?;
+            if self.focused_project_id.as_deref() == Some(project_id) {
+                self.selected_issue_id = None;
+                self.parent_filter = None;
+                self.refresh_project(project_id, RefreshTrigger::Immediate);
+            }
+        }
+        Ok(())
     }
 
     fn remove_project(&mut self, project_id: &str) -> Result<(), KernelError> {
@@ -4319,42 +4361,32 @@ impl HostKernel {
             ));
         }
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
-        let _removed = self.projects.remove(index);
+        let mut projects = self.projects.clone();
+        projects.remove(index);
+        let focused_project_id = if was_current {
+            if projects.is_empty() {
+                None
+            } else {
+                Some(projects[index.min(projects.len() - 1)].id.clone())
+            }
+        } else {
+            self.focused_project_id.clone()
+        };
+        self.persist_host_settings_state(&projects, focused_project_id.as_deref())?;
+
+        self.projects = projects;
+        self.focused_project_id = focused_project_id;
         self.refresh.remove(project_id);
         self.loaded_issues.remove(project_id);
-        self.live.retain(|run_id, _| {
-            !self
-                .runs
-                .iter()
-                .any(|run| run.id == *run_id && run.project_id == project_id)
-        });
-        self.runs.retain(|run| run.project_id != project_id);
-        self.usage_samples
-            .retain(|sample| sample.project_id != project_id);
-        let _ = self.persist_usage_samples();
-        if self
-            .focused_run_id
-            .as_ref()
-            .is_some_and(|id| !self.runs.iter().any(|run| run.id == *id))
-        {
-            self.focused_run_id = self.runs.last().map(|run| run.id.clone());
-        }
         self.clear_pending(project_id, false);
-        refresh::remove_project_data(&self.data.host_dir, project_id);
-        let _ = self.persist_runs();
         if was_current {
             self.selected_issue_id = None;
             self.parent_filter = None;
-            self.focused_project_id = if self.projects.is_empty() {
-                None
-            } else {
-                Some(self.projects[index.min(self.projects.len() - 1)].id.clone())
-            };
             if let Some(next_id) = self.focused_project_id.clone() {
                 self.refresh_project(&next_id, RefreshTrigger::Immediate);
             }
         }
-        self.persist_host_settings()
+        Ok(())
     }
 
     fn focus_project(&mut self, project_id: &str) -> Result<(), KernelError> {
@@ -4674,16 +4706,32 @@ impl HostKernel {
         ) {
             self.projects[index].connection = self.probe_github(github_host, repository);
         }
-        self.projects[index].tracker_synced = complete;
-        let _ = refresh::save_snapshot(
+        let snapshot = refresh::StoredTrackerSnapshot {
+            fetched_at_ms: now,
+            complete,
+            detail: detail.clone(),
+            issues: issues.clone(),
+        };
+        if let Err(err) = refresh::save_snapshot(
             &refresh::snapshot_path(&self.data.host_dir, project_id),
-            &refresh::StoredTrackerSnapshot {
-                fetched_at_ms: now,
-                complete,
-                detail: detail.clone(),
-                issues: issues.clone(),
-            },
-        );
+            &snapshot,
+        ) {
+            self.projects[index].tracker_synced = false;
+            self.loaded_issues.insert(project_id.to_string(), issues);
+            self.refresh.insert(
+                project_id.to_string(),
+                ProjectRefreshState {
+                    fetched_at_ms: Some(now),
+                    last_attempt_ms: now,
+                    kind: StoredRefreshKind::TrackerError,
+                    retry_at_ms: None,
+                    complete: false,
+                    detail: Some(format!("tracker snapshot could not be persisted: {err}")),
+                },
+            );
+            return;
+        }
+        self.projects[index].tracker_synced = complete;
         self.loaded_issues.insert(project_id.to_string(), issues);
         self.refresh.insert(
             project_id.to_string(),
@@ -5007,6 +5055,12 @@ impl ShellCopy {
                 edit_project_title: "编辑 Project 登记".into(),
                 display_name: "显示名称".into(),
                 local_directory: "本地目录".into(),
+                choose_directory: "选择目录".into(),
+                active_project_edit_hint: "这个 Project 有活跃 Run，只能修改显示名称；要改目录或 GitHub 连接，请先停止所有活跃 Run。".into(),
+                remote_project_hint: "这里填写远程 Host 上的绝对路径。请在远程 Host 上确认目录，或手动粘贴该路径；不会选择这台 Client 上的目录。".into(),
+                operation_pending: "保存中…".into(),
+                inference_pending: "推断中…".into(),
+                removal_pending: "移除中…".into(),
                 github_host: "GitHub host".into(),
                 repository: "仓库".into(),
                 infer_from_directory: "从本地目录推断".into(),
@@ -5035,6 +5089,7 @@ impl ShellCopy {
                 notify_crash: "Host 崩溃后已捡回".into(),
                 got_it: "知道了".into(),
                 auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
+                connection_unavailable: "这个 Project 暂时连不上 GitHub。".into(),
                 repair_cli: "用 gh 登录".into(),
                 repair_secrets: "在 Host 秘密文件里写入这个 host 的 PAT".into(),
                 repair_env: "设置应用专用或通用环境变量".into(),
@@ -5248,6 +5303,12 @@ impl ShellCopy {
                 edit_project_title: "Edit Project registration".into(),
                 display_name: "Display name".into(),
                 local_directory: "Local directory".into(),
+                choose_directory: "Choose folder".into(),
+                active_project_edit_hint: "This Project has an active Run. Only the display name can be changed; stop all active Runs before changing its directory or GitHub connection.".into(),
+                remote_project_hint: "Enter an absolute path on the remote Host. Confirm it on that Host or paste it manually; this Client will not choose a local folder.".into(),
+                operation_pending: "Saving…".into(),
+                inference_pending: "Inferring…".into(),
+                removal_pending: "Removing…".into(),
                 github_host: "GitHub host".into(),
                 repository: "Repository".into(),
                 infer_from_directory: "Infer from local directory".into(),
@@ -5276,6 +5337,7 @@ impl ShellCopy {
                 notify_crash: "Recovered after Host crash".into(),
                 got_it: "Got it".into(),
                 auth_failed: "GitHub credentials for this Project are not available.".into(),
+                connection_unavailable: "This Project cannot reach GitHub right now.".into(),
                 repair_cli: "Sign in with gh".into(),
                 repair_secrets: "Write a PAT for this host in the Host secrets file".into(),
                 repair_env: "Set the app-specific or generic environment variable".into(),
