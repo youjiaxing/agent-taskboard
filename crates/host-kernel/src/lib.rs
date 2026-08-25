@@ -687,6 +687,9 @@ pub struct ShellCopy {
     pub display_name: String,
     pub local_directory: String,
     pub choose_directory: String,
+    pub choose_directory_desktop_only: String,
+    pub inferring_from_directory: String,
+    pub inference_failed: String,
     pub active_project_edit_hint: String,
     pub remote_project_hint: String,
     pub operation_pending: String,
@@ -763,6 +766,8 @@ pub struct ShellCopy {
     pub pick_issue: String,
     pub recent_limit: String,
     pub recent_limit_help: String,
+    pub refresh_interval: String,
+    pub refresh_interval_help: String,
     pub unclear_issue: String,
     pub refresh_now: String,
     pub refresh_refreshing: String,
@@ -900,6 +905,7 @@ pub struct HostSnapshot {
     pub paired_clients: Vec<PairedClient>,
     pub board: Option<BoardSnapshot>,
     pub recent_completed_limit: u32,
+    pub refresh_interval_ms: u64,
     pub center_view: CenterView,
     pub workspace_view: WorkspaceView,
     pub runs: Vec<RunSummary>,
@@ -1046,6 +1052,7 @@ enum StoredRefreshKind {
 struct ClientView {
     project_id: String,
     visible: bool,
+    last_seen_ms: u64,
 }
 
 struct PreviousRun {
@@ -1077,6 +1084,7 @@ struct RemoteView {
     launch_form: Option<RunLaunchForm>,
     usage_open: bool,
     usage: UsagePage,
+    refresh_interval_ms: u64,
 }
 
 impl HostKernel {
@@ -1290,6 +1298,7 @@ impl HostKernel {
                 .collect(),
             board,
             recent_completed_limit: self.recent_limit,
+            refresh_interval_ms: self.refresh_interval_for_focus(),
             center_view: self.center_view,
             workspace_view,
             runs,
@@ -1429,6 +1438,7 @@ impl HostKernel {
             Command::ShowWindow => {
                 if self.process_alive() {
                     self.window_visible = true;
+                    self.now_ms = refresh::wall_ms();
                     if self.running {
                         if let Some(project_id) = self.focused_project_id.clone() {
                             self.refresh_project(&project_id, RefreshTrigger::Immediate);
@@ -1555,6 +1565,7 @@ impl HostKernel {
             }
             Command::Tick { now_ms } => {
                 self.now_ms = now_ms.unwrap_or_else(refresh::wall_ms);
+                self.expire_stale_client_views();
                 self.maybe_auto_refresh();
                 self.finish_due_pending();
             }
@@ -2012,17 +2023,41 @@ impl HostKernel {
                         .map(ToOwned::to_owned),
                 })
             }
-            "tick" => self.dispatch(Command::Tick {
-                now_ms: request.get("nowMs").and_then(|value| value.as_u64()),
-            }),
-            "setClientView" => self.dispatch(Command::SetClientView {
-                client_id: required_string(&request, "clientId")?,
-                project_id: optional_string(&request, "projectId"),
-                visible: request
-                    .get("visible")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            }),
+            "tick" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                if let Some(client_id) = request
+                    .get("clientId")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                {
+                    self.set_client_view(
+                        client_id,
+                        &optional_string(&request, "projectId"),
+                        request
+                            .get("visible")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false),
+                    );
+                }
+                self.dispatch(Command::Tick {
+                    now_ms: request.get("nowMs").and_then(|value| value.as_u64()),
+                })
+            }
+            "setClientView" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetClientView {
+                    client_id: required_string(&request, "clientId")?,
+                    project_id: optional_string(&request, "projectId"),
+                    visible: request
+                        .get("visible")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
             "noteRunEnded" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -2269,12 +2304,17 @@ impl HostKernel {
             }
             "cancelQuit" => self.dispatch(Command::CancelQuit),
             "confirmQuitStopAll" => self.dispatch(Command::ConfirmQuitStopAll),
-            "setRefreshInterval" => self.dispatch(Command::SetRefreshInterval {
-                interval_ms: request
-                    .get("intervalMs")
-                    .and_then(|value| value.as_u64())
-                    .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
-            }),
+            "setRefreshInterval" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetRefreshInterval {
+                    interval_ms: request
+                        .get("intervalMs")
+                        .and_then(|value| value.as_u64())
+                        .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
+                })
+            }
             "viewChanges" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
@@ -2623,8 +2663,24 @@ impl HostKernel {
                 Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
                 _ => usage::build_usage_page(&usage::UsageQuery::default(), 0, 0, &[], &[]),
             },
+            refresh_interval_ms: snapshot
+                .get("refreshIntervalMs")
+                .and_then(|value| value.as_u64())
+                .map(refresh::clamp_refresh_interval_ms)
+                .unwrap_or(refresh::DEFAULT_REFRESH_INTERVAL_MS),
         });
         Ok(())
+    }
+
+    fn refresh_interval_for_focus(&self) -> u64 {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            if let Some(view) = &self.remote_view {
+                if view.host_id == self.focused_host_id {
+                    return view.refresh_interval_ms;
+                }
+            }
+        }
+        self.refresh_interval_ms
     }
 
     fn launch_form_for_focus(&self) -> Option<RunLaunchForm> {
@@ -4651,7 +4707,10 @@ impl HostKernel {
         );
     }
 
-    fn refresh_project(&mut self, project_id: &str, _trigger: RefreshTrigger) -> bool {
+    fn refresh_project(&mut self, project_id: &str, trigger: RefreshTrigger) -> bool {
+        if !self.should_attempt_refresh(project_id, trigger) {
+            return false;
+        }
         let Some(index) = self
             .projects
             .iter()
@@ -4920,6 +4979,31 @@ impl HostKernel {
         }
     }
 
+    fn should_attempt_refresh(&self, project_id: &str, trigger: RefreshTrigger) -> bool {
+        let Some(state) = self.refresh.get(project_id) else {
+            return true;
+        };
+        match state.kind {
+            StoredRefreshKind::RateLimited => match trigger {
+                RefreshTrigger::Immediate | RefreshTrigger::Action => true,
+                RefreshTrigger::Interval | RefreshTrigger::RunEnded => state
+                    .retry_at_ms
+                    .is_some_and(|retry_at| self.now_ms >= retry_at),
+            },
+            StoredRefreshKind::AuthFailed => {
+                matches!(trigger, RefreshTrigger::Immediate | RefreshTrigger::Action)
+            }
+            _ => true,
+        }
+    }
+
+    fn expire_stale_client_views(&mut self) {
+        let ttl = self.refresh_interval_ms.saturating_mul(3).max(90_000);
+        let now = self.now_ms;
+        self.client_views
+            .retain(|_, view| now.saturating_sub(view.last_seen_ms) <= ttl);
+    }
+
     fn should_auto_refresh(&self, project_id: &str) -> bool {
         if !self.project_watched(project_id) {
             return false;
@@ -4965,19 +5049,26 @@ impl HostKernel {
         // 拿到的是不完整数据时优先表达 incomplete：看板不能当作全量数据计算 Frontier/依赖图；
         // 从未读到过数据（complete=false 且无已加载数据）则按错误状态表达。
         if !state.complete && self.loaded_issues.contains_key(project_id) {
-            if state.kind == StoredRefreshKind::TrackerError {
-                return RefreshStatus::TrackerError {
-                    fetched_at_ms: state.fetched_at_ms,
-                    data_complete: false,
-                    next_refresh_in_ms: next,
-                    detail: state.detail.clone(),
-                };
+            match state.kind {
+                StoredRefreshKind::Offline
+                | StoredRefreshKind::RateLimited
+                | StoredRefreshKind::AuthFailed => {}
+                StoredRefreshKind::TrackerError => {
+                    return RefreshStatus::TrackerError {
+                        fetched_at_ms: state.fetched_at_ms,
+                        data_complete: false,
+                        next_refresh_in_ms: next,
+                        detail: state.detail.clone(),
+                    };
+                }
+                _ => {
+                    return RefreshStatus::Incomplete {
+                        fetched_at_ms: state.fetched_at_ms,
+                        next_refresh_in_ms: next,
+                        detail: state.detail.clone(),
+                    };
+                }
             }
-            return RefreshStatus::Incomplete {
-                fetched_at_ms: state.fetched_at_ms,
-                next_refresh_in_ms: next,
-                detail: state.detail.clone(),
-            };
         }
         match state.kind {
             StoredRefreshKind::Ready => match state.fetched_at_ms {
@@ -5047,6 +5138,7 @@ impl HostKernel {
             ClientView {
                 project_id: project_id.to_string(),
                 visible: true,
+                last_seen_ms: self.now_ms,
             },
         );
         let changed = previous
@@ -5214,6 +5306,9 @@ impl ShellCopy {
                 display_name: "显示名称".into(),
                 local_directory: "本地目录".into(),
                 choose_directory: "选择目录".into(),
+                choose_directory_desktop_only: "系统目录选择只在本机桌面窗口可用。浏览器 Client 请手动粘贴 Host 上的绝对路径。".into(),
+                inferring_from_directory: "正在从本地目录推断…".into(),
+                inference_failed: "这个目录没有可用的 GitHub remote，请手动填写仓库。".into(),
                 active_project_edit_hint: "这个 Project 有活跃 Run，只能修改显示名称；要改目录或 GitHub 连接，请先停止所有活跃 Run。".into(),
                 remote_project_hint: "这里填写远程 Host 上的绝对路径。请在远程 Host 上确认目录，或手动粘贴该路径；不会选择这台 Client 上的目录。".into(),
                 operation_pending: "保存中…".into(),
@@ -5223,7 +5318,7 @@ impl ShellCopy {
                 repository: "仓库".into(),
                 infer_from_directory: "从本地目录推断".into(),
                 use_inference: "使用这份推断结果".into(),
-                inference_hint: "Host 可以从所填目录推断 git remote。推断结果不会自动写入，必须由你确认采用。".into(),
+                inference_hint: "选好本地目录后，显示名称默认用目录名，GitHub 连接会按该目录的 git remote 预填，仍可改。".into(),
                 save_registration: "保存登记".into(),
                 cancel: "取消".into(),
                 remove_confirm_title: "移除这个 Project？".into(),
@@ -5290,6 +5385,8 @@ impl ShellCopy {
                 pick_issue: "点一张 Issue".into(),
                 recent_limit: "最近完成列张数".into(),
                 recent_limit_help: "默认 5。只影响最右那一列。不能拖进这一列来关票。".into(),
+                refresh_interval: "自动刷新间隔（秒）".into(),
+                refresh_interval_help: "有人在看这块看板时，按这个间隔拉 Tracker。最短 15 秒，最长 10 分钟。".into(),
                 unclear_issue: "对端看不清".into(),
                 refresh_now: "刷新".into(),
                 refresh_refreshing: "正在刷新".into(),
@@ -5365,8 +5462,8 @@ impl ShellCopy {
                 return_to_board: "返回看板".into(),
                 show_sidebar: "显示侧栏".into(),
                 hide_sidebar: "收起侧栏".into(),
-                show_issue_detail: "显示 Issue".into(),
-                hide_issue_detail: "收起 Issue".into(),
+                show_issue_detail: "显示详情".into(),
+                hide_issue_detail: "收起详情".into(),
                 show_ended_runs: "显示已结束".into(),
                 run_group_waiting: "等待操作".into(),
                 run_group_running: "进行中".into(),
@@ -5462,6 +5559,9 @@ impl ShellCopy {
                 display_name: "Display name".into(),
                 local_directory: "Local directory".into(),
                 choose_directory: "Choose folder".into(),
+                choose_directory_desktop_only: "The system folder picker is only available in the desktop window on this machine. In a browser Client, paste an absolute path on the Host.".into(),
+                inferring_from_directory: "Inferring from the local directory…".into(),
+                inference_failed: "No usable GitHub remote was found in this directory. Enter the repository manually.".into(),
                 active_project_edit_hint: "This Project has an active Run. Only the display name can be changed; stop all active Runs before changing its directory or GitHub connection.".into(),
                 remote_project_hint: "Enter an absolute path on the remote Host. Confirm it on that Host or paste it manually; this Client will not choose a local folder.".into(),
                 operation_pending: "Saving…".into(),
@@ -5471,7 +5571,7 @@ impl ShellCopy {
                 repository: "Repository".into(),
                 infer_from_directory: "Infer from local directory".into(),
                 use_inference: "Use this inference".into(),
-                inference_hint: "The Host can infer a git remote from the folder. Inference is only a candidate until you confirm it.".into(),
+                inference_hint: "After you choose a local directory, the display name defaults to the folder name and the GitHub connection is prefilled from that folder's git remote. You can still change them.".into(),
                 save_registration: "Save registration".into(),
                 cancel: "Cancel".into(),
                 remove_confirm_title: "Remove this Project?".into(),
@@ -5538,6 +5638,8 @@ impl ShellCopy {
                 pick_issue: "Select an Issue".into(),
                 recent_limit: "Recently-closed count".into(),
                 recent_limit_help: "Default 5. Only the rightmost column. Dragging here does not close.".into(),
+                refresh_interval: "Auto-refresh interval (seconds)".into(),
+                refresh_interval_help: "While someone is looking at this board, pull Tracker on this interval. Minimum 15 seconds, maximum 10 minutes.".into(),
                 unclear_issue: "The other side is unclear".into(),
                 refresh_now: "Refresh".into(),
                 refresh_refreshing: "Refreshing".into(),
@@ -5613,8 +5715,8 @@ impl ShellCopy {
                 return_to_board: "Back to board".into(),
                 show_sidebar: "Show sidebar".into(),
                 hide_sidebar: "Hide sidebar".into(),
-                show_issue_detail: "Show Issue".into(),
-                hide_issue_detail: "Hide Issue".into(),
+                show_issue_detail: "Show details".into(),
+                hide_issue_detail: "Hide details".into(),
                 show_ended_runs: "Show ended Runs".into(),
                 run_group_waiting: "Waiting".into(),
                 run_group_running: "In progress".into(),

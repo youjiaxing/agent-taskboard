@@ -697,6 +697,89 @@ fn incomplete_read_persists_snapshot_and_board_across_reboot() {
 }
 
 #[test]
+fn offline_after_incomplete_read_is_shown_as_offline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![IssueRecord::open("you/garden", 1, "ready")],
+    );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("truncated at 500 issues".into()),
+    );
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "garden", "you/garden");
+    match refresh_status(&host) {
+        RefreshStatus::Incomplete { .. } => {}
+        other => panic!("expected incomplete, got {other:?}"),
+    }
+    tracker.set_read_mode("you/garden", ReadMode::Offline);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    match refresh_status(&host) {
+        RefreshStatus::Offline { .. } => {}
+        other => panic!("expected offline after a later failed read, got {other:?}"),
+    }
+}
+
+#[test]
+fn run_end_does_not_hit_rate_limited_project_before_retry_after() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    tracker.fail_rate_limited("you/garden", Some(120_000));
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    let after_limit = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "noteRunEnded",
+        "projectId": project_id,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), after_limit);
+}
+
+#[test]
+fn stale_client_view_without_heartbeat_stops_polling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    host.handle(serde_json::json!({ "op": "hideWindow" })).unwrap();
+    host.handle(serde_json::json!({
+        "op": "setClientView",
+        "clientId": "phone",
+        "projectId": project_id,
+        "visible": true,
+    }))
+    .unwrap();
+    let fetched = match refresh_status(&host) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready, got {other:?}"),
+    };
+    let baseline = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+
+    let after_poll = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS * 4,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), after_poll);
+}
+
+#[test]
 fn claim_without_last_data_still_live_reads_the_focused_project() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
