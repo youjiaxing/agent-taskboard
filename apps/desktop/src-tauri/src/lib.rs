@@ -50,19 +50,23 @@ pub fn run() {
             let kernel = Arc::new(Mutex::new(kernel));
             let app_handle = app.handle().clone();
             let on_outcome = move |outcome: host_kernel::CommandOutcome| {
-                let _ = refresh_shell(&app_handle, &outcome.snapshot);
-                if outcome.snapshot.window_visible {
-                    if let Some(window) = app_handle.get_webview_window("main") {
-                        if !window.is_visible().unwrap_or(true) {
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
+                let app_handle = app_handle.clone();
+                let ui = app_handle.clone();
+                let _ = app_handle.run_on_main_thread(move || {
+                    let _ = refresh_shell(&ui, &outcome.snapshot);
+                    if outcome.snapshot.window_visible {
+                        if let Some(window) = ui.get_webview_window("main") {
+                            if !window.is_visible().unwrap_or(true) {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
                         }
                     }
-                }
-                if outcome.process == ProcessIntent::Exit {
-                    app_handle.exit(0);
-                }
+                    if outcome.process == ProcessIntent::Exit {
+                        ui.exit(0);
+                    }
+                });
             };
             let loopback = if host_mode == HostMode::ClientOnly {
                 LoopbackServer::attach_client_transport(Arc::clone(&kernel), on_outcome)?
