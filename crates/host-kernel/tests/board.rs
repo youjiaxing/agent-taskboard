@@ -854,6 +854,26 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     run_browser_e2e(host, "board.mjs", &[]);
 }
 
+fn run_degraded_shell_edge_state(
+    state: &str,
+    repository: &str,
+    inject_failure: impl FnOnce(&MemoryTracker, &str),
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), &format!("work/{state}"));
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(repository, 1, "cached"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &project_dir, repository);
+    inject_failure(&tracker, repository);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    run_browser_e2e(
+        host,
+        "shell-edge-state.mjs",
+        &[("SHELL_EDGE_STATE", Path::new(state))],
+    );
+}
+
 #[test]
 fn browser_renders_shell_edge_state_fixtures() {
     let empty_tmp = tempfile::tempdir().unwrap();
@@ -887,49 +907,15 @@ fn browser_renders_shell_edge_state_fixtures() {
         &[("SHELL_EDGE_STATE", Path::new("frontier-empty"))],
     );
 
-    let offline_tmp = tempfile::tempdir().unwrap();
-    let offline_dir = make_dir(offline_tmp.path(), "work/offline");
-    let offline_tracker = Arc::new(MemoryTracker::new());
-    offline_tracker.add_issue(IssueRecord::open("you/offline", 1, "cached"));
-    let mut offline = boot(offline_tmp.path(), Arc::clone(&offline_tracker));
-    register(&mut offline, &offline_dir, "you/offline");
-    offline_tracker.fail_read("you/offline");
-    offline
-        .handle(serde_json::json!({ "op": "refresh" }))
-        .unwrap();
-    run_browser_e2e(
-        offline,
-        "shell-edge-state.mjs",
-        &[("SHELL_EDGE_STATE", Path::new("offline"))],
-    );
-
-    let rate_tmp = tempfile::tempdir().unwrap();
-    let rate_dir = make_dir(rate_tmp.path(), "work/rate");
-    let rate_tracker = Arc::new(MemoryTracker::new());
-    rate_tracker.add_issue(IssueRecord::open("you/rate", 1, "cached"));
-    let mut rate = boot(rate_tmp.path(), Arc::clone(&rate_tracker));
-    register(&mut rate, &rate_dir, "you/rate");
-    rate_tracker.fail_rate_limited("you/rate", Some(120_000));
-    rate.handle(serde_json::json!({ "op": "refresh" })).unwrap();
-    run_browser_e2e(
-        rate,
-        "shell-edge-state.mjs",
-        &[("SHELL_EDGE_STATE", Path::new("rate-limited"))],
-    );
-
-    let auth_tmp = tempfile::tempdir().unwrap();
-    let auth_dir = make_dir(auth_tmp.path(), "work/auth");
-    let auth_tracker = Arc::new(MemoryTracker::new());
-    auth_tracker.add_issue(IssueRecord::open("you/auth", 1, "cached"));
-    let mut auth = boot(auth_tmp.path(), Arc::clone(&auth_tracker));
-    register(&mut auth, &auth_dir, "you/auth");
-    auth_tracker.fail_auth("you/auth");
-    auth.handle(serde_json::json!({ "op": "refresh" })).unwrap();
-    run_browser_e2e(
-        auth,
-        "shell-edge-state.mjs",
-        &[("SHELL_EDGE_STATE", Path::new("auth-failed"))],
-    );
+    run_degraded_shell_edge_state("offline", "you/offline", |tracker, repository| {
+        tracker.fail_read(repository);
+    });
+    run_degraded_shell_edge_state("rate-limited", "you/rate", |tracker, repository| {
+        tracker.fail_rate_limited(repository, Some(120_000));
+    });
+    run_degraded_shell_edge_state("auth-failed", "you/auth", |tracker, repository| {
+        tracker.fail_auth(repository);
+    });
 }
 
 #[test]
