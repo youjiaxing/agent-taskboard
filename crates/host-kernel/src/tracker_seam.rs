@@ -1,6 +1,7 @@
 use crate::issue::{DependencyRef, IssueRecord, IssueRef};
 use crate::tracker::{
-    IssueEdit, ProbeContext, ProbeOutcome, TrackerPort, TrackerReadError, TrackerWriteError,
+    IssueDocument, IssueEdit, ProbeContext, ProbeOutcome, TrackerPort, TrackerReadError,
+    TrackerWriteError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,11 @@ pub enum TrackerReadOutcome {
 pub trait TrackerSeam: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError>;
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError>;
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
@@ -44,6 +50,14 @@ impl<T: TrackerPort> TrackerSeam for T {
 
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
         TrackerPort::read_all(self, ctx)
+    }
+
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        TrackerPort::read_issue_document(self, ctx, issue_id)
     }
 
     fn write_issue(

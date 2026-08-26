@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use host_kernel::{
-    AuthFailureKind, CredentialSource, DependencyRef, IssueRecord, IssueRef, ProbeContext,
-    ProbeOutcome, TrackerReadError, TrackerReadOutcome, TrackerSeam, TrackerWriteError,
-    TrackerWriteOp,
+    AuthFailureKind, CredentialSource, DependencyRef, IssueDocument, IssueRecord, IssueRef,
+    ProbeContext, ProbeOutcome, TrackerReadError, TrackerReadOutcome, TrackerSeam,
+    TrackerWriteError, TrackerWriteOp,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +37,7 @@ pub struct SeamTracker {
     write_modes: Mutex<BTreeMap<String, WriteMode>>,
     reads: Mutex<BTreeMap<String, u64>>,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
+    bodies: Mutex<BTreeMap<String, String>>,
     write_log: Mutex<Vec<(String, Option<String>, TrackerWriteOp)>>,
 }
 
@@ -59,6 +60,13 @@ impl SeamTracker {
             .entry(issue.repository.clone())
             .or_default()
             .push(issue);
+    }
+
+    pub fn set_issue_body(&self, issue_id: &str, body: &str) {
+        self.bodies
+            .lock()
+            .expect("seam tracker")
+            .insert(issue_id.to_string(), body.to_string());
     }
 
     pub fn set_read_mode(&self, repository: &str, mode: ReadMode) {
@@ -270,6 +278,34 @@ impl TrackerSeam for SeamTracker {
                 Ok(TrackerReadOutcome::Complete { issues: issues() })
             }
         }
+    }
+
+    fn read_issue_document(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        let issue = self
+            .issues
+            .lock()
+            .expect("seam tracker")
+            .values()
+            .flat_map(|issues| issues.iter())
+            .find(|issue| issue.id() == issue_id)
+            .cloned()
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })?;
+        Ok(IssueDocument {
+            issue,
+            body: self
+                .bodies
+                .lock()
+                .expect("seam tracker")
+                .get(issue_id)
+                .cloned()
+                .unwrap_or_default(),
+        })
     }
 
     fn write_issue(

@@ -63,6 +63,60 @@ pub struct IssueLink {
     pub visible: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IssueDocumentFailureKind {
+    Offline,
+    RateLimited,
+    Auth,
+    Tracker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDocumentFailure {
+    pub kind: IssueDocumentFailureKind,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum IssueDocumentState {
+    Unloaded,
+    Loading {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        #[serde(
+            rename = "fetchedAtMs",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        fetched_at_ms: Option<u64>,
+    },
+    Ready {
+        body: String,
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: u64,
+    },
+    Stale {
+        body: String,
+        #[serde(rename = "fetchedAtMs")]
+        fetched_at_ms: u64,
+        failure: IssueDocumentFailure,
+    },
+    Failed {
+        failure: IssueDocumentFailure,
+    },
+}
+
+impl Default for IssueDocumentState {
+    fn default() -> Self {
+        Self::Unloaded
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDetail {
@@ -79,6 +133,8 @@ pub struct IssueDetail {
     pub children: Vec<IssueLink>,
     pub blocked_by: Vec<IssueLink>,
     pub blocking: Vec<IssueLink>,
+    #[serde(default)]
+    pub document: IssueDocumentState,
     #[serde(default)]
     pub execution_stopped: bool,
     #[serde(default)]
@@ -672,6 +728,7 @@ fn detail(issue: &IssueRecord, mapping_active: bool) -> IssueDetail {
         children: issue.children.iter().map(known_link).collect(),
         blocked_by: issue.blocked_by.iter().map(dependency_link).collect(),
         blocking: issue.blocking.iter().map(known_link).collect(),
+        document: IssueDocumentState::Unloaded,
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,
@@ -693,6 +750,7 @@ fn link_detail(issue: &IssueRef) -> IssueDetail {
         children: Vec::new(),
         blocked_by: Vec::new(),
         blocking: Vec::new(),
+        document: IssueDocumentState::Unloaded,
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,
@@ -715,6 +773,7 @@ fn unclear_detail(repository: Option<&str>, number: Option<u64>) -> IssueDetail 
         children: Vec::new(),
         blocked_by: Vec::new(),
         blocking: Vec::new(),
+        document: IssueDocumentState::Unloaded,
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,

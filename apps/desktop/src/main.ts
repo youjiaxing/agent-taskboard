@@ -133,6 +133,13 @@ type ShellCopy = {
   emptyNoData: string;
   emptyIncomplete: string;
   emptyTrackerError: string;
+  issueDocument: string;
+  issueDocumentLoading: string;
+  issueDocumentRetry: string;
+  issueDocumentStale: string;
+  issueDocumentFailed: string;
+  issueDetailWiden: string;
+  issueDetailNarrow: string;
   family: string;
   deps: string;
   parent: string;
@@ -366,10 +373,24 @@ type IssueDetail = {
   children: IssueLink[];
   blockedBy: IssueLink[];
   blocking: IssueLink[];
+  document: IssueDocumentState;
   executionStopped?: boolean;
   waitingForUser?: boolean;
   activeRunId?: string | null;
 };
+
+type IssueDocumentFailure = {
+  kind: "offline" | "rate-limited" | "auth" | "tracker";
+  message: string;
+  retryAfterMs?: number | null;
+};
+
+type IssueDocumentState =
+  | { kind: "unloaded" }
+  | { kind: "loading"; body?: string | null; fetchedAtMs?: number | null }
+  | { kind: "ready"; body: string; fetchedAtMs: number }
+  | { kind: "stale"; body: string; fetchedAtMs: number; failure: IssueDocumentFailure }
+  | { kind: "failed"; failure: IssueDocumentFailure };
 
 type BoardColumns = {
   blocked: IssueCard[];
@@ -821,6 +842,7 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let issueDetailWide = false;
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
@@ -1285,6 +1307,18 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
 async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
   const result = await rpc("viewChanges", { runId, scope });
   changesView = result.viewChanges ?? null;
+}
+
+async function loadSelectedIssueDocument(force = false): Promise<void> {
+  const issue = snapshot?.board?.selected;
+  if (!issue) return;
+  const state = issue.document ?? { kind: "unloaded" as const };
+  if (!force && state.kind !== "unloaded" && state.kind !== "loading") return;
+  issue.document = state.kind === "ready" || state.kind === "stale" || state.kind === "loading"
+    ? { kind: "loading", body: state.body, fetchedAtMs: state.fetchedAtMs }
+    : { kind: "loading" };
+  render();
+  await rpc("loadIssueDocument", { issueId: issue.id });
 }
 
 function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
@@ -2129,7 +2163,7 @@ function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
   const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}">
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}">
     ${terminalPanel(copy, run, "lifted-terminal")}
     ${inspectorOpen && snap.board ? `<aside class="issue-detail">${issueDetail(copy, snap.board)}</aside>` : ""}
   </section>`;
@@ -2416,7 +2450,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
   const inspectorOpen = issueDetailVisible && Boolean(board.selected);
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -2579,16 +2613,23 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
          <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
       : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
   return `
-    <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-    <div class="detail-meta">
-      ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-      <span class="tag">${escapeHtml(claim)}</span>
-      ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
-      ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
-      ${actions}
-      <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
-    </div>
-    <section class="detail-block">
+    <header class="detail-sticky">
+      <div class="detail-title-row">
+        <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+        <button type="button" class="detail-width" data-act="toggle-issue-width">${escapeHtml(issueDetailWide ? copy.issueDetailNarrow : copy.issueDetailWiden)}</button>
+      </div>
+      <div class="detail-meta">
+        ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
+        <span class="tag">${escapeHtml(claim)}</span>
+        ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
+        ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
+        ${actions}
+        <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
+      </div>
+    </header>
+    <div class="detail-scroll">
+      ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
+      <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
       ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
@@ -2603,8 +2644,8 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
           ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>`
           : ""
       }
-    </section>
-    <section class="detail-block">
+      </section>
+      <section class="detail-block">
       <h4>${escapeHtml(copy.deps)}</h4>
       <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
       ${
@@ -2618,7 +2659,116 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
           ? issue.blocking.map((link) => issueLink(copy, link)).join("")
           : `<span class="muted">${escapeHtml(copy.none)}</span>`
       }
+      </section>
+    </div>`;
+}
+
+function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: string): string {
+  if (state.kind === "unloaded" || state.kind === "loading") {
+    const previous = state.kind === "loading" && state.body != null
+      ? `<div class="issue-markdown is-stale">${renderMarkdown(state.body, issueUrl)}</div>`
+      : "";
+    const asOf = state.kind === "loading" && state.fetchedAtMs != null
+      ? ` · ${escapeHtml(copy.refreshAsOf)} ${escapeHtml(formatTime(state.fetchedAtMs))}`
+      : "";
+    return `<section class="issue-document" data-document-state="${state.kind}">
+      <h4>${escapeHtml(copy.issueDocument)}</h4>
+      <p class="document-status">${escapeHtml(copy.issueDocumentLoading)}${asOf}</p>
+      ${previous}
     </section>`;
+  }
+  if (state.kind === "failed") {
+    return `<section class="issue-document" data-document-state="failed">
+      <h4>${escapeHtml(copy.issueDocument)}</h4>
+      <p class="notice bad">${escapeHtml(copy.issueDocumentFailed)} ${escapeHtml(state.failure.message)}</p>
+      <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>
+    </section>`;
+  }
+  const stale = state.kind === "stale";
+  return `<section class="issue-document" data-document-state="${state.kind}">
+    <h4>${escapeHtml(copy.issueDocument)}</h4>
+    ${stale
+      ? `<p class="document-status stale">${escapeHtml(copy.issueDocumentStale)} ${escapeHtml(formatTime(state.fetchedAtMs))}. ${escapeHtml(state.failure.message)}</p>
+         <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>`
+      : ""}
+    <div class="issue-markdown ${stale ? "is-stale" : ""}">${renderMarkdown(state.body, issueUrl)}</div>
+  </section>`;
+}
+
+function renderMarkdown(markdown: string, baseUrl: string): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: string[] = [];
+  let paragraph: string[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "), baseUrl)}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    const tag = list.ordered ? "ol" : "ul";
+    blocks.push(`<${tag}>${list.items.map((item) => `<li>${renderInlineMarkdown(item, baseUrl)}</li>`).join("")}</${tag}>`);
+    list = null;
+  };
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    const item = /^\s*([-*+] |\d+\. )(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2], baseUrl)}</h${level}>`);
+    } else if (item) {
+      flushParagraph();
+      const ordered = /^\d/.test(item[1]);
+      if (list && list.ordered !== ordered) flushList();
+      list ??= { ordered, items: [] };
+      list.items.push(item[2]);
+    } else if (!line.trim()) {
+      flushParagraph();
+      flushList();
+    } else {
+      flushList();
+      paragraph.push(line.trim());
+    }
+  }
+  flushParagraph();
+  flushList();
+  return blocks.join("");
+}
+
+function renderInlineMarkdown(source: string, baseUrl: string): string {
+  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\n)]+\))/g;
+  let html = "";
+  let offset = 0;
+  for (const match of source.matchAll(token)) {
+    const index = match.index ?? 0;
+    html += escapeHtml(source.slice(offset, index));
+    const value = match[0];
+    if (value.startsWith("`")) {
+      html += `<code>${escapeHtml(value.slice(1, -1))}</code>`;
+    } else if (value.startsWith("**")) {
+      html += `<strong>${escapeHtml(value.slice(2, -2))}</strong>`;
+    } else {
+      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(value);
+      const href = link ? safeHttpUrl(link[2], baseUrl) : null;
+      html += href
+        ? `<a href="${escapeHtml(href)}" data-act="open-external" data-url="${escapeHtml(href)}">${escapeHtml(link?.[1] ?? "")}</a>`
+        : `<span class="unsafe-link">${escapeHtml(link?.[1] ?? value)}</span>`;
+    }
+    offset = index + value.length;
+  }
+  return html + escapeHtml(source.slice(offset));
+}
+
+function safeHttpUrl(raw: string, baseUrl?: string): string | null {
+  try {
+    const url = baseUrl ? new URL(raw.trim(), baseUrl) : new URL(raw.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function issueLink(copy: ShellCopy, link: IssueLink): string {
@@ -3176,6 +3326,11 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "toggle-issue-width") {
+    issueDetailWide = !issueDetailWide;
+    render();
+    return;
+  }
   if (act === "open-overview") {
     sidebarVisible = true;
     await rpc("openHostOverview");
@@ -3287,6 +3442,17 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "open-issue" && target.dataset.url) {
     await openExternalUrl(target.dataset.url);
+    return;
+  }
+  if (act === "open-external" && target.dataset.url) {
+    event.preventDefault();
+    const url = safeHttpUrl(target.dataset.url);
+    if (url) await openExternalUrl(url);
+    return;
+  }
+  if (act === "retry-issue-document") {
+    await loadSelectedIssueDocument(true);
+    render();
     return;
   }
   if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
@@ -3701,6 +3867,8 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-issue" && target.dataset.id) {
     issueDetailVisible = true;
     await rpc("focusIssue", { issueId: target.dataset.id });
+    render();
+    await loadSelectedIssueDocument();
     if (mobileClient()) {
       mobileView = "issue";
       mobileLiveTerminal = false;

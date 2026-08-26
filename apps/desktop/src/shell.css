@@ -263,6 +263,7 @@ html[data-theme="plain-night"] button.danger.primary {
   min-height: 0;
   flex: 1;
 }
+.board-shell.issue-wide { grid-template-columns: minmax(0, 1fr) minmax(440px, 42vw); }
 .board-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .board-shell.issue-collapsed { grid-template-columns: 1fr; }
 .board-hint {
@@ -427,13 +428,55 @@ html[data-theme="plain-night"] button.danger.primary {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--paper-2);
-  padding: 12px;
+  padding: 0;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
+.detail-sticky {
+  flex: 0 0 auto;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+  z-index: 2;
+}
+.detail-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .detail-hd { font-weight: 650; font-size: 14px; line-height: 1.4; }
-.detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.detail-width { flex: 0 0 auto; padding: 4px 7px; font-size: 11px; }
+.detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.detail-scroll { min-height: 0; overflow: auto; padding: 0 12px 14px; overscroll-behavior: contain; }
+.issue-document { padding-top: 14px; }
+.issue-document > h4 { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+.document-status { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.document-status.stale { color: var(--accent-ink); }
+.issue-markdown { color: var(--ink); font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; }
+.issue-markdown > :first-child { margin-top: 0; }
+.issue-markdown > :last-child { margin-bottom: 0; }
+.issue-markdown h1, .issue-markdown h2, .issue-markdown h3,
+.issue-markdown h4, .issue-markdown h5, .issue-markdown h6 {
+  margin: 1.35em 0 .55em;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+}
+.issue-markdown h1 { font-size: 20px; }
+.issue-markdown h2 { font-size: 17px; }
+.issue-markdown h3 { font-size: 15px; }
+.issue-markdown h4, .issue-markdown h5, .issue-markdown h6 { font-size: 13px; }
+.issue-markdown p { margin: .7em 0; }
+.issue-markdown ul, .issue-markdown ol { margin: .7em 0; padding-left: 1.5em; }
+.issue-markdown li + li { margin-top: .25em; }
+.issue-markdown code {
+  padding: .1em .35em;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--chip);
+  font: .92em/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.issue-markdown a { color: var(--accent-ink); text-underline-offset: 2px; }
+.issue-markdown.is-stale { opacity: .82; }
+.unsafe-link { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
 .detail-block {
   border-top: 1px solid var(--line);
   padding-top: 10px;
@@ -647,6 +690,7 @@ html[data-theme="plain-night"] button.danger.primary {
   gap: 14px;
   padding: 14px;
 }
+.lifted-run.issue-wide { grid-template-columns: minmax(0, 1.35fr) minmax(440px, 1fr); }
 .lifted-run.issue-collapsed { grid-template-columns: 1fr; }
 .lifted-terminal {
   min-width: 0;
@@ -1040,8 +1084,10 @@ html[data-theme="plain-night"] button.danger.primary {
     padding: 5px;
   }
   .mobile-scope-project.active { background: var(--sel); }
-  .mobile-issue-view, .mobile-run-view { width: 100%; min-height: 100%; padding: 12px; }
-  .mobile-issue-view .issue-detail { display: block; }
+  .mobile-issue-view, .mobile-run-view { width: 100%; min-height: 0; height: 100%; padding: 12px; }
+  .mobile-issue-view .issue-detail { display: flex; height: 100%; overflow: hidden; }
+  .mobile-issue-view .detail-width { display: none; }
+  .mobile-issue-view .detail-scroll { overflow: auto; }
   .mobile-run-view { display: flex; flex-direction: column; gap: 8px; }
   .mobile-output-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }
   .mobile-run-output {

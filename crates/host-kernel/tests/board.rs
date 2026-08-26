@@ -698,6 +698,14 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
     tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
     tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker"));
+    tracker.set_issue_body(
+        "you/garden#2",
+        "# Question\n\nCan the operator read **every constraint** beside the official TUI?\n\n## Constraints\n\n- Keep Tracker markdown unchanged\n- Render `inline code` clearly\n- Keep [the GitHub Issue](https://github.com/you/garden/issues/2) available\n- Reject [dangerous links](javascript:alert(1))\n\n<script>window.__ISSUE_HTML_EXECUTED__ = true</script>\n\n## Long document\n\nParagraph one explains why the Issue document remains the source material while the board stays read-only.\n\nParagraph two is intentionally long enough to require scrolling in the inspector at 1440 by 900.\n\nParagraph three keeps family and Dependency sections below the complete document.\n\nParagraph four verifies that the title and primary actions remain available while this content scrolls.\n\nParagraph five provides enough vertical depth for the mobile Issue view at 390 by 844.\n\nParagraph six confirms that entering a Run must retain this same complete Issue document.",
+    );
+    tracker.set_issue_body(
+        "you/garden#10",
+        "# Active Run Question\n\nKeep this **same complete Issue** visible after entering the Run.\n\n- terminal stays primary\n- document stays readable\n- browser link still points to Tracker",
+    );
     tracker.add_issue(
         IssueRecord::open("you/garden", 5, "waiting on history").blocked_by(
             "you/garden",
