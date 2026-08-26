@@ -189,7 +189,6 @@ fn spawn_local_rpc_inner(
     if host_tick {
         let tick_kernel = Arc::clone(&kernel);
         let tick_stop = Arc::clone(&stop);
-        let tick_on_outcome = Arc::clone(&on_outcome);
         let _ = std::thread::Builder::new()
             .name("host-refresh-tick".into())
             .spawn(move || {
@@ -198,17 +197,16 @@ fn spawn_local_rpc_inner(
                     if tick_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let outcome = {
+                    let should_exit = {
                         let Ok(mut host) = tick_kernel.lock() else {
                             break;
                         };
-                        host.dispatch(crate::Command::Tick { now_ms: None }).ok()
+                        host.dispatch(crate::Command::Tick { now_ms: None })
+                            .ok()
+                            .is_some_and(|outcome| outcome.process == ProcessIntent::Exit)
                     };
-                    if let Some(outcome) = outcome {
-                        if outcome.process == ProcessIntent::Exit {
-                            tick_stop.store(true, Ordering::Relaxed);
-                        }
-                        tick_on_outcome(outcome);
+                    if should_exit {
+                        tick_stop.store(true, Ordering::Relaxed);
                     }
                 }
             });

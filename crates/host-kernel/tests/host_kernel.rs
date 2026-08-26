@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1151,4 +1152,23 @@ fn http_exchange(addr: SocketAddr, request: &str) -> (u16, String, String) {
         }
     }
     panic!("connect {addr} failed: {last_err:?}");
+}
+
+#[test]
+fn host_autonomous_tick_does_not_drive_shell_callbacks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let kernel = Arc::new(Mutex::new(HostKernel::boot(boot_req(tmp.path())).unwrap()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let server = LoopbackServer::attach(Arc::clone(&kernel), 0, move |_| {
+        seen.fetch_add(1, Ordering::SeqCst);
+    })
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "Host tick must not rebuild the desktop shell from a background thread"
+    );
+    drop(server);
 }
