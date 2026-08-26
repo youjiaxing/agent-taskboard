@@ -76,6 +76,7 @@ type ShellCopy = {
   remoteProjectHint: string;
   operationPending: string;
   inferencePending: string;
+  retryInference: string;
   removalPending: string;
   githubHost: string;
   repository: string;
@@ -315,6 +316,12 @@ type ProjectDraft = {
   githubHost: string;
   repository: string;
 };
+
+type ProjectInferenceState =
+  | { status: "idle"; requestId: number }
+  | { status: "pending"; requestId: number }
+  | { status: "candidate"; requestId: number; candidate: ProjectDraft }
+  | { status: "failed"; requestId: number; message: string };
 
 type TriageRole =
   | "needs-triage"
@@ -788,11 +795,11 @@ let projectMenuId = "";
 let formOpen: "register" | "edit" | null = null;
 let formProjectId = "";
 let formDraft: ProjectDraft = emptyDraft();
-let inferred: ProjectDraft | null = null;
+let autoFilledProjectName = "";
+let projectInference: ProjectInferenceState = { status: "idle", requestId: 0 };
 let formError = "";
 let removeError = "";
-let inferenceRequestId = 0;
-let projectOperation: "save" | "infer" | "remove" | null = null;
+let projectOperation: "save" | "remove" | null = null;
 let removeProject: Project | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
@@ -1011,20 +1018,24 @@ function directoryName(path: string): string {
   return parts.length ? parts[parts.length - 1] : "";
 }
 
+function supersedeProjectInference(): void {
+  projectInference = { status: "idle", requestId: projectInference.requestId + 1 };
+}
+
 function applyLocalPath(path: string, prefillName: boolean): void {
   const nextPath = path.trim();
-  const previousName = directoryName(formDraft.localPath);
   const nextName = directoryName(nextPath);
   const shouldPrefillName =
     prefillName &&
     Boolean(nextName) &&
-    (!formDraft.name.trim() || formDraft.name.trim() === previousName);
+    (!formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName);
   formDraft = {
     ...formDraft,
     localPath: path,
     name: shouldPrefillName ? nextName : formDraft.name,
   };
-  inferred = null;
+  if (shouldPrefillName) autoFilledProjectName = nextName;
+  supersedeProjectInference();
   formError = "";
   void inferFromLocalPath(nextPath);
 }
@@ -1032,29 +1043,22 @@ function applyLocalPath(path: string, prefillName: boolean): void {
 async function inferFromLocalPath(path: string): Promise<void> {
   const requestedPath = path.trim();
   if (!requestedPath || !focusedHostIsLocal()) return;
-  const requestId = ++inferenceRequestId;
-  projectOperation = "infer";
+  const requestId = projectInference.requestId + 1;
+  projectInference = { status: "pending", requestId };
   render();
   try {
     const result = await rpc("inferProject", { localPath: requestedPath });
-    if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
-    inferred = result.inference ?? null;
-    if (inferred) {
-      formDraft = {
-        ...formDraft,
-        githubHost: inferred.githubHost,
-        repository: inferred.repository,
-      };
-      formError = "";
-    } else {
-      formError = snapshot?.copy.inferenceFailed ?? "";
-    }
+    if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
+    projectInference = result.inference
+      ? { status: "candidate", requestId, candidate: result.inference }
+      : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
   } catch (error) {
-    if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
-    inferred = null;
-    formError = error instanceof Error ? error.message : String(error);
-  } finally {
-    if (requestId === inferenceRequestId) projectOperation = null;
+    if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
+    projectInference = {
+      status: "failed",
+      requestId,
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
   render();
 }
@@ -2845,8 +2849,9 @@ function projectForm(copy: ShellCopy): string {
     snapshot?.projects.find((project) => project.id === formProjectId)?.hasActiveRun,
   );
   const lockedRegistration = editing && activeRun;
-  const pending = projectOperation === "save" || projectOperation === "remove";
-  const inferring = projectOperation === "infer";
+  const saving = projectOperation === "save";
+  const inferenceCandidate = projectInference.status === "candidate" ? projectInference.candidate : null;
+  const inferenceMessage = projectInference.status === "failed" ? projectInference.message : "";
   return `<div class="overlay modal" data-act="close-form">
     <form class="sheet form-sheet" data-act="form-noop" data-form="project">
       <h2>${escapeHtml(editing ? copy.editProjectTitle : copy.registerProjectTitle)}</h2>
@@ -2854,32 +2859,53 @@ function projectForm(copy: ShellCopy): string {
       ${lockedRegistration ? `<p class="notice">${escapeHtml(copy.activeProjectEditHint)}</p>` : ""}
       <div class="field">
         <label class="label" for="project-name">${escapeHtml(copy.displayName)}</label>
-        <input id="project-name" data-field="name" ${pending ? "disabled" : "required"} value="${escapeHtml(formDraft.name)}" />
+        <input id="project-name" data-field="name" ${saving ? "disabled" : "required"} value="${escapeHtml(formDraft.name)}" />
       </div>
       <div class="field">
         <label class="label" for="project-path">${escapeHtml(copy.localDirectory)}</label>
         <div class="path-picker">
-          <input id="project-path" class="path-input" data-field="localPath" ${lockedRegistration || pending ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" title="${escapeHtml(formDraft.localPath)}" dir="ltr" />
+          <input id="project-path" class="path-input" data-field="localPath" ${lockedRegistration || saving ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" title="${escapeHtml(formDraft.localPath)}" dir="ltr" />
           ${focusedHostIsLocal() && !lockedRegistration
-            ? `<button type="button" data-act="choose-project-directory" ${pending ? "disabled" : ""}>${escapeHtml(copy.chooseDirectory)}</button>`
+            ? `<button type="button" data-act="choose-project-directory" ${saving ? "disabled" : ""}>${escapeHtml(copy.chooseDirectory)}</button>`
             : ""}
         </div>
       </div>
       <div class="field">
         <label class="label" for="project-host">${escapeHtml(copy.githubHost)}</label>
-        <input id="project-host" data-field="githubHost" ${lockedRegistration || pending ? "disabled" : ""} value="${escapeHtml(formDraft.githubHost)}" />
+        <input id="project-host" data-field="githubHost" ${lockedRegistration || saving ? "disabled" : ""} value="${escapeHtml(formDraft.githubHost)}" />
       </div>
       <div class="field">
         <label class="label" for="project-repo">${escapeHtml(copy.repository)}</label>
-        <input id="project-repo" data-field="repository" ${lockedRegistration || pending ? "disabled" : "required"} placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
+        <input id="project-repo" data-field="repository" ${lockedRegistration || saving ? "disabled" : "required"} placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
       </div>
-      ${!lockedRegistration && inferring
-        ? `<p class="hint">${escapeHtml(copy.inferringFromDirectory)}</p>`
+      ${!lockedRegistration && projectInference.status !== "idle"
+        ? `<div class="inference">
+            ${projectInference.status === "pending"
+              ? `<p class="hint" data-inference="pending">${escapeHtml(copy.inferringFromDirectory)}</p>`
+              : ""}
+            ${inferenceCandidate
+              ? `<div class="notice ok inference-candidate" data-inference="candidate">
+                  <div><b>${escapeHtml(inferenceCandidate.name)}</b></div>
+                  <div>${escapeHtml(inferenceCandidate.githubHost)}/${escapeHtml(inferenceCandidate.repository)}</div>
+                  <div class="actions">
+                    <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
+                  </div>
+                </div>`
+              : ""}
+            ${inferenceMessage
+              ? `<div class="notice bad" data-inference="failed">
+                  <div>${escapeHtml(inferenceMessage)}</div>
+                  <div class="actions">
+                    <button type="button" data-act="retry-infer">${escapeHtml(copy.retryInference)}</button>
+                  </div>
+                </div>`
+              : ""}
+          </div>`
         : ""}
       ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
       <div class="actions">
-        <button type="button" data-act="close-form" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(projectOperation === "save" ? copy.operationPending : editing ? copy.saveRegistration : copy.addProject)}</button>
+        <button type="button" data-act="close-form" ${saving ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary" ${saving ? "disabled" : ""}>${escapeHtml(saving ? copy.operationPending : editing ? copy.saveRegistration : copy.addProject)}</button>
       </div>
     </form>
   </div>`;
@@ -3235,10 +3261,10 @@ app.addEventListener("click", async (event) => {
     formOpen = "register";
     formProjectId = "";
     formDraft = emptyDraft();
-    inferred = null;
+    autoFilledProjectName = "";
+    supersedeProjectInference();
     formError = "";
     removeError = "";
-    inferenceRequestId += 1;
     projectMenuId = "";
     pairingOpen = false;
     settingsOpen = false;
@@ -3267,9 +3293,8 @@ app.addEventListener("click", async (event) => {
     if (projectOperation) return;
     if (target.tagName !== "BUTTON") return;
     formOpen = null;
-    inferred = null;
+    supersedeProjectInference();
     formError = "";
-    inferenceRequestId += 1;
     render();
     return;
   }
@@ -3499,10 +3524,10 @@ app.addEventListener("click", async (event) => {
       githubHost: project.githubHost,
       repository: project.repository,
     };
-    inferred = null;
+    autoFilledProjectName = "";
+    supersedeProjectInference();
     formError = "";
     removeError = "";
-    inferenceRequestId += 1;
     projectMenuId = "";
     render();
     return;
@@ -3542,6 +3567,24 @@ app.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     await chooseProjectDirectory();
+    return;
+  }
+  if (act === "apply-infer" && projectInference.status === "candidate") {
+    const candidate = projectInference.candidate;
+    const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
+    formDraft = {
+      name: useCandidateName ? candidate.name : formDraft.name,
+      localPath: candidate.localPath,
+      githubHost: candidate.githubHost,
+      repository: candidate.repository,
+    };
+    autoFilledProjectName = useCandidateName ? candidate.name : "";
+    projectInference = { status: "idle", requestId: projectInference.requestId };
+    render();
+    return;
+  }
+  if (act === "retry-infer") {
+    await inferFromLocalPath(formDraft.localPath);
     return;
   }
   if (act === "toggle-hosts") {
@@ -3732,6 +3775,7 @@ app.addEventListener("input", (event) => {
   const field = target.getAttribute("data-field");
   if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
     formDraft = { ...formDraft, [field]: target.value };
+    if (field === "name") autoFilledProjectName = "";
     if (field === "localPath") target.title = target.value;
   }
 });
@@ -3929,6 +3973,7 @@ app.addEventListener("submit", async (event) => {
   if (!form || !snapshot) return;
   event.preventDefault();
   if (projectOperation) return;
+  supersedeProjectInference();
   formError = "";
   projectOperation = "save";
   render();
@@ -3939,7 +3984,6 @@ app.addEventListener("submit", async (event) => {
       await rpc("registerProject", formDraft);
     }
     formOpen = null;
-    inferred = null;
   } catch (error) {
     formError = error instanceof Error ? error.message : String(error);
   } finally {

@@ -47,6 +47,37 @@ fn register(host: &mut HostKernel, dir: &Path, repository: &str) -> String {
     .focused_project_id
 }
 
+fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) {
+    let kernel = Arc::new(Mutex::new(host));
+    let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/dist")
+        .canonicalize()
+        .expect("built desktop client");
+    let client = LoopbackServer::attach_with(
+        Arc::clone(&kernel),
+        0,
+        LoopbackAssets::Directory(dist),
+        |_| {},
+    )
+    .unwrap();
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut command = Command::new("node");
+    command
+        .arg(repo.join("apps/desktop/e2e").join(script_name))
+        .current_dir(&repo)
+        .env("BOARD_URL", client.protocol_url().to_string());
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let output = command.output().expect("playwright");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{script_name} browser e2e failed\nstdout:{stdout}\nstderr:{stderr}"
+    );
+}
+
 fn ids(cards: &[host_kernel::IssueCard]) -> Vec<String> {
     cards.iter().map(|card| card.id.clone()).collect()
 }
@@ -784,31 +815,46 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "projectId": garden_project_id,
     }))
     .unwrap();
-    let kernel = Arc::new(Mutex::new(host));
-    let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/desktop/dist")
-        .canonicalize()
-        .expect("built desktop client");
-    let client = LoopbackServer::attach_with(
-        Arc::clone(&kernel),
-        0,
-        LoopbackAssets::Directory(dist),
-        |_| {},
+    run_browser_e2e(host, "board.mjs", &[]);
+}
+
+#[test]
+fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = make_dir(tmp.path(), "work/first");
+    let stale = make_dir(tmp.path(), "work/stale");
+    let retry = make_dir(tmp.path(), "work/retry");
+    for (dir, repository) in [(&first, "you/first"), (&stale, "you/stale")] {
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        std::fs::write(
+            dir.join(".git/config"),
+            format!("[remote \"origin\"]\n\turl = git@github.com:{repository}.git\n"),
+        )
+        .unwrap();
+    }
+    let missing = tmp.path().join("work/missing");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/first", 1, "first tracker issue"));
+    tracker.add_issue(IssueRecord::open("manual/retry", 1, "retry tracker issue"));
+    let host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::clone(&tracker) as _,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
     )
     .unwrap();
-    let url = client.protocol_url().to_string();
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = repo.join("apps/desktop/e2e/board.mjs");
-    let output = Command::new("node")
-        .arg(&script)
-        .current_dir(&repo)
-        .env("BOARD_URL", &url)
-        .output()
-        .expect("playwright");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "browser e2e failed\nstdout:{stdout}\nstderr:{stderr}"
+    assert!(host.snapshot().projects.is_empty());
+    run_browser_e2e(
+        host,
+        "project-registration.mjs",
+        &[
+            ("FIRST_PROJECT_DIR", first.as_path()),
+            ("STALE_PROJECT_DIR", stale.as_path()),
+            ("MISSING_PROJECT_DIR", missing.as_path()),
+            ("RETRY_PROJECT_DIR", retry.as_path()),
+        ],
     );
 }
