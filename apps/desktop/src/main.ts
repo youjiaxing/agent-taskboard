@@ -1462,6 +1462,7 @@ function render(): void {
     ? clientCopy(appearance.language, snap.copy)
     : snap.copy;
   const { hosts, projects } = snap;
+  const project = currentProject(snap);
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
   document.documentElement.dataset.theme = appearance.theme;
   document.documentElement.dataset.mobile = isMobile ? "true" : "false";
@@ -1480,20 +1481,36 @@ function render(): void {
 
   app.innerHTML = `
     <div class="frame">
-      <header class="chrome">
-        ${isMobile
-          ? `<button type="button" class="ghost" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
-          : `<button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-             ${showIssueToggle
-               ? `<button type="button" class="ghost ${inspectorOpen ? "active" : ""}" data-act="toggle-issue">${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}</button>`
-               : ""}`}
-        ${!isMobile && !showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
-        ${runLifted ? `<button type="button" class="ghost" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
-        <button type="button" class="ghost" data-act="settings">${escapeHtml(copy.settings)}</button>
-        <span class="chrome-trail">
-          <button type="button" class="ghost ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
-          <button type="button" class="ghost ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
-        </span>
+      <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
+        <div class="chrome-lead">
+          ${isMobile
+            ? `<button type="button" class="chrome-button" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
+            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
+               ${showSidebar ? `<span class="chrome-app">${escapeHtml(copy.appName)}</span>` : ""}`}
+        </div>
+        <div class="chrome-main">
+          <div class="chrome-primary">
+            ${!isMobile && !empty && !snap.usageOpen && snap.workspaceView === "project" && !runLifted
+              ? `<div class="view-switch" role="tablist">
+                  <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
+                  <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+                </div>`
+              : ""}
+            ${runLifted ? `<button type="button" class="chrome-button" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
+            ${!isMobile && snap.workspaceView === "host-overview" ? `<span class="chrome-title">${escapeHtml(copy.hostOverview)}</span>` : ""}
+            ${!isMobile && snap.usageOpen ? `<span class="chrome-title">${escapeHtml(copy.usage)}</span>` : ""}
+          </div>
+          ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
+          <div class="chrome-trail">
+            ${showIssueToggle
+              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">◧</button>`
+              : ""}
+            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
+            <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
+            <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
+            <button type="button" class="chrome-button ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
+          </div>
+        </div>
       </header>
       <div class="body ${showSidebar ? "" : "side-collapsed"}">
         ${showSidebar ? `<aside class="side">
@@ -2387,14 +2404,9 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
     ${loopbackNotice(snap.loopbackPage)}
     <div class="board-head">
       <div class="board-head-row">
-        <div>
+        <div class="project-heading">
           <h1>${escapeHtml(project.name)}</h1>
-          <p>${escapeHtml(project.localPath)}</p>
-          <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
-        </div>
-        <div class="view-switch" role="tablist">
-          <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
-          <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
         </div>
       </div>
     </div>

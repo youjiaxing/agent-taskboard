@@ -823,6 +823,34 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "projectId": garden_project_id,
     }))
     .unwrap();
+    let remote_tmp = tempfile::tempdir().unwrap();
+    let mut remote_req = boot_req(remote_tmp.path());
+    remote_req.host_display_name = "Mini".into();
+    let remote = Arc::new(Mutex::new(HostKernel::boot(remote_req).unwrap()));
+    let _remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
+    let remote_address = _remote_server
+        .protocol_url()
+        .trim_end_matches('/')
+        .to_string();
+    let remote_code = remote
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": remote_address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+    host.handle(serde_json::json!({
+        "op": "pairRemoteHost",
+        "address": remote_address,
+        "code": remote_code,
+    }))
+    .unwrap();
+    assert_eq!(host.snapshot().hosts.len(), 2);
     run_browser_e2e(host, "board.mjs", &[]);
 }
 

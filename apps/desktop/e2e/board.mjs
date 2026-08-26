@@ -1,6 +1,9 @@
 import { chromium } from "playwright";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import pixelmatch from "pixelmatch";
+import { PNG } from "pngjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -9,8 +12,46 @@ if (!url) {
 }
 const screenshotDir = process.env.ISSUE_DOCUMENT_SCREENSHOT_DIR;
 if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
+const visualBaselineDir = join(dirname(fileURLToPath(import.meta.url)), "baselines");
+const visualDiffDir = process.env.VISUAL_DIFF_DIR ?? join("target", "visual-diffs");
+const updateVisualBaselines = process.env.UPDATE_VISUAL_BASELINES === "1";
 const capture = async (name) => {
   if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
+};
+const assertVisual = async (name) => {
+  await page.addStyleTag({
+    content: "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }",
+  });
+  const actualBuffer = await page.screenshot({ fullPage: false });
+  const baselinePath = join(visualBaselineDir, name);
+  if (updateVisualBaselines) {
+    await mkdir(visualBaselineDir, { recursive: true });
+    await writeFile(baselinePath, actualBuffer);
+    return;
+  }
+  let expectedBuffer;
+  try {
+    expectedBuffer = await readFile(baselinePath);
+  } catch {
+    throw new Error(`missing visual baseline ${baselinePath}; run with UPDATE_VISUAL_BASELINES=1`);
+  }
+  const actual = PNG.sync.read(actualBuffer);
+  const expected = PNG.sync.read(expectedBuffer);
+  if (actual.width !== expected.width || actual.height !== expected.height) {
+    throw new Error(`visual baseline dimensions changed for ${name}: ${expected.width}x${expected.height} -> ${actual.width}x${actual.height}`);
+  }
+  const diff = new PNG({ width: actual.width, height: actual.height });
+  const different = pixelmatch(expected.data, actual.data, diff.data, actual.width, actual.height, {
+    threshold: 0.16,
+    includeAA: false,
+  });
+  const ratio = different / (actual.width * actual.height);
+  if (ratio > 0.02) {
+    await mkdir(visualDiffDir, { recursive: true });
+    await writeFile(join(visualDiffDir, name.replace(".png", ".actual.png")), actualBuffer);
+    await writeFile(join(visualDiffDir, name.replace(".png", ".diff.png")), PNG.sync.write(diff));
+    throw new Error(`visual regression ${name}: ${(ratio * 100).toFixed(2)}% pixels changed`);
+  }
 };
 
 const browser = await chromium.launch({ headless: true });
@@ -40,6 +81,14 @@ try {
   console.error("page html", html.slice(0, 4000));
   throw error;
 }
+await page.click("button[data-act='toggle-hosts']");
+const visibleHosts = await page.$$eval(".host-picker button[data-act='focus-host']", (nodes) =>
+  nodes.map((node) => node.textContent?.replace(/\s+/g, " ").trim()),
+);
+if (visibleHosts.length < 2) {
+  throw new Error(`daily shell fixture should expose multiple Hosts, got ${JSON.stringify(visibleHosts)}`);
+}
+await page.click("button[data-act='toggle-hosts']");
 if (await page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
 }
@@ -164,6 +213,67 @@ if (!headers[0].startsWith("阻塞中") || !headers[1].startsWith("Frontier") ||
   throw new Error(`unexpected column order: ${JSON.stringify(headers)}`);
 }
 
+const dailyShellGeometry = await page.evaluate(() => {
+  const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect();
+  const chrome = rect(".chrome");
+  const side = rect(".side");
+  const lanes = [...document.querySelectorAll(".lane")].map((node) => node.getBoundingClientRect());
+  const boardTabs = [...document.querySelectorAll('.chrome [data-act="center-view"]')];
+  return {
+    chromeHeight: chrome?.height ?? 0,
+    sideWidth: side?.width ?? 0,
+    boardTabs: boardTabs.map((node) => node.textContent?.trim()),
+    laneLefts: lanes.map((lane) => lane.left),
+    laneWidths: lanes.map((lane) => lane.width),
+    laneBorderWidths: lanes.map((_, index) =>
+      getComputedStyle(document.querySelectorAll(".lane")[index]).borderLeftWidth,
+    ),
+    horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+});
+if (dailyShellGeometry.chromeHeight > 40) {
+  throw new Error(`desktop chrome should stay native and compact, got ${dailyShellGeometry.chromeHeight}px`);
+}
+if (dailyShellGeometry.sideWidth < 220 || dailyShellGeometry.sideWidth > 250) {
+  throw new Error(`desktop Host / Project hierarchy should keep a stable native rail, got ${dailyShellGeometry.sideWidth}px`);
+}
+if (dailyShellGeometry.boardTabs.join("|") !== "看板|依赖图") {
+  throw new Error(`board and graph controls should live in the stable middle chrome, got ${JSON.stringify(dailyShellGeometry.boardTabs)}`);
+}
+if (dailyShellGeometry.laneLefts.some((left, index, all) => index > 0 && left <= all[index - 1])) {
+  throw new Error(`four desktop lanes should remain ordered left to right: ${JSON.stringify(dailyShellGeometry.laneLefts)}`);
+}
+if (dailyShellGeometry.laneWidths.some((width) => width < 140)) {
+  throw new Error(`four desktop lanes should remain scannable without horizontal paging: ${JSON.stringify(dailyShellGeometry.laneWidths)}`);
+}
+if (dailyShellGeometry.laneBorderWidths.some((width) => width !== "0px")) {
+  throw new Error(`main board lanes should be calm surfaces instead of bordered dashboard cards: ${JSON.stringify(dailyShellGeometry.laneBorderWidths)}`);
+}
+if (dailyShellGeometry.horizontalOverflow > 0) {
+  throw new Error(`daily desktop shell should not create page-level horizontal scrolling: ${dailyShellGeometry.horizontalOverflow}px`);
+}
+await assertVisual("issue-99-desktop-1280x840.png");
+
+const shellStructure = async () => page.evaluate(() => ({
+  regions: [".chrome", ".side", ".board-main", ".issue-detail"]
+    .map((selector) => Boolean(document.querySelector(selector))),
+  lanes: [...document.querySelectorAll(".lane")].map((node) => ({
+    lane: node.getAttribute("data-lane"),
+    left: Math.round(node.getBoundingClientRect().left),
+    width: Math.round(node.getBoundingClientRect().width),
+  })),
+}));
+const warmStructure = await shellStructure();
+for (const theme of ["plain-paper", "plain-night", "warm-paper"]) {
+  await page.click("button[data-act='settings']");
+  await page.click(`button[data-act='theme'][data-id='${theme}']`);
+  await page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+  const themedStructure = await shellStructure();
+  if (JSON.stringify(themedStructure) !== JSON.stringify(warmStructure)) {
+    throw new Error(`theme ${theme} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);
+  }
+}
+
 await page.setViewportSize({ width: 1440, height: 900 });
 let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
@@ -243,7 +353,11 @@ if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
 }
 await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await capture("issue-98-desktop-detail-1440x900.png");
+await assertVisual("issue-99-desktop-1440x900.png");
 const normalDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
+if (normalDetailWidth < 340) {
+  throw new Error(`Issue document should be readable in the default desktop shell, got ${normalDetailWidth}px`);
+}
 await page.click('button[data-act="toggle-issue-width"]');
 const wideDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
 if (wideDetailWidth <= normalDetailWidth || !(await page.getByRole("button", { name: "收窄详情" }).count())) {
@@ -322,6 +436,7 @@ await page.waitForSelector(".detail-hd:has-text('active work')");
 if (await page.$(".lifted-run")) {
   throw new Error("dependency graph nodes should only change Issue details");
 }
+await assertVisual("issue-99-graph-1440x900.png");
 
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
@@ -348,6 +463,7 @@ const filteredProjects = await page.$$eval(".run-thumbnail .run-project", (nodes
 if (filteredProjects.some((name) => name !== "garden")) {
   throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
 }
+await assertVisual("issue-99-overview-1440x900.png");
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 
@@ -366,13 +482,28 @@ if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes
   throw new Error(`entering a Run should retain the complete Issue document, got ${liftedDocument}`);
 }
 await capture("issue-98-existing-run-1440x900.png");
+await assertVisual("issue-99-run-1440x900.png");
 const liftedWidths = await page.evaluate(() => {
   const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
   const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
-  return { terminal, detail };
+  const lifted = document.querySelector(".lifted-run");
+  const style = lifted ? getComputedStyle(lifted) : null;
+  return {
+    terminal,
+    detail,
+    gap: style?.columnGap ?? "",
+    padding: style?.padding ?? "",
+    horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
 });
 if (liftedWidths.terminal < liftedWidths.detail * 1.8 || liftedWidths.terminal > liftedWidths.detail * 2.2) {
   throw new Error(`lifted Run should use about a 2:1 split, got ${JSON.stringify(liftedWidths)}`);
+}
+if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
+  throw new Error(`lifted Run and Issue should share one continuous workspace seam, got ${JSON.stringify(liftedWidths)}`);
+}
+if (liftedWidths.horizontalOverflow > 0) {
+  throw new Error(`lifted Run should not create page-level horizontal scrolling: ${liftedWidths.horizontalOverflow}px`);
 }
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
@@ -645,6 +776,7 @@ if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
   throw new Error("mobile Issue view should still omit full view changes");
 }
 await capture("issue-98-mobile-390x844.png");
+await assertVisual("issue-99-mobile-390x844.png");
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
 
