@@ -1,9 +1,7 @@
 import { chromium } from "playwright";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import pixelmatch from "pixelmatch";
-import { PNG } from "pngjs";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { assertShellRegionsDoNotOverlap, createVisualAssert } from "./visual-regression.mjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -12,51 +10,14 @@ if (!url) {
 }
 const screenshotDir = process.env.ISSUE_DOCUMENT_SCREENSHOT_DIR;
 if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
-const visualBaselineDir = join(dirname(fileURLToPath(import.meta.url)), "baselines");
-const visualDiffDir = process.env.VISUAL_DIFF_DIR ?? join("target", "visual-diffs");
-const updateVisualBaselines = process.env.UPDATE_VISUAL_BASELINES === "1";
 const capture = async (name) => {
   if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
-};
-const assertVisual = async (name) => {
-  await page.addStyleTag({
-    content: "*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }",
-  });
-  const actualBuffer = await page.screenshot({ fullPage: false });
-  const baselinePath = join(visualBaselineDir, name);
-  if (updateVisualBaselines) {
-    await mkdir(visualBaselineDir, { recursive: true });
-    await writeFile(baselinePath, actualBuffer);
-    return;
-  }
-  let expectedBuffer;
-  try {
-    expectedBuffer = await readFile(baselinePath);
-  } catch {
-    throw new Error(`missing visual baseline ${baselinePath}; run with UPDATE_VISUAL_BASELINES=1`);
-  }
-  const actual = PNG.sync.read(actualBuffer);
-  const expected = PNG.sync.read(expectedBuffer);
-  if (actual.width !== expected.width || actual.height !== expected.height) {
-    throw new Error(`visual baseline dimensions changed for ${name}: ${expected.width}x${expected.height} -> ${actual.width}x${actual.height}`);
-  }
-  const diff = new PNG({ width: actual.width, height: actual.height });
-  const different = pixelmatch(expected.data, actual.data, diff.data, actual.width, actual.height, {
-    threshold: 0.16,
-    includeAA: false,
-  });
-  const ratio = different / (actual.width * actual.height);
-  if (ratio > 0.02) {
-    await mkdir(visualDiffDir, { recursive: true });
-    await writeFile(join(visualDiffDir, name.replace(".png", ".actual.png")), actualBuffer);
-    await writeFile(join(visualDiffDir, name.replace(".png", ".diff.png")), PNG.sync.write(diff));
-    throw new Error(`visual regression ${name}: ${(ratio * 100).toFixed(2)}% pixels changed`);
-  }
 };
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 const page = await context.newPage();
+const assertVisual = createVisualAssert(page);
 page.on("pageerror", (error) => {
   console.error("pageerror", error);
 });
@@ -253,6 +214,7 @@ if (dailyShellGeometry.horizontalOverflow > 0) {
   throw new Error(`daily desktop shell should not create page-level horizontal scrolling: ${dailyShellGeometry.horizontalOverflow}px`);
 }
 await assertVisual("issue-99-desktop-1280x840.png");
+await assertShellRegionsDoNotOverlap(page);
 
 const shellStructure = async () => page.evaluate(() => ({
   regions: [".chrome", ".side", ".board-main", ".issue-detail"]
@@ -354,6 +316,7 @@ if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
 await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await capture("issue-98-desktop-detail-1440x900.png");
 await assertVisual("issue-99-desktop-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 const normalDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
 if (normalDetailWidth < 340) {
   throw new Error(`Issue document should be readable in the default desktop shell, got ${normalDetailWidth}px`);
@@ -437,6 +400,7 @@ if (await page.$(".lifted-run")) {
   throw new Error("dependency graph nodes should only change Issue details");
 }
 await assertVisual("issue-99-graph-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
@@ -464,6 +428,7 @@ if (filteredProjects.some((name) => name !== "garden")) {
   throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
 }
 await assertVisual("issue-99-overview-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 
@@ -483,6 +448,7 @@ if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes
 }
 await capture("issue-98-existing-run-1440x900.png");
 await assertVisual("issue-99-run-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 const liftedWidths = await page.evaluate(() => {
   const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
   const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
@@ -517,9 +483,18 @@ if (await page.$(".run-dock")) {
   throw new Error("selecting an Issue without an active Run should remove the terminal dock");
 }
 
+const issueToggleLeftBeforeSidebarFold = await page.$eval("button[data-act='toggle-issue']", (node) =>
+  node.getBoundingClientRect().left,
+);
 await page.click("button[data-act='toggle-sidebar']");
 if (await page.$(".side")) {
   throw new Error("the sidebar toggle should remove the sidebar from layout");
+}
+const issueToggleLeftAfterSidebarFold = await page.$eval("button[data-act='toggle-issue']", (node) =>
+  node.getBoundingClientRect().left,
+);
+if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold) > 1) {
+  throw new Error(`Issue detail toggle should keep its chrome coordinate when the sidebar folds: ${issueToggleLeftBeforeSidebarFold} -> ${issueToggleLeftAfterSidebarFold}`);
 }
 await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
 await page.waitForSelector(".lifted-run");
@@ -777,6 +752,7 @@ if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
 }
 await capture("issue-98-mobile-390x844.png");
 await assertVisual("issue-99-mobile-390x844.png");
+await assertShellRegionsDoNotOverlap(page);
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
 

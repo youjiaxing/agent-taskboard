@@ -1499,13 +1499,13 @@ function render(): void {
             ${runLifted ? `<button type="button" class="chrome-button" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
             ${!isMobile && snap.workspaceView === "host-overview" ? `<span class="chrome-title">${escapeHtml(copy.hostOverview)}</span>` : ""}
             ${!isMobile && snap.usageOpen ? `<span class="chrome-title">${escapeHtml(copy.usage)}</span>` : ""}
+            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
           </div>
           ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
           <div class="chrome-trail">
             ${showIssueToggle
               ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">◧</button>`
               : ""}
-            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
             <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
             <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
             <button type="button" class="chrome-button ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>

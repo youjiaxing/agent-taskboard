@@ -24,21 +24,17 @@ cargo test -p host-kernel browser_renders_incomplete_state_then_recovers_all_boa
 
 该场景覆盖：多 Host、多 Project、四列、最近完成、普通 Issue、已有 Run、执行已停、Dependency graph、Host 总览、Project 过滤、左右折叠、Run 返回看板、三种主题同结构、1280×840、1440×900 与 390×844。
 
-边界状态使用同一内核 public seam 的可恢复 fixture：
+边界状态也由真实产品壳 + HostKernel loopback fixture 渲染并截图：
 
 ```sh
-cargo test -p host-kernel three_empty_states_are_distinct
-cargo test -p host-kernel browser_registers_the_first_project_from_an_empty_host_and_retries_failures
-cargo test -p host-kernel successful_refresh_persists_last_data_and_keeps_it_when_offline
-cargo test -p host-kernel rate_limit_pauses_auto_refresh_and_is_not_offline
-cargo test -p host-kernel auth_failure_is_project_degraded_not_offline
+cargo test -p host-kernel browser_renders_shell_edge_state_fixtures -- --nocapture
 ```
 
-分别覆盖 Frontier 全阻塞 / 全认领、空 Host 到单 Project、离线保留上次数据、限流与鉴权失败。
+该 browser fixture 分别恢复空 Host、单 Project、Frontier 全认领、离线保留上次数据、限流与鉴权失败；对应 kernel 单元测试继续验证状态语义和写入边界。
 
 ## 视觉回归基线
 
-`apps/desktop/e2e/board.mjs` 使用 `pixelmatch` 比较产品截图；差异超过 2% 时写出 `target/visual-diffs/*.actual.png` 与 `*.diff.png` 并失败。DOM 几何断言另行检查主要区域存在、四列顺序、最小列宽、详情宽度、Run 约 2:1、折叠退场和页面级横向溢出。
+`apps/desktop/e2e/visual-regression.mjs` 使用 `pixelmatch` 比较产品截图；差异超过 0.2% 时写出 `target/visual-diffs/*.actual.png` 与 `*.diff.png` 并失败。DOM 几何断言另行检查主要区域存在、关键区域不相交、四列顺序与互不遮挡、最小列宽、详情宽度、Run 约 2:1、折叠退场和页面级横纵向溢出。
 
 - [1280×840 日常看板](../../../apps/desktop/e2e/baselines/issue-99-desktop-1280x840.png)
 - [1440×900 普通 Issue](../../../apps/desktop/e2e/baselines/issue-99-desktop-1440x900.png)
@@ -46,6 +42,12 @@ cargo test -p host-kernel auth_failure_is_project_degraded_not_offline
 - [1440×900 Host 总览](../../../apps/desktop/e2e/baselines/issue-99-overview-1440x900.png)
 - [1440×900 已有 Run](../../../apps/desktop/e2e/baselines/issue-99-run-1440x900.png)
 - [390×844 手机 Issue](../../../apps/desktop/e2e/baselines/issue-99-mobile-390x844.png)
+- [1280×840 空 Host](../../../apps/desktop/e2e/baselines/issue-99-edge-empty-host-1280x840.png)
+- [1280×840 单 Project](../../../apps/desktop/e2e/baselines/issue-99-edge-single-project-1280x840.png)
+- [1280×840 Frontier 空](../../../apps/desktop/e2e/baselines/issue-99-edge-frontier-empty-1280x840.png)
+- [1280×840 offline](../../../apps/desktop/e2e/baselines/issue-99-edge-offline-1280x840.png)
+- [1280×840 rate-limit](../../../apps/desktop/e2e/baselines/issue-99-edge-rate-limited-1280x840.png)
+- [1280×840 auth-failure](../../../apps/desktop/e2e/baselines/issue-99-edge-auth-failed-1280x840.png)
 
 更新基线仅用于有意视觉变更：
 
