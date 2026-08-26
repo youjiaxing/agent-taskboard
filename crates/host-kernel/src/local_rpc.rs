@@ -54,6 +54,7 @@ impl LoopbackServer {
             LoopbackAssets::Builtin,
             Arc::clone(&stop),
             on_outcome,
+            false,
         );
         Ok(Self { protocol_url, stop })
     }
@@ -103,7 +104,14 @@ impl LoopbackServer {
                     .lock()
                     .map_err(|_| io::Error::other("kernel lock poisoned"))?
                     .note_loopback_page(LoopbackKind::Serving, port);
-                spawn_local_rpc_inner(listener, kernel, assets, Arc::clone(&stop), on_outcome);
+                spawn_local_rpc_inner(
+                    listener,
+                    kernel,
+                    assets,
+                    Arc::clone(&stop),
+                    on_outcome,
+                    true,
+                );
                 Ok(Self { protocol_url, stop })
             }
             Err(_) => {
@@ -119,7 +127,14 @@ impl LoopbackServer {
                             page_port
                         },
                     );
-                spawn_local_rpc_inner(listener, kernel, assets, Arc::clone(&stop), on_outcome);
+                spawn_local_rpc_inner(
+                    listener,
+                    kernel,
+                    assets,
+                    Arc::clone(&stop),
+                    on_outcome,
+                    true,
+                );
                 Ok(Self { protocol_url, stop })
             }
         }
@@ -158,6 +173,7 @@ pub fn spawn_local_rpc(
         LoopbackAssets::Builtin,
         Arc::new(AtomicBool::new(false)),
         on_outcome,
+        false,
     );
 }
 
@@ -167,8 +183,36 @@ fn spawn_local_rpc_inner(
     assets: LoopbackAssets,
     stop: Arc<AtomicBool>,
     on_outcome: impl Fn(CommandOutcome) + Send + Sync + 'static,
+    host_tick: bool,
 ) {
     let on_outcome = Arc::new(on_outcome);
+    if host_tick {
+        let tick_kernel = Arc::clone(&kernel);
+        let tick_stop = Arc::clone(&stop);
+        let tick_on_outcome = Arc::clone(&on_outcome);
+        let _ = std::thread::Builder::new()
+            .name("host-refresh-tick".into())
+            .spawn(move || {
+                while !tick_stop.load(Ordering::Relaxed) && kernel_process_alive(&tick_kernel) {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    if tick_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let outcome = {
+                        let Ok(mut host) = tick_kernel.lock() else {
+                            break;
+                        };
+                        host.dispatch(crate::Command::Tick { now_ms: None }).ok()
+                    };
+                    if let Some(outcome) = outcome {
+                        if outcome.process == ProcessIntent::Exit {
+                            tick_stop.store(true, Ordering::Relaxed);
+                        }
+                        tick_on_outcome(outcome);
+                    }
+                }
+            });
+    }
     std::thread::Builder::new()
         .name("host-local-rpc".into())
         .spawn(move || {

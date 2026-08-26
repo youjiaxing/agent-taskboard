@@ -1,5 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -69,6 +69,9 @@ type ShellCopy = {
   displayName: string;
   localDirectory: string;
   chooseDirectory: string;
+  chooseDirectoryDesktopOnly: string;
+  inferringFromDirectory: string;
+  inferenceFailed: string;
   activeProjectEditHint: string;
   remoteProjectHint: string;
   operationPending: string;
@@ -145,6 +148,8 @@ type ShellCopy = {
   pickIssue: string;
   recentLimit: string;
   recentLimitHelp: string;
+  refreshInterval: string;
+  refreshIntervalHelp: string;
   unclearIssue: string;
   refreshNow: string;
   refreshRefreshing: string;
@@ -460,6 +465,7 @@ type Snapshot = {
   pairedClients: PairedClient[];
   board: BoardSnapshot | null;
   recentCompletedLimit: number;
+  refreshIntervalMs: number;
   centerView: CenterView;
   workspaceView: WorkspaceView;
   runs: RunSummary[];
@@ -972,7 +978,7 @@ function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
 }
 
 async function openExternalUrl(url: string): Promise<void> {
-  if ("__TAURI_INTERNALS__" in window) {
+  if (desktopShellAvailable()) {
     await openUrl(url);
     return;
   }
@@ -987,22 +993,80 @@ function isLoopbackPage(): boolean {
   );
 }
 
-function desktopUpdateAvailable(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+function desktopShellAvailable(): boolean {
+  return isTauri() || "__TAURI_INTERNALS__" in window;
 }
 
 function focusedHostIsLocal(): boolean {
   const snap = snapshot;
-  return Boolean(snap?.hosts.find((host) => host.id === snap.focusedHostId)?.local);
+  if (!snap) return false;
+  const focused = snap.hosts.find((host) => host.id === snap.focusedHostId);
+  if (focused) return focused.local;
+  return snap.hosts.some((host) => host.local) && snap.hosts.every((host) => host.local);
 }
 
-function canChooseProjectDirectory(): boolean {
-  return desktopUpdateAvailable() && focusedHostIsLocal();
+function directoryName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+
+function applyLocalPath(path: string, prefillName: boolean): void {
+  const nextPath = path.trim();
+  const previousName = directoryName(formDraft.localPath);
+  const nextName = directoryName(nextPath);
+  const shouldPrefillName =
+    prefillName &&
+    Boolean(nextName) &&
+    (!formDraft.name.trim() || formDraft.name.trim() === previousName);
+  formDraft = {
+    ...formDraft,
+    localPath: path,
+    name: shouldPrefillName ? nextName : formDraft.name,
+  };
+  inferred = null;
+  formError = "";
+  void inferFromLocalPath(nextPath);
+}
+
+async function inferFromLocalPath(path: string): Promise<void> {
+  const requestedPath = path.trim();
+  if (!requestedPath || !focusedHostIsLocal()) return;
+  const requestId = ++inferenceRequestId;
+  projectOperation = "infer";
+  render();
+  try {
+    const result = await rpc("inferProject", { localPath: requestedPath });
+    if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
+    inferred = result.inference ?? null;
+    if (inferred) {
+      formDraft = {
+        ...formDraft,
+        githubHost: inferred.githubHost,
+        repository: inferred.repository,
+      };
+      formError = "";
+    } else {
+      formError = snapshot?.copy.inferenceFailed ?? "";
+    }
+  } catch (error) {
+    if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
+    inferred = null;
+    formError = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (requestId === inferenceRequestId) projectOperation = null;
+  }
+  render();
 }
 
 async function chooseProjectDirectory(): Promise<void> {
-  if (!canChooseProjectDirectory()) return;
+  if (!focusedHostIsLocal()) return;
   formError = "";
+  if (!desktopShellAvailable()) {
+    formError = snapshot?.copy.chooseDirectoryDesktopOnly ?? "";
+    render();
+    return;
+  }
   try {
     const selected = await openDirectory({
       directory: true,
@@ -1012,18 +1076,16 @@ async function chooseProjectDirectory(): Promise<void> {
       canCreateDirectories: false,
     });
     if (typeof selected !== "string" || !selected) return;
-    formDraft = { ...formDraft, localPath: selected };
-    inferred = null;
-    inferenceRequestId += 1;
+    applyLocalPath(selected, true);
   } catch (error) {
     formError = error instanceof Error ? error.message : String(error);
+    render();
   }
-  render();
 }
 
 async function loadStartupSettings(): Promise<void> {
   startupSettingsError = "";
-  if (!desktopUpdateAvailable()) {
+  if (!desktopShellAvailable()) {
     startAtLogin = null;
     return;
   }
@@ -1063,7 +1125,7 @@ async function setStartAtLogin(enabled: boolean): Promise<void> {
 }
 
 async function checkForUpdates(manual: boolean): Promise<void> {
-  if (!desktopUpdateAvailable()) {
+  if (!desktopShellAvailable()) {
     updateState = { kind: "failed", message: snapshot?.copy.updateUnavailableBrowser ?? "" };
     render();
     return;
@@ -1201,6 +1263,7 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
     result.snapshot.notifySound = result.snapshot.notifySound ?? true;
     result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
+    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
     result.events = result.events ?? [];
     syncLaunchDraft(result.snapshot);
     deliverHostEvents(result.events, result.snapshot);
@@ -1253,6 +1316,7 @@ async function jumpToNotification(event: Extract<HostEvent, { type: "notificatio
     await rpc("focusProject", { projectId: event.projectId });
   }
   if (event.issueId) {
+    issueDetailVisible = true;
     await rpc("focusIssue", { issueId: event.issueId });
   }
   if (event.runId) {
@@ -1312,10 +1376,47 @@ function languageLabel(copy: ShellCopy, language: Language): string {
   return language === "zh-CN" ? copy.languageZh : copy.languageEn;
 }
 
+function captureActiveField(): {
+  id: string;
+  start: number | null;
+  end: number | null;
+  direction: "forward" | "backward" | "none" | null;
+  scrollLeft: number;
+} | null {
+  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  if (!active || !app?.contains(active) || active.id === "") return null;
+  if (!("value" in active)) return null;
+  return {
+    id: active.id,
+    start: active.selectionStart,
+    end: active.selectionEnd,
+    direction: active.selectionDirection,
+    scrollLeft: active.scrollLeft,
+  };
+}
+
+function restoreActiveField(field: {
+  id: string;
+  start: number | null;
+  end: number | null;
+  direction: "forward" | "backward" | "none" | null;
+  scrollLeft: number;
+} | null): void {
+  if (!field) return;
+  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(field.id)}`);
+  if (!next) return;
+  next.focus();
+  if (field.start != null && field.end != null) {
+    next.setSelectionRange(field.start, field.end, field.direction ?? "none");
+  }
+  next.scrollLeft = field.scrollLeft;
+}
+
 function render(): void {
   if (!snapshot || !app) return;
   const snap = snapshot;
   const isMobile = mobileClient();
+  const activeField = captureActiveField();
   const appearance = isMobile
     ? { ...snap.appearance, ...ensureMobileAppearance() }
     : snap.appearance;
@@ -1332,6 +1433,9 @@ function render(): void {
   const empty = snapshot.emptyActions.length > 0;
   const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
   const showSidebar = !isMobile && sidebarVisible && !runLifted;
+  const selectedIssue = snap.board?.selected;
+  const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
+  const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
   if (!pairingAddress) {
     pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
@@ -1341,8 +1445,10 @@ function render(): void {
       <header class="chrome">
         ${isMobile
           ? `<button type="button" class="ghost" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
-          : `<button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-             <button type="button" class="ghost" data-act="toggle-issue" aria-label="${escapeHtml(issueDetailVisible ? copy.hideIssueDetail : copy.showIssueDetail)}">▱</button>`}
+          : `<button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
+             ${showIssueToggle
+               ? `<button type="button" class="ghost ${inspectorOpen ? "active" : ""}" data-act="toggle-issue">${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}</button>`
+               : ""}`}
         ${!isMobile && !showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
         ${runLifted ? `<button type="button" class="ghost" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
         <button type="button" class="ghost" data-act="settings">${escapeHtml(copy.settings)}</button>
@@ -1455,6 +1561,11 @@ function render(): void {
               </div>
               ${updateSettings(copy)}
               <div class="field">
+                <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
+                <input id="refresh-interval" type="number" min="15" max="600" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
+                <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
+              </div>
+              <div class="field">
                 <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
                 <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
                 <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
@@ -1554,6 +1665,7 @@ function render(): void {
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
   paintGraphEdges();
+  restoreActiveField(activeField);
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
     void pumpMobileOutput(snap);
@@ -2012,9 +2124,10 @@ function runDock(copy: ShellCopy, snap: Snapshot): string {
 function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
-  return `<section class="lifted-run ${issueDetailVisible ? "" : "issue-collapsed"}">
+  const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}">
     ${terminalPanel(copy, run, "lifted-terminal")}
-    ${issueDetailVisible ? `<aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board) : ""}</aside>` : ""}
+    ${inspectorOpen && snap.board ? `<aside class="issue-detail">${issueDetail(copy, snap.board)}</aside>` : ""}
   </section>`;
 }
 
@@ -2143,7 +2256,7 @@ function launchEnvironmentStatus(copy: StartupCopy): string {
 }
 
 function startupSettings(copy: StartupCopy, snap: Snapshot): string {
-  if (!desktopUpdateAvailable()) {
+  if (!desktopShellAvailable()) {
     return `<div class="field startup-settings"><div class="label">${escapeHtml(copy.hostStartup)}</div><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
   }
   return `<div class="field startup-settings">
@@ -2174,7 +2287,7 @@ function updateSettings(copy: ShellCopy): string {
           : "";
   return `<div class="field update-settings">
     <div class="label">${escapeHtml(copy.updates)}</div>
-    ${desktopUpdateAvailable()
+    ${desktopShellAvailable()
       ? `<button type="button" data-act="check-updates" ${updateState.kind === "checking" || updateState.kind === "installing" ? "disabled" : ""}>${escapeHtml(updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates)}</button>`
       : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
     ${status ? `<p class="hint update-status">${escapeHtml(status)}</p>` : ""}
@@ -2298,7 +2411,8 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
   }
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
-  return `<div class="board-shell ${issueDetailVisible ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
+  const inspectorOpen = issueDetailVisible && Boolean(board.selected);
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -2310,7 +2424,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
       </div>
       ${onGraph ? dependencyGraphView(copy, board) : boardLanes(copy, board)}
     </div>
-    ${issueDetailVisible ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
+    ${inspectorOpen ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
   </div>`;
 }
 
@@ -2731,7 +2845,8 @@ function projectForm(copy: ShellCopy): string {
     snapshot?.projects.find((project) => project.id === formProjectId)?.hasActiveRun,
   );
   const lockedRegistration = editing && activeRun;
-  const pending = projectOperation !== null;
+  const pending = projectOperation === "save" || projectOperation === "remove";
+  const inferring = projectOperation === "infer";
   return `<div class="overlay modal" data-act="close-form">
     <form class="sheet form-sheet" data-act="form-noop" data-form="project">
       <h2>${escapeHtml(editing ? copy.editProjectTitle : copy.registerProjectTitle)}</h2>
@@ -2744,8 +2859,8 @@ function projectForm(copy: ShellCopy): string {
       <div class="field">
         <label class="label" for="project-path">${escapeHtml(copy.localDirectory)}</label>
         <div class="path-picker">
-          <input id="project-path" data-field="localPath" ${lockedRegistration || pending ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" />
-          ${canChooseProjectDirectory() && !lockedRegistration
+          <input id="project-path" class="path-input" data-field="localPath" ${lockedRegistration || pending ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" title="${escapeHtml(formDraft.localPath)}" dir="ltr" />
+          ${focusedHostIsLocal() && !lockedRegistration
             ? `<button type="button" data-act="choose-project-directory" ${pending ? "disabled" : ""}>${escapeHtml(copy.chooseDirectory)}</button>`
             : ""}
         </div>
@@ -2758,21 +2873,9 @@ function projectForm(copy: ShellCopy): string {
         <label class="label" for="project-repo">${escapeHtml(copy.repository)}</label>
         <input id="project-repo" data-field="repository" ${lockedRegistration || pending ? "disabled" : "required"} placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
       </div>
-      ${lockedRegistration
-        ? ""
-        : `<div class="inference">
-        <button type="button" data-act="infer" ${pending ? "disabled" : ""}>${escapeHtml(projectOperation === "infer" ? copy.inferencePending : copy.inferFromDirectory)}</button>
-        ${
-          inferred
-            ? `<div class="notice" style="margin-top:8px">
-                <b>${escapeHtml(inferred.githubHost)}/${escapeHtml(inferred.repository)}</b>
-                <div class="actions">
-                  <button type="button" data-act="apply-infer" ${pending ? "disabled" : ""}>${escapeHtml(copy.useInference)}</button>
-                </div>
-              </div>`
-            : ""
-        }
-      </div>`}
+      ${!lockedRegistration && inferring
+        ? `<p class="hint">${escapeHtml(copy.inferringFromDirectory)}</p>`
+        : ""}
       ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
       <div class="actions">
         <button type="button" data-act="close-form" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
@@ -3162,6 +3265,7 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
     if (projectOperation) return;
+    if (target.tagName !== "BUTTON") return;
     formOpen = null;
     inferred = null;
     formError = "";
@@ -3264,6 +3368,7 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-run" && target.dataset.id) {
     sidebarBeforeLift = sidebarVisible;
+    issueDetailVisible = true;
     await rpc("focusRun", { runId: target.dataset.id });
     if (mobileClient()) {
       mobileView = "run";
@@ -3434,42 +3539,9 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "choose-project-directory") {
+    event.preventDefault();
+    event.stopPropagation();
     await chooseProjectDirectory();
-    return;
-  }
-  if (act === "infer") {
-    if (projectOperation) return;
-    formError = "";
-    projectOperation = "infer";
-    const requestedPath = formDraft.localPath.trim();
-    const requestId = ++inferenceRequestId;
-    render();
-    try {
-      const result = await rpc("inferProject", { localPath: requestedPath });
-      if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
-      inferred = result.inference ?? null;
-      if (!inferred) {
-        formError = snapshot.copy.inferenceHint;
-      }
-    } catch (error) {
-      if (requestId !== inferenceRequestId || formDraft.localPath.trim() !== requestedPath) return;
-      inferred = null;
-      formError = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (projectOperation === "infer") projectOperation = null;
-    }
-    render();
-    return;
-  }
-  if (act === "apply-infer" && inferred) {
-    formDraft = {
-      name: formDraft.name || inferred.name,
-      localPath: inferred.localPath,
-      githubHost: inferred.githubHost,
-      repository: inferred.repository,
-    };
-    inferred = null;
-    render();
     return;
   }
   if (act === "toggle-hosts") {
@@ -3478,8 +3550,10 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "focus-host" && target.dataset.id) {
+    await reportClientView(false);
     await rpc("focusHost", { hostId: target.dataset.id });
     hostPickerOpen = false;
+    await reportClientView();
     render();
     return;
   }
@@ -3582,6 +3656,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "focus-issue" && target.dataset.id) {
+    issueDetailVisible = true;
     await rpc("focusIssue", { issueId: target.dataset.id });
     if (mobileClient()) {
       mobileView = "issue";
@@ -3651,11 +3726,31 @@ app.addEventListener("submit", async (event) => {
   render();
 });
 
+app.addEventListener("input", (event) => {
+  const target = event.target as HTMLInputElement | null;
+  if (!target || !formOpen) return;
+  const field = target.getAttribute("data-field");
+  if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
+    formDraft = { ...formDraft, [field]: target.value };
+    if (field === "localPath") target.title = target.value;
+  }
+});
+
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
   if (!target || !snapshot) return;
+  if (target.getAttribute("data-field") === "localPath" && "value" in target) {
+    applyLocalPath((target as HTMLInputElement).value, true);
+    return;
+  }
   if (target.getAttribute("data-field") === "startAtLogin" && "checked" in target) {
     await setStartAtLogin((target as HTMLInputElement).checked);
+    render();
+  }
+  if (target.getAttribute("data-field") === "refreshInterval" && "value" in target) {
+    const seconds = Number((target as HTMLInputElement).value);
+    if (!Number.isFinite(seconds)) return;
+    await rpc("setRefreshInterval", { intervalMs: Math.max(0, seconds) * 1000 });
     render();
   }
   if (target.getAttribute("data-field") === "recentLimit" && "value" in target) {
@@ -3761,14 +3856,10 @@ app.addEventListener("input", (event) => {
     noteDraft = (target as HTMLInputElement).value;
   }
   if (
-    (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") &&
+    (field === "name" || field === "githubHost" || field === "repository") &&
     "value" in target
   ) {
     formDraft = { ...formDraft, [field]: (target as HTMLInputElement).value };
-    if (field === "localPath") {
-      inferred = null;
-      inferenceRequestId += 1;
-    }
   }
   if (field === "openingText" && launchDraft && "value" in target) {
     launchDraft.openingText = (target as HTMLTextAreaElement).value;
@@ -3870,24 +3961,66 @@ function parsePairingPayload(raw: string): { address: string; code: string } | n
   return { address, code };
 }
 
-async function reportClientView(): Promise<void> {
-  const projectId = snapshot?.focusedProjectId ?? "";
-  const visible = document.visibilityState === "visible";
+function shouldReportClientView(): boolean {
+  return !desktopShellAvailable() || !focusedHostIsLocal();
+}
+
+let hostWindowVisible = true;
+let lastReportedView = { projectId: "", visible: false };
+
+function clientIsVisible(): boolean {
+  return hostWindowVisible && document.visibilityState === "visible";
+}
+
+async function reportClientView(visible = clientIsVisible()): Promise<boolean> {
+  if (!shouldReportClientView()) return false;
+  const projectId = visible ? snapshot?.focusedProjectId ?? "" : "";
+  const changed = visible !== lastReportedView.visible || projectId !== lastReportedView.projectId;
+  lastReportedView = { projectId, visible };
   await rpc("setClientView", { clientId, projectId, visible });
+  return changed;
+}
+
+let foregroundRefresh: Promise<void> | null = null;
+
+function onClientForegroundOrHidden(): void {
+  if (!shouldReportClientView()) return;
+  if (!clientIsVisible()) {
+    void reportClientView(false).then(render).catch(() => {});
+    return;
+  }
+  if (foregroundRefresh) return;
+  foregroundRefresh = (async () => {
+    try {
+      const changed = await reportClientView(true);
+      if (!clientIsVisible()) {
+        await reportClientView(false);
+        return;
+      }
+      if (!changed) await rpc("refresh");
+      render();
+    } finally {
+      foregroundRefresh = null;
+    }
+  })();
+  void foregroundRefresh.catch(() => {});
 }
 
 function ensureTick(): void {
   if (tickTimer != null) return;
   tickTimer = window.setInterval(() => {
-    rpc("tick").then(render).catch(() => {});
+    const extra = shouldReportClientView()
+      ? {
+          clientId,
+          projectId: snapshot?.focusedProjectId ?? "",
+          visible: clientIsVisible(),
+        }
+      : {};
+    rpc("tick", extra).then(render).catch(() => {});
   }, 1000);
 }
 
-document.addEventListener("visibilitychange", () => {
-  const visible = document.visibilityState === "visible";
-  const work = visible ? rpc("refresh").then(() => reportClientView()) : reportClientView();
-  work.then(render).catch(() => {});
-});
+document.addEventListener("visibilitychange", onClientForegroundOrHidden);
 
 function terminalHasFocus(): boolean {
   const active = document.activeElement as HTMLElement | null;
@@ -3951,8 +4084,22 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("focus", () => {
-  if (document.visibilityState !== "visible") return;
-  rpc("refresh").then(render).catch(() => {});
+  if (!clientIsVisible()) return;
+  onClientForegroundOrHidden();
+});
+
+window.addEventListener("pagehide", () => {
+  void reportClientView(false).catch(() => {});
+});
+
+window.addEventListener("agent-taskboard:host-window-hidden", () => {
+  hostWindowVisible = false;
+  void reportClientView(false).then(render).catch(() => {});
+});
+
+window.addEventListener("agent-taskboard:host-window-shown", () => {
+  hostWindowVisible = true;
+  onClientForegroundOrHidden();
 });
 
 window.addEventListener("agent-taskboard:check-update", () => {
@@ -3980,7 +4127,7 @@ rpc("snapshot")
     ensureTick();
     await reportClientView();
     render();
-    if (desktopUpdateAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
+    if (desktopShellAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
       startupUpdateChecked = true;
       window.setTimeout(() => {
         if (updateState.kind === "idle") void checkForUpdates(false);

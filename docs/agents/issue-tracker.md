@@ -15,7 +15,7 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
 
 ## 收尾关票
 
-Default close-out after `/implement` (or when the user says 收尾 / 关票). The issue closes because GitHub processes `Closes #<n>` on merge — not because the agent ran `gh issue close`.
+After a successful `/implement` of an implementation ticket, run these steps in the same turn. Successful means tests are green and `HEAD` is the implementation commit. Also run them when the user says 收尾 / 关票. The issue closes because GitHub processes `Closes #<n>` on merge — not because the agent ran `gh issue close`.
 
 Wayfinder children still **Resolve**: comment, `gh issue close`, then a pointer on the map.
 

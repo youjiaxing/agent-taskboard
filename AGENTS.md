@@ -6,7 +6,7 @@ Issues live as GitHub Issues (`gh`). See `docs/agents/issue-tracker.md`.
 
 ### Wrap-up
 
-收尾 / 关票 an implementation ticket: merge a PR whose body contains `Closes #<n>`. Do not `gh issue close` first. Steps: `docs/agents/issue-tracker.md` (**收尾关票**).
+Successful `/implement` of an implementation ticket 收尾 automatically in the same turn. Also 收尾 / 关票. Merge a PR whose body contains `Closes #<n>`. Do not `gh issue close` first. Steps: `docs/agents/issue-tracker.md` (**收尾关票**).
 
 ### Triage labels
 

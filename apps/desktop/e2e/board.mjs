@@ -33,6 +33,12 @@ try {
   console.error("page html", html.slice(0, 4000));
   throw error;
 }
+if (await page.$(".board-shell > .issue-detail")) {
+  throw new Error("issue inspector should not occupy the board before an Issue is selected");
+}
+if (await page.$("button[data-act='toggle-issue']")) {
+  throw new Error("issue inspector toggle should not appear before an Issue is selected");
+}
 await page.waitForSelector(".refresh-bar");
 if (await page.$('.refresh-bar[data-kind="incomplete"]')) {
   const incompleteText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
@@ -59,6 +65,19 @@ if (!keyboardFocusedCard) {
 }
 await page.keyboard.press("Enter");
 await page.waitForSelector(".issue-detail .detail-hd");
+await page.waitForSelector("button[data-act='toggle-issue']");
+const lanesWithInspector = await page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
+await page.click("button[data-act='toggle-issue']");
+await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+const lanesWithoutInspector = await page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
+if (lanesWithoutInspector <= lanesWithInspector) {
+  throw new Error("hiding the inspector should give the lanes more width");
+}
+if (!(await page.$("button[data-act='toggle-issue']"))) {
+  throw new Error("hiding the inspector should keep the restore control in the chrome");
+}
+await page.click("button[data-act='toggle-issue']");
+await page.waitForSelector(".issue-detail .detail-hd");
 
 const beforeTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) => nodes.map((node) => node.textContent));
 await page.fill("#issue-title-search", "child ready");
@@ -84,6 +103,47 @@ const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.
 if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")) {
   throw new Error(`refresh bar missing as-of time: ${refreshText}`);
 }
+if (!refreshText.includes("下次刷新") && !refreshText.includes("Next refresh")) {
+  throw new Error(`refresh bar missing auto-refresh countdown: ${refreshText}`);
+}
+
+function isRefreshRpc(req) {
+  if (req.method() !== "POST" || !req.url().includes("/rpc")) return false;
+  try {
+    return req.postDataJSON()?.op === "refresh";
+  } catch {
+    return false;
+  }
+}
+
+const focusRefresh = page.waitForRequest(isRefreshRpc, { timeout: 3000 });
+await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+await focusRefresh;
+await page.waitForFunction(() => {
+  const bar = document.querySelector(".refresh-bar");
+  return Boolean(bar) && bar.getAttribute("data-kind") !== "refreshing";
+});
+await new Promise((resolve) => setTimeout(resolve, 300));
+
+let coalescedRefreshCount = 0;
+const countCoalescedRefresh = (req) => {
+  if (isRefreshRpc(req)) coalescedRefreshCount += 1;
+};
+page.on("request", countCoalescedRefresh);
+await page.evaluate(() => {
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+});
+const coalesceDeadline = Date.now() + 1500;
+while (coalescedRefreshCount < 1 && Date.now() < coalesceDeadline) {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+await new Promise((resolve) => setTimeout(resolve, 250));
+page.off("request", countCoalescedRefresh);
+if (coalescedRefreshCount !== 1) {
+  throw new Error(`same foreground event should refresh once, got ${coalescedRefreshCount}`);
+}
+
 await page.click(".refresh-bar button[data-act='refresh']");
 await page.waitForSelector(".lanes");
 
@@ -293,9 +353,39 @@ if (newLabel !== "新建" && newLabel !== "New") {
 }
 await page.click("button[data-act='register']");
 await page.waitForSelector("form[data-form='project']");
-if (await page.$("button[data-act='choose-project-directory']")) {
-  throw new Error("browser Client should keep manual local-directory input instead of rendering a native picker action");
+if (!(await page.$("button[data-act='choose-project-directory']"))) {
+  throw new Error("local Host registration should keep a folder-picker action next to the path field");
 }
+if (await page.$("button[data-act='infer']")) {
+  throw new Error("registration should infer automatically instead of asking for a manual infer click");
+}
+await page.click(".overlay.modal[data-act='close-form']", { position: { x: 2, y: 2 } });
+if (!(await page.$("form[data-form='project']"))) {
+  throw new Error("clicking outside the registration sheet should keep the form open");
+}
+await page.click("button[data-act='choose-project-directory']");
+await page.waitForSelector("form[data-form='project'] .notice.bad");
+const pickerNotice = await page.$eval("form[data-form='project'] .notice.bad", (node) => node.textContent?.trim());
+if (!pickerNotice?.includes("系统目录选择只在本机桌面窗口可用")) {
+  throw new Error(`browser Client should explain the desktop-only folder picker, got ${pickerNotice}`);
+}
+await page.fill("#project-path", "/Users/youjiaxing/Code/youjiaxing/agent-taskboard");
+await page.locator("#project-path").dispatchEvent("change");
+await page.waitForFunction(() => {
+  const name = document.querySelector("#project-name");
+  const repo = document.querySelector("#project-repo");
+  return name instanceof HTMLInputElement && repo instanceof HTMLInputElement
+    && name.value === "agent-taskboard"
+    && repo.value === "youjiaxing/agent-taskboard";
+});
+const pathValue = await page.$eval("#project-path", (node) => node instanceof HTMLInputElement ? node.value : "");
+if (!pathValue.endsWith("/agent-taskboard")) {
+  throw new Error(`local path should remain complete after inference, got ${pathValue}`);
+}
+await page.click("form[data-form='project'] button[data-act='close-form']");
+await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
+await page.click("button[data-act='register']");
+await page.waitForSelector("form[data-form='project']");
 await page.fill("#project-name", "failed draft");
 await page.fill("#project-path", "/definitely/missing/project-directory");
 await page.fill("#project-repo", "you/failed-draft");
