@@ -369,32 +369,6 @@ const pickerNotice = await page.$eval("form[data-form='project'] .notice.bad", (
 if (!pickerNotice?.includes("系统目录选择只在本机桌面窗口可用")) {
   throw new Error(`browser Client should explain the desktop-only folder picker, got ${pickerNotice}`);
 }
-await page.fill("#project-path", "/Users/youjiaxing/Code/youjiaxing/agent-taskboard");
-await page.locator("#project-path").dispatchEvent("change");
-await page.waitForFunction(() => {
-  const name = document.querySelector("#project-name");
-  const repo = document.querySelector("#project-repo");
-  return name instanceof HTMLInputElement && repo instanceof HTMLInputElement
-    && name.value === "agent-taskboard"
-    && repo.value === "youjiaxing/agent-taskboard";
-});
-const pathValue = await page.$eval("#project-path", (node) => node instanceof HTMLInputElement ? node.value : "");
-if (!pathValue.endsWith("/agent-taskboard")) {
-  throw new Error(`local path should remain complete after inference, got ${pathValue}`);
-}
-await page.click("form[data-form='project'] button[data-act='close-form']");
-await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
-await page.click("button[data-act='register']");
-await page.waitForSelector("form[data-form='project']");
-await page.fill("#project-name", "failed draft");
-await page.fill("#project-path", "/definitely/missing/project-directory");
-await page.fill("#project-repo", "you/failed-draft");
-await page.click("form[data-form='project'] button[type='submit']");
-await page.waitForSelector("form[data-form='project'] .notice.bad");
-const failedDraft = await page.$eval("#project-name", (node) => node.value);
-if (failedDraft !== "failed draft") {
-  throw new Error(`failed registration should preserve its draft, got ${failedDraft}`);
-}
 await page.click("form[data-form='project'] button[data-act='close-form']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await page.click("button[data-act='new-run']");

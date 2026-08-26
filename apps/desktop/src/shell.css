@@ -471,6 +471,10 @@ html[data-theme="plain-night"] button.danger.primary {
   background: var(--chip);
   margin-bottom: 12px;
 }
+.inference > :first-child { margin-top: 0; }
+.inference > :last-child { margin-bottom: 0; }
+.inference-candidate { line-height: 1.5; }
+.inference .actions { margin-top: 8px; }
 .form-sheet {
   width: min(510px, calc(100% - 24px));
   max-height: calc(100vh - 80px);
