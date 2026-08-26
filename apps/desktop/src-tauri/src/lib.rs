@@ -108,6 +108,11 @@ pub fn run() {
                         let _ = kernel.dispatch(Command::HideWindow);
                     }
                 }
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    let _ = webview.eval(
+                        "window.dispatchEvent(new Event('agent-taskboard:host-window-hidden'));",
+                    );
+                }
             }
         })
         .build(tauri::generate_context!())
@@ -325,7 +330,9 @@ fn show_main(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
         if became_visible {
-            let _ = window.eval("window.dispatchEvent(new Event('agent-taskboard:check-update'));");
+            let _ = window.eval(
+                "window.dispatchEvent(new Event('agent-taskboard:host-window-shown')); window.dispatchEvent(new Event('agent-taskboard:check-update'));",
+            );
         }
     }
 }

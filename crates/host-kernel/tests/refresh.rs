@@ -1,12 +1,12 @@
 mod common;
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, MemoryTracker,
-    RefreshStatus, SystemAppearance, DEFAULT_REFRESH_INTERVAL_MS,
+    BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, LoopbackServer,
+    MemoryTracker, RefreshStatus, SystemAppearance, DEFAULT_REFRESH_INTERVAL_MS,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -724,7 +724,7 @@ fn offline_after_incomplete_read_is_shown_as_offline() {
 }
 
 #[test]
-fn run_end_does_not_hit_rate_limited_project_before_retry_after() {
+fn run_end_refreshes_even_when_rate_limited() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -733,13 +733,27 @@ fn run_end_does_not_hit_rate_limited_project_before_retry_after() {
     let project_id = register(&mut host, &dir, "garden", "you/garden");
     tracker.fail_rate_limited("you/garden", Some(120_000));
     host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    let fetched = match refresh_status(&host) {
+        RefreshStatus::RateLimited { fetched_at_ms, .. } => fetched_at_ms.expect("last data"),
+        other => panic!("expected rate-limited, got {other:?}"),
+    };
     let after_limit = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+    }))
+    .unwrap();
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        after_limit,
+        "interval auto-refresh must stay paused"
+    );
     host.handle(serde_json::json!({
         "op": "noteRunEnded",
         "projectId": project_id,
     }))
     .unwrap();
-    assert_eq!(tracker.read_count("you/garden"), after_limit);
+    assert_eq!(tracker.read_count("you/garden"), after_limit + 1);
 }
 
 #[test]
@@ -750,7 +764,8 @@ fn stale_client_view_without_heartbeat_stops_polling() {
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
     let project_id = register(&mut host, &dir, "garden", "you/garden");
-    host.handle(serde_json::json!({ "op": "hideWindow" })).unwrap();
+    host.handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
     host.handle(serde_json::json!({
         "op": "setClientView",
         "clientId": "phone",
@@ -777,6 +792,179 @@ fn stale_client_view_without_heartbeat_stops_polling() {
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), after_poll);
+}
+
+#[test]
+fn tick_heartbeat_keeps_visible_client_past_ttl() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    host.handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setClientView",
+        "clientId": "phone",
+        "projectId": project_id,
+        "visible": true,
+    }))
+    .unwrap();
+    let fetched = match refresh_status(&host) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready, got {other:?}"),
+    };
+    let baseline = tracker.read_count("you/garden");
+    let later = fetched + DEFAULT_REFRESH_INTERVAL_MS * 4;
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": later,
+        "clientId": "phone",
+        "projectId": project_id,
+        "visible": true,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+}
+
+#[test]
+fn host_and_client_ticks_do_not_duplicate_interval_fetch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "garden", "you/garden");
+    let fetched = match refresh_status(&host) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready, got {other:?}"),
+    };
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+    }))
+    .unwrap();
+    let after_host_tick = tracker.read_count("you/garden");
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS + 500,
+    }))
+    .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), after_host_tick);
+}
+
+#[test]
+fn tauri_client_viewing_remote_host_keeps_that_project_watched() {
+    let host_dir = tempfile::tempdir().unwrap();
+    let client_dir = tempfile::tempdir().unwrap();
+    let garden = make_dir(host_dir.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host_kernel = boot(host_dir.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host_kernel, &garden, "garden", "you/garden");
+    host_kernel
+        .handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
+    let host = Arc::new(Mutex::new(host_kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+    let address = server.protocol_url().trim_end_matches('/').to_string();
+    let code = host
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+
+    let mut client = HostKernel::boot(boot_req(client_dir.path())).unwrap();
+    let remote_id = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": address,
+            "code": code,
+        }))
+        .unwrap()
+        .snapshot
+        .hosts
+        .iter()
+        .find(|item| !item.local)
+        .unwrap()
+        .id
+        .clone();
+    client
+        .handle(serde_json::json!({
+            "op": "focusHost",
+            "hostId": remote_id,
+        }))
+        .unwrap();
+
+    let fetched = match host.lock().unwrap().snapshot().board.unwrap().refresh {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready, got {other:?}"),
+    };
+    let without_view = tracker.read_count("you/garden");
+    host.lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        }))
+        .unwrap();
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        without_view,
+        "hidden Host window without Client heartbeat must not poll"
+    );
+
+    client
+        .handle(serde_json::json!({
+            "op": "setClientView",
+            "clientId": "tauri-desktop",
+            "projectId": project_id,
+            "visible": true,
+        }))
+        .unwrap();
+    let after_view = tracker.read_count("you/garden");
+    assert!(
+        after_view > without_view,
+        "visible remote Client must refresh immediately"
+    );
+    let watched_at = match host.lock().unwrap().snapshot().board.unwrap().refresh {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready after remote Client view, got {other:?}"),
+    };
+    host.lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": watched_at + DEFAULT_REFRESH_INTERVAL_MS,
+        }))
+        .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), after_view + 1);
+
+    client
+        .handle(serde_json::json!({
+            "op": "setClientView",
+            "clientId": "tauri-desktop",
+            "projectId": "",
+            "visible": false,
+        }))
+        .unwrap();
+    let after_hide = tracker.read_count("you/garden");
+    host.lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": watched_at + DEFAULT_REFRESH_INTERVAL_MS * 2,
+        }))
+        .unwrap();
+    assert_eq!(tracker.read_count("you/garden"), after_hide);
 }
 
 #[test]

@@ -3550,8 +3550,10 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "focus-host" && target.dataset.id) {
+    await reportClientView(false);
     await rpc("focusHost", { hostId: target.dataset.id });
     hostPickerOpen = false;
+    await reportClientView();
     render();
     return;
   }
@@ -3959,33 +3961,66 @@ function parsePairingPayload(raw: string): { address: string; code: string } | n
   return { address, code };
 }
 
-async function reportClientView(): Promise<void> {
-  if (desktopShellAvailable()) return;
-  const projectId = snapshot?.focusedProjectId ?? "";
-  const visible = document.visibilityState === "visible";
+function shouldReportClientView(): boolean {
+  return !desktopShellAvailable() || !focusedHostIsLocal();
+}
+
+let hostWindowVisible = true;
+let lastReportedView = { projectId: "", visible: false };
+
+function clientIsVisible(): boolean {
+  return hostWindowVisible && document.visibilityState === "visible";
+}
+
+async function reportClientView(visible = clientIsVisible()): Promise<boolean> {
+  if (!shouldReportClientView()) return false;
+  const projectId = visible ? snapshot?.focusedProjectId ?? "" : "";
+  const changed = visible !== lastReportedView.visible || projectId !== lastReportedView.projectId;
+  lastReportedView = { projectId, visible };
   await rpc("setClientView", { clientId, projectId, visible });
+  return changed;
+}
+
+let foregroundRefresh: Promise<void> | null = null;
+
+function onClientForegroundOrHidden(): void {
+  if (!shouldReportClientView()) return;
+  if (!clientIsVisible()) {
+    void reportClientView(false).then(render).catch(() => {});
+    return;
+  }
+  if (foregroundRefresh) return;
+  foregroundRefresh = (async () => {
+    try {
+      const changed = await reportClientView(true);
+      if (!clientIsVisible()) {
+        await reportClientView(false);
+        return;
+      }
+      if (!changed) await rpc("refresh");
+      render();
+    } finally {
+      foregroundRefresh = null;
+    }
+  })();
+  void foregroundRefresh.catch(() => {});
 }
 
 function ensureTick(): void {
   if (tickTimer != null) return;
   tickTimer = window.setInterval(() => {
-    const extra = desktopShellAvailable()
-      ? {}
-      : {
+    const extra = shouldReportClientView()
+      ? {
           clientId,
           projectId: snapshot?.focusedProjectId ?? "",
-          visible: document.visibilityState === "visible",
-        };
+          visible: clientIsVisible(),
+        }
+      : {};
     rpc("tick", extra).then(render).catch(() => {});
   }, 1000);
 }
 
-document.addEventListener("visibilitychange", () => {
-  if (desktopShellAvailable()) return;
-  const visible = document.visibilityState === "visible";
-  const work = visible ? rpc("refresh").then(() => reportClientView()) : reportClientView();
-  work.then(render).catch(() => {});
-});
+document.addEventListener("visibilitychange", onClientForegroundOrHidden);
 
 function terminalHasFocus(): boolean {
   const active = document.activeElement as HTMLElement | null;
@@ -4049,8 +4084,22 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("focus", () => {
-  if (desktopShellAvailable() || document.visibilityState !== "visible") return;
-  void reportClientView();
+  if (!clientIsVisible()) return;
+  onClientForegroundOrHidden();
+});
+
+window.addEventListener("pagehide", () => {
+  void reportClientView(false).catch(() => {});
+});
+
+window.addEventListener("agent-taskboard:host-window-hidden", () => {
+  hostWindowVisible = false;
+  void reportClientView(false).then(render).catch(() => {});
+});
+
+window.addEventListener("agent-taskboard:host-window-shown", () => {
+  hostWindowVisible = true;
+  onClientForegroundOrHidden();
 });
 
 window.addEventListener("agent-taskboard:check-update", () => {

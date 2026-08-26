@@ -2027,6 +2027,11 @@ impl HostKernel {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
                 }
+                let now_ms = request
+                    .get("nowMs")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or_else(refresh::wall_ms);
+                self.now_ms = now_ms;
                 if let Some(client_id) = request
                     .get("clientId")
                     .and_then(|value| value.as_str())
@@ -2042,7 +2047,7 @@ impl HostKernel {
                     );
                 }
                 self.dispatch(Command::Tick {
-                    now_ms: request.get("nowMs").and_then(|value| value.as_u64()),
+                    now_ms: Some(now_ms),
                 })
             }
             "setClientView" => {
@@ -4985,8 +4990,10 @@ impl HostKernel {
         };
         match state.kind {
             StoredRefreshKind::RateLimited => match trigger {
-                RefreshTrigger::Immediate | RefreshTrigger::Action => true,
-                RefreshTrigger::Interval | RefreshTrigger::RunEnded => state
+                RefreshTrigger::Immediate | RefreshTrigger::Action | RefreshTrigger::RunEnded => {
+                    true
+                }
+                RefreshTrigger::Interval => state
                     .retry_at_ms
                     .is_some_and(|retry_at| self.now_ms >= retry_at),
             },

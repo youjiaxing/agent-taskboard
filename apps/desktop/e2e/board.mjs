@@ -106,6 +106,44 @@ if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")
 if (!refreshText.includes("下次刷新") && !refreshText.includes("Next refresh")) {
   throw new Error(`refresh bar missing auto-refresh countdown: ${refreshText}`);
 }
+
+function isRefreshRpc(req) {
+  if (req.method() !== "POST" || !req.url().includes("/rpc")) return false;
+  try {
+    return req.postDataJSON()?.op === "refresh";
+  } catch {
+    return false;
+  }
+}
+
+const focusRefresh = page.waitForRequest(isRefreshRpc, { timeout: 3000 });
+await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+await focusRefresh;
+await page.waitForFunction(() => {
+  const bar = document.querySelector(".refresh-bar");
+  return Boolean(bar) && bar.getAttribute("data-kind") !== "refreshing";
+});
+await new Promise((resolve) => setTimeout(resolve, 300));
+
+let coalescedRefreshCount = 0;
+const countCoalescedRefresh = (req) => {
+  if (isRefreshRpc(req)) coalescedRefreshCount += 1;
+};
+page.on("request", countCoalescedRefresh);
+await page.evaluate(() => {
+  document.dispatchEvent(new Event("visibilitychange"));
+  window.dispatchEvent(new Event("focus"));
+});
+const coalesceDeadline = Date.now() + 1500;
+while (coalescedRefreshCount < 1 && Date.now() < coalesceDeadline) {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+await new Promise((resolve) => setTimeout(resolve, 250));
+page.off("request", countCoalescedRefresh);
+if (coalescedRefreshCount !== 1) {
+  throw new Error(`same foreground event should refresh once, got ${coalescedRefreshCount}`);
+}
+
 await page.click(".refresh-bar button[data-act='refresh']");
 await page.waitForSelector(".lanes");
 

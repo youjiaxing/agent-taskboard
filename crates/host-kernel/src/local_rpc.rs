@@ -104,7 +104,14 @@ impl LoopbackServer {
                     .lock()
                     .map_err(|_| io::Error::other("kernel lock poisoned"))?
                     .note_loopback_page(LoopbackKind::Serving, port);
-                spawn_local_rpc_inner(listener, kernel, assets, Arc::clone(&stop), on_outcome, true);
+                spawn_local_rpc_inner(
+                    listener,
+                    kernel,
+                    assets,
+                    Arc::clone(&stop),
+                    on_outcome,
+                    true,
+                );
                 Ok(Self { protocol_url, stop })
             }
             Err(_) => {
@@ -120,7 +127,14 @@ impl LoopbackServer {
                             page_port
                         },
                     );
-                spawn_local_rpc_inner(listener, kernel, assets, Arc::clone(&stop), on_outcome, true);
+                spawn_local_rpc_inner(
+                    listener,
+                    kernel,
+                    assets,
+                    Arc::clone(&stop),
+                    on_outcome,
+                    true,
+                );
                 Ok(Self { protocol_url, stop })
             }
         }
