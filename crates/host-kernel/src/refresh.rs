@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -31,6 +32,16 @@ pub struct StoredTrackerSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     pub issues: Vec<IssueRecord>,
+    /// 只保存实际打开并成功读取过的正文，不把列表刷新变成全量正文下载。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub documents: BTreeMap<String, StoredIssueDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredIssueDocument {
+    pub body: String,
+    pub fetched_at_ms: u64,
 }
 
 fn default_complete() -> bool {

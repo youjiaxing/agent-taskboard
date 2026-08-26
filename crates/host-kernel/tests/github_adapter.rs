@@ -172,6 +172,37 @@ fn github_adapter_does_not_treat_relates_to_or_body_as_dependency() {
 }
 
 #[test]
+fn github_adapter_reads_the_complete_issue_document_without_changing_tracker_markdown() {
+    let tracker = scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "tok".into())].into(),
+        accept_tokens: ["tok".into()].into(),
+        issues: BTreeMap::from([(
+            "you/garden".into(),
+            vec![node(serde_json::json!({
+                "body": "# Question\n\nKeep **Tracker** markdown and `code` exactly.\n\n- one\n- two",
+                "url": null,
+            }))],
+        )]),
+        ..Default::default()
+    });
+    let ctx = probe_ctx("github.example.com", "you/garden");
+
+    let document = tracker
+        .read_issue_document(&ctx, "you/garden#50")
+        .expect("issue document");
+
+    assert_eq!(document.issue.id(), "you/garden#50");
+    assert_eq!(
+        document.issue.url,
+        "https://github.example.com/you/garden/issues/50"
+    );
+    assert_eq!(
+        document.body,
+        "# Question\n\nKeep **Tracker** markdown and `code` exactly.\n\n- one\n- two"
+    );
+}
+
+#[test]
 fn github_adapter_ignores_pull_requests_in_the_issue_list() {
     let host = scripted_host(vec![
         serde_json::json!({

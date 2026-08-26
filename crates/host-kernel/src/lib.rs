@@ -38,8 +38,9 @@ pub use agent::{
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
-    FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail, IssueLink,
-    IssueSearch, IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
+    FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail,
+    IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState, IssueLink, IssueSearch,
+    IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
@@ -61,9 +62,9 @@ pub use session::{
 };
 pub use tracker::{
     gh_known_install_locations, map_github_issue_node, resolve_gh, AuthFailureKind,
-    CredentialSource, GitHubTracker, IssueComment, IssueEdit, MemoryTracker, ProbeContext,
-    ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind, TrackerPort,
-    TrackerReadError, TrackerWriteError,
+    CredentialSource, GitHubTracker, IssueComment, IssueDocument, IssueEdit, MemoryTracker,
+    ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind,
+    TrackerPort, TrackerReadError, TrackerWriteError,
 };
 pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
 pub use usage::{
@@ -158,6 +159,9 @@ pub enum Command {
         local_path: String,
     },
     FocusIssue {
+        issue_id: String,
+    },
+    LoadIssueDocument {
         issue_id: String,
     },
     FilterParent {
@@ -751,6 +755,13 @@ pub struct ShellCopy {
     pub empty_no_data: String,
     pub empty_incomplete: String,
     pub empty_tracker_error: String,
+    pub issue_document: String,
+    pub issue_document_loading: String,
+    pub issue_document_retry: String,
+    pub issue_document_stale: String,
+    pub issue_document_failed: String,
+    pub issue_detail_widen: String,
+    pub issue_detail_narrow: String,
     pub family: String,
     pub deps: String,
     pub parent: String,
@@ -998,6 +1009,7 @@ pub struct HostKernel {
     remote_hosts: Vec<pairing::RemoteHost>,
     remote_view: Option<RemoteView>,
     loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
+    issue_documents: BTreeMap<String, BTreeMap<String, IssueDocumentState>>,
     refresh: BTreeMap<String, ProjectRefreshState>,
     client_views: BTreeMap<String, ClientView>,
     pending_events: Vec<HostEvent>,
@@ -1210,6 +1222,7 @@ impl HostKernel {
             remote_hosts,
             remote_view: None,
             loaded_issues: BTreeMap::new(),
+            issue_documents: BTreeMap::new(),
             refresh: BTreeMap::new(),
             client_views: BTreeMap::new(),
             pending_events: Vec::new(),
@@ -1523,8 +1536,33 @@ impl HostKernel {
             }
             Command::FocusIssue { issue_id } => {
                 self.selected_issue_id = Some(issue_id.clone());
+                if let Some(project_id) = self.focused_project_id.clone() {
+                    let previous_body = self
+                        .issue_documents
+                        .get(&project_id)
+                        .and_then(|documents| documents.get(&issue_id))
+                        .and_then(|state| issue_document_body(Some(state)));
+                    let should_start_loading = self
+                        .issue_documents
+                        .get(&project_id)
+                        .and_then(|documents| documents.get(&issue_id))
+                        .is_none_or(|state| !matches!(state, IssueDocumentState::Ready { .. }));
+                    if should_start_loading {
+                        self.issue_documents.entry(project_id).or_default().insert(
+                            issue_id.clone(),
+                            IssueDocumentState::Loading {
+                                body: previous_body.as_ref().map(|(body, _)| body.clone()),
+                                fetched_at_ms: previous_body
+                                    .map(|(_, fetched_at_ms)| fetched_at_ms),
+                            },
+                        );
+                    }
+                }
                 self.focused_run_id = self.active_run_id_for_issue(&issue_id);
                 self.workspace_view = WorkspaceView::Project;
+            }
+            Command::LoadIssueDocument { issue_id } => {
+                self.load_issue_document(&issue_id)?;
             }
             Command::FilterParent { issue_id } => {
                 self.parent_filter = Some(issue_id);
@@ -1938,6 +1976,14 @@ impl HostKernel {
                     return Ok(outcome);
                 }
                 self.dispatch(Command::FocusIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "loadIssueDocument" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::LoadIssueDocument {
                     issue_id: required_string(&request, "issueId")?,
                 })
             }
@@ -3316,22 +3362,54 @@ impl HostKernel {
         } else {
             issues.push(updated);
         }
-        if let Some(state) = self.refresh.get(project_id) {
-            if let Some(fetched_at_ms) = state.fetched_at_ms {
-                let _ = refresh::save_snapshot(
-                    &refresh::snapshot_path(&self.data.host_dir, project_id),
-                    &refresh::StoredTrackerSnapshot {
-                        fetched_at_ms,
-                        complete: state.complete,
-                        detail: state.detail.clone(),
-                        issues: issues.clone(),
-                    },
-                );
-            }
-        }
+        self.persist_tracker_snapshot(project_id);
         self.pending_events.push(HostEvent::BoardUpdated {
             project_id: project_id.to_string(),
         });
+    }
+
+    fn stored_issue_documents(
+        &self,
+        project_id: &str,
+    ) -> BTreeMap<String, refresh::StoredIssueDocument> {
+        self.issue_documents
+            .get(project_id)
+            .into_iter()
+            .flat_map(|documents| documents.iter())
+            .filter_map(|(issue_id, state)| {
+                issue_document_body(Some(state)).map(|(body, fetched_at_ms)| {
+                    (
+                        issue_id.clone(),
+                        refresh::StoredIssueDocument {
+                            body,
+                            fetched_at_ms,
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn persist_tracker_snapshot(&self, project_id: &str) {
+        let Some(state) = self.refresh.get(project_id) else {
+            return;
+        };
+        let Some(fetched_at_ms) = state.fetched_at_ms else {
+            return;
+        };
+        let Some(issues) = self.loaded_issues.get(project_id) else {
+            return;
+        };
+        let _ = refresh::save_snapshot(
+            &refresh::snapshot_path(&self.data.host_dir, project_id),
+            &refresh::StoredTrackerSnapshot {
+                fetched_at_ms,
+                complete: state.complete,
+                detail: state.detail.clone(),
+                issues: issues.clone(),
+                documents: self.stored_issue_documents(project_id),
+            },
+        );
     }
 
     fn persist_runs(&self) -> Result<(), KernelError> {
@@ -4558,6 +4636,7 @@ impl HostKernel {
         self.projects = projects;
         if registration_changed {
             self.loaded_issues.remove(project_id);
+            self.issue_documents.remove(project_id);
             self.refresh.remove(project_id);
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
             if self.focused_project_id.as_deref() == Some(project_id) {
@@ -4598,6 +4677,7 @@ impl HostKernel {
         self.focused_project_id = focused_project_id;
         self.refresh.remove(project_id);
         self.loaded_issues.remove(project_id);
+        self.issue_documents.remove(project_id);
         self.clear_pending(project_id, false);
         if was_current {
             self.selected_issue_id = None;
@@ -4674,11 +4754,100 @@ impl HostKernel {
             }
         }
         if let Some(selected) = board.selected.as_mut() {
+            selected.document = self
+                .issue_documents
+                .get(focused_project_id)
+                .and_then(|documents| documents.get(&selected.id))
+                .cloned()
+                .unwrap_or_default();
             selected.active_run_id = self.active_run_id_for_issue(&selected.id);
             selected.execution_stopped = self.execution_stopped(&selected.id);
             selected.waiting_for_user = self.issue_waiting(&selected.id);
         }
         Some(board)
+    }
+
+    fn load_issue_document(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        let project_id = self
+            .focused_project_id
+            .clone()
+            .ok_or_else(|| KernelError::Protocol("no focused project".into()))?;
+        if self.selected_issue_id.as_deref() != Some(issue_id) {
+            return Err(KernelError::Protocol(
+                "Issue document can only be loaded for the selected Issue".into(),
+            ));
+        }
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let previous = self
+            .issue_documents
+            .get(&project_id)
+            .and_then(|documents| documents.get(issue_id))
+            .cloned();
+        let previous_body = issue_document_body(previous.as_ref());
+        self.issue_documents
+            .entry(project_id.clone())
+            .or_default()
+            .insert(
+                issue_id.to_string(),
+                IssueDocumentState::Loading {
+                    body: previous_body.as_ref().map(|(body, _)| body.clone()),
+                    fetched_at_ms: previous_body
+                        .as_ref()
+                        .map(|(_, fetched_at_ms)| *fetched_at_ms),
+                },
+            );
+        let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
+        let result = self.tracker.read_issue_document(
+            &tracker::ProbeContext {
+                github_host: &project.github_host,
+                repository: &project.repository,
+                secrets_pat: pat.as_deref(),
+                secrets_path: &self.data.host_secrets_path,
+            },
+            issue_id,
+        );
+        let state = match result {
+            Ok(document) => {
+                if let Some(issues) = self.loaded_issues.get_mut(&project_id) {
+                    if let Some(existing) = issues.iter_mut().find(|issue| issue.id() == issue_id) {
+                        // 单 Issue REST 响应不保证带原生父子与 Dependency；详情刷新只合并
+                        // 该响应确实拥有的基础字段，关系仍由列表/GraphQL 真源维护。
+                        existing.title = document.issue.title;
+                        existing.url = document.issue.url;
+                        existing.open = document.issue.open;
+                        existing.closed_at = document.issue.closed_at;
+                        existing.assignees = document.issue.assignees;
+                        existing.labels = document.issue.labels;
+                    }
+                }
+                IssueDocumentState::Ready {
+                    body: document.body,
+                    fetched_at_ms: self.now_ms,
+                }
+            }
+            Err(error) => {
+                let failure = issue_document_failure(error);
+                match previous_body {
+                    Some((body, fetched_at_ms)) => IssueDocumentState::Stale {
+                        body,
+                        fetched_at_ms,
+                        failure,
+                    },
+                    None => IssueDocumentState::Failed { failure },
+                }
+            }
+        };
+        self.issue_documents
+            .entry(project_id.clone())
+            .or_default()
+            .insert(issue_id.to_string(), state);
+        self.persist_tracker_snapshot(&project_id);
+        Ok(())
     }
 
     fn load_persisted_snapshot(&mut self, project_id: &str) {
@@ -4687,6 +4856,19 @@ impl HostKernel {
         else {
             return;
         };
+        let documents = self
+            .issue_documents
+            .entry(project_id.to_string())
+            .or_default();
+        for (issue_id, document) in &stored.documents {
+            documents.insert(
+                issue_id.clone(),
+                IssueDocumentState::Loading {
+                    body: Some(document.body.clone()),
+                    fetched_at_ms: Some(document.fetched_at_ms),
+                },
+            );
+        }
         self.loaded_issues
             .insert(project_id.to_string(), stored.issues);
         if let Some(project) = self
@@ -4934,6 +5116,7 @@ impl HostKernel {
             complete,
             detail: detail.clone(),
             issues: issues.clone(),
+            documents: self.stored_issue_documents(project_id),
         };
         if let Err(err) = refresh::save_snapshot(
             &refresh::snapshot_path(&self.data.host_dir, project_id),
@@ -5378,6 +5561,13 @@ impl ShellCopy {
                 empty_no_data: "还没有可显示的数据。".into(),
                 empty_incomplete: "Issue 数据没有完整读完。为避免误判，暂不显示 Frontier 和依赖图。".into(),
                 empty_tracker_error: "Tracker 返回业务错误。为避免使用过期数据误判，暂不显示 Frontier 和依赖图。".into(),
+                issue_document: "Issue 正文".into(),
+                issue_document_loading: "正在读取 Issue 正文…".into(),
+                issue_document_retry: "重试读取".into(),
+                issue_document_stale: "正文读取失败；以下为只读的上次内容，数据截至".into(),
+                issue_document_failed: "正文尚未成功读取。".into(),
+                issue_detail_widen: "加宽详情".into(),
+                issue_detail_narrow: "收窄详情".into(),
                 family: "属于 / 子票".into(),
                 deps: "挡住它的 / 它挡住的".into(),
                 parent: "属于".into(),
@@ -5632,6 +5822,13 @@ impl ShellCopy {
                 empty_no_data: "No displayable data yet.".into(),
                 empty_incomplete: "Issue data could not be read completely. Frontier and the dependency graph are hidden to prevent incorrect decisions.".into(),
                 empty_tracker_error: "The Tracker returned a business error. Frontier and the dependency graph are hidden to avoid decisions based on stale data.".into(),
+                issue_document: "Issue document".into(),
+                issue_document_loading: "Loading the Issue document…".into(),
+                issue_document_retry: "Retry load".into(),
+                issue_document_stale: "The document could not be refreshed. Showing the last read-only copy from".into(),
+                issue_document_failed: "The document has never loaded successfully.".into(),
+                issue_detail_widen: "Widen details".into(),
+                issue_detail_narrow: "Narrow details".into(),
                 family: "Parent / children".into(),
                 deps: "Blocked by / blocking".into(),
                 parent: "Parent".into(),
@@ -6220,6 +6417,52 @@ fn auth_failure_message(language: Language, kind: AuthFailureKind, detail: Optio
     match detail {
         Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
         _ => base,
+    }
+}
+
+fn issue_document_body(state: Option<&IssueDocumentState>) -> Option<(String, u64)> {
+    match state? {
+        IssueDocumentState::Ready {
+            body,
+            fetched_at_ms,
+        }
+        | IssueDocumentState::Stale {
+            body,
+            fetched_at_ms,
+            ..
+        } => Some((body.clone(), *fetched_at_ms)),
+        IssueDocumentState::Loading {
+            body: Some(body),
+            fetched_at_ms: Some(fetched_at_ms),
+        } => Some((body.clone(), *fetched_at_ms)),
+        IssueDocumentState::Unloaded
+        | IssueDocumentState::Loading { .. }
+        | IssueDocumentState::Failed { .. } => None,
+    }
+}
+
+fn issue_document_failure(error: tracker::TrackerReadError) -> IssueDocumentFailure {
+    match error {
+        tracker::TrackerReadError::Offline { detail, .. } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Offline,
+            message: detail.unwrap_or_else(|| "Issue Tracker is offline".into()),
+            retry_after_ms: None,
+        },
+        tracker::TrackerReadError::RateLimited { retry_after_ms } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::RateLimited,
+            message: "Issue Tracker rate limit reached".into(),
+            retry_after_ms,
+        },
+        tracker::TrackerReadError::Auth { detail, .. } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Auth,
+            message: detail.unwrap_or_else(|| "Issue Tracker authentication failed".into()),
+            retry_after_ms: None,
+        },
+        tracker::TrackerReadError::Failed { detail } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Tracker,
+            message: detail.unwrap_or_else(|| "Issue Tracker could not load this Issue".into()),
+            retry_after_ms: None,
+        },
     }
 }
 

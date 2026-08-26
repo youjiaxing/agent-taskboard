@@ -1,10 +1,17 @@
 import { chromium } from "playwright";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 const url = process.env.BOARD_URL;
 if (!url) {
   console.error("missing BOARD_URL");
   process.exit(1);
 }
+const screenshotDir = process.env.ISSUE_DOCUMENT_SCREENSHOT_DIR;
+if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
+const capture = async (name) => {
+  if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
+};
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
@@ -157,8 +164,92 @@ if (!headers[0].startsWith("阻塞中") || !headers[1].startsWith("Frontier") ||
   throw new Error(`unexpected column order: ${JSON.stringify(headers)}`);
 }
 
+await page.setViewportSize({ width: 1440, height: 900 });
+let releaseDocumentRefresh;
+const documentRefreshGate = new Promise((resolve) => {
+  releaseDocumentRefresh = resolve;
+});
+const preserveCachedDocumentDuringRefresh = async (route) => {
+  if (!route.request().url().endsWith("/rpc")) {
+    await route.continue();
+    return;
+  }
+  let request;
+  try {
+    request = route.request().postDataJSON();
+  } catch {
+    await route.continue();
+    return;
+  }
+  if (request?.op === "focusIssue" && request.issueId === "you/garden#2") {
+    const response = await route.fetch();
+    const result = await response.json();
+    result.snapshot.board.selected.document = {
+      kind: "loading",
+      body: "# Cached issue body\n\nVisible while Tracker refreshes.",
+      fetchedAtMs: Date.now() - 60_000,
+    };
+    await route.fulfill({ response, json: result });
+    return;
+  }
+  if (request?.op === "loadIssueDocument" && request.issueId === "you/garden#2") {
+    await documentRefreshGate;
+  }
+  await route.continue();
+};
+await page.route("**/*", preserveCachedDocumentDuringRefresh);
 await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".detail-hd:has-text('child ready')");
+await page.waitForSelector('[data-document-state="loading"] .issue-markdown:has-text("Cached issue body")');
+const loadingStatus = await page.$eval('[data-document-state="loading"] .document-status', (node) => node.textContent);
+if (!loadingStatus?.includes("数据截至") && !loadingStatus?.includes("Data as of")) {
+  throw new Error(`cached Issue document should keep its as-of time while refreshing, got ${loadingStatus}`);
+}
+releaseDocumentRefresh();
+await page.waitForSelector('[data-document-state="ready"]');
+await page.unroute("**/*", preserveCachedDocumentDuringRefresh);
+const documentText = await page.$eval(".issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!documentText?.includes("Can the operator read every constraint") || !documentText.includes("Paragraph six")) {
+  throw new Error(`Issue document should render the complete long body, got ${documentText}`);
+}
+for (const selector of [".issue-markdown h1", ".issue-markdown h2", ".issue-markdown strong", ".issue-markdown code", ".issue-markdown ul"]) {
+  if (!(await page.$(selector))) throw new Error(`Markdown rendering missing ${selector}`);
+}
+if (await page.$(".issue-markdown script") || await page.evaluate(() => window.__ISSUE_HTML_EXECUTED__ === true)) {
+  throw new Error("raw Issue HTML must stay escaped and inert");
+}
+if (!(await page.$('.issue-markdown a[data-url="https://github.com/you/garden/issues/2"]'))) {
+  throw new Error("safe HTTPS markdown link should remain available");
+}
+if (await page.$('.issue-markdown [data-url^="javascript:"]')) {
+  throw new Error("dangerous markdown URLs must not become actions");
+}
+if (!(await page.$(".issue-markdown .unsafe-link"))) {
+  throw new Error("dangerous markdown link should be rendered as inert text");
+}
+const sectionOrder = await page.evaluate(() => {
+  const documentTop = document.querySelector(".issue-document")?.getBoundingClientRect().top ?? 0;
+  const family = document.querySelector(".detail-block")?.getBoundingClientRect().top ?? 0;
+  return { document: documentTop, family };
+});
+if (sectionOrder.family <= sectionOrder.document) {
+  throw new Error(`family and Dependency sections should follow the document: ${JSON.stringify(sectionOrder)}`);
+}
+const headerTopBeforeScroll = await page.$eval(".detail-sticky", (node) => node.getBoundingClientRect().top);
+await page.$eval(".detail-scroll", (node) => { node.scrollTop = node.scrollHeight; });
+const headerTopAfterScroll = await page.$eval(".detail-sticky", (node) => node.getBoundingClientRect().top);
+if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
+  throw new Error("Issue title and actions should stay pinned while document content scrolls");
+}
+await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
+await capture("issue-98-desktop-detail-1440x900.png");
+const normalDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
+await page.click('button[data-act="toggle-issue-width"]');
+const wideDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
+if (wideDetailWidth <= normalDetailWidth || !(await page.getByRole("button", { name: "收窄详情" }).count())) {
+  throw new Error(`details should have explicit widen/narrow actions, got ${normalDetailWidth} -> ${wideDetailWidth}`);
+}
+await page.click('button[data-act="toggle-issue-width"]');
 await page.click(".issue-detail button[data-act='open-issue']");
 const openedDetailUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
 if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
@@ -269,6 +360,12 @@ if (await page.$(".side")) {
   throw new Error("lifting a Run should remove the sidebar from layout");
 }
 await page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
+await page.waitForSelector('.lifted-run [data-document-state="ready"]');
+const liftedDocument = await page.$eval(".lifted-run .issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes("same complete Issue")) {
+  throw new Error(`entering a Run should retain the complete Issue document, got ${liftedDocument}`);
+}
+await capture("issue-98-existing-run-1440x900.png");
 const liftedWidths = await page.evaluate(() => {
   const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
   const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
@@ -537,8 +634,17 @@ await page.click(".mobile-scope-sheet button[data-act='remove-project']");
 await page.waitForSelector(".overlay[data-act='close-remove']");
 await page.click("button[data-act='close-remove']");
 
-await page.click("button[data-act='mobile-issue']");
+await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".mobile-issue-view .issue-detail");
+await page.waitForSelector('.mobile-issue-view [data-document-state="ready"]');
+const mobileDocument = await page.$eval(".mobile-issue-view .issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!mobileDocument?.includes("Can the operator read every constraint") || !mobileDocument.includes("Paragraph six")) {
+  throw new Error(`390px Issue view should expose the complete document, got ${mobileDocument}`);
+}
+if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
+  throw new Error("mobile Issue view should still omit full view changes");
+}
+await capture("issue-98-mobile-390x844.png");
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
 

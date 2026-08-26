@@ -141,6 +141,13 @@ pub struct IssueComment {
     pub body: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueDocument {
+    pub issue: IssueRecord,
+    /// Tracker 原文；Host 和 Client 不从中推导 Dependency 或父子关系。
+    pub body: String,
+}
+
 pub trait TrackerPort: Send + Sync {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
     fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError>;
@@ -151,6 +158,11 @@ pub trait TrackerPort: Send + Sync {
         self.read_issues(ctx)
             .map(|issues| crate::tracker_seam::TrackerReadOutcome::Complete { issues })
     }
+    fn read_issue_document(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError>;
     fn create_issue(
         &self,
         ctx: &ProbeContext<'_>,
@@ -313,6 +325,7 @@ pub const MEMORY_TRACKER_ACTOR: &str = "me";
 pub struct MemoryTracker {
     failures: Mutex<BTreeSet<String>>,
     read_scripts: Mutex<BTreeMap<String, ReadScript>>,
+    detail_read_scripts: Mutex<BTreeMap<String, ReadScript>>,
     read_counts: Mutex<BTreeMap<String, u64>>,
     issues: Mutex<BTreeMap<String, Vec<IssueRecord>>>,
     write_fail: Mutex<BTreeMap<String, String>>,
@@ -327,6 +340,7 @@ impl MemoryTracker {
         Self {
             failures: Mutex::new(BTreeSet::new()),
             read_scripts: Mutex::new(BTreeMap::new()),
+            detail_read_scripts: Mutex::new(BTreeMap::new()),
             read_counts: Mutex::new(BTreeMap::new()),
             issues: Mutex::new(BTreeMap::new()),
             write_fail: Mutex::new(BTreeMap::new()),
@@ -425,6 +439,31 @@ impl MemoryTracker {
             .entry(issue.repository.clone())
             .or_default()
             .push(issue);
+    }
+
+    pub fn set_issue_body(&self, issue_id: impl Into<String>, body: impl Into<String>) {
+        self.bodies
+            .lock()
+            .expect("memory tracker")
+            .insert(issue_id.into(), body.into());
+    }
+
+    pub fn fail_issue_document_offline(&self, issue_id: impl Into<String>) {
+        self.detail_read_scripts
+            .lock()
+            .expect("memory tracker")
+            .insert(issue_id.into(), ReadScript::Offline);
+    }
+
+    pub fn fail_issue_document_rate_limited(
+        &self,
+        issue_id: impl Into<String>,
+        retry_after_ms: Option<u64>,
+    ) {
+        self.detail_read_scripts
+            .lock()
+            .expect("memory tracker")
+            .insert(issue_id.into(), ReadScript::RateLimited { retry_after_ms });
     }
 
     fn write_guard(&self, ctx: &ProbeContext<'_>) -> Result<(), TrackerWriteError> {
@@ -547,6 +586,56 @@ impl TrackerPort for MemoryTracker {
             .get(ctx.repository)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn read_issue_document(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        if let Some(script) = self
+            .detail_read_scripts
+            .lock()
+            .expect("memory tracker")
+            .get(issue_id)
+            .cloned()
+        {
+            return Err(match script {
+                ReadScript::Offline => TrackerReadError::Offline {
+                    source: Some(self.source),
+                    cli_detected: true,
+                    detail: Some(format!("cannot read {issue_id}")),
+                },
+                ReadScript::Auth => TrackerReadError::Auth {
+                    source: Some(self.source),
+                    kind: AuthFailureKind::Rejected,
+                    cli_detected: true,
+                    detail: Some(format!("credentials rejected for {issue_id}")),
+                },
+                ReadScript::RateLimited { retry_after_ms } => {
+                    TrackerReadError::RateLimited { retry_after_ms }
+                }
+            });
+        }
+        let issue = self
+            .issues
+            .lock()
+            .expect("memory tracker")
+            .values()
+            .flat_map(|issues| issues.iter())
+            .find(|issue| issue.id() == issue_id)
+            .cloned()
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })?;
+        let body = self
+            .bodies
+            .lock()
+            .expect("memory tracker")
+            .get(issue_id)
+            .cloned()
+            .unwrap_or_default();
+        Ok(IssueDocument { issue, body })
     }
 
     fn create_issue(
@@ -907,6 +996,13 @@ trait GitHubApi: Send + Sync {
         edges: IssueEdges,
         after: Option<&str>,
     ) -> Result<NodePage, ProbeError>;
+    fn read_issue(
+        &self,
+        host: &str,
+        repository: &str,
+        token: &str,
+        number: u64,
+    ) -> Result<Value, ProbeError>;
     fn viewer_login(&self, host: &str, token: &str) -> Result<String, ProbeError>;
     fn add_assignees(
         &self,
@@ -1311,6 +1407,34 @@ impl TrackerPort for GitHubTracker {
         Ok(crate::tracker_seam::TrackerReadOutcome::Complete {
             issues: map_github_nodes(&nodes, ctx),
         })
+    }
+
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        let (token, source, cli_detected) = self.authorized_read(ctx)?;
+        let (repository, number) =
+            parse_issue_id(issue_id).ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })?;
+        let node = self
+            .api
+            .read_issue(ctx.github_host, &repository, &token, number)
+            .map_err(|err| probe_read_error(err, source, cli_detected))?;
+        let issue =
+            map_github_issue_node(&node, &repository, ctx.github_host).ok_or_else(|| {
+                TrackerReadError::Failed {
+                    detail: Some("cannot map GitHub issue".into()),
+                }
+            })?;
+        let body = node
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Ok(IssueDocument { issue, body })
     }
 
     fn create_issue(
@@ -1859,6 +1983,17 @@ impl GitHubApi for LiveGitHubApi {
             has_next_page,
             end_cursor,
         })
+    }
+
+    fn read_issue(
+        &self,
+        host: &str,
+        repository: &str,
+        token: &str,
+        number: u64,
+    ) -> Result<Value, ProbeError> {
+        let url = format!("{}/issues/{number}", github_repo_url(host, repository));
+        github_json("GET", &url, token, None)
     }
 
     fn viewer_login(&self, host: &str, token: &str) -> Result<String, ProbeError> {
@@ -2623,6 +2758,27 @@ impl GitHubApi for MapApi {
             end_cursor: (has_next_page && !self.missing_edge_cursor)
                 .then(|| format!("cursor-{next}")),
         })
+    }
+
+    fn read_issue(
+        &self,
+        _host: &str,
+        repository: &str,
+        token: &str,
+        number: u64,
+    ) -> Result<Value, ProbeError> {
+        self.guard_read(token)?;
+        self.issues
+            .lock()
+            .expect("scripted github")
+            .get(repository)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("number").and_then(Value::as_u64) == Some(number))
+            })
+            .cloned()
+            .ok_or_else(|| ProbeError::Unreachable("unknown issue".into()))
     }
 
     fn viewer_login(&self, _host: &str, token: &str) -> Result<String, ProbeError> {
