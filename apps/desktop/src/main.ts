@@ -430,6 +430,7 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  closedCount?: number;
 };
 
 type CenterView = "board" | "graph";
@@ -841,6 +842,8 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let renderedGraphKey = "";
+let renderedGraphProjectId = "";
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
@@ -1448,6 +1451,20 @@ function restoreActiveField(field: {
   next.scrollLeft = field.scrollLeft;
 }
 
+function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
+  if (!board?.graph) return "";
+  return JSON.stringify([board.selected?.id ?? "", board.graph]);
+}
+
+function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
+  if (typeof graph.closedCount === "number") {
+    return copy.showClosedContext.replace("{count}", String(graph.closedCount));
+  }
+  return copy.showClosedContext
+    .replace(/\s*（[^）]*\{count\}[^）]*）/, "")
+    .replace(/\s*\([^)]*\{count\}[^)]*\)/, "");
+}
+
 function render(): void {
   if (!snapshot || !app) return;
   const snap = snapshot;
@@ -1473,6 +1490,34 @@ function render(): void {
   const selectedIssue = snap.board?.selected;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
+  const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
+  const previousGraph = previousGraphCanvas
+    ? {
+        canvas: previousGraphCanvas,
+        projectId: renderedGraphProjectId,
+        renderKey: renderedGraphKey,
+        scrollLeft: previousGraphCanvas.scrollLeft,
+        scrollTop: previousGraphCanvas.scrollTop,
+        clientWidth: previousGraphCanvas.clientWidth,
+        clientHeight: previousGraphCanvas.clientHeight,
+        scrollWidth: previousGraphCanvas.scrollWidth,
+        scrollHeight: previousGraphCanvas.scrollHeight,
+      }
+    : null;
+  const desktopProjectGraph =
+    !isMobile &&
+    !empty &&
+    !snap.usageOpen &&
+    snap.workspaceView === "project" &&
+    !runLifted &&
+    snap.centerView === "graph" &&
+    Boolean(snap.board?.graph);
+  const nextGraphKey = desktopProjectGraph ? dependencyGraphRenderKey(snap.board) : "";
+  const reuseGraphCanvas = Boolean(
+    previousGraph &&
+      previousGraph.projectId === snap.focusedProjectId &&
+      previousGraph.renderKey === nextGraphKey,
+  );
   if (!pairingAddress) {
     pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
@@ -1573,7 +1618,7 @@ function render(): void {
                     ? hostOverviewPage(copy, snap)
                     : runLifted
                       ? liftedRunView(copy, snap)
-                      : `${projectMain(copy, snap)}${runDock(copy, snap)}`
+                      : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
           }
         </main>
       </div>
@@ -1717,7 +1762,28 @@ function render(): void {
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
-  paintGraphEdges();
+  const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
+  if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
+    graphPlaceholder.replaceWith(previousGraph.canvas);
+  }
+  const graphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
+  if (graphCanvas && previousGraph?.projectId === snap.focusedProjectId) {
+    graphCanvas.scrollLeft = previousGraph.scrollLeft;
+    graphCanvas.scrollTop = previousGraph.scrollTop;
+  }
+  renderedGraphKey = graphCanvas ? nextGraphKey : "";
+  renderedGraphProjectId = graphCanvas ? snap.focusedProjectId : "";
+  const graphLayoutChanged = Boolean(
+    graphCanvas &&
+      previousGraph &&
+      (graphCanvas.clientWidth !== previousGraph.clientWidth ||
+        graphCanvas.clientHeight !== previousGraph.clientHeight ||
+        graphCanvas.scrollWidth !== previousGraph.scrollWidth ||
+        graphCanvas.scrollHeight !== previousGraph.scrollHeight),
+  );
+  if (!reuseGraphCanvas || graphLayoutChanged) {
+    paintGraphEdges();
+  }
   restoreActiveField(activeField);
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
@@ -2397,7 +2463,7 @@ function keyboardHelpDialog(copy: ShellCopy): string {
   </div>`;
 }
 
-function projectMain(copy: ShellCopy, snap: Snapshot): string {
+function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
   if (!project) return loopbackNotice(snap.loopbackPage);
   return `<div class="project-board">
@@ -2414,7 +2480,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
     ${issueSearch(copy, snap)}
     ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
-    ${boardView(copy, snap)}
+    ${boardView(copy, snap, reuseGraphCanvas)}
   </div>`;
 }
 
@@ -2444,7 +2510,7 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
   </form>`;
 }
 
-function boardView(copy: ShellCopy, snap: Snapshot): string {
+function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const board = snap.board;
   if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
     const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
@@ -2472,7 +2538,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
             : ""
         }
       </div>
-      ${onGraph ? dependencyGraphView(copy, board) : boardLanes(copy, board)}
+      ${onGraph ? dependencyGraphView(copy, board, reuseGraphCanvas) : boardLanes(copy, board)}
     </div>
     ${inspectorOpen ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
   </div>`;
@@ -2510,7 +2576,7 @@ function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
   </div>`;
 }
 
-function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot): string {
+function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas: boolean): string {
   const graph = board.graph;
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
@@ -2522,12 +2588,15 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot): string {
     columns.set(node.rank, list);
   }
   const ranks = [...columns.keys()].sort((a, b) => a - b);
+  const completeGraphLabel = completeDependencyGraphLabel(copy, graph);
   return `<div class="dep-graph">
     <label class="graph-opt">
       <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
-      ${escapeHtml(copy.showClosedContext)}
+      ${escapeHtml(completeGraphLabel)}
     </label>
-    <div class="graph-canvas">
+    ${reuseCanvas
+      ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
+      : `<div class="graph-canvas">
       <svg class="graph-edges" aria-hidden="true"></svg>
       <div class="graph-flow">
         ${ranks
@@ -2539,7 +2608,7 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot): string {
           )
           .join("")}
       </div>
-    </div>
+    </div>`}
   </div>`;
 }
 

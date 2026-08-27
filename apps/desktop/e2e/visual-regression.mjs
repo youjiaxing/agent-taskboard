@@ -11,8 +11,13 @@ const deterministicNowMs = 1_787_748_507_000;
 
 export async function installDeterministicHostProtocol(page, protocol) {
   await page.addInitScript(({ protocol, nowMs }) => {
+    const intervalCallbacks = [];
     Date.now = () => nowMs;
-    window.setInterval = () => 1;
+    window.setInterval = (callback, _delay, ...args) => {
+      intervalCallbacks.push(() => callback(...args));
+      return intervalCallbacks.length;
+    };
+    window.__RUN_INTERVAL_CALLBACKS__ = () => intervalCallbacks.forEach((callback) => callback());
     window.__HOST_PROTOCOL__ = protocol;
   }, { protocol, nowMs: deterministicNowMs });
 }

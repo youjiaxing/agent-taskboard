@@ -278,6 +278,7 @@ pub struct GraphEdge {
 pub struct DependencyGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    pub closed_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -475,6 +476,7 @@ pub fn project_board(
 }
 
 fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> DependencyGraph {
+    let closed_count = issues.iter().filter(|issue| !issue.open).count();
     let by_id: BTreeMap<String, &IssueRecord> =
         issues.iter().map(|issue| (issue.id(), issue)).collect();
     let mut refs: BTreeMap<String, &IssueRef> = BTreeMap::new();
@@ -530,7 +532,11 @@ fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> Depend
         .into_iter()
         .map(|(from, to)| GraphEdge { from, to })
         .collect();
-    DependencyGraph { nodes, edges }
+    DependencyGraph {
+        nodes,
+        edges,
+        closed_count,
+    }
 }
 
 fn graph_node(

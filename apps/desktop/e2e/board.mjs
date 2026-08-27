@@ -393,6 +393,10 @@ if (!graphTitles.includes("unparented ready") || !graphTitles.includes("blocker"
 if (graphTitles.includes("old gate") || graphTitles.includes("just closed")) {
   throw new Error("closed context should be off by default");
 }
+const completeGraphToggle = page.getByLabel("显示完整 Project 图（已关闭 Issue：3）");
+if ((await completeGraphToggle.count()) !== 1) {
+  throw new Error("complete Project graph toggle should name its scope and closed Issue count");
+}
 const edge = await page.$('path[data-from="you/garden#9"][data-to="you/garden#3"]');
 if (!edge) {
   throw new Error("graph should draw the blocker edge from left to right");
@@ -429,6 +433,32 @@ if (await page.$(".lifted-run")) {
 }
 await assertVisual("issue-99-graph-1440x900.png");
 await assertShellRegionsDoNotOverlap(page);
+
+const graphCanvas = await page.$(".graph-canvas");
+const graphEdgePath = await page.$(".graph-edges path");
+const graphScrollLeft = await page.$eval(".graph-canvas", (node) => {
+  const flow = node.querySelector(".graph-flow");
+  flow.style.width = "1600px";
+  node.scrollLeft = Math.floor((node.scrollWidth - node.clientWidth) / 2);
+  return node.scrollLeft;
+});
+if (!graphCanvas || graphScrollLeft <= 0) {
+  throw new Error(`graph scroll regression needs horizontal overflow, got ${graphScrollLeft}`);
+}
+const tickResponse = page.waitForResponse((response) =>
+  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+);
+await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+await tickResponse;
+await page.waitForTimeout(50);
+const graphCanvasConnected = await graphCanvas.evaluate((node) => node.isConnected);
+const graphEdgeConnected = graphEdgePath ? await graphEdgePath.evaluate((node) => node.isConnected) : false;
+const graphScrollAfterTick = await page.$eval(".graph-canvas", (node) => node.scrollLeft);
+if (!graphCanvasConnected || !graphEdgeConnected || graphScrollAfterTick !== graphScrollLeft) {
+  throw new Error(
+    `Host tick should preserve the dependency graph DOM and viewport, got canvas=${graphCanvasConnected} edge=${graphEdgeConnected} scroll=${graphScrollLeft}->${graphScrollAfterTick}`,
+  );
+}
 
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");

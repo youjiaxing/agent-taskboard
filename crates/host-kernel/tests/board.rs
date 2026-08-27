@@ -560,6 +560,7 @@ fn closed_context_toggle_shows_the_entire_project_graph() {
     let before = host.snapshot().board.unwrap();
     let graph = before.graph.expect("graph");
     assert!(!before.show_closed_graph_context);
+    assert_eq!(graph.closed_count, 2);
     assert_eq!(node_ids(&graph), vec!["you/garden#1", "you/garden#10"]);
     assert!(edge_pairs(&graph).is_empty());
 
@@ -571,6 +572,7 @@ fn closed_context_toggle_shows_the_entire_project_graph() {
     let after = host.snapshot().board.unwrap();
     let graph = after.graph.expect("graph");
     assert!(after.show_closed_graph_context);
+    assert_eq!(graph.closed_count, 2);
     assert_eq!(
         node_ids(&graph),
         vec![
