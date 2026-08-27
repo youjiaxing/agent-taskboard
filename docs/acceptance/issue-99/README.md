@@ -1,19 +1,21 @@
 # Issue #99 主壳恢复验收
 
-验收日期：2026-08-26。
+验收日期：2026-08-27。
 
 ## 原型基线 / 产品结果 / 有意偏离
 
 | 原型基线 `prototype/codex-shell-refresh` | 产品结果 | 有意偏离 |
 | --- | --- | --- |
 | 左侧连续展示 Host、Project、进行中与执行已停 Run | 产品壳使用固定宽度的原生层级栏；自动化 fixture 含 2 个 Host、2 个 Project、进行中与执行已停 Run | 保留真实 Host 配对、Project 登记、独立菜单和状态修复入口，不复制原型假数据 |
-| 中间顶栏固定放看板 / 依赖图与折叠入口 | 看板 / 依赖图进入 38px chrome；左右区域折叠后从 grid 消失，恢复入口仍在 chrome | 保留产品已有的刷新、搜索和键盘入口，压成工作区工具条，不放进原型控制条 |
+| 中间顶栏固定放看板 / 依赖图与折叠入口 | 看板 / 依赖图进入 38px chrome；左右区域折叠后从 grid 消失，恢复入口仍在 chrome；Issue header 也提供 icon-only 收起入口 | 保留产品已有的刷新、搜索和键盘入口，压成工作区工具条，不放进原型控制条 |
 | 四列是可扫读的主工作面，右侧是完整 Issue | 1440×900 与 1280×840 均为四列并排；列使用无边框 surface；默认详情宽度至少 340px | 暖纸仍按 ADR 0011 作为系统浅色首次默认；素纸与素纸夜间只改颜色，不改 DOM 和几何 |
 | 点已有 Run 的 Issue 进入约 2:1 的 Embedded Terminal / Issue 工作面 | 产品壳自动收起左侧，Embedded Terminal 与 Issue 直接共边，返回看板恢复原布局 | Embedded Terminal 使用真实 xterm / PTY，不复制原型中的假 TUI 文案与终端控制 |
-| 依赖图替换看板；Host 总览按状态分组 | 产品壳保留真实 Dependency graph、Host 总览、Project 过滤和已结束默认隐藏 | 图节点仅换详情，不把图交互改成 Run 导航；遵守 ADR 0015 |
+| 依赖图替换看板；Host 总览按状态分组 | 产品壳保留真实 Dependency graph；打开 closed context 后显示当前 Project 全部 Issue；总览保留 Project 过滤和已结束默认隐藏 | 图节点仅换详情，不把图交互改成 Run 导航；总览只显示通过 Agent Taskboard 启动的 Run，无 Run 时明确说明数据边界；遵守 ADR 0015 |
 | 手机聚焦当前 Project，底栏为看板 / 票 / Run | 390×844 仍只显示进行中与 Frontier；Host / Project 在切换面板；完整 Issue 独立滚动 | 手机默认显示只读最近输出，完整官方 TUI 仍是逃生入口，不升级为手机主路径 |
 
 ## 可复现场景
+
+开发 Host 运行时，可直接在浏览器打开 `http://127.0.0.1:10529/`，或使用当前由 `npm run tauri dev` 启动的桌面窗口。不要打开 `/Applications/Agent Taskboard.app`，那是已安装版本，不包含本分支尚未合并的改动。
 
 主壳场景统一由真实 `HostKernel` loopback fixture 驱动：
 

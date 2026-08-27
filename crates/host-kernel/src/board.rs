@@ -488,29 +488,11 @@ fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> Depend
             refs.entry(blocked.id()).or_insert(blocked);
         }
     }
-    let mut node_ids: BTreeSet<String> = issues
+    let node_ids: BTreeSet<String> = issues
         .iter()
-        .filter(|issue| issue.open)
+        .filter(|issue| issue.open || show_closed_context)
         .map(IssueRecord::id)
         .collect();
-
-    if show_closed_context {
-        let open_ids = node_ids.clone();
-        for issue in issues.iter().filter(|issue| open_ids.contains(&issue.id())) {
-            for blocker in &issue.blocked_by {
-                if let DependencyRef::Known(known) = blocker {
-                    if !known.open.unwrap_or(true) {
-                        node_ids.insert(known.id());
-                    }
-                }
-            }
-            for blocked in &issue.blocking {
-                if !blocked.open.unwrap_or(true) {
-                    node_ids.insert(blocked.id());
-                }
-            }
-        }
-    }
 
     let mut edge_set: BTreeSet<(String, String)> = BTreeSet::new();
     for issue in issues {

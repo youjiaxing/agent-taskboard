@@ -1,5 +1,9 @@
 import { chromium } from "playwright";
-import { assertShellRegionsDoNotOverlap, createVisualAssert } from "./visual-regression.mjs";
+import {
+  assertShellRegionsDoNotOverlap,
+  createVisualAssert,
+  installDeterministicHostProtocol,
+} from "./visual-regression.mjs";
 
 const url = process.env.BOARD_URL;
 const state = process.env.SHELL_EDGE_STATE;
@@ -11,9 +15,7 @@ if (!url || !state) {
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 page.on("pageerror", (error) => console.error("pageerror", error));
-await page.addInitScript((protocol) => {
-  window.__HOST_PROTOCOL__ = protocol;
-}, url);
+await installDeterministicHostProtocol(page, url);
 await page.goto(url, { waitUntil: "domcontentloaded" });
 
 if (state === "empty-host") {
@@ -24,6 +26,14 @@ if (state === "empty-host") {
   if (state === "single-project") {
     const projects = await page.$$(".project-row");
     if (projects.length !== 1) throw new Error(`single Project fixture rendered ${projects.length} Project rows`);
+    await page.waitForSelector(".lanes");
+    await page.click("button[data-act='open-overview']");
+    await page.waitForSelector(".overview-page");
+    const empty = await page.$eval(".overview-empty", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+    if (!empty?.includes("只显示通过 Agent Taskboard 启动的 Run")) {
+      throw new Error(`Host overview should explain its empty Run source: ${empty}`);
+    }
+    await page.click("button[data-act='return-board']");
     await page.waitForSelector(".lanes");
   } else if (state === "frontier-empty") {
     await page.waitForSelector('[data-lane="frontier"] .lane-empty');

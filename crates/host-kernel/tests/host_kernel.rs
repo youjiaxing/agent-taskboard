@@ -642,8 +642,19 @@ fn loopback_page_can_proxy_the_dev_client() {
     let up_addr = upstream.local_addr().unwrap();
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = upstream.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut request = Vec::new();
             let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buf).unwrap();
+                request.extend_from_slice(&buf[..read]);
+            }
+            let mut extra = [0u8; 1];
+            if matches!(stream.read(&mut extra), Ok(0)) {
+                return;
+            }
             let body = b"<title>dev-empty-shell</title>";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

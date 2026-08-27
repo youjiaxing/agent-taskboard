@@ -1,7 +1,11 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { assertShellRegionsDoNotOverlap, createVisualAssert } from "./visual-regression.mjs";
+import {
+  assertShellRegionsDoNotOverlap,
+  createVisualAssert,
+  installDeterministicHostProtocol,
+} from "./visual-regression.mjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -26,14 +30,14 @@ page.on("console", (msg) => {
     console.error("console", msg.text());
   }
 });
-await page.addInitScript((protocol) => {
-  window.__HOST_PROTOCOL__ = protocol;
+await installDeterministicHostProtocol(page, url);
+await page.addInitScript(() => {
   window.__OPENED_URLS__ = [];
   window.open = (target) => {
     window.__OPENED_URLS__.push(String(target));
     return null;
   };
-}, url);
+});
 await page.goto(url, { waitUntil: "domcontentloaded" });
 try {
   await page.waitForSelector(".lanes");
@@ -321,12 +325,27 @@ const normalDetailWidth = await page.$eval(".board-shell > .issue-detail", (node
 if (normalDetailWidth < 340) {
   throw new Error(`Issue document should be readable in the default desktop shell, got ${normalDetailWidth}px`);
 }
-await page.click('button[data-act="toggle-issue-width"]');
-const wideDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
-if (wideDetailWidth <= normalDetailWidth || !(await page.getByRole("button", { name: "收窄详情" }).count())) {
-  throw new Error(`details should have explicit widen/narrow actions, got ${normalDetailWidth} -> ${wideDetailWidth}`);
+if (await page.$('button[data-act="toggle-issue-width"]')) {
+  throw new Error("Issue details should not expose a widen/narrow action");
 }
-await page.click('button[data-act="toggle-issue-width"]');
+const detailHide = page.locator('.issue-detail .detail-title-row button[data-act="toggle-issue"]');
+if ((await detailHide.count()) !== 1) {
+  throw new Error("Issue details should expose one local hide control");
+}
+if ((await detailHide.getAttribute("aria-label")) !== "收起详情" || (await detailHide.textContent())?.trim()) {
+  throw new Error("Issue detail hide control should be icon-only with an accessible label");
+}
+if ((await detailHide.locator("svg").count()) !== 1) {
+  throw new Error("Issue detail hide control should use a meaningful panel icon");
+}
+await detailHide.click();
+await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+const restoreDetail = page.locator('button[data-act="toggle-issue"][aria-label="显示详情"]');
+if ((await restoreDetail.count()) !== 1 || (await restoreDetail.locator("svg").count()) !== 1) {
+  throw new Error("collapsed Issue details should keep an icon-only restore control in chrome");
+}
+await restoreDetail.click();
+await page.waitForSelector(".board-shell > .issue-detail");
 await page.click(".issue-detail button[data-act='open-issue']");
 const openedDetailUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
 if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
@@ -390,12 +409,21 @@ if (await page.$("button[data-act='clear-filter']")) {
 
 await page.click("[data-field='closedContext']");
 await page.waitForSelector(".graph-node:has-text('old gate')");
-if (await page.$(".graph-node:has-text('just closed')")) {
-  throw new Error("closed context should only add dependency neighbors");
+const globalGraphTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
+  nodes.map((node) => node.textContent),
+);
+if (globalGraphTitles.length !== 10) {
+  throw new Error(`global dependency graph should include all 10 Project Issues, got ${JSON.stringify(globalGraphTitles)}`);
+}
+for (const closedTitle of ["older closed", "just closed"]) {
+  if (!(await page.$(`.graph-node:has-text('${closedTitle}')`))) {
+    throw new Error(`global dependency graph should include closed Issue ${closedTitle}`);
+  }
 }
 
 await page.click(".graph-node:has-text('active work')");
 await page.waitForSelector(".detail-hd:has-text('active work')");
+await page.waitForSelector('.issue-markdown:has-text("Active Run Question")');
 if (await page.$(".lifted-run")) {
   throw new Error("dependency graph nodes should only change Issue details");
 }
@@ -749,6 +777,9 @@ if (!mobileDocument?.includes("Can the operator read every constraint") || !mobi
 }
 if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
   throw new Error("mobile Issue view should still omit full view changes");
+}
+if (await page.$('.mobile-issue-view button[data-act="toggle-issue"]')) {
+  throw new Error("mobile Issue view should not expose a desktop panel-collapse control");
 }
 await capture("issue-98-mobile-390x844.png");
 await assertVisual("issue-99-mobile-390x844.png");

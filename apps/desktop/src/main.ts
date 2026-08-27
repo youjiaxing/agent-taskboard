@@ -138,8 +138,6 @@ type ShellCopy = {
   issueDocumentRetry: string;
   issueDocumentStale: string;
   issueDocumentFailed: string;
-  issueDetailWiden: string;
-  issueDetailNarrow: string;
   family: string;
   deps: string;
   parent: string;
@@ -230,6 +228,7 @@ type ShellCopy = {
   usageHint: string;
   hostOverview: string;
   hostOverviewHint: string;
+  hostOverviewEmpty: string;
   returnToBoard: string;
   showSidebar: string;
   hideSidebar: string;
@@ -842,7 +841,6 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
-let issueDetailWide = false;
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
@@ -1504,7 +1502,7 @@ function render(): void {
           ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
           <div class="chrome-trail">
             ${showIssueToggle
-              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">◧</button>`
+              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
               : ""}
             <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
             <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
@@ -1804,7 +1802,7 @@ function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
 function mobileMain(copy: ShellCopy, snap: Snapshot): string {
   if (mobileView === "run") return mobileRunView(copy, snap);
   if (mobileView === "issue") {
-    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board) : ""}</aside></section>`;
+    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board, false) : ""}</aside></section>`;
   }
   return `<section class="mobile-board-view">${projectMain(copy, snap)}</section>`;
 }
@@ -2068,17 +2066,19 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       </label>
       <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
     </div>
-    <div class="overview-groups">
-      ${groups
-        .filter(([id]) => id !== "ended" || overviewShowEnded)
-        .map(
-          ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
-            <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
-            <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
-          </section>`,
-        )
-        .join("")}
-    </div>
+    ${visibleRuns.length === 0
+      ? `<div class="board-empty overview-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
+      : `<div class="overview-groups">
+          ${groups
+            .filter(([id]) => id !== "ended" || overviewShowEnded)
+            .map(
+              ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
+                <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
+                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+              </section>`,
+            )
+            .join("")}
+        </div>`}
   </div>`;
 }
 
@@ -2180,7 +2180,7 @@ function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
   const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}">
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}">
     ${terminalPanel(copy, run, "lifted-terminal")}
     ${inspectorOpen && snap.board ? `<aside class="issue-detail">${issueDetail(copy, snap.board)}</aside>` : ""}
   </section>`;
@@ -2462,7 +2462,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
   const inspectorOpen = issueDetailVisible && Boolean(board.selected);
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}" data-center-view="${onGraph ? "graph" : "board"}">
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -2552,6 +2552,15 @@ function graphNode(node: GraphNode, selectedId: string | undefined): string {
   </button>`;
 }
 
+function issuePanelIcon(open: boolean): string {
+  const chevron = open ? "M13 9l3 3-3 3" : "M16 9l-3 3 3 3";
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+    <path d="M10 4v16"></path>
+    <path d="${chevron}"></path>
+  </svg>`;
+}
+
 function frontierEmptyText(
   copy: ShellCopy,
   reason: BoardSnapshot["frontierEmpty"],
@@ -2607,7 +2616,7 @@ function issueCard(
   </article>`;
 }
 
-function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
+function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
   const issue = board.selected;
   if (!issue) {
     return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
@@ -2628,7 +2637,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
     <header class="detail-sticky">
       <div class="detail-title-row">
         <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        <button type="button" class="detail-width" data-act="toggle-issue-width">${escapeHtml(issueDetailWide ? copy.issueDetailNarrow : copy.issueDetailWiden)}</button>
+        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
       </div>
       <div class="detail-meta">
         ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
@@ -3335,11 +3344,6 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "toggle-issue") {
     issueDetailVisible = !issueDetailVisible;
-    render();
-    return;
-  }
-  if (act === "toggle-issue-width") {
-    issueDetailWide = !issueDetailWide;
     render();
     return;
   }

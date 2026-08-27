@@ -7,6 +7,15 @@ import { PNG } from "pngjs";
 const visualBaselineDir = join(dirname(fileURLToPath(import.meta.url)), "baselines");
 const visualDiffDir = process.env.VISUAL_DIFF_DIR ?? join("target", "visual-diffs");
 const updateVisualBaselines = process.env.UPDATE_VISUAL_BASELINES === "1";
+const deterministicNowMs = 1_787_748_507_000;
+
+export async function installDeterministicHostProtocol(page, protocol) {
+  await page.addInitScript(({ protocol, nowMs }) => {
+    Date.now = () => nowMs;
+    window.setInterval = () => 1;
+    window.__HOST_PROTOCOL__ = protocol;
+  }, { protocol, nowMs: deterministicNowMs });
+}
 
 export function createVisualAssert(page) {
   return async (name) => {

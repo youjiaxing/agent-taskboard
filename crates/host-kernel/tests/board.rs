@@ -11,6 +11,8 @@ use host_kernel::{
     DEFAULT_RECENT_LIMIT,
 };
 
+const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
+
 fn boot_req(root: &Path) -> BootRequest {
     BootRequest {
         app_local_data_dir: root.to_path_buf(),
@@ -28,11 +30,23 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+    let mut host = HostKernel::boot_with(boot_req(root), tracker).unwrap();
+    pin_board_test_time(&mut host);
+    host
 }
 
 fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+    let mut host = HostKernel::boot_with(boot_req(root), tracker).unwrap();
+    pin_board_test_time(&mut host);
+    host
+}
+
+fn pin_board_test_time(host: &mut HostKernel) {
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": BOARD_TEST_NOW_MS,
+    }))
+    .unwrap();
 }
 
 fn register(host: &mut HostKernel, dir: &Path, repository: &str) -> String {
@@ -53,7 +67,7 @@ fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) 
         .join("../../apps/desktop/dist")
         .canonicalize()
         .expect("built desktop client");
-    let client = LoopbackServer::attach_with(
+    let client = LoopbackServer::attach_without_host_tick(
         Arc::clone(&kernel),
         0,
         LoopbackAssets::Directory(dist),
@@ -521,7 +535,7 @@ fn dependency_graph_contains_only_dependency_edges() {
 }
 
 #[test]
-fn closed_context_toggle_only_adds_nodes() {
+fn closed_context_toggle_shows_the_entire_project_graph() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -559,13 +573,17 @@ fn closed_context_toggle_only_adds_nodes() {
     assert!(after.show_closed_graph_context);
     assert_eq!(
         node_ids(&graph),
-        vec!["you/garden#1", "you/garden#9", "you/garden#10"]
+        vec![
+            "you/garden#1",
+            "you/garden#8",
+            "you/garden#9",
+            "you/garden#10"
+        ]
     );
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#9".into(), "you/garden#10".into())]
     );
-    assert!(!node_ids(&graph).contains(&"you/garden#8".into()));
     assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#10"));
 }
 
@@ -739,6 +757,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         },
     )
     .unwrap();
+    pin_board_test_time(&mut host);
     let garden_project_id = register(&mut host, &dir, "you/garden");
     assert_eq!(
         host.snapshot().board.unwrap().empty,
@@ -826,7 +845,9 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let remote_tmp = tempfile::tempdir().unwrap();
     let mut remote_req = boot_req(remote_tmp.path());
     remote_req.host_display_name = "Mini".into();
-    let remote = Arc::new(Mutex::new(HostKernel::boot(remote_req).unwrap()));
+    let mut remote_host = HostKernel::boot(remote_req).unwrap();
+    pin_board_test_time(&mut remote_host);
+    let remote = Arc::new(Mutex::new(remote_host));
     let _remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
     let remote_address = _remote_server
         .protocol_url()
@@ -936,7 +957,7 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
     let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(IssueRecord::open("you/first", 1, "first tracker issue"));
     tracker.add_issue(IssueRecord::open("manual/retry", 1, "retry tracker issue"));
-    let host = HostKernel::boot_with_ports(
+    let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         host_kernel::KernelPorts {
             tracker: Arc::clone(&tracker) as _,
@@ -946,6 +967,7 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
         },
     )
     .unwrap();
+    pin_board_test_time(&mut host);
     assert!(host.snapshot().projects.is_empty());
     run_browser_e2e(
         host,
