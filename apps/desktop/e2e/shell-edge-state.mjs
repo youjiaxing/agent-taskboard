@@ -29,9 +29,10 @@ if (state === "empty-host") {
     await page.waitForSelector(".lanes");
     await page.click("button[data-act='open-overview']");
     await page.waitForSelector(".overview-page");
-    const empty = await page.$eval(".overview-empty", (node) => node.textContent?.replace(/\s+/g, " ").trim());
-    if (!empty?.includes("只显示通过 Agent Taskboard 启动的 Run")) {
-      throw new Error(`Host overview should explain its empty Run source: ${empty}`);
+    await page.waitForSelector(".overview-project");
+    const empty = await page.$eval(".overview-runs-empty", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+    if (!empty?.includes("尚无通过 Agent Taskboard 启动的 Run") || !empty.includes("Project 态势仍在上方可见")) {
+      throw new Error(`Host overview should keep Project status above a compact Run empty state: ${empty}`);
     }
     await page.click("button[data-act='return-board']");
     await page.waitForSelector(".lanes");

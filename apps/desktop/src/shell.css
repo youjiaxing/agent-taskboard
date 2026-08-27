@@ -502,17 +502,17 @@ html[data-theme="plain-night"] button.danger.primary {
   text-align: left;
 }
 .graph-center-act {
-  flex: 0 0 30px;
-  width: 30px;
+  flex: 0 0 auto;
   border: 0;
   border-left: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
-  padding: 6px;
+  padding: 6px 8px;
   color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .graph-center-act:hover { color: var(--ink); background: var(--hover); }
-.graph-center-act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .graph-node .issue-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -858,6 +858,23 @@ html[data-theme="plain-night"] button.danger.primary {
 .overview-controls { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; }
 .overview-controls > label:first-child { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .overview-controls select { min-width: 180px; }
+.overview-stats { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 8px; }
+.overview-stats > div { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--paper-2); }
+.overview-stats b { font-size: 20px; }
+.overview-stats span { color: var(--muted); font-size: 11px; }
+.overview-project-section, .overview-run-section { display: grid; gap: 8px; }
+.overview-projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+.overview-project { display: grid; gap: 10px; padding: 12px; text-align: left; background: var(--paper-2); }
+.overview-project-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.overview-project-head > span { display: grid; gap: 3px; min-width: 0; }
+.overview-project-head b, .overview-project-head small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-project-head small { color: var(--muted); font-size: 11px; }
+.overview-project-head em { color: var(--good); font-size: 10px; font-style: normal; white-space: nowrap; }
+.overview-project-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.overview-project-metrics > span { display: grid; gap: 2px; }
+.overview-project-metrics i { color: var(--muted); font-size: 10px; font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-project-metrics b { font-size: 14px; }
+.overview-runs-empty { padding: 12px; border-radius: 10px; color: var(--muted); background: var(--paper-2); }
 .overview-groups { display: grid; gap: 14px; }
 .overview-group { border: 0; border-radius: 12px; padding: 12px; background: var(--paper-2); }
 .run-thumbnails { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }

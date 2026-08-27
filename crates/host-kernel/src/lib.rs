@@ -40,7 +40,7 @@ pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
     FrontierEmptyReason, GraphEdge, GraphNode, GraphRelation, IssueActivity, IssueCard,
     IssueDetail, IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState, IssueLink,
-    IssueSearch, IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
+    IssueSearch, IssueStateFilter, ProjectIssueCounts, RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
@@ -536,6 +536,8 @@ pub struct ProjectSummary {
     pub restore_auto_advance: bool,
     #[serde(default = "advance::default_restore_delay_ms")]
     pub restore_delay_ms: u64,
+    #[serde(default)]
+    pub issue_counts: ProjectIssueCounts,
 }
 
 #[derive(Debug, Clone)]
@@ -555,7 +557,12 @@ struct ProjectRecord {
 }
 
 impl ProjectRecord {
-    fn summary(&self, has_active_run: bool, has_execution_stopped: bool) -> ProjectSummary {
+    fn summary(
+        &self,
+        has_active_run: bool,
+        has_execution_stopped: bool,
+        issue_counts: ProjectIssueCounts,
+    ) -> ProjectSummary {
         ProjectSummary {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -570,6 +577,7 @@ impl ProjectRecord {
             auto_advance: self.auto_advance,
             restore_auto_advance: self.restore_auto_advance,
             restore_delay_ms: self.restore_delay_ms,
+            issue_counts,
         }
     }
 
@@ -1550,31 +1558,7 @@ impl HostKernel {
                 return Ok(self.outcome_with(None, inference));
             }
             Command::FocusIssue { issue_id } => {
-                self.selected_issue_id = Some(issue_id.clone());
-                if let Some(project_id) = self.focused_project_id.clone() {
-                    let previous_body = self
-                        .issue_documents
-                        .get(&project_id)
-                        .and_then(|documents| documents.get(&issue_id))
-                        .and_then(|state| issue_document_body(Some(state)));
-                    let should_start_loading = self
-                        .issue_documents
-                        .get(&project_id)
-                        .and_then(|documents| documents.get(&issue_id))
-                        .is_none_or(|state| !matches!(state, IssueDocumentState::Ready { .. }));
-                    if should_start_loading {
-                        self.issue_documents.entry(project_id).or_default().insert(
-                            issue_id.clone(),
-                            IssueDocumentState::Loading {
-                                body: previous_body.as_ref().map(|(body, _)| body.clone()),
-                                fetched_at_ms: previous_body
-                                    .map(|(_, fetched_at_ms)| fetched_at_ms),
-                            },
-                        );
-                    }
-                }
-                self.focused_run_id = self.active_run_id_for_issue(&issue_id);
-                self.workspace_view = WorkspaceView::Project;
+                self.focus_issue(&issue_id);
             }
             Command::LoadIssueDocument { issue_id } => {
                 self.load_issue_document(&issue_id)?;
@@ -1608,8 +1592,8 @@ impl HostKernel {
                 self.persist_client_settings(&self.appearance.clone())?;
             }
             Command::CenterDependencyGraph { issue_id } => {
+                self.focus_issue(&issue_id);
                 self.graph_center_issue_id = Some(issue_id);
-                self.complete_dependency_graph = false;
             }
             Command::SetDependencyGraphComplete { complete } => {
                 self.complete_dependency_graph = complete;
@@ -2681,11 +2665,20 @@ impl HostKernel {
                 project.summary(
                     self.project_has_active_run(&project.id),
                     self.project_has_execution_stopped(&project.id),
+                    self.project_issue_counts(&project.id),
                 )
             })
             .collect();
         let focused_project_id = self.focused_project_id.clone().unwrap_or_default();
         (projects, focused_project_id, empty_actions)
+    }
+
+    fn project_issue_counts(&self, project_id: &str) -> ProjectIssueCounts {
+        let refresh = self.refresh_status_for(project_id);
+        board::project_issue_counts(
+            self.loaded_issues.get(project_id).map(Vec::as_slice),
+            &refresh,
+        )
     }
 
     fn refresh_remote_view(&mut self, host_id: &str) -> Result<(), KernelError> {
@@ -4013,6 +4006,33 @@ impl HostKernel {
             .iter()
             .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
             .map(|run| run.id.clone())
+    }
+
+    fn focus_issue(&mut self, issue_id: &str) {
+        self.selected_issue_id = Some(issue_id.to_string());
+        if let Some(project_id) = self.focused_project_id.clone() {
+            let previous_body = self
+                .issue_documents
+                .get(&project_id)
+                .and_then(|documents| documents.get(issue_id))
+                .and_then(|state| issue_document_body(Some(state)));
+            let should_start_loading = self
+                .issue_documents
+                .get(&project_id)
+                .and_then(|documents| documents.get(issue_id))
+                .is_none_or(|state| !matches!(state, IssueDocumentState::Ready { .. }));
+            if should_start_loading {
+                self.issue_documents.entry(project_id).or_default().insert(
+                    issue_id.to_string(),
+                    IssueDocumentState::Loading {
+                        body: previous_body.as_ref().map(|(body, _)| body.clone()),
+                        fetched_at_ms: previous_body.map(|(_, fetched_at_ms)| fetched_at_ms),
+                    },
+                );
+            }
+        }
+        self.focused_run_id = self.active_run_id_for_issue(issue_id);
+        self.workspace_view = WorkspaceView::Project;
     }
 
     fn last_bound_run(&self, issue_id: &str) -> Option<&RunSummary> {
@@ -5618,7 +5638,7 @@ impl ShellCopy {
                 view_graph: "依赖图".into(),
                 show_closed_context: "也显示已关闭上下文".into(),
                 graph_center: "中心 Issue：{issue}".into(),
-                graph_center_here: "以此为中心".into(),
+                graph_center_here: "从此处展开".into(),
                 graph_show_complete: "查看完整上下游（{count} 个 Issue）".into(),
                 graph_show_neighborhood: "收起到一跳上下游".into(),
                 graph_show_more: "继续显示节点".into(),
@@ -5736,8 +5756,8 @@ impl ShellCopy {
                 usage: "用量".into(),
                 usage_hint: "这台 Host 上全部 Project 的 token 流水。不估美元，不管账号额度。".into(),
                 host_overview: "总览".into(),
-                host_overview_hint: "当前 Host 上的 Run，按终端状态分组。不是 Frontier 聚合板。".into(),
-                host_overview_empty: "这台 Host 还没有 Run。这里只显示通过 Agent Taskboard 启动的 Run。".into(),
+                host_overview_hint: "当前 Host 的 Project 态势与 Run；Run 按终端状态分组。".into(),
+                host_overview_empty: "尚无通过 Agent Taskboard 启动的 Run；Project 态势仍在上方可见。".into(),
                 return_to_board: "返回看板".into(),
                 show_sidebar: "显示侧栏".into(),
                 hide_sidebar: "收起侧栏".into(),
@@ -5889,7 +5909,7 @@ impl ShellCopy {
                 view_graph: "Dependency graph".into(),
                 show_closed_context: "Also show closed context".into(),
                 graph_center: "Center Issue: {issue}".into(),
-                graph_center_here: "Center graph here".into(),
+                graph_center_here: "Expand from here".into(),
                 graph_show_complete: "View complete upstream and downstream ({count} Issues)".into(),
                 graph_show_neighborhood: "Collapse to one hop".into(),
                 graph_show_more: "Show more nodes".into(),
@@ -6007,8 +6027,8 @@ impl ShellCopy {
                 usage: "Usage".into(),
                 usage_hint: "Token traffic for every Project on this Host. No dollar estimates and no account quotas.".into(),
                 host_overview: "Overview".into(),
-                host_overview_hint: "Runs on the current Host, grouped by terminal state. This is not an aggregated Frontier.".into(),
-                host_overview_empty: "This Host has no Runs yet. Only Runs started through Agent Taskboard appear here.".into(),
+                host_overview_hint: "Project status and Runs on the current Host; Runs are grouped by terminal state.".into(),
+                host_overview_empty: "No Runs have been started through Agent Taskboard yet; Project status remains visible above.".into(),
                 return_to_board: "Back to board".into(),
                 show_sidebar: "Show sidebar".into(),
                 hide_sidebar: "Hide sidebar".into(),

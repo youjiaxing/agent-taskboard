@@ -363,6 +363,18 @@ pub struct BoardSnapshot {
     pub search: IssueSearch,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectIssueCounts {
+    pub data_available: bool,
+    pub total: usize,
+    pub open: usize,
+    pub closed: usize,
+    pub blocked: usize,
+    pub frontier: usize,
+    pub in_progress: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lane {
     Blocked,
@@ -372,6 +384,33 @@ enum Lane {
 
 pub fn clamp_recent_limit(limit: u32) -> u32 {
     limit.clamp(1, MAX_RECENT_LIMIT)
+}
+
+pub fn project_issue_counts(
+    loaded: Option<&[IssueRecord]>,
+    refresh: &RefreshStatus,
+) -> ProjectIssueCounts {
+    let Some(issues) = loaded else {
+        return ProjectIssueCounts::default();
+    };
+    let mut counts = ProjectIssueCounts {
+        data_available: refresh.complete(),
+        total: issues.len(),
+        open: issues.iter().filter(|issue| issue.open).count(),
+        closed: issues.iter().filter(|issue| !issue.open).count(),
+        ..ProjectIssueCounts::default()
+    };
+    if !refresh.complete() {
+        return counts;
+    }
+    for issue in issues.iter().filter(|issue| issue.open) {
+        match lane(issue) {
+            Lane::Blocked => counts.blocked += 1,
+            Lane::Frontier => counts.frontier += 1,
+            Lane::InProgress => counts.in_progress += 1,
+        }
+    }
+    counts
 }
 
 pub fn project_board(

@@ -158,6 +158,15 @@ fn selecting_a_github_project_projects_four_columns_left_to_right() {
     );
     assert_eq!(board.recent_limit, DEFAULT_RECENT_LIMIT);
     assert!(board.empty.is_none());
+
+    let counts = &host.snapshot().projects[0].issue_counts;
+    assert!(counts.data_available);
+    assert_eq!(counts.total, 5);
+    assert_eq!(counts.open, 3);
+    assert_eq!(counts.closed, 2);
+    assert_eq!(counts.blocked, 1);
+    assert_eq!(counts.frontier, 1);
+    assert_eq!(counts.in_progress, 1);
 }
 
 #[test]
@@ -646,24 +655,37 @@ fn centered_dependency_graph_expands_the_complete_upstream_and_downstream_closur
     );
 
     host.handle(serde_json::json!({
-        "op": "centerDependencyGraph",
-        "issueId": "you/garden#9",
+        "op": "focusIssue",
+        "issueId": "you/garden#10",
     }))
     .unwrap();
-    let recentered = host.snapshot().board.unwrap().graph.expect("graph");
-    assert_eq!(recentered.center_id.as_deref(), Some("you/garden#9"));
-    assert!(!recentered.complete);
-    assert_eq!(
-        node_ids(&recentered),
-        vec!["you/garden#8", "you/garden#9", "you/garden#10"]
-    );
-    assert!(!recentered.nodes[0].open);
-
     host.handle(serde_json::json!({
         "op": "setDependencyGraphComplete",
         "complete": true,
     }))
     .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#9",
+    }))
+    .unwrap();
+    let recentered_board = host.snapshot().board.unwrap();
+    assert_eq!(recentered_board.selected.unwrap().id, "you/garden#9");
+    let recentered = recentered_board.graph.expect("graph");
+    assert_eq!(recentered.center_id.as_deref(), Some("you/garden#9"));
+    assert!(recentered.complete);
+    assert_eq!(
+        node_ids(&recentered),
+        vec![
+            "you/garden#8",
+            "you/garden#9",
+            "you/garden#10",
+            "you/garden#11",
+            "you/garden#12",
+        ]
+    );
+    assert!(!recentered.nodes[0].open);
+
     let graph = host.snapshot().board.unwrap().graph.expect("graph");
     assert_eq!(graph.center_id.as_deref(), Some("you/garden#9"));
     assert!(graph.complete);

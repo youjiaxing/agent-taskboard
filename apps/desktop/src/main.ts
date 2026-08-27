@@ -325,6 +325,17 @@ type Project = {
   autoAdvance?: boolean;
   restoreAutoAdvance?: boolean;
   restoreDelayMs?: number;
+  issueCounts?: ProjectIssueCounts;
+};
+
+type ProjectIssueCounts = {
+  dataAvailable: boolean;
+  total: number;
+  open: number;
+  closed: number;
+  blocked: number;
+  frontier: number;
+  inProgress: number;
 };
 
 type ProjectDraft = {
@@ -841,6 +852,8 @@ let projectOperation: "save" | "remove" | null = null;
 let removeProject: Project | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
+const activePointers = new Set<number>();
+let tickRenderPending = false;
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let termHost: HTMLDivElement | null = null;
@@ -2178,6 +2191,9 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
 }
 
 function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+  const visibleProjects = snap.projects.filter(
+    (project) => !overviewProjectId || project.id === overviewProjectId,
+  );
   const visibleRuns = (snap.runs ?? []).filter(
     (run) => !overviewProjectId || run.projectId === overviewProjectId,
   );
@@ -2192,6 +2208,20 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       (project) => `<option value="${escapeHtml(project.id)}" ${project.id === overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
     )
     .join("");
+  const totalCounts = visibleProjects.reduce(
+    (total, project) => {
+      const counts = projectIssueCounts(project);
+      if (counts.dataAvailable) {
+        total.open += counts.open;
+        total.frontier += counts.frontier;
+        total.available += 1;
+      }
+      return total;
+    },
+    { open: 0, frontier: 0, available: 0 },
+  );
+  const allCountsAvailable = visibleProjects.length > 0 && totalCounts.available === visibleProjects.length;
+  const activeRuns = visibleRuns.filter((run) => run.status !== "ended").length;
   return `<div class="overview-page">
     <div class="board-head">
       <div class="board-head-row">
@@ -2205,9 +2235,23 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       </label>
       <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
     </div>
-    ${visibleRuns.length === 0
-      ? `<div class="board-empty overview-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
-      : `<div class="overview-groups">
+    <div class="overview-stats">
+      <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.open : "—"}</b><span>Open Issue</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.frontier : "—"}</b><span>Frontier</span></div>
+      <div><b>${activeRuns}</b><span>Run</span></div>
+    </div>
+    <section class="overview-project-section">
+      <div class="lane-hd">${escapeHtml(copy.projects)} <span>${visibleProjects.length}</span></div>
+      <div class="overview-projects">
+        ${visibleProjects.map((project) => overviewProjectCard(copy, project)).join("")}
+      </div>
+    </section>
+    <section class="overview-run-section">
+      <div class="lane-hd">Run <span>${visibleRuns.length}</span></div>
+      ${visibleRuns.length === 0
+        ? `<div class="overview-runs-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
+        : `<div class="overview-groups">
           ${groups
             .filter(([id]) => id !== "ended" || overviewShowEnded)
             .map(
@@ -2218,7 +2262,41 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
             )
             .join("")}
         </div>`}
+    </section>
   </div>`;
+}
+
+function projectIssueCounts(project: Project): ProjectIssueCounts {
+  return project.issueCounts ?? {
+    dataAvailable: false,
+    total: 0,
+    open: 0,
+    closed: 0,
+    blocked: 0,
+    frontier: 0,
+    inProgress: 0,
+  };
+}
+
+function overviewProjectCard(copy: ShellCopy, project: Project): string {
+  const counts = projectIssueCounts(project);
+  const metric = (label: string, value: number) =>
+    `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
+  const connection = project.connection.status === "ready"
+    ? copy.connectionReady
+    : project.connection.status === "unreachable"
+      ? copy.connectionUnavailable
+      : copy.authFailed;
+  return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-metrics">
+      ${metric("Open", counts.open)}
+      ${metric(copy.colBlocked, counts.blocked)}
+      ${metric(copy.colFrontier, counts.frontier)}
+      ${metric(copy.colInProgress, counts.inProgress)}
+      ${metric("Closed", counts.closed)}
+    </span>
+  </button>`;
 }
 
 function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
@@ -2787,9 +2865,7 @@ function graphNode(
 function graphCenterButton(copy: ShellCopy, node: GraphNode): string {
   const label = `${copy.graphCenterHere} #${node.number}`;
   return `<button type="button" class="graph-center-act" data-act="center-graph" data-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="12" cy="12" r="6"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path><circle cx="12" cy="12" r="1"></circle>
-    </svg>
+    ${escapeHtml(copy.graphCenterHere)}
   </button>`;
 }
 
@@ -4129,8 +4205,9 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
-    resetGraphUiState();
     await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    render();
+    await loadSelectedIssueDocument();
     render();
     return;
   }
@@ -4527,9 +4604,34 @@ function ensureTick(): void {
           visible: clientIsVisible(),
         }
       : {};
-    rpc("tick", extra).then(render).catch(() => {});
+    rpc("tick", extra).then(renderAfterTick).catch(() => {});
   }, 1000);
 }
+
+function renderAfterTick(): void {
+  if (activePointers.size > 0) {
+    tickRenderPending = true;
+    return;
+  }
+  render();
+}
+
+function finishPointerInteraction(pointerId: number): void {
+  activePointers.delete(pointerId);
+  if (activePointers.size > 0 || !tickRenderPending) return;
+  window.setTimeout(() => {
+    if (activePointers.size > 0 || !tickRenderPending) return;
+    tickRenderPending = false;
+    render();
+  }, 0);
+}
+
+document.addEventListener("pointerdown", (event) => activePointers.add(event.pointerId), true);
+document.addEventListener("pointerup", (event) => finishPointerInteraction(event.pointerId), true);
+document.addEventListener("pointercancel", (event) => finishPointerInteraction(event.pointerId), true);
+window.addEventListener("blur", () => {
+  for (const pointerId of activePointers) finishPointerInteraction(pointerId);
+});
 
 document.addEventListener("visibilitychange", onClientForegroundOrHidden);
 

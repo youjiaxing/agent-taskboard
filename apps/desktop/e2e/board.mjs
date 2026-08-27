@@ -379,6 +379,27 @@ if (!boardActive) {
   throw new Error("factory default should be the board view");
 }
 
+const graphTabBeforeTick = await page.$("button[data-act='center-view'][data-id='graph']");
+const graphTabBox = await graphTabBeforeTick?.boundingBox();
+if (!graphTabBeforeTick || !graphTabBox) {
+  throw new Error("single-click navigation regression needs the graph tab");
+}
+await page.mouse.move(graphTabBox.x + graphTabBox.width / 2, graphTabBox.y + graphTabBox.height / 2);
+await page.mouse.down();
+const navigationTickResponse = page.waitForResponse((response) =>
+  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+);
+await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+await navigationTickResponse;
+await page.waitForTimeout(50);
+if (!(await graphTabBeforeTick.evaluate((node) => node.isConnected))) {
+  throw new Error("Host tick should not replace a navigation target while its pointer is pressed");
+}
+await page.mouse.up();
+await page.waitForSelector(".dep-graph", { timeout: 1000 });
+await page.click("button[data-act='center-view'][data-id='board']");
+await page.waitForSelector(".lanes");
+
 await page.click(".issue-card:has-text('child blocked') .issue-card-main");
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.click("button[data-act='center-view'][data-id='graph']");
@@ -431,19 +452,17 @@ if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isCo
   throw new Error("changing graph node details should preserve the graph canvas");
 }
 
-const centerOnBlocker = page.getByRole("button", { name: "以此为中心 #9" });
-if ((await centerOnBlocker.locator("svg").count()) !== 1) {
-  throw new Error("graph nodes should expose an icon-only center action");
+const expandFromWaiting = page.getByRole("button", { name: "从此处展开 #5" });
+if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
+  throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
 }
-await centerOnBlocker.click();
-await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#9 blocker"));
-await page.waitForSelector(".graph-node:has-text('old gate')");
-if (!(await page.$(".graph-node:has-text('old gate').closed"))) {
-  throw new Error("closed Issues should remain visible and subdued when they connect the centered chain");
-}
+await expandFromWaiting.click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
+await page.waitForSelector(".detail-hd:has-text('waiting on history')");
 
-await page.getByRole("button", { name: "以此为中心 #3" }).click();
+await page.getByRole("button", { name: "从此处展开 #3" }).click();
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await page.waitForSelector(".graph-index");
 const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
@@ -462,8 +481,22 @@ const searchedRelationship = await page.$eval(".graph-index-row", (node) => node
 if (!searchedRelationship?.includes("just closed")) {
   throw new Error(`complete relationship search should find closed downstream Issues, got ${searchedRelationship}`);
 }
+await page.fill('[data-field="graphSearch"]', "waiting on history");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 1);
+await page.getByRole("button", { name: "从此处展开 #5" }).first().click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
+await page.waitForSelector(".detail-hd:has-text('waiting on history')");
+if (!(await page.$(".graph-index")) || !(await page.getByRole("button", { name: "收起到一跳上下游" }).count())) {
+  throw new Error("re-centering a complete upstream/downstream view should preserve its range");
+}
+if ((await page.inputValue('[data-field="graphSearch"]')) !== "waiting on history") {
+  throw new Error("re-centering a complete upstream/downstream view should preserve its search context");
+}
 await page.fill('[data-field="graphSearch"]', "");
 await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 50);
+await page.getByRole("button", { name: "从此处展开 #3" }).first().click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector(".graph-index");
 
 await page.click(".graph-node:has-text('active work') .graph-node-main");
 await page.waitForSelector(".detail-hd:has-text('active work')");
@@ -527,6 +560,48 @@ if (filteredProjects.some((name) => name !== "garden")) {
 }
 await assertVisual("issue-99-overview-1440x900.png");
 await assertShellRegionsDoNotOverlap(page);
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
+
+const emptyRunsOverviewResponse = async (route) => {
+  if (!route.request().url().endsWith("/rpc")) {
+    await route.continue();
+    return;
+  }
+  let request;
+  try {
+    request = route.request().postDataJSON();
+  } catch {
+    await route.continue();
+    return;
+  }
+  if (request?.op !== "openHostOverview") {
+    await route.continue();
+    return;
+  }
+  const response = await route.fetch();
+  const result = await response.json();
+  result.snapshot.runs = [];
+  result.snapshot.projects = result.snapshot.projects.map((project) => ({
+    ...project,
+    hasActiveRun: false,
+    hasExecutionStopped: false,
+  }));
+  await route.fulfill({ response, json: result });
+};
+await page.route("**/*", emptyRunsOverviewResponse);
+await page.click("button[data-act='open-overview']");
+await page.waitForSelector(".overview-page");
+const gardenOverview = await page.$$eval(".overview-project:has-text('garden') .overview-project-metrics > span", (nodes) =>
+  Object.fromEntries(nodes.map((node) => [node.querySelector("i")?.textContent, node.querySelector("b")?.textContent])),
+);
+if (gardenOverview.Open !== "7" || gardenOverview.Frontier !== "5") {
+  throw new Error(`Host overview should keep Project Issue data when there are no Runs, got ${JSON.stringify(gardenOverview)}`);
+}
+if (!(await page.$(".overview-runs-empty"))) {
+  throw new Error("a Host with no Runs should keep a compact Run empty state below Project data");
+}
+await page.unroute("**/*", emptyRunsOverviewResponse);
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 
