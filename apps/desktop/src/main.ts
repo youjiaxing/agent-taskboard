@@ -2191,6 +2191,9 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
 }
 
 function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+  if (overviewProjectId && !snap.projects.some((project) => project.id === overviewProjectId)) {
+    overviewProjectId = "";
+  }
   const visibleProjects = snap.projects.filter(
     (project) => !overviewProjectId || project.id === overviewProjectId,
   );

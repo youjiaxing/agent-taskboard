@@ -582,21 +582,23 @@ const emptyRunsOverviewResponse = async (route) => {
   const response = await route.fetch();
   const result = await response.json();
   result.snapshot.runs = [];
-  result.snapshot.projects = result.snapshot.projects.map((project) => ({
-    ...project,
-    hasActiveRun: false,
-    hasExecutionStopped: false,
-  }));
+  result.snapshot.projects = result.snapshot.projects
+    .filter((project) => project.name === "tools")
+    .map((project) => ({
+      ...project,
+      hasActiveRun: false,
+      hasExecutionStopped: false,
+    }));
   await route.fulfill({ response, json: result });
 };
 await page.route("**/*", emptyRunsOverviewResponse);
 await page.click("button[data-act='open-overview']");
 await page.waitForSelector(".overview-page");
-const gardenOverview = await page.$$eval(".overview-project:has-text('garden') .overview-project-metrics > span", (nodes) =>
+const toolsOverview = await page.$$eval(".overview-project:has-text('tools') .overview-project-metrics > span", (nodes) =>
   Object.fromEntries(nodes.map((node) => [node.querySelector("i")?.textContent, node.querySelector("b")?.textContent])),
 );
-if (gardenOverview.Open !== "7" || gardenOverview.Frontier !== "5") {
-  throw new Error(`Host overview should keep Project Issue data when there are no Runs, got ${JSON.stringify(gardenOverview)}`);
+if (toolsOverview.Open !== "1" || toolsOverview.Frontier !== "1") {
+  throw new Error(`Host overview should discard a stale cross-Host Project filter and keep Issue data without Runs, got ${JSON.stringify(toolsOverview)}`);
 }
 if (!(await page.$(".overview-runs-empty"))) {
   throw new Error("a Host with no Runs should keep a compact Run empty state below Project data");
