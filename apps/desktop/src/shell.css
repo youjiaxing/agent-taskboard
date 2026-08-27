@@ -408,6 +408,26 @@ html[data-theme="plain-night"] button.danger.primary {
 .issue-card:hover { border-color: var(--line); }
 .issue-card.sel { border-color: var(--line-strong); background: var(--paper); box-shadow: 0 0 0 1px var(--line-strong); }
 .dep-graph { display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1; }
+.graph-toolbar,
+.graph-limit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.graph-center-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-limit {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.graph-toolbar button,
+.graph-limit button,
+.graph-index button { padding: 4px 7px; font-size: 11px; }
 .graph-opt {
   display: inline-flex;
   align-items: center;
@@ -456,26 +476,89 @@ html[data-theme="plain-night"] button.danger.primary {
   max-width: 220px;
 }
 .graph-node {
-  display: block;
+  position: relative;
+  display: flex;
+  align-items: stretch;
   width: 100%;
-  text-align: left;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px;
+  overflow: hidden;
 }
 .graph-node.sel {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
   background: var(--sel);
 }
+.graph-node.root { border-color: var(--line-strong); }
 .graph-node.closed { opacity: .62; }
+.graph-node-main {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 8px;
+  text-align: left;
+}
+.graph-center-act {
+  flex: 0 0 30px;
+  width: 30px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 6px;
+  color: var(--muted);
+}
+.graph-center-act:hover { color: var(--ink); background: var(--hover); }
+.graph-center-act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .graph-node .issue-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.graph-index {
+  flex: 0 0 auto;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--paper);
+}
+.graph-index summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.graph-index > input {
+  width: calc(100% - 20px);
+  margin: 0 10px 8px;
+  padding: 7px 9px;
+}
+.graph-index-list { border-top: 1px solid var(--line); }
+.graph-index-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line-soft);
+}
+.graph-index-row.closed { opacity: .62; }
+.graph-index-main {
+  display: grid;
+  grid-template-columns: 58px 44px minmax(0, 1fr);
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.graph-index-main .issue-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-relation { font-size: 10px; color: var(--muted); }
+.graph-index-more { margin: 8px 10px; }
 .issue-id { font-size: 11px; color: var(--muted); }
 .issue-title { font-size: 13px; margin-top: 2px; }
 .issue-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }

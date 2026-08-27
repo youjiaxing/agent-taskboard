@@ -38,9 +38,9 @@ pub use agent::{
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
-    FrontierEmptyReason, GraphEdge, GraphNode, IssueActivity, IssueCard, IssueDetail,
-    IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState, IssueLink, IssueSearch,
-    IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
+    FrontierEmptyReason, GraphEdge, GraphNode, GraphRelation, IssueActivity, IssueCard,
+    IssueDetail, IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState, IssueLink,
+    IssueSearch, IssueStateFilter, RefreshStatus, DEFAULT_RECENT_LIMIT,
 };
 pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
@@ -171,8 +171,11 @@ pub enum Command {
     SetCenterView {
         view: CenterView,
     },
-    SetShowClosedGraphContext {
-        show: bool,
+    CenterDependencyGraph {
+        issue_id: String,
+    },
+    SetDependencyGraphComplete {
+        complete: bool,
     },
     SetRecentCompletedLimit {
         limit: u32,
@@ -741,6 +744,17 @@ pub struct ShellCopy {
     pub view_board: String,
     pub view_graph: String,
     pub show_closed_context: String,
+    pub graph_center: String,
+    pub graph_center_here: String,
+    pub graph_show_complete: String,
+    pub graph_show_neighborhood: String,
+    pub graph_show_more: String,
+    pub graph_canvas_limit: String,
+    pub graph_complete_list: String,
+    pub graph_search_placeholder: String,
+    pub graph_upstream: String,
+    pub graph_downstream: String,
+    pub graph_both: String,
     pub clear_filter: String,
     pub col_blocked: String,
     pub col_frontier: String,
@@ -1020,7 +1034,8 @@ pub struct HostKernel {
     issue_search: BTreeMap<String, IssueSearch>,
     center_view: CenterView,
     workspace_view: WorkspaceView,
-    show_closed_graph_context: bool,
+    graph_center_issue_id: Option<String>,
+    complete_dependency_graph: bool,
     launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     last_successful_agent: BTreeMap<String, String>,
     launch_form: Option<RunLaunchForm>,
@@ -1233,7 +1248,8 @@ impl HostKernel {
             issue_search: BTreeMap::new(),
             center_view,
             workspace_view: WorkspaceView::Project,
-            show_closed_graph_context: false,
+            graph_center_issue_id: None,
+            complete_dependency_graph: false,
             launch_defaults: settings.agent_launch_defaults,
             last_successful_agent: settings.last_successful_agent,
             launch_form: None,
@@ -1570,11 +1586,33 @@ impl HostKernel {
                 self.parent_filter = None;
             }
             Command::SetCenterView { view } => {
+                if view == CenterView::Graph
+                    && self.center_view != CenterView::Graph
+                    && self.focused_host_id == LOCAL_HOST_ID
+                {
+                    self.graph_center_issue_id = self.selected_issue_id.clone().or_else(|| {
+                        self.focused_project_id
+                            .as_ref()
+                            .and_then(|project_id| self.loaded_issues.get(project_id))
+                            .and_then(|issues| {
+                                issues
+                                    .iter()
+                                    .find(|issue| issue.open)
+                                    .or_else(|| issues.first())
+                            })
+                            .map(IssueRecord::id)
+                    });
+                    self.complete_dependency_graph = false;
+                }
                 self.center_view = view;
                 self.persist_client_settings(&self.appearance.clone())?;
             }
-            Command::SetShowClosedGraphContext { show } => {
-                self.show_closed_graph_context = show;
+            Command::CenterDependencyGraph { issue_id } => {
+                self.graph_center_issue_id = Some(issue_id);
+                self.complete_dependency_graph = false;
+            }
+            Command::SetDependencyGraphComplete { complete } => {
+                self.complete_dependency_graph = complete;
             }
             Command::SetRecentCompletedLimit { limit } => {
                 self.recent_limit = board::clamp_recent_limit(limit);
@@ -2009,12 +2047,36 @@ impl HostKernel {
                 )?;
                 self.dispatch(Command::SetCenterView { view })
             }
-            "setShowClosedGraphContext" => self.dispatch(Command::SetShowClosedGraphContext {
-                show: request
-                    .get("show")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
-            }),
+            "centerDependencyGraph" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CenterDependencyGraph {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "setDependencyGraphComplete" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetDependencyGraphComplete {
+                    complete: request
+                        .get("complete")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing complete".into()))?,
+                })
+            }
+            "setShowClosedGraphContext" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetDependencyGraphComplete {
+                    complete: request
+                        .get("show")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
+                })
+            }
             "setRecentCompletedLimit" => self.dispatch(Command::SetRecentCompletedLimit {
                 limit: request
                     .get("limit")
@@ -4566,6 +4628,8 @@ impl HostKernel {
         self.projects = projects;
         self.focused_project_id = Some(project_id.clone());
         self.selected_issue_id = None;
+        self.graph_center_issue_id = None;
+        self.complete_dependency_graph = false;
         self.parent_filter = None;
         self.refresh_project(&project_id, RefreshTrigger::Immediate);
         Ok(())
@@ -4640,6 +4704,8 @@ impl HostKernel {
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
             if self.focused_project_id.as_deref() == Some(project_id) {
                 self.selected_issue_id = None;
+                self.graph_center_issue_id = None;
+                self.complete_dependency_graph = false;
                 self.parent_filter = None;
                 self.refresh_project(project_id, RefreshTrigger::Immediate);
             }
@@ -4680,6 +4746,8 @@ impl HostKernel {
         self.clear_pending(project_id, false);
         if was_current {
             self.selected_issue_id = None;
+            self.graph_center_issue_id = None;
+            self.complete_dependency_graph = false;
             self.parent_filter = None;
             if let Some(next_id) = self.focused_project_id.clone() {
                 self.refresh_project(&next_id, RefreshTrigger::Immediate);
@@ -4702,6 +4770,8 @@ impl HostKernel {
         self.projects[index].connection = connection;
         self.focused_project_id = Some(project_id.to_string());
         self.selected_issue_id = None;
+        self.graph_center_issue_id = None;
+        self.complete_dependency_graph = false;
         self.parent_filter = None;
         self.refresh_project(project_id, RefreshTrigger::Immediate);
         self.persist_host_settings()
@@ -4737,7 +4807,8 @@ impl HostKernel {
             self.selected_issue_id.as_deref(),
             self.recent_limit,
             self.refresh_status_for(focused_project_id),
-            self.show_closed_graph_context,
+            self.graph_center_issue_id.as_deref(),
+            self.complete_dependency_graph,
             self.issue_search
                 .get(focused_project_id)
                 .cloned()
@@ -5545,7 +5616,18 @@ impl ShellCopy {
                 graph_hint: "只画 Dependency，不画父子。点节点只换详情。".into(),
                 view_board: "看板".into(),
                 view_graph: "依赖图".into(),
-                show_closed_context: "显示完整 Project 图（已关闭 Issue：{count}）".into(),
+                show_closed_context: "也显示已关闭上下文".into(),
+                graph_center: "中心 Issue：{issue}".into(),
+                graph_center_here: "以此为中心".into(),
+                graph_show_complete: "查看完整上下游（{count} 个 Issue）".into(),
+                graph_show_neighborhood: "收起到一跳上下游".into(),
+                graph_show_more: "继续显示节点".into(),
+                graph_canvas_limit: "画布显示 {shown}/{total}；其余 Issue 可在完整关系列表中搜索。".into(),
+                graph_complete_list: "完整关系列表".into(),
+                graph_search_placeholder: "搜索上下游 Issue".into(),
+                graph_upstream: "上游".into(),
+                graph_downstream: "下游".into(),
+                graph_both: "上下游".into(),
                 clear_filter: "清除过滤".into(),
                 col_blocked: "阻塞中".into(),
                 col_frontier: "Frontier".into(),
@@ -5805,7 +5887,18 @@ impl ShellCopy {
                 graph_hint: "Dependencies only — not parent/child. Click a node to change details.".into(),
                 view_board: "Board".into(),
                 view_graph: "Dependency graph".into(),
-                show_closed_context: "Show complete Project graph (closed Issues: {count})".into(),
+                show_closed_context: "Also show closed context".into(),
+                graph_center: "Center Issue: {issue}".into(),
+                graph_center_here: "Center graph here".into(),
+                graph_show_complete: "View complete upstream and downstream ({count} Issues)".into(),
+                graph_show_neighborhood: "Collapse to one hop".into(),
+                graph_show_more: "Show more nodes".into(),
+                graph_canvas_limit: "Canvas shows {shown}/{total}; search the complete relationship list for the rest.".into(),
+                graph_complete_list: "Complete relationship list".into(),
+                graph_search_placeholder: "Search upstream and downstream Issues".into(),
+                graph_upstream: "Upstream".into(),
+                graph_downstream: "Downstream".into(),
+                graph_both: "Both".into(),
                 clear_filter: "Clear filter".into(),
                 col_blocked: "Blocked".into(),
                 col_frontier: "Frontier".into(),

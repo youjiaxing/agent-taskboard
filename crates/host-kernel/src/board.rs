@@ -265,6 +265,20 @@ pub struct GraphNode {
     pub title: String,
     pub open: bool,
     pub rank: u32,
+    #[serde(default)]
+    pub distance: u32,
+    #[serde(default)]
+    pub relation: GraphRelation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GraphRelation {
+    #[default]
+    Center,
+    Upstream,
+    Downstream,
+    Both,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +292,15 @@ pub struct GraphEdge {
 pub struct DependencyGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    #[serde(default)]
+    pub center_id: Option<String>,
+    #[serde(default)]
+    pub total_count: usize,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub max_distance: u32,
+    /// Legacy protocol field retained for older Clients.
     pub closed_count: usize,
 }
 
@@ -358,7 +381,8 @@ pub fn project_board(
     selected_id: Option<&str>,
     recent_limit: u32,
     refresh: RefreshStatus,
-    show_closed_graph_context: bool,
+    graph_center_id: Option<&str>,
+    complete_dependency_graph: bool,
     search: IssueSearch,
 ) -> BoardSnapshot {
     let recent_limit = clamp_recent_limit(recent_limit);
@@ -374,7 +398,7 @@ pub fn project_board(
             recent_limit,
             refresh,
             graph: None,
-            show_closed_graph_context,
+            show_closed_graph_context: complete_dependency_graph,
             search,
         };
     };
@@ -401,7 +425,7 @@ pub fn project_board(
             recent_limit,
             refresh,
             graph: None,
-            show_closed_graph_context,
+            show_closed_graph_context: complete_dependency_graph,
             search,
         };
     }
@@ -469,14 +493,21 @@ pub fn project_board(
         label_mapping_active: mapping_active,
         recent_limit,
         refresh,
-        graph: Some(dependency_graph(issues, show_closed_graph_context)),
-        show_closed_graph_context,
+        graph: Some(dependency_graph(
+            issues,
+            graph_center_id,
+            complete_dependency_graph,
+        )),
+        show_closed_graph_context: complete_dependency_graph,
         search,
     }
 }
 
-fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> DependencyGraph {
-    let closed_count = issues.iter().filter(|issue| !issue.open).count();
+fn dependency_graph(
+    issues: &[IssueRecord],
+    requested_center_id: Option<&str>,
+    complete: bool,
+) -> DependencyGraph {
     let by_id: BTreeMap<String, &IssueRecord> =
         issues.iter().map(|issue| (issue.id(), issue)).collect();
     let mut refs: BTreeMap<String, &IssueRef> = BTreeMap::new();
@@ -490,40 +521,89 @@ fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> Depend
             refs.entry(blocked.id()).or_insert(blocked);
         }
     }
-    let node_ids: BTreeSet<String> = issues
-        .iter()
-        .filter(|issue| issue.open || show_closed_context)
-        .map(IssueRecord::id)
-        .collect();
+    let mut all_node_ids: BTreeSet<String> = issues.iter().map(IssueRecord::id).collect();
+    all_node_ids.extend(refs.keys().cloned());
 
-    let mut edge_set: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut all_edges: BTreeSet<(String, String)> = BTreeSet::new();
     for issue in issues {
-        if !node_ids.contains(&issue.id()) {
-            continue;
-        }
         for blocker in &issue.blocked_by {
             if let DependencyRef::Known(known) = blocker {
-                if node_ids.contains(&known.id()) {
-                    edge_set.insert((known.id(), issue.id()));
-                }
+                all_edges.insert((known.id(), issue.id()));
             }
         }
         for blocked in &issue.blocking {
-            if node_ids.contains(&blocked.id()) {
-                edge_set.insert((issue.id(), blocked.id()));
-            }
+            all_edges.insert((issue.id(), blocked.id()));
         }
     }
+
+    let center_id = requested_center_id
+        .filter(|id| all_node_ids.contains(*id))
+        .map(str::to_string)
+        .or_else(|| issues.iter().find(|issue| issue.open).map(IssueRecord::id))
+        .or_else(|| issues.first().map(IssueRecord::id));
+    let Some(center_id) = center_id else {
+        return DependencyGraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            center_id: None,
+            total_count: 0,
+            complete,
+            max_distance: 0,
+            closed_count: 0,
+        };
+    };
+
+    let mut outgoing: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut incoming: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (from, to) in &all_edges {
+        outgoing.entry(from.clone()).or_default().push(to.clone());
+        incoming.entry(to.clone()).or_default().push(from.clone());
+    }
+    let upstream = graph_distances(&center_id, &incoming);
+    let downstream = graph_distances(&center_id, &outgoing);
+    let closure_ids: BTreeSet<String> = upstream.keys().chain(downstream.keys()).cloned().collect();
+    let node_ids: BTreeSet<String> = closure_ids
+        .iter()
+        .filter(|id| {
+            complete
+                || upstream.get(*id).is_some_and(|distance| *distance <= 1)
+                || downstream.get(*id).is_some_and(|distance| *distance <= 1)
+        })
+        .cloned()
+        .collect();
+    let edge_set: BTreeSet<(String, String)> = all_edges
+        .into_iter()
+        .filter(|(from, to)| node_ids.contains(from) && node_ids.contains(to))
+        .collect();
 
     let ranks = graph_ranks(&node_ids, &edge_set);
     let mut nodes: Vec<GraphNode> = node_ids
         .iter()
         .map(|id| {
+            let upstream_distance = upstream.get(id).copied();
+            let downstream_distance = downstream.get(id).copied();
+            let relation = if id == &center_id {
+                GraphRelation::Center
+            } else {
+                match (upstream_distance.is_some(), downstream_distance.is_some()) {
+                    (true, true) => GraphRelation::Both,
+                    (true, false) => GraphRelation::Upstream,
+                    (false, true) => GraphRelation::Downstream,
+                    (false, false) => GraphRelation::Center,
+                }
+            };
+            let distance = upstream_distance
+                .into_iter()
+                .chain(downstream_distance)
+                .min()
+                .unwrap_or(0);
             graph_node(
                 id,
                 by_id.get(id).copied(),
                 refs.get(id).copied(),
                 ranks.get(id).copied().unwrap_or(0),
+                distance,
+                relation,
             )
         })
         .collect();
@@ -532,11 +612,49 @@ fn dependency_graph(issues: &[IssueRecord], show_closed_context: bool) -> Depend
         .into_iter()
         .map(|(from, to)| GraphEdge { from, to })
         .collect();
+    let closed_count = closure_ids
+        .iter()
+        .filter(|id| {
+            by_id
+                .get(*id)
+                .map(|issue| !issue.open)
+                .or_else(|| refs.get(*id).and_then(|issue| issue.open.map(|open| !open)))
+                .unwrap_or(false)
+        })
+        .count();
+    let max_distance = upstream
+        .values()
+        .chain(downstream.values())
+        .copied()
+        .max()
+        .unwrap_or(0);
     DependencyGraph {
         nodes,
         edges,
+        center_id: Some(center_id),
+        total_count: closure_ids.len(),
+        complete,
+        max_distance,
         closed_count,
     }
+}
+
+fn graph_distances(
+    center_id: &str,
+    adjacency: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, u32> {
+    let mut distances = BTreeMap::from([(center_id.to_string(), 0)]);
+    let mut pending = std::collections::VecDeque::from([(center_id.to_string(), 0)]);
+    while let Some((id, distance)) = pending.pop_front() {
+        for next in adjacency.get(&id).into_iter().flatten() {
+            if distances.contains_key(next) {
+                continue;
+            }
+            distances.insert(next.clone(), distance + 1);
+            pending.push_back((next.clone(), distance + 1));
+        }
+    }
+    distances
 }
 
 fn graph_node(
@@ -544,6 +662,8 @@ fn graph_node(
     issue: Option<&IssueRecord>,
     fallback: Option<&IssueRef>,
     rank: u32,
+    distance: u32,
+    relation: GraphRelation,
 ) -> GraphNode {
     if let Some(issue) = issue {
         return GraphNode {
@@ -553,6 +673,8 @@ fn graph_node(
             title: issue.title.clone(),
             open: issue.open,
             rank,
+            distance,
+            relation,
         };
     }
     if let Some(issue) = fallback {
@@ -563,6 +685,8 @@ fn graph_node(
             title: issue.title.clone(),
             open: issue.open.unwrap_or(false),
             rank,
+            distance,
+            relation,
         };
     }
     let (repository, number) = split_issue_id(id);
@@ -573,6 +697,8 @@ fn graph_node(
         title: String::new(),
         open: false,
         rank,
+        distance,
+        relation,
     }
 }
 

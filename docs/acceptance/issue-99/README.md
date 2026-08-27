@@ -10,7 +10,7 @@
 | 中间顶栏固定放看板 / 依赖图与折叠入口 | 看板 / 依赖图进入 38px chrome；左右区域折叠后从 grid 消失，恢复入口仍在 chrome；Issue header 也提供 icon-only 收起入口 | 保留产品已有的刷新、搜索和键盘入口，压成工作区工具条，不放进原型控制条 |
 | 四列是可扫读的主工作面，右侧是完整 Issue | 1440×900 与 1280×840 均为四列并排；列使用无边框 surface；默认详情宽度至少 340px | 暖纸仍按 ADR 0011 作为系统浅色首次默认；素纸与素纸夜间只改颜色，不改 DOM 和几何 |
 | 点已有 Run 的 Issue 进入约 2:1 的 Embedded Terminal / Issue 工作面 | 产品壳自动收起左侧，Embedded Terminal 与 Issue 直接共边，返回看板恢复原布局 | Embedded Terminal 使用真实 xterm / PTY，不复制原型中的假 TUI 文案与终端控制 |
-| 依赖图替换看板；Host 总览按状态分组 | 产品壳保留真实 Dependency graph；「显示完整 Project 图」按需展示当前 Project 全部 Issue，并预告已关闭 Issue 数量；总览保留 Project 过滤和已结束默认隐藏 | 图节点仅换详情，不把图交互改成 Run 导航；总览只显示通过 Agent Taskboard 启动的 Run，无 Run 时明确说明数据边界；遵守 ADR 0015 |
+| 依赖图替换看板；Host 总览按状态分组 | Dependency graph 以一张中心 Issue 为根，默认显示一跳上下游；可查看包含 closed Issue 的完整 Dependency 闭包，但不加入无关 Project 历史；总览保留 Project 过滤和已结束默认隐藏 | 单击节点只换详情，独立 target 图标才改变中心；大闭包的数据完整，但画布和关系列表渐进挂载，避免同时铺满全部节点；总览只显示通过 Agent Taskboard 启动的 Run；遵守 ADR 0015 |
 | 手机聚焦当前 Project，底栏为看板 / 票 / Run | 390×844 仍只显示进行中与 Frontier；Host / Project 在切换面板；完整 Issue 独立滚动 | 手机默认显示只读最近输出，完整官方 TUI 仍是逃生入口，不升级为手机主路径 |
 
 ## 可复现场景
@@ -26,7 +26,9 @@ cargo test -p host-kernel browser_renders_incomplete_state_then_recovers_all_boa
 
 该场景覆盖：多 Host、多 Project、四列、最近完成、普通 Issue、已有 Run、执行已停、Dependency graph、Host 总览、Project 过滤、左右折叠、Run 返回看板、三种主题同结构、1280×840、1440×900 与 390×844。
 
-Dependency graph 的回归场景还会制造横向 overflow，再手动触发一次 Host tick，断言原 graph canvas、SVG Dependency path 与横向视野均未被替换或重置。完整 Project 图只在用户打开时绘制；数据与选中节点未变化时，后续每秒 tick 复用既有 DOM，避免 Issue 较多时反复解析节点和重新布局。
+Dependency graph 的回归场景以 #3 为中心：默认只画一跳上游与下游；单击 #9 只切换详情，点击独立的「以此为中心」图标才重新构图；完整上下游包含 closed 链路并排除无关 Issue。fixture 构造 61 节点闭包，完整数据可搜索，但画布首批只挂载 48 节点、关系列表首批只挂载 50 行，可继续渐进显示。
+
+同一场景还会制造横向 overflow，再手动触发一次 Host tick，断言原 graph canvas、SVG Dependency path 与横向视野均未被替换或重置。graph 数据和中心未变化时，后续每秒 tick 复用既有 DOM；仅切换右侧详情时也不重建 graph canvas。
 
 边界状态也由真实产品壳 + HostKernel loopback fixture 渲染并截图：
 

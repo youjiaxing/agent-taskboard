@@ -379,6 +379,8 @@ if (!boardActive) {
   throw new Error("factory default should be the board view");
 }
 
+await page.click(".issue-card:has-text('child blocked') .issue-card-main");
+await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.click("button[data-act='center-view'][data-id='graph']");
 await page.waitForSelector(".dep-graph");
 if (await page.$(".lanes")) {
@@ -387,45 +389,83 @@ if (await page.$(".lanes")) {
 const graphTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
   nodes.map((node) => node.textContent),
 );
-if (!graphTitles.includes("unparented ready") || !graphTitles.includes("blocker")) {
-  throw new Error(`graph should include all open issues, got ${JSON.stringify(graphTitles)}`);
+for (const title of ["blocker", "child blocked", "waiting on history", "active work"]) {
+  if (!graphTitles.includes(title)) {
+    throw new Error(`one-hop graph should include ${title}, got ${JSON.stringify(graphTitles)}`);
+  }
 }
-if (graphTitles.includes("old gate") || graphTitles.includes("just closed")) {
-  throw new Error("closed context should be off by default");
+for (const unrelated of ["parent", "unparented ready", "older closed"]) {
+  if (graphTitles.includes(unrelated)) {
+    throw new Error(`centered graph should exclude unrelated Issue ${unrelated}`);
+  }
 }
-const completeGraphToggle = page.getByLabel("显示完整 Project 图（已关闭 Issue：3）");
-if ((await completeGraphToggle.count()) !== 1) {
-  throw new Error("complete Project graph toggle should name its scope and closed Issue count");
+const graphCenterText = await page.$eval(".graph-center-label", (node) => node.textContent?.trim());
+if (graphCenterText !== "中心 Issue：#3 child blocked") {
+  throw new Error(`graph should name its stable center Issue, got ${graphCenterText}`);
+}
+const completeGraphAction = page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" });
+if ((await completeGraphAction.count()) !== 1) {
+  throw new Error("graph should offer the complete connected upstream/downstream closure with a count");
 }
 const edge = await page.$('path[data-from="you/garden#9"][data-to="you/garden#3"]');
 if (!edge) {
   throw new Error("graph should draw the blocker edge from left to right");
 }
+if (!(await page.$('path[data-from="you/garden#3"][data-to="you/garden#5"]'))) {
+  throw new Error("graph should draw downstream dependencies from the center Issue");
+}
 if (await page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]')) {
   throw new Error("graph should not draw parent/child as an edge");
 }
 
-await page.click(".graph-node:has-text('unparented ready')");
-await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+const stableGraphCanvas = await page.$(".graph-canvas");
+await page.click(".graph-node:has-text('blocker') .graph-node-main");
+await page.waitForSelector(".detail-hd:has-text('blocker')");
 if (await page.$("button[data-act='clear-filter']")) {
   throw new Error("clicking a graph node should not filter the board");
 }
+if ((await page.$eval(".graph-center-label", (node) => node.textContent?.trim())) !== "中心 Issue：#3 child blocked") {
+  throw new Error("clicking a graph node should only change details, not the graph center");
+}
+if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isConnected))) {
+  throw new Error("changing graph node details should preserve the graph canvas");
+}
 
-await page.click("[data-field='closedContext']");
+const centerOnBlocker = page.getByRole("button", { name: "以此为中心 #9" });
+if ((await centerOnBlocker.locator("svg").count()) !== 1) {
+  throw new Error("graph nodes should expose an icon-only center action");
+}
+await centerOnBlocker.click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#9 blocker"));
 await page.waitForSelector(".graph-node:has-text('old gate')");
-const globalGraphTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
-  nodes.map((node) => node.textContent),
-);
-if (globalGraphTitles.length !== 10) {
-  throw new Error(`global dependency graph should include all 10 Project Issues, got ${JSON.stringify(globalGraphTitles)}`);
-}
-for (const closedTitle of ["older closed", "just closed"]) {
-  if (!(await page.$(`.graph-node:has-text('${closedTitle}')`))) {
-    throw new Error(`global dependency graph should include closed Issue ${closedTitle}`);
-  }
+if (!(await page.$(".graph-node:has-text('old gate').closed"))) {
+  throw new Error("closed Issues should remain visible and subdued when they connect the centered chain");
 }
 
-await page.click(".graph-node:has-text('active work')");
+await page.getByRole("button", { name: "以此为中心 #3" }).click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
+await page.waitForSelector(".graph-index");
+const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!limitedGraphText?.includes("画布显示 48/61")) {
+  throw new Error(`large complete closure should keep the canvas bounded, got ${limitedGraphText}`);
+}
+if ((await page.$$(".graph-node")).length !== 48) {
+  throw new Error("large complete closure should not render every node at once");
+}
+if ((await page.$$(".graph-index-row")).length !== 50 || !(await page.$("button[data-act='graph-list-more']"))) {
+  throw new Error("complete relationship list should paginate instead of mounting every Issue row");
+}
+await page.fill('[data-field="graphSearch"]', "just closed");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 1);
+const searchedRelationship = await page.$eval(".graph-index-row", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!searchedRelationship?.includes("just closed")) {
+  throw new Error(`complete relationship search should find closed downstream Issues, got ${searchedRelationship}`);
+}
+await page.fill('[data-field="graphSearch"]', "");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 50);
+
+await page.click(".graph-node:has-text('active work') .graph-node-main");
 await page.waitForSelector(".detail-hd:has-text('active work')");
 await page.waitForSelector('.issue-markdown:has-text("Active Run Question")');
 if (await page.$(".lifted-run")) {

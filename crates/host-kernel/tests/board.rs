@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, FrontierEmptyReason, HostKernel, IssueRecord,
-    LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TriageRole,
-    DEFAULT_RECENT_LIMIT,
+    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, FrontierEmptyReason, GraphRelation,
+    HostKernel, IssueRecord, LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance,
+    TriageRole, DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -323,6 +323,19 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
     host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let before = host.snapshot().board.unwrap().graph.expect("graph");
+    assert_eq!(before.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(node_ids(&before), vec!["you/garden#9", "you/garden#3"]);
+    host.handle(serde_json::json!({
         "op": "filterParent",
         "issueId": "you/garden#1",
     }))
@@ -330,8 +343,8 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
     let board = host.snapshot().board.unwrap();
     assert_eq!(ids(&board.columns.unwrap().frontier), vec!["you/garden#2"]);
     let graph = board.graph.expect("graph");
-    assert!(node_ids(&graph).contains(&"you/garden#4".into()));
-    assert!(node_ids(&graph).contains(&"you/garden#9".into()));
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(node_ids(&graph), vec!["you/garden#9", "you/garden#3"]);
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#9".into(), "you/garden#3".into())]
@@ -513,80 +526,168 @@ fn dependency_graph_contains_only_dependency_edges() {
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
     let board = host.snapshot().board.unwrap();
     let graph = board.graph.expect("graph");
 
-    assert_eq!(
-        node_ids(&graph),
-        vec![
-            "you/garden#1",
-            "you/garden#2",
-            "you/garden#4",
-            "you/garden#9",
-            "you/garden#3",
-        ]
-    );
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(graph.total_count, 2);
+    assert!(!graph.complete);
+    assert_eq!(node_ids(&graph), vec!["you/garden#9", "you/garden#3"]);
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#9".into(), "you/garden#3".into())]
     );
     assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#3"));
-    assert!(!board.show_closed_graph_context);
 }
 
 #[test]
-fn closed_context_toggle_shows_the_entire_project_graph() {
+fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
+    let graph: DependencyGraph = serde_json::from_value(serde_json::json!({
+        "nodes": [{
+            "id": "you/garden#3",
+            "repository": "you/garden",
+            "number": 3,
+            "title": "legacy node",
+            "open": true,
+            "rank": 0
+        }],
+        "edges": [],
+        "closedCount": 0
+    }))
+    .unwrap();
+
+    assert_eq!(graph.center_id, None);
+    assert_eq!(graph.total_count, 0);
+    assert!(!graph.complete);
+    assert_eq!(graph.max_distance, 0);
+    assert_eq!(graph.nodes[0].distance, 0);
+    assert_eq!(graph.nodes[0].relation, GraphRelation::Center);
+}
+
+#[test]
+fn centered_dependency_graph_expands_the_complete_upstream_and_downstream_closure() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(
-        IssueRecord::open("you/garden", 10, "waiting")
-            .parent("you/garden", 1, "parent")
-            .blocked_by("you/garden", 9, "already closed", false),
+        IssueRecord::open("you/garden", 10, "center")
+            .blocked_by("you/garden", 9, "upstream", true)
+            .blocking("you/garden", 11, "downstream"),
     );
-    tracker.add_issue(IssueRecord::open("you/garden", 1, "parent").child(
+    tracker.add_issue(IssueRecord::open("you/garden", 9, "upstream").blocked_by(
         "you/garden",
-        10,
-        "waiting",
+        8,
+        "closed origin",
+        false,
     ));
     tracker.add_issue(
-        IssueRecord::open("you/garden", 9, "already closed").closed_at("2026-08-20T10:00:00Z"),
+        IssueRecord::open("you/garden", 8, "closed origin").closed_at("2026-08-19T10:00:00Z"),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 11, "downstream").blocking(
+        "you/garden",
+        12,
+        "closed result",
+    ));
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 12, "closed result").closed_at("2026-08-20T10:00:00Z"),
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 8, "unrelated closed").closed_at("2026-08-19T10:00:00Z"),
+        IssueRecord::open("you/garden", 99, "unrelated history").closed_at("2026-08-21T10:00:00Z"),
     );
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
-    let before = host.snapshot().board.unwrap();
-    let graph = before.graph.expect("graph");
-    assert!(!before.show_closed_graph_context);
-    assert_eq!(graph.closed_count, 2);
-    assert_eq!(node_ids(&graph), vec!["you/garden#1", "you/garden#10"]);
-    assert!(edge_pairs(&graph).is_empty());
-
     host.handle(serde_json::json!({
-        "op": "setShowClosedGraphContext",
-        "show": true,
+        "op": "focusIssue",
+        "issueId": "you/garden#10",
     }))
     .unwrap();
-    let after = host.snapshot().board.unwrap();
-    let graph = after.graph.expect("graph");
-    assert!(after.show_closed_graph_context);
-    assert_eq!(graph.closed_count, 2);
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let before = host.snapshot().board.unwrap();
+    let graph = before.graph.expect("graph");
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#10"));
+    assert_eq!(graph.total_count, 5);
+    assert!(!graph.complete);
+    assert_eq!(
+        node_ids(&graph),
+        vec!["you/garden#9", "you/garden#10", "you/garden#11"]
+    );
+    assert_eq!(
+        edge_pairs(&graph),
+        vec![
+            ("you/garden#10".into(), "you/garden#11".into()),
+            ("you/garden#9".into(), "you/garden#10".into()),
+        ]
+    );
+
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#9",
+    }))
+    .unwrap();
+    let detail_only = host.snapshot().board.unwrap();
+    assert_eq!(detail_only.selected.unwrap().id, "you/garden#9");
+    assert_eq!(
+        detail_only.graph.expect("graph").center_id.as_deref(),
+        Some("you/garden#10")
+    );
+
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#9",
+    }))
+    .unwrap();
+    let recentered = host.snapshot().board.unwrap().graph.expect("graph");
+    assert_eq!(recentered.center_id.as_deref(), Some("you/garden#9"));
+    assert!(!recentered.complete);
+    assert_eq!(
+        node_ids(&recentered),
+        vec!["you/garden#8", "you/garden#9", "you/garden#10"]
+    );
+    assert!(!recentered.nodes[0].open);
+
+    host.handle(serde_json::json!({
+        "op": "setDependencyGraphComplete",
+        "complete": true,
+    }))
+    .unwrap();
+    let graph = host.snapshot().board.unwrap().graph.expect("graph");
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#9"));
+    assert!(graph.complete);
+    assert_eq!(graph.total_count, 5);
     assert_eq!(
         node_ids(&graph),
         vec![
-            "you/garden#1",
             "you/garden#8",
             "you/garden#9",
-            "you/garden#10"
+            "you/garden#10",
+            "you/garden#11",
+            "you/garden#12",
         ]
     );
     assert_eq!(
         edge_pairs(&graph),
-        vec![("you/garden#9".into(), "you/garden#10".into())]
+        vec![
+            ("you/garden#10".into(), "you/garden#11".into()),
+            ("you/garden#11".into(), "you/garden#12".into()),
+            ("you/garden#8".into(), "you/garden#9".into()),
+            ("you/garden#9".into(), "you/garden#10".into()),
+        ]
     );
-    assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#10"));
+    assert!(!node_ids(&graph).contains(&"you/garden#99".into()));
 }
 
 #[test]
@@ -630,6 +731,13 @@ fn focusing_a_graph_node_only_changes_details() {
         "view": "graph",
     }))
     .unwrap();
+    let center_before = host
+        .snapshot()
+        .board
+        .unwrap()
+        .graph
+        .expect("graph")
+        .center_id;
     host.handle(serde_json::json!({
         "op": "focusIssue",
         "issueId": "you/garden#9",
@@ -638,6 +746,7 @@ fn focusing_a_graph_node_only_changes_details() {
     let board = host.snapshot().board.unwrap();
     assert_eq!(host.snapshot().center_view, CenterView::Graph);
     assert_eq!(board.selected.unwrap().id, "you/garden#9");
+    assert_eq!(board.graph.expect("graph").center_id, center_before);
     assert!(board.parent_filter.is_none());
     assert!(ids(&board.columns.unwrap().frontier).contains(&"you/garden#4".into()));
 }
@@ -713,11 +822,18 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     tracker.add_issue(
         IssueRecord::open("you/garden", 3, "child blocked")
             .parent("you/garden", 1, "parent")
-            .blocked_by("you/garden", 9, "blocker", true),
+            .blocked_by("you/garden", 9, "blocker", true)
+            .blocking("you/garden", 5, "waiting on history")
+            .blocking("you/garden", 10, "active work"),
     );
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
     tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
-    tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker"));
+    tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker").blocked_by(
+        "you/garden",
+        6,
+        "old gate",
+        false,
+    ));
     tracker.set_issue_body(
         "you/garden#2",
         "# Question\n\nCan the operator read **every constraint** beside the official TUI?\n\n## Constraints\n\n- Keep Tracker markdown unchanged\n- Render `inline code` clearly\n- Keep [the GitHub Issue](https://github.com/you/garden/issues/2) available\n- Reject [dangerous links](javascript:alert(1))\n\n<script>window.__ISSUE_HTML_EXECUTED__ = true</script>\n\n## Long document\n\nParagraph one explains why the Issue document remains the source material while the board stays read-only.\n\nParagraph two is intentionally long enough to require scrolling in the inspector at 1440 by 900.\n\nParagraph three keeps family and Dependency sections below the complete document.\n\nParagraph four verifies that the title and primary actions remain available while this content scrolls.\n\nParagraph five provides enough vertical depth for the mobile Issue view at 390 by 844.\n\nParagraph six confirms that entering a Run must retain this same complete Issue document.",
@@ -727,16 +843,29 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "# Active Run Question\n\nKeep this **same complete Issue** visible after entering the Run.\n\n- terminal stays primary\n- document stays readable\n- browser link still points to Tracker",
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 5, "waiting on history").blocked_by(
-            "you/garden",
-            6,
-            "old gate",
-            false,
-        ),
+        IssueRecord::open("you/garden", 5, "waiting on history")
+            .blocked_by("you/garden", 6, "old gate", false)
+            .blocking("you/garden", 7, "just closed"),
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 6, "old gate").closed_at("2026-08-18T10:00:00Z"),
+        IssueRecord::open("you/garden", 6, "old gate")
+            .blocked_by("you/garden", 100, "history 100", false)
+            .closed_at("2026-08-18T10:00:00Z"),
     );
+    for number in 100..=154 {
+        let issue = IssueRecord::open("you/garden", number, format!("history {number}"))
+            .closed_at("2020-01-01T00:00:00Z");
+        tracker.add_issue(if number < 154 {
+            issue.blocked_by(
+                "you/garden",
+                number + 1,
+                format!("history {}", number + 1),
+                false,
+            )
+        } else {
+            issue
+        });
+    }
     tracker.add_issue(
         IssueRecord::open("you/garden", 8, "older closed").closed_at("2026-08-20T10:00:00Z"),
     );
@@ -874,6 +1003,11 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     }))
     .unwrap();
     assert_eq!(host.snapshot().hosts.len(), 2);
+    host.handle(serde_json::json!({
+        "op": "setRecentCompletedLimit",
+        "limit": 3,
+    }))
+    .unwrap();
     run_browser_e2e(host, "board.mjs", &[]);
 }
 

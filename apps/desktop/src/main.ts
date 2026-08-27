@@ -119,6 +119,17 @@ type ShellCopy = {
   viewBoard: string;
   viewGraph: string;
   showClosedContext: string;
+  graphCenter: string;
+  graphCenterHere: string;
+  graphShowComplete: string;
+  graphShowNeighborhood: string;
+  graphShowMore: string;
+  graphCanvasLimit: string;
+  graphCompleteList: string;
+  graphSearchPlaceholder: string;
+  graphUpstream: string;
+  graphDownstream: string;
+  graphBoth: string;
   clearFilter: string;
   colBlocked: string;
   colFrontier: string;
@@ -420,6 +431,8 @@ type GraphNode = {
   title: string;
   open: boolean;
   rank: number;
+  distance?: number;
+  relation?: "center" | "upstream" | "downstream" | "both";
 };
 
 type GraphEdge = {
@@ -430,6 +443,10 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  centerId?: string | null;
+  totalCount?: number;
+  complete?: boolean;
+  maxDistance?: number;
   closedCount?: number;
 };
 
@@ -844,6 +861,10 @@ let sidebarVisible = true;
 let issueDetailVisible = true;
 let renderedGraphKey = "";
 let renderedGraphProjectId = "";
+let renderedGraphCenterId = "";
+let graphCanvasLimit = 48;
+let graphListLimit = 50;
+let graphListQuery = "";
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
@@ -859,6 +880,19 @@ const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
 
+const GRAPH_RELATION_META: Record<
+  NonNullable<GraphNode["relation"]>,
+  { order: number; label: (copy: ShellCopy) => string }
+> = {
+  upstream: { order: 0, label: (copy) => copy.graphUpstream },
+  center: {
+    order: 1,
+    label: (copy) => copy.graphCenter.replace("：{issue}", "").replace(": {issue}", ""),
+  },
+  both: { order: 2, label: (copy) => copy.graphBoth },
+  downstream: { order: 3, label: (copy) => copy.graphDownstream },
+};
+
 function sessionClientId(): string {
   const key = "agent-taskboard-client-id";
   const existing = sessionStorage.getItem(key);
@@ -873,6 +907,12 @@ function sessionClientId(): string {
 
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+}
+
+function resetGraphUiState(): void {
+  graphCanvasLimit = 48;
+  graphListLimit = 50;
+  graphListQuery = "";
 }
 
 const MOBILE_BREAKPOINT = 640;
@@ -1453,7 +1493,7 @@ function restoreActiveField(field: {
 
 function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
   if (!board?.graph) return "";
-  return JSON.stringify([board.selected?.id ?? "", board.graph]);
+  return JSON.stringify([board.graph, graphCanvasLimit]);
 }
 
 function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
@@ -1495,6 +1535,7 @@ function render(): void {
     ? {
         canvas: previousGraphCanvas,
         projectId: renderedGraphProjectId,
+        centerId: renderedGraphCenterId,
         renderKey: renderedGraphKey,
         scrollLeft: previousGraphCanvas.scrollLeft,
         scrollTop: previousGraphCanvas.scrollTop,
@@ -1513,6 +1554,8 @@ function render(): void {
     snap.centerView === "graph" &&
     Boolean(snap.board?.graph);
   const nextGraphKey = desktopProjectGraph ? dependencyGraphRenderKey(snap.board) : "";
+  const nextGraphCenterId = desktopProjectGraph ? snap.board?.graph?.centerId ?? "" : "";
+  const graphContentChanged = Boolean(previousGraph && previousGraph.renderKey !== nextGraphKey);
   const reuseGraphCanvas = Boolean(
     previousGraph &&
       previousGraph.projectId === snap.focusedProjectId &&
@@ -1767,12 +1810,18 @@ function render(): void {
     graphPlaceholder.replaceWith(previousGraph.canvas);
   }
   const graphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
-  if (graphCanvas && previousGraph?.projectId === snap.focusedProjectId) {
+  const sameGraphCenter = Boolean(
+    previousGraph &&
+      previousGraph.projectId === snap.focusedProjectId &&
+      previousGraph.centerId === nextGraphCenterId,
+  );
+  if (graphCanvas && sameGraphCenter && !graphContentChanged && previousGraph) {
     graphCanvas.scrollLeft = previousGraph.scrollLeft;
     graphCanvas.scrollTop = previousGraph.scrollTop;
   }
   renderedGraphKey = graphCanvas ? nextGraphKey : "";
   renderedGraphProjectId = graphCanvas ? snap.focusedProjectId : "";
+  renderedGraphCenterId = graphCanvas ? nextGraphCenterId : "";
   const graphLayoutChanged = Boolean(
     graphCanvas &&
       previousGraph &&
@@ -1783,6 +1832,10 @@ function render(): void {
   );
   if (!reuseGraphCanvas || graphLayoutChanged) {
     paintGraphEdges();
+  }
+  syncGraphSelection(graphCanvas, snap.board?.selected?.id);
+  if (graphCanvas && (!sameGraphCenter || graphContentChanged)) {
+    centerGraphViewport(graphCanvas, nextGraphCenterId);
   }
   restoreActiveField(activeField);
   if (isMobile && !mobileLiveTerminal) {
@@ -1823,6 +1876,26 @@ function paintGraphEdges(): void {
     })
     .join("");
   svg.innerHTML = `<defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"></path></marker></defs>${paths}`;
+}
+
+function syncGraphSelection(canvas: HTMLElement | null, selectedId: string | undefined): void {
+  if (!canvas) return;
+  for (const node of canvas.querySelectorAll<HTMLElement>(".graph-node")) {
+    node.classList.toggle("sel", node.dataset.id === selectedId);
+  }
+}
+
+function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
+  if (!centerId) return;
+  const center = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((node) => node.dataset.id === centerId);
+  if (!center) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const centerRect = center.getBoundingClientRect();
+  const centerX = centerRect.left - canvasRect.left + canvas.scrollLeft + centerRect.width / 2;
+  const centerY = centerRect.top - canvasRect.top + canvas.scrollTop + centerRect.height / 2;
+  canvas.scrollLeft = Math.max(0, centerX - canvas.clientWidth / 2);
+  canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
 }
 
 function currentProject(snap: Snapshot): Project | undefined {
@@ -2581,19 +2654,50 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
+  const legacyGraph = graph.centerId == null;
+  const projectedNodes = [...graph.nodes]
+    .sort((a, b) =>
+      (a.distance ?? 0) - (b.distance ?? 0) ||
+      a.rank - b.rank ||
+      a.number - b.number,
+    )
+    .slice(0, graphCanvasLimit);
   const columns = new Map<number, GraphNode[]>();
-  for (const node of graph.nodes) {
+  for (const node of projectedNodes) {
     const list = columns.get(node.rank) ?? [];
     list.push(node);
     columns.set(node.rank, list);
   }
   const ranks = [...columns.keys()].sort((a, b) => a - b);
-  const completeGraphLabel = completeDependencyGraphLabel(copy, graph);
+  const center = graph.nodes.find((node) => node.id === graph.centerId);
+  const totalCount = graph.totalCount ?? graph.nodes.length;
+  const centerLabel = copy.graphCenter.replace(
+    "{issue}",
+    center ? `#${center.number} ${center.title}` : graph.centerId ?? "—",
+  );
+  const completeLabel = copy.graphShowComplete.replace("{count}", String(totalCount));
+  const canvasLimit = copy.graphCanvasLimit
+    .replace("{shown}", String(projectedNodes.length))
+    .replace("{total}", String(graph.nodes.length));
   return `<div class="dep-graph">
-    <label class="graph-opt">
-      <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
-      ${escapeHtml(completeGraphLabel)}
-    </label>
+    ${legacyGraph
+      ? `<label class="graph-opt">
+          <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
+          ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
+        </label>`
+      : `<div class="graph-toolbar">
+          <span class="graph-center-label">${escapeHtml(centerLabel)}</span>
+          <div class="actions">
+            ${graph.complete
+              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+              : totalCount > graph.nodes.length
+                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                : ""}
+          </div>
+        </div>
+        ${projectedNodes.length < graph.nodes.length
+          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
+          : ""}`}
     ${reuseCanvas
       ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
       : `<div class="graph-canvas">
@@ -2603,21 +2707,89 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
           .map(
             (rank) =>
               `<div class="graph-col" data-rank="${rank}">${(columns.get(rank) ?? [])
-                .map((node) => graphNode(node, board.selected?.id))
+                .map((node) =>
+                  graphNode(
+                    copy,
+                    node,
+                    board.selected?.id,
+                    legacyGraph ? null : graph.centerId ?? null,
+                  ),
+                )
                 .join("")}</div>`,
           )
           .join("")}
       </div>
     </div>`}
+    ${!legacyGraph && graph.complete ? dependencyGraphIndex(copy, graph) : ""}
   </div>`;
 }
 
-function graphNode(node: GraphNode, selectedId: string | undefined): string {
+function dependencyGraphIndex(copy: ShellCopy, graph: DependencyGraph): string {
+  const query = graphListQuery.trim().toLowerCase();
+  const matches = graph.nodes
+    .filter((node) =>
+      !query ||
+      node.title.toLowerCase().includes(query) ||
+      node.id.toLowerCase().includes(query) ||
+      `#${node.number}`.includes(query),
+    )
+    .sort((a, b) =>
+      graphRelationMeta(a.relation).order - graphRelationMeta(b.relation).order ||
+      (a.distance ?? 0) - (b.distance ?? 0) ||
+      a.number - b.number,
+    );
+  const visible = matches.slice(0, graphListLimit);
+  return `<details class="graph-index" open>
+    <summary>${escapeHtml(copy.graphCompleteList)} <span>${matches.length}</span></summary>
+    <input id="dependency-graph-search" type="search" data-field="graphSearch" value="${escapeHtml(graphListQuery)}" placeholder="${escapeHtml(copy.graphSearchPlaceholder)}" />
+    <div class="graph-index-list">
+      ${visible.map((node) => graphIndexRow(copy, node, graph.centerId ?? "")).join("")}
+    </div>
+    ${visible.length < matches.length
+      ? `<button type="button" class="graph-index-more" data-act="graph-list-more">${escapeHtml(copy.graphShowMore)}</button>`
+      : ""}
+  </details>`;
+}
+
+function graphRelationMeta(relation: GraphNode["relation"]): (typeof GRAPH_RELATION_META)["center"] {
+  return GRAPH_RELATION_META[relation ?? "center"];
+}
+
+function graphIndexRow(copy: ShellCopy, node: GraphNode, centerId: string): string {
+  return `<div class="graph-index-row ${node.open ? "" : "closed"}">
+    <button type="button" class="graph-index-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+      <span class="graph-relation">${escapeHtml(graphRelationMeta(node.relation).label(copy))}</span>
+      <span class="issue-id">#${node.number}</span>
+      <span class="issue-title">${escapeHtml(node.title)}</span>
+    </button>
+    ${node.id === centerId ? "" : graphCenterButton(copy, node)}
+  </div>`;
+}
+
+function graphNode(
+  copy: ShellCopy,
+  node: GraphNode,
+  selectedId: string | undefined,
+  centerId: string | null,
+): string {
   const selected = node.id === selectedId ? "sel" : "";
   const closed = node.open ? "" : "closed";
-  return `<button type="button" class="graph-node ${selected} ${closed}" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
-    <div class="issue-id">#${node.number}</div>
-    <div class="issue-title">${escapeHtml(node.title)}</div>
+  const center = node.id === centerId ? "root" : "";
+  return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
+    <button type="button" class="graph-node-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+      <div class="issue-id">#${node.number}</div>
+      <div class="issue-title">${escapeHtml(node.title)}</div>
+    </button>
+    ${center || centerId == null ? "" : graphCenterButton(copy, node)}
+  </article>`;
+}
+
+function graphCenterButton(copy: ShellCopy, node: GraphNode): string {
+  const label = `${copy.graphCenterHere} #${node.number}`;
+  return `<button type="button" class="graph-center-act" data-act="center-graph" data-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="6"></circle><path d="M12 2v4M12 18v4M2 12h4M18 12h4"></path><circle cx="12" cy="12" r="1"></circle>
+    </svg>
   </button>`;
 }
 
@@ -3946,6 +4118,41 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "center-view" && target.dataset.id) {
     await rpc("setCenterView", { view: target.dataset.id });
+    if (target.dataset.id === "graph") {
+      resetGraphUiState();
+      const selectedId = snapshot.board?.selected?.id;
+      if (selectedId && snapshot.board?.graph?.centerId != null) {
+        await rpc("centerDependencyGraph", { issueId: selectedId });
+      }
+    }
+    render();
+    return;
+  }
+  if (act === "center-graph" && target.dataset.id) {
+    resetGraphUiState();
+    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    render();
+    return;
+  }
+  if (act === "graph-complete") {
+    resetGraphUiState();
+    await rpc("setDependencyGraphComplete", { complete: true });
+    render();
+    return;
+  }
+  if (act === "graph-neighborhood") {
+    resetGraphUiState();
+    await rpc("setDependencyGraphComplete", { complete: false });
+    render();
+    return;
+  }
+  if (act === "graph-more") {
+    graphCanvasLimit += 48;
+    render();
+    return;
+  }
+  if (act === "graph-list-more") {
+    graphListLimit += 50;
     render();
     return;
   }
@@ -4024,7 +4231,14 @@ app.addEventListener("submit", async (event) => {
 
 app.addEventListener("input", (event) => {
   const target = event.target as HTMLInputElement | null;
-  if (!target || !formOpen) return;
+  if (!target) return;
+  if (target.getAttribute("data-field") === "graphSearch") {
+    graphListQuery = target.value;
+    graphListLimit = 50;
+    render();
+    return;
+  }
+  if (!formOpen) return;
   const field = target.getAttribute("data-field");
   if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
     formDraft = { ...formDraft, [field]: target.value };
