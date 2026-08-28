@@ -694,6 +694,126 @@ fn loopback_snapshot_stays_responsive_while_remote_rpc_is_blocked() {
 }
 
 #[test]
+fn autonomous_host_tick_does_not_follow_a_persisted_remote_focus() {
+    let remote = TcpListener::bind("127.0.0.1:0").unwrap();
+    let remote_addr = remote.local_addr().unwrap();
+    let remote_address = format!("http://{remote_addr}");
+    let (third_request_tx, third_request_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let remote_thread = std::thread::spawn(move || {
+        let responses = [
+            serde_json::json!({
+                "pairing": {
+                    "hostId": "slow-remote",
+                    "displayName": "Slow Remote",
+                    "token": "paired-token",
+                }
+            }),
+            serde_json::json!({
+                "process": "keep-running",
+                "snapshot": {
+                    "projects": [],
+                    "emptyActions": [],
+                    "focusedProjectId": "",
+                    "board": null,
+                    "runs": [],
+                    "focusedRunId": "",
+                    "workspaceView": "project",
+                    "quitOffer": null,
+                    "launchForm": null,
+                    "usageOpen": false,
+                }
+            }),
+        ];
+        for body in responses {
+            let (mut stream, _) = remote.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = body.to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            )
+            .unwrap();
+        }
+
+        let (mut stream, _) = remote.accept().unwrap();
+        third_request_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        let body = serde_json::json!({
+            "process": "keep-running",
+            "snapshot": {
+                "projects": [],
+                "emptyActions": [],
+                "focusedProjectId": "",
+                "board": null,
+                "runs": [],
+                "focusedRunId": "",
+                "workspaceView": "project",
+            }
+        })
+        .to_string();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut client = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": remote_address,
+            "code": "123456",
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    client
+        .handle(serde_json::json!({
+            "op": "focusHost",
+            "hostId": remote_id,
+        }))
+        .unwrap();
+
+    let kernel = Arc::new(Mutex::new(client));
+    let server = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+    std::thread::sleep(Duration::from_millis(1_250));
+    let contacted_remote = third_request_rx.try_recv().is_ok();
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = server.protocol_url().to_string();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(
+            &snapshot_url,
+            r#"{"op":"snapshot","clientId":"local-check","clientView":{"focusedHostId":"local"}}"#,
+        );
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+
+    if !contacted_remote {
+        let _ = TcpStream::connect(remote_addr);
+    }
+    release_tx.send(()).unwrap();
+    remote_thread.join().unwrap();
+    assert!(
+        !contacted_remote,
+        "the autonomous Host tick must not inherit a Client's remote focus"
+    );
+    assert_navigation_gate_result(responsive, "autonomous Host tick with remote focus");
+}
+
+#[test]
 fn loopback_snapshot_stays_responsive_while_pairing_rpc_is_blocked() {
     let remote = TcpListener::bind("127.0.0.1:0").unwrap();
     let remote_address = format!("http://{}", remote.local_addr().unwrap());

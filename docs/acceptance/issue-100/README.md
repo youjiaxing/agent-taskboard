@@ -34,10 +34,10 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 
 | 真人反馈 | 结果 | 修复与回归证据 |
 | --- | --- | --- |
-| 浏览器操作会同步改变桌面 App 当前界面 | PASS | Client 以独立 ID 在本地持有 Host / Project / Issue / Run、看板/依赖图、搜索、父过滤和图模式；每次 RPC 冻结调用当下的 `clientView`。`multi-client-navigation.mjs` 用两个独立浏览器 Client 选择不同 Issue，跨多个 tick 后互不抢焦点；本机与远程 Host Snapshot 都按显式 Client 视图生成。只有成功完整刷新确认 Issue 不存在时，当前 Client 才清理自己的悬空选择。 |
-| 依赖图只看到一张 Issue | PASS | 顶栏直达进入最多 200 张 open Issue 的概览；Dependency 参与者优先保留，超限显示总数、展示数与截断提示。点击节点进入一跳上下游，可展开完整闭包；看板卡片有「查看依赖」，单 Issue 模式有「返回依赖概览」，无 Dependency 有明确说明。 |
+| 浏览器操作会同步改变桌面 App 当前界面 | PASS | Client 以独立 ID 在本地持有 Host / Project / Issue / Run、看板/依赖图、搜索、父过滤和图模式；每次 RPC 冻结调用当下的 `clientView`。`multi-client-navigation.mjs` 用两个独立浏览器 Client 选择不同 Issue，跨多个 tick 后互不抢焦点；本机与远程 Host Snapshot 都按显式 Client 视图生成。不完整读取会合并保留上次已知 Issue，只有后续成功完整刷新确认 Issue 不存在时，当前 Client 才清理自己的悬空选择。 |
+| 依赖图只看到一张 Issue | PASS | 顶栏直达进入最多 200 张 open Issue 的概览；Dependency 参与者优先保留，超限显示总数、展示数与截断提示。点击节点进入一跳上下游，可展开完整闭包；看板卡片有「查看依赖」，单 Issue 模式有「返回依赖概览」，无 Dependency 有明确说明。节点每 50ms 原地追加一批，不重建 toolbar 与 canvas。 |
 | 看板 / 依赖图切换延迟数秒 | PASS | Client 导航只发 Snapshot，不触发 Tracker 刷新；刷新、tick 和正文读取在 Host 短锁内创建任务，Tracker 读取在线程中执行，完成后再短锁应用。阻塞 Tracker 时，第二个 Snapshot 的自动化硬门为 250ms；图首批绘制 48 节点，其余每 50ms 自动补齐。 |
-| Issue 详情松开鼠标后回到顶部 | PASS | 仅倒计时变化的 tick 跳过全量 DOM 重建；确需重绘时按同一 Issue 恢复 `.detail-scroll`。E2E 将详情滚到 240px，按住鼠标跨两个 tick，松开后仍保持 240px。 |
+| Issue 详情松开鼠标后回到顶部 | PASS | 仅倒计时变化的 tick 跳过全量 DOM 重建；确需重绘时按同一 Issue 恢复 `.detail-scroll`，并按稳定字段定位恢复 Terminal、Usage、搜索与设置表单的焦点、选区和输入内滚动。E2E 将详情滚到 240px，按住鼠标跨两个 tick，松开后仍保持 240px；另强制业务 snapshot 重绘并断言 Usage 时间输入仍聚焦。 |
 
 ## 截图
 
@@ -97,6 +97,8 @@ cargo test -p host-kernel --test board browser_keeps_issue_and_run_lifecycles_di
 cargo test -p host-kernel --test board browser_clients_keep_independent_issue_navigation -- --nocapture
 cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_tracker_refresh_is_blocked -- --nocapture
 cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_issue_document_load_is_blocked -- --nocapture
+cargo test -p host-kernel --test refresh autonomous_host_tick_does_not_follow_a_persisted_remote_focus -- --nocapture
+cargo test -p host-kernel --test tracker_seam incomplete_refresh_keeps_a_missing_selection_until_a_complete_read_confirms_deletion -- --nocapture
 cargo test -p host-kernel --test host_kernel remote_host_snapshots_honor_each_clients_explicit_issue_navigation -- --nocapture
 cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_port_without_disabling_the_client -- --nocapture
 ```

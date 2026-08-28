@@ -494,6 +494,7 @@ if (await page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]')) {
 }
 
 const stableGraphCanvas = await page.$(".graph-canvas");
+const stableGraphToolbar = await page.$(".graph-toolbar");
 await page.click(".graph-node:has-text('blocker') .graph-node-main");
 await page.waitForSelector(".detail-hd:has-text('blocker')");
 if (await page.$("button[data-act='clear-filter']")) {
@@ -504,6 +505,9 @@ if ((await page.$eval(".graph-center-label", (node) => node.textContent?.trim())
 }
 if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isConnected))) {
   throw new Error("changing graph node details should preserve the graph canvas");
+}
+if (!stableGraphToolbar || !(await stableGraphToolbar.evaluate((node) => node.isConnected))) {
+  throw new Error("changing graph node details should preserve the graph toolbar actions");
 }
 
 const expandFromWaiting = page.getByRole("button", { name: "从此处展开 #5" });

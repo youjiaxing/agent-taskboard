@@ -959,6 +959,7 @@ const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
 let clientView = loadClientView(clientId);
+let clientViewRevision = 0;
 
 const GRAPH_RELATION_META: Record<
   NonNullable<GraphNode["relation"]>,
@@ -1085,9 +1086,14 @@ function saveClientView(): void {
   localStorage.setItem(clientViewStorageKey(clientId), JSON.stringify(clientView));
 }
 
-function updateClientView(patch: Partial<ClientViewState>): void {
-  clientView = { ...clientView, ...patch };
+function commitClientView(next: ClientViewState): void {
+  if (JSON.stringify(next) !== JSON.stringify(clientView)) clientViewRevision += 1;
+  clientView = next;
   saveClientView();
+}
+
+function updateClientView(patch: Partial<ClientViewState>): void {
+  commitClientView({ ...clientView, ...patch });
 }
 
 function reconcileClientView(snap: Snapshot): void {
@@ -1100,7 +1106,7 @@ function reconcileClientView(snap: Snapshot): void {
       && board.refresh.kind === "ready"
       && !board.selected,
   );
-  clientView = {
+  const next: ClientViewState = {
     ...clientView,
     focusedHostId: snap.focusedHostId,
     focusedProjectId: snap.focusedProjectId,
@@ -1127,7 +1133,7 @@ function reconcileClientView(snap: Snapshot): void {
         snap.usage?.highlightedRunId ?? clientView.usageQuery.highlightedRunId ?? null,
     },
   };
-  saveClientView();
+  commitClientView(next);
 }
 
 function emptyDraft(): ProjectDraft {
@@ -1539,6 +1545,7 @@ async function protocolBase(): Promise<string> {
 let rpcQueue: Promise<void> = Promise.resolve();
 
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
+  const requestClientViewRevision = clientViewRevision;
   const requestClientView: ClientViewState = {
     ...clientView,
     search: { ...clientView.search },
@@ -1570,13 +1577,15 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
     result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
     result.events = result.events ?? [];
-    reconcileClientView(result.snapshot);
-    syncLaunchDraft(result.snapshot);
     deliverHostEvents(result.events, result.snapshot);
-    snapshot = result.snapshot;
-    if (result.viewChanges) {
-      changesView = result.viewChanges;
-      changesOpen = true;
+    if (requestClientViewRevision === clientViewRevision) {
+      reconcileClientView(result.snapshot);
+      syncLaunchDraft(result.snapshot);
+      snapshot = result.snapshot;
+      if (result.viewChanges) {
+        changesView = result.viewChanges;
+        changesOpen = true;
+      }
     }
     return result;
   });
@@ -1717,39 +1726,76 @@ function languageLabel(copy: ShellCopy, language: Language): string {
 }
 
 function captureActiveField(): {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
+  scrollTop: number;
 } | null {
-  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  if (!active || !app?.contains(active) || active.id === "") return null;
-  if (!("value" in active)) return null;
+  const active = document.activeElement;
+  if (
+    !(active instanceof HTMLInputElement)
+    && !(active instanceof HTMLTextAreaElement)
+    && !(active instanceof HTMLSelectElement)
+  ) return null;
+  if (!app?.contains(active)) return null;
+  let selector = active.id ? `#${CSS.escape(active.id)}` : "";
+  if (!selector) {
+    const name = active.getAttribute("name");
+    const form = active.closest<HTMLFormElement>("form[data-act]");
+    const action = form?.dataset.act;
+    if (name && action) {
+      const formId = form.dataset.id;
+      selector = `form[data-act="${CSS.escape(action)}"]${
+        formId ? `[data-id="${CSS.escape(formId)}"]` : ""
+      } [name="${CSS.escape(name)}"]`;
+    }
+  }
+  for (const attribute of ["data-field", "data-usage-filter"] as const) {
+    if (selector) break;
+    const value = active.getAttribute(attribute);
+    if (value) {
+      selector = `${active.tagName.toLowerCase()}[${attribute}="${CSS.escape(value)}"]`;
+    }
+  }
+  if (!selector) return null;
+  const textControl = active instanceof HTMLTextAreaElement
+    || (active instanceof HTMLInputElement
+      && ["text", "search", "url", "tel", "password"].includes(active.type));
   return {
-    id: active.id,
-    start: active.selectionStart,
-    end: active.selectionEnd,
-    direction: active.selectionDirection,
+    selector,
+    start: textControl ? active.selectionStart : null,
+    end: textControl ? active.selectionEnd : null,
+    direction: textControl ? active.selectionDirection : null,
     scrollLeft: active.scrollLeft,
+    scrollTop: active.scrollTop,
   };
 }
 
 function restoreActiveField(field: {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
+  scrollTop: number;
 } | null): void {
   if (!field) return;
-  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(field.id)}`);
+  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    field.selector,
+  );
   if (!next) return;
   next.focus();
-  if (field.start != null && field.end != null) {
+  if (
+    field.start != null
+    && field.end != null
+    && (next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement)
+  ) {
     next.setSelectionRange(field.start, field.end, field.direction ?? "none");
   }
   next.scrollLeft = field.scrollLeft;
+  next.scrollTop = field.scrollTop;
 }
 
 function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
@@ -1806,6 +1852,7 @@ function render(): void {
     : null;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
+  const previousGraphToolbar = app.querySelector<HTMLElement>(".graph-toolbar");
   const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
   const previousGraph = previousGraphCanvas
     ? {
@@ -2081,6 +2128,14 @@ function render(): void {
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
+  const graphToolbar = app.querySelector<HTMLElement>(".graph-toolbar");
+  if (
+    previousGraphToolbar
+    && graphToolbar
+    && previousGraphToolbar.outerHTML === graphToolbar.outerHTML
+  ) {
+    graphToolbar.replaceWith(previousGraphToolbar);
+  }
   const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
   if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
     graphPlaceholder.replaceWith(previousGraph.canvas);
@@ -2145,8 +2200,69 @@ function scheduleGraphBatch(snap: Snapshot): void {
       || (snapshot.board?.graph?.centerId ?? "") !== expectedCenter
     ) return;
     graphCanvasLimit = Math.min(graphCanvasLimit + 48, snapshot.board?.graph?.nodes.length ?? 0);
-    render();
+    renderGraphBatch(snapshot);
   }, 50);
+}
+
+function renderGraphBatch(snap: Snapshot): void {
+  const board = snap.board;
+  const graph = board?.graph;
+  const currentGraph = app?.querySelector<HTMLElement>(".dep-graph");
+  const currentCanvas = currentGraph?.querySelector<HTMLElement>(".graph-canvas");
+  const currentFlow = currentCanvas?.querySelector<HTMLElement>(".graph-flow");
+  if (!board || !graph || !currentGraph || !currentCanvas || !currentFlow) {
+    render();
+    return;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = dependencyGraphView(snap.copy, board, false).trim();
+  const nextGraph = template.content.firstElementChild as HTMLElement | null;
+  const nextFlow = nextGraph?.querySelector<HTMLElement>(".graph-flow");
+  if (!nextGraph || !nextFlow) {
+    render();
+    return;
+  }
+
+  for (const nextColumn of [...nextFlow.querySelectorAll<HTMLElement>(":scope > .graph-col")]) {
+    const rank = nextColumn.dataset.rank ?? "";
+    let currentColumn = currentFlow.querySelector<HTMLElement>(
+      `:scope > .graph-col[data-rank="${CSS.escape(rank)}"]`,
+    );
+    if (!currentColumn) {
+      const numericRank = Number(rank);
+      const before = [...currentFlow.querySelectorAll<HTMLElement>(":scope > .graph-col")]
+        .find((column) => Number(column.dataset.rank) > numericRank);
+      currentFlow.insertBefore(nextColumn, before ?? null);
+      currentColumn = nextColumn;
+    } else {
+      for (const nextNode of [...nextColumn.querySelectorAll<HTMLElement>(":scope > .graph-node")]) {
+        const id = nextNode.dataset.id ?? "";
+        if (!currentColumn.querySelector(`:scope > .graph-node[data-id="${CSS.escape(id)}"]`)) {
+          currentColumn.append(nextNode);
+        }
+      }
+    }
+  }
+
+  const currentLimit = currentGraph.querySelector<HTMLElement>(
+    ":scope > .graph-limit:not(.graph-truncated)",
+  );
+  const nextLimit = nextGraph.querySelector<HTMLElement>(
+    ":scope > .graph-limit:not(.graph-truncated)",
+  );
+  if (nextLimit && currentLimit) {
+    currentLimit.textContent = nextLimit.textContent;
+  } else if (nextLimit) {
+    currentCanvas.before(nextLimit);
+  } else {
+    currentLimit?.remove();
+  }
+
+  renderedGraphKey = dependencyGraphRenderKey(board);
+  paintGraphEdges();
+  syncGraphSelection(currentCanvas, board.selected?.id);
+  scheduleGraphBatch(snap);
 }
 
 function paintGraphEdges(): void {

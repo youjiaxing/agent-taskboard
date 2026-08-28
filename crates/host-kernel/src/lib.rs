@@ -2667,7 +2667,7 @@ impl HostKernel {
             .as_ref()
             .map(|view| view.focused_host_id.as_str())
             .filter(|host_id| !host_id.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
+            .unwrap_or(LOCAL_HOST_ID);
         if requested_host != LOCAL_HOST_ID {
             return self
                 .handle(request.clone())
@@ -6476,13 +6476,24 @@ impl HostKernel {
         _github_host: &str,
         _repository: &str,
         now: u64,
-        issues: Vec<IssueRecord>,
+        mut issues: Vec<IssueRecord>,
         complete: bool,
         detail: Option<String>,
         connection: Option<ProjectConnection>,
     ) {
         if let Some(connection) = connection {
             self.projects[index].connection = connection;
+        }
+        if !complete {
+            let mut seen = issues.iter().map(IssueRecord::id).collect::<BTreeSet<_>>();
+            if let Some(previous) = self.loaded_issues.get(project_id) {
+                issues.extend(
+                    previous
+                        .iter()
+                        .filter(|issue| seen.insert(issue.id()))
+                        .cloned(),
+                );
+            }
         }
         let snapshot = refresh::StoredTrackerSnapshot {
             fetched_at_ms: now,

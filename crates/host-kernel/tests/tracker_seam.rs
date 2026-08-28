@@ -426,6 +426,38 @@ fn incomplete_read_draws_no_frontier_or_graph_and_keeps_details() {
 }
 
 #[test]
+fn incomplete_refresh_keeps_a_missing_selection_until_a_complete_read_confirms_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({ "op": "focusIssue", "issueId": "you/garden#8" }))
+        .unwrap();
+
+    tracker.set_issues(
+        "you/garden",
+        vec![IssueRecord::open("you/garden", 9, "gate")],
+    );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("pagination stopped before the selected Issue".into()),
+    );
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    assert_eq!(
+        host.snapshot().board.unwrap().selected.unwrap().id,
+        "you/garden#8",
+        "an incomplete read cannot prove that the selected Issue was deleted"
+    );
+
+    tracker.set_read_mode("you/garden", ReadMode::Complete);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    assert!(
+        host.snapshot().board.unwrap().selected.is_none(),
+        "a later complete read may clear the confirmed missing Issue"
+    );
+}
+
+#[test]
 fn tracker_business_error_keeps_complete_last_data_but_blocks_writes() {
     let tmp = tempfile::tempdir().unwrap();
     let (tracker, dir) = garden_setup(&tmp);

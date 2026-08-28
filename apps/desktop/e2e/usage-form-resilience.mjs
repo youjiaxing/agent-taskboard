@@ -11,10 +11,19 @@ let releaseFailure;
 let markStarted;
 let requests = 0;
 let failed = false;
+let forceTickRender = false;
 const failureGate = new Promise((resolve) => { releaseFailure = resolve; });
 const started = new Promise((resolve) => { markStarted = resolve; });
 await page.route("**/rpc", async (route) => {
   const request = route.request().postDataJSON();
+  if (request?.op === "tick" && forceTickRender) {
+    const response = await route.fetch();
+    const result = await response.json();
+    result.snapshot.notifySound = !result.snapshot.notifySound;
+    forceTickRender = false;
+    await route.fulfill({ response, json: result });
+    return;
+  }
   if (request?.op !== "snapshot" || request?.clientAction !== "setUsageRange") {
     await route.continue();
     return;
@@ -33,6 +42,19 @@ await page.route("**/rpc", async (route) => {
     body: JSON.stringify({ message: "usage range temporarily unavailable" }),
   });
 });
+
+await page.focus("form[data-act='usage-custom'] input[name='from']");
+forceTickRender = true;
+const changedTick = page.waitForResponse((response) =>
+  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+);
+await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+await changedTick;
+await page.waitForTimeout(50);
+const activeUsageField = await page.evaluate(() => document.activeElement?.getAttribute("name"));
+if (activeUsageField !== "from") {
+  throw new Error(`business snapshot redraw must preserve the active Usage field: ${activeUsageField}`);
+}
 
 await page.$eval("form[data-act='usage-custom']", (form) => {
   form.requestSubmit();
