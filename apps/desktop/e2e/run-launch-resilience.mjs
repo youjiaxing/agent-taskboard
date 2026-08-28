@@ -72,6 +72,12 @@ const afterFailure = await hostSnapshot(page, url);
 if (afterFailure.runs.some((run) => run.status === "running")) {
   throw new Error(`a failed launch must not become a running Run: ${JSON.stringify(afterFailure.runs)}`);
 }
+const issueAfterFailure = Object.values(afterFailure.board.columns)
+  .flat()
+  .find((issue) => issue.id === issueId);
+if (!issueAfterFailure || issueAfterFailure.claimedBy.length !== 0) {
+  throw new Error(`a failed launch must release its provisional claim: ${JSON.stringify(issueAfterFailure)}`);
+}
 
 await page.click("form[data-form='launch'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));

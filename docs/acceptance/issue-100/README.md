@@ -1,10 +1,10 @@
 # Issue #100 核心用户路径验收
 
-验收日期：2026-08-28。
+验收日期：2026-08-29。
 
 ## 结论
 
-自动化结果：**PASS**。九条 Required user task 都有从产品入口出发、通过真实 `HostKernel` loopback 与 Playwright 驱动的场景；断言最终可见结果和 Tracker 认领 / Run / Project 等关键副作用。
+自动化结果：**PASS**。九条 Required user task 都有从产品入口出发、通过真实 `HostKernel` loopback 与 Playwright 驱动的场景；断言最终可见结果和 Tracker 认领 / Run / Project 等关键副作用。2026-08-28 真人验收提出的四项缺陷也已补回归覆盖并修复。
 
 Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟脚本，在真实产品壳和真实 GitHub Project 上完成一次连续任务并明确接受。在此之前 Issue #100 与 PR 保持 OPEN，不把 fixture 或逻辑测试升级成提出者验收。
 
@@ -14,7 +14,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 | --- | --- | --- |
 | 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，目录推断只产生候选，用户确认后看到首批 Issue；失败保留草稿并可重试。 |
 | 2 已有 Project 新增、编辑、移除 | PASS | `project-management.mjs`：从已有 Project 的桌面侧栏新增并看到首批 Issue，再由行尾菜单完成编辑与移除；活跃 Run 明确禁止移除；执行已停提示 Tracker 认领仍保留；移除当前 Project 后回退且不残留旧 Issue。 |
-| 3 找工作 | PASS | `board.mjs`：四列、标题搜索、triage/open/closed 筛选、父子过滤、Dependency graph、图中心与详情分离、返回同一 Issue 上下文、键盘 `j` / Enter / `?`。 |
+| 3 找工作 | PASS | `board.mjs`：四列、标题搜索、triage/open/closed 筛选、父子过滤、Project open Issue 依赖概览、单 Issue 一跳上下游、完整连通闭包、图中心与详情分离、返回同一 Issue 上下文、键盘 `j` / Enter / `?`。 |
 | 4 绑定 Issue 开 Run | PASS | `run-launch-resilience.mjs` + `board.mjs`：从「执行」进入同一启动配置表；选择 Agent、预填来源、命令预览和隔离说明可见；打开表单后再次核对未认领且无 Run，提交成功后断言同一 Issue 已认领并只创建一条 Run。 |
 | 5 游离 Run | PASS | `board.mjs`：从 Project 行「新建」进入同一表单，初始指令可明确填写；打开表单前后及启动成功后逐 Issue 比较认领状态不变，同时出现未绑定 Issue 的运行中 Run。 |
 | 6 运行中 | PASS | `run-lifecycle.mjs`：从进行中卡片进入 Terminal，按需加载并保留完整 Issue；等待操作、注入一行、查看改动、停止、继续和释放认领均从可见入口完成；注入与改动备注另覆盖提交中、防重复、失败保留草稿和显式重试。 |
@@ -29,6 +29,15 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 - 从 Run 卡片进入 Terminal 时按需加载同一 Issue 正文；不把正文加入看板全量快照。
 - Agent 选择页对未安装 Adapter 展示 command、搜索 PATH 与已知安装位置；动作禁用但不再静默。
 - 搜索、Terminal 注入、改动备注和自定义用量表单共用异步提交保护：提交中禁用、防重复，协议失败保留完整草稿与错误，原按钮可显式重试。
+
+## 2026-08-28 NOT ACCEPTED 后的修复结果
+
+| 真人反馈 | 结果 | 修复与回归证据 |
+| --- | --- | --- |
+| 浏览器操作会同步改变桌面 App 当前界面 | PASS | Client 以独立 ID 在本地持有 Host / Project / Issue / Run、看板/依赖图、搜索、父过滤和图模式；每次 RPC 冻结调用当下的 `clientView`。`multi-client-navigation.mjs` 用两个独立浏览器 Client 选择不同 Issue，跨多个 tick 后互不抢焦点；本机与远程 Host Snapshot 都按显式 Client 视图生成。只有成功完整刷新确认 Issue 不存在时，当前 Client 才清理自己的悬空选择。 |
+| 依赖图只看到一张 Issue | PASS | 顶栏直达进入最多 200 张 open Issue 的概览；Dependency 参与者优先保留，超限显示总数、展示数与截断提示。点击节点进入一跳上下游，可展开完整闭包；看板卡片有「查看依赖」，单 Issue 模式有「返回依赖概览」，无 Dependency 有明确说明。 |
+| 看板 / 依赖图切换延迟数秒 | PASS | Client 导航只发 Snapshot，不触发 Tracker 刷新；刷新、tick 和正文读取在 Host 短锁内创建任务，Tracker 读取在线程中执行，完成后再短锁应用。阻塞 Tracker 时，第二个 Snapshot 的自动化硬门为 250ms；图首批绘制 48 节点，其余每 50ms 自动补齐。 |
+| Issue 详情松开鼠标后回到顶部 | PASS | 仅倒计时变化的 tick 跳过全量 DOM 重建；确需重绘时按同一 Issue 恢复 `.detail-scroll`。E2E 将详情滚到 240px，按住鼠标跨两个 tick，松开后仍保持 240px。 |
 
 ## 截图
 
@@ -48,10 +57,11 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 - Tracker 使用 `MemoryTracker` / `SeamTracker` fixture；只验证 Taskboard 的认领 / 释放认领写边界，不把它称为真实 GitHub 写操作证据。
 - Playwright 同一套 Client 代码覆盖桌面浏览器与 390×844 手机；Tauri 系统目录选择、系统通知、自启和 updater 仍属于真实平台边界。
 - 截图中的仓库、Issue 和 Run 为 deterministic fixture，不代表真实 GitHub #100 已被认领或关闭。
+- 250ms 响应门使用阻塞 `TrackerSeam` fixture，证明慢 Tracker 读取不会占住 Host Snapshot 锁；不把该 fixture 称为真实 GitHub 网络延迟数据。
 
 ## #90 壳层 PARTIAL 重新判定
 
-| #90 项 | 2026-08-28 判定 | 当前证据 |
+| #90 项 | 2026-08-29 判定 | 当前证据 |
 | --- | --- | --- |
 | #5 系统自启 | BLOCKED | 设置壳与 Host mode 合同存在；真实登录后自启必须由 macOS/Windows 平台验收，且 #100 明确不做安装/自启。 |
 | #20 桌面 Project 行尾编辑/移除 | PASS | `project-management.mjs` 从已有 Project 的侧栏新增 Project，并从行尾菜单完成编辑、活跃 Run 阻止、执行已停警告、移除与回退。 |
@@ -71,6 +81,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 ```sh
 npm --prefix apps/desktop run build
 cargo test -p host-kernel --test board -- --nocapture
+cargo test -p host-kernel --test refresh --test host_kernel -- --nocapture
 cargo test --workspace --all-targets
 npm --prefix apps/desktop run verify:release
 ```
@@ -83,6 +94,10 @@ cargo test -p host-kernel --test board browser_manages_projects_from_the_desktop
 cargo test -p host-kernel --test board browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retry -- --nocapture
 cargo test -p host-kernel --test board browser_explains_why_an_agent_is_unavailable_before_launch -- --nocapture
 cargo test -p host-kernel --test board browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions -- --nocapture
+cargo test -p host-kernel --test board browser_clients_keep_independent_issue_navigation -- --nocapture
+cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_tracker_refresh_is_blocked -- --nocapture
+cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_issue_document_load_is_blocked -- --nocapture
+cargo test -p host-kernel --test host_kernel remote_host_snapshots_honor_each_clients_explicit_issue_navigation -- --nocapture
 cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_port_without_disabling_the_client -- --nocapture
 ```
 
@@ -90,8 +105,10 @@ cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_por
 
 1. 在本分支运行 `npm --prefix apps/desktop run tauri -- dev`，打开真实产品壳；不要使用一次性原型或已安装旧版本。
 2. 若 Host 为空，登记本仓 Project；否则选择本仓。确认目录推断候选后提交，并等到真实 GitHub Issue 出现或看到明确可重试错误。
-3. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate，确认正文可滚且主要动作保持可用。
-4. 点击「执行」，查看 Agent、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写一条可安全停止的指令后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
-5. 进入 Terminal，确认右侧仍是 Issue #100；向 Run 注入一行；打开「查看改动」，然后停止 Run或返回看板。
-6. 确认 Run 停止没有把 Issue #100 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
-7. 在本 PR 留言明确 `ACCEPTED` 或列出失败步骤、截图和期望。只有明确接受后才 merge PR 并由 `Closes #100` 关闭 Issue。
+3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮自动刷新，确认两边不会互相抢 Project、Issue、Run 或视图焦点。
+4. 在任一 Client 顶栏直接打开依赖图，确认先看到未关闭 Issue 概览；点击 Issue 进入其 Dependency 上下游，再用「返回依赖概览」退出。回看板后通过卡片「查看依赖」再次进入单 Issue 模式。
+5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两个刷新倒计时后松开，确认滚动位置不跳顶。
+6. 点击「执行」，查看 Agent、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写一条可安全停止的指令后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
+7. 进入 Terminal，确认右侧仍是 Issue #100；向 Run 注入一行；打开「查看改动」，然后停止 Run 或返回看板。
+8. 确认 Run 停止没有把 Issue #100 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
+9. 在本 PR 留言明确 `ACCEPTED` 或列出失败步骤、截图和期望。只有明确接受后才 merge PR 并由 `Closes #100` 关闭 Issue。

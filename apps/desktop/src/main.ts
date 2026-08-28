@@ -118,6 +118,11 @@ type ShellCopy = {
   graphHint: string;
   viewBoard: string;
   viewGraph: string;
+  viewDependencies: string;
+  graphOverview: string;
+  graphReturnOverview: string;
+  graphTruncated: string;
+  graphNoDependencies: string;
   showClosedContext: string;
   graphCenter: string;
   graphCenterHere: string;
@@ -480,15 +485,39 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  mode?: "overview" | "focused";
   centerId?: string | null;
   totalCount?: number;
   complete?: boolean;
   maxDistance?: number;
+  truncated?: boolean;
   closedCount?: number;
 };
 
 type CenterView = "board" | "graph";
 type WorkspaceView = "project" | "host-overview" | "run";
+type ClientGraphMode = "overview" | "focused";
+type ClientViewState = {
+  focusedHostId: string;
+  focusedProjectId: string;
+  selectedIssueId: string | null;
+  focusedRunId: string;
+  centerView: CenterView;
+  workspaceView: WorkspaceView;
+  parentFilterId: string | null;
+  search: BoardSnapshot["search"];
+  graphMode: ClientGraphMode;
+  graphCenterIssueId: string | null;
+  completeDependencyGraph: boolean;
+  usageOpen: boolean;
+  usageQuery: {
+    range: UsageRange;
+    customFromMs?: number | null;
+    customToMs?: number | null;
+    filter: UsageFilter;
+    highlightedRunId?: string | null;
+  };
+};
 
 type BoardSnapshot = {
   projectId: string;
@@ -906,10 +935,13 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let renderedDetailIssueId = "";
+let renderedSnapshotKey = "";
 let renderedGraphKey = "";
 let renderedGraphProjectId = "";
 let renderedGraphCenterId = "";
 let graphCanvasLimit = 48;
+let graphBatchTimer: number | undefined;
 let graphListLimit = 50;
 let graphListQuery = "";
 let overviewProjectId = "";
@@ -926,6 +958,7 @@ let mobilePtyPumping = false;
 const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
+let clientView = loadClientView(clientId);
 
 const GRAPH_RELATION_META: Record<
   NonNullable<GraphNode["relation"]>,
@@ -952,11 +985,158 @@ function sessionClientId(): string {
   return id;
 }
 
+function defaultClientView(): ClientViewState {
+  return {
+    focusedHostId: "local",
+    focusedProjectId: "",
+    selectedIssueId: null,
+    focusedRunId: "",
+    centerView: "board",
+    workspaceView: "project",
+    parentFilterId: null,
+    search: { title: "", triageRole: null, state: "all" },
+    graphMode: "overview",
+    graphCenterIssueId: null,
+    completeDependencyGraph: false,
+    usageOpen: false,
+    usageQuery: {
+      range: "today",
+      customFromMs: null,
+      customToMs: null,
+      filter: {},
+      highlightedRunId: null,
+    },
+  };
+}
+
+function clientViewStorageKey(id: string): string {
+  return `agent-taskboard-client-view:${id}`;
+}
+
+function loadClientView(id: string): ClientViewState {
+  const fallback = defaultClientView();
+  try {
+    const raw = localStorage.getItem(clientViewStorageKey(id));
+    if (!raw) return fallback;
+    const stored = JSON.parse(raw) as Partial<ClientViewState>;
+    return {
+      ...fallback,
+      focusedHostId: typeof stored.focusedHostId === "string" ? stored.focusedHostId : fallback.focusedHostId,
+      focusedProjectId: typeof stored.focusedProjectId === "string" ? stored.focusedProjectId : "",
+      selectedIssueId: typeof stored.selectedIssueId === "string" ? stored.selectedIssueId : null,
+      focusedRunId: typeof stored.focusedRunId === "string" ? stored.focusedRunId : "",
+      centerView: stored.centerView === "graph" ? "graph" : "board",
+      workspaceView:
+        stored.workspaceView === "host-overview" || stored.workspaceView === "run"
+          ? stored.workspaceView
+          : "project",
+      parentFilterId: typeof stored.parentFilterId === "string" ? stored.parentFilterId : null,
+      search: {
+        title: typeof stored.search?.title === "string" ? stored.search.title : "",
+        triageRole: stored.search?.triageRole ?? null,
+        state:
+          stored.search?.state === "open" || stored.search?.state === "closed"
+            ? stored.search.state
+            : "all",
+      },
+      graphMode: stored.graphMode === "focused" ? "focused" : "overview",
+      graphCenterIssueId:
+        typeof stored.graphCenterIssueId === "string" ? stored.graphCenterIssueId : null,
+      completeDependencyGraph: Boolean(stored.completeDependencyGraph),
+      usageOpen: Boolean(stored.usageOpen),
+      usageQuery: {
+        range:
+          stored.usageQuery?.range === "24-hours"
+          || stored.usageQuery?.range === "7-days"
+          || stored.usageQuery?.range === "30-days"
+          || stored.usageQuery?.range === "custom"
+            ? stored.usageQuery.range
+            : "today",
+        customFromMs:
+          typeof stored.usageQuery?.customFromMs === "number" ? stored.usageQuery.customFromMs : null,
+        customToMs:
+          typeof stored.usageQuery?.customToMs === "number" ? stored.usageQuery.customToMs : null,
+        filter: {
+          projectId:
+            typeof stored.usageQuery?.filter?.projectId === "string"
+              ? stored.usageQuery.filter.projectId
+              : null,
+          agentId:
+            typeof stored.usageQuery?.filter?.agentId === "string"
+              ? stored.usageQuery.filter.agentId
+              : null,
+          model:
+            typeof stored.usageQuery?.filter?.model === "string"
+              ? stored.usageQuery.filter.model
+              : null,
+        },
+        highlightedRunId:
+          typeof stored.usageQuery?.highlightedRunId === "string"
+            ? stored.usageQuery.highlightedRunId
+            : null,
+      },
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveClientView(): void {
+  localStorage.setItem(clientViewStorageKey(clientId), JSON.stringify(clientView));
+}
+
+function updateClientView(patch: Partial<ClientViewState>): void {
+  clientView = { ...clientView, ...patch };
+  saveClientView();
+}
+
+function reconcileClientView(snap: Snapshot): void {
+  const board = snap.board;
+  const projectChanged = snap.focusedProjectId !== clientView.focusedProjectId;
+  const selectedIssueConfirmedMissing = Boolean(
+    !projectChanged
+      && clientView.selectedIssueId
+      && board
+      && board.refresh.kind === "ready"
+      && !board.selected,
+  );
+  clientView = {
+    ...clientView,
+    focusedHostId: snap.focusedHostId,
+    focusedProjectId: snap.focusedProjectId,
+    selectedIssueId:
+      board?.selected?.id
+      ?? (projectChanged || selectedIssueConfirmedMissing ? null : clientView.selectedIssueId),
+    focusedRunId: snap.focusedRunId,
+    centerView: snap.centerView,
+    workspaceView: snap.workspaceView,
+    parentFilterId: board?.parentFilter?.id ?? null,
+    search: board?.search ?? (projectChanged ? defaultClientView().search : clientView.search),
+    graphCenterIssueId:
+      clientView.graphMode === "focused"
+        ? board?.graph?.centerId ?? clientView.graphCenterIssueId
+        : null,
+    completeDependencyGraph: Boolean(board?.graph?.complete),
+    usageOpen: Boolean(snap.usageOpen),
+    usageQuery: {
+      range: snap.usage?.range ?? clientView.usageQuery.range,
+      customFromMs: snap.usage?.customFromMs ?? clientView.usageQuery.customFromMs ?? null,
+      customToMs: snap.usage?.customToMs ?? clientView.usageQuery.customToMs ?? null,
+      filter: { ...(snap.usage?.filter ?? clientView.usageQuery.filter) },
+      highlightedRunId:
+        snap.usage?.highlightedRunId ?? clientView.usageQuery.highlightedRunId ?? null,
+    },
+  };
+  saveClientView();
+}
+
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
 }
 
 function resetGraphUiState(): void {
+  if (graphBatchTimer != null) window.clearTimeout(graphBatchTimer);
+  graphBatchTimer = undefined;
   graphCanvasLimit = 48;
   graphListLimit = 50;
   graphListQuery = "";
@@ -1359,11 +1539,15 @@ async function protocolBase(): Promise<string> {
 let rpcQueue: Promise<void> = Promise.resolve();
 
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
+  const requestClientView: ClientViewState = {
+    ...clientView,
+    search: { ...clientView.search },
+  };
   const request = rpcQueue.then(async () => {
     const response = await fetch(`${await protocolBase()}/rpc`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op, ...extra }),
+      body: JSON.stringify({ op, ...extra, clientId, clientView: requestClientView }),
     });
     if (!response.ok) {
       const text = await response.text();
@@ -1386,6 +1570,7 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
     result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
     result.events = result.events ?? [];
+    reconcileClientView(result.snapshot);
     syncLaunchDraft(result.snapshot);
     deliverHostEvents(result.events, result.snapshot);
     snapshot = result.snapshot;
@@ -1397,6 +1582,24 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
   });
   rpcQueue = request.then(() => undefined, () => undefined);
   return request;
+}
+
+async function navigateClient(
+  patch: Partial<ClientViewState>,
+  request: Record<string, unknown> = {},
+): Promise<void> {
+  updateClientView(patch);
+  await rpc("snapshot", request);
+}
+
+async function refreshProject(projectId = clientView.focusedProjectId): Promise<void> {
+  let result = await rpc("refresh", projectId ? { projectId } : {});
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const board = result.snapshot.board;
+    if (board?.projectId !== projectId || board.refresh.kind !== "refreshing") return;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    result = await rpc("snapshot");
+  }
 }
 
 async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
@@ -1413,7 +1616,14 @@ async function loadSelectedIssueDocument(force = false): Promise<void> {
     ? { kind: "loading", body: state.body, fetchedAtMs: state.fetchedAtMs }
     : { kind: "loading" };
   render();
-  await rpc("loadIssueDocument", { issueId: issue.id });
+  const issueId = issue.id;
+  let result = await rpc("loadIssueDocument", { issueId });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const selected = result.snapshot.board?.selected;
+    if (selected?.id !== issueId || selected.document?.kind !== "loading") return;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    result = await rpc("snapshot");
+  }
 }
 
 function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
@@ -1445,16 +1655,13 @@ function playNotifySound(): void {
 
 async function jumpToNotification(event: Extract<HostEvent, { type: "notification" }>): Promise<void> {
   await rpc("showWindow");
-  if (event.projectId) {
-    await rpc("focusProject", { projectId: event.projectId });
-  }
-  if (event.issueId) {
-    issueDetailVisible = true;
-    await rpc("focusIssue", { issueId: event.issueId });
-  }
-  if (event.runId) {
-    await rpc("focusRun", { runId: event.runId });
-  }
+  issueDetailVisible = Boolean(event.issueId) || issueDetailVisible;
+  await navigateClient({
+    focusedProjectId: event.projectId || clientView.focusedProjectId,
+    selectedIssueId: event.issueId ?? clientView.selectedIssueId,
+    focusedRunId: event.runId || "",
+    workspaceView: event.runId ? "run" : "project",
+  });
   render();
 }
 
@@ -1550,6 +1757,13 @@ function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): stri
   return JSON.stringify([board.graph, graphCanvasLimit]);
 }
 
+function snapshotRenderKey(snap: Snapshot): string {
+  return JSON.stringify(snap, (key, value) => {
+    if (key === "nextRefreshInMs" || key === "remainingMs") return undefined;
+    return value;
+  });
+}
+
 function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
   if (typeof graph.closedCount === "number") {
     return copy.showClosedContext.replace("{count}", String(graph.closedCount));
@@ -1582,6 +1796,14 @@ function render(): void {
   const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
   const showSidebar = !isMobile && sidebarVisible && !runLifted;
   const selectedIssue = snap.board?.selected;
+  const previousDetailScrollNode = app.querySelector<HTMLElement>(".detail-scroll");
+  const previousDetailScroll = previousDetailScrollNode
+    ? {
+        issueId: renderedDetailIssueId,
+        scrollTop: previousDetailScrollNode.scrollTop,
+        scrollLeft: previousDetailScrollNode.scrollLeft,
+      }
+    : null;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
   const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
@@ -1892,6 +2114,13 @@ function render(): void {
     centerGraphViewport(graphCanvas, nextGraphCenterId);
   }
   restoreActiveField(activeField);
+  const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
+  if (nextDetailScroll && previousDetailScroll?.issueId === (selectedIssue?.id ?? "")) {
+    nextDetailScroll.scrollTop = previousDetailScroll.scrollTop;
+    nextDetailScroll.scrollLeft = previousDetailScroll.scrollLeft;
+  }
+  renderedDetailIssueId = selectedIssue?.id ?? "";
+  renderedSnapshotKey = snapshotRenderKey(snap);
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
     void pumpMobileOutput(snap);
@@ -1899,6 +2128,25 @@ function render(): void {
     mobilePtyPumping = false;
     attachTerminal(snap);
   }
+  scheduleGraphBatch(snap);
+}
+
+function scheduleGraphBatch(snap: Snapshot): void {
+  if (graphBatchTimer != null) return;
+  const graph = snap.centerView === "graph" ? snap.board?.graph : null;
+  if (!graph || graphCanvasLimit >= graph.nodes.length) return;
+  const expectedProject = snap.focusedProjectId;
+  const expectedCenter = graph.centerId ?? "";
+  graphBatchTimer = window.setTimeout(() => {
+    graphBatchTimer = undefined;
+    if (
+      snapshot?.focusedProjectId !== expectedProject
+      || snapshot.centerView !== "graph"
+      || (snapshot.board?.graph?.centerId ?? "") !== expectedCenter
+    ) return;
+    graphCanvasLimit = Math.min(graphCanvasLimit + 48, snapshot.board?.graph?.nodes.length ?? 0);
+    render();
+  }, 50);
 }
 
 function paintGraphEdges(): void {
@@ -2852,12 +3100,13 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
-  const legacyGraph = graph.centerId == null;
+  const overview = graph.mode === "overview";
+  const legacyGraph = graph.mode == null && graph.centerId == null;
   const projectedNodes = [...graph.nodes]
     .sort((a, b) =>
       (a.distance ?? 0) - (b.distance ?? 0) ||
       a.rank - b.rank ||
-      a.number - b.number,
+      (overview ? b.number - a.number : a.number - b.number),
     )
     .slice(0, graphCanvasLimit);
   const columns = new Map<number, GraphNode[]>();
@@ -2877,25 +3126,31 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   const canvasLimit = copy.graphCanvasLimit
     .replace("{shown}", String(projectedNodes.length))
     .replace("{total}", String(graph.nodes.length));
+  const truncated = copy.graphTruncated
+    .replace("{shown}", String(graph.nodes.length))
+    .replace("{total}", String(totalCount));
   return `<div class="dep-graph">
     ${legacyGraph
       ? `<label class="graph-opt">
           <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
           ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
         </label>`
-      : `<div class="graph-toolbar">
-          <span class="graph-center-label">${escapeHtml(centerLabel)}</span>
+      : `<div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
+          <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
           <div class="actions">
-            ${graph.complete
-              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
-              : totalCount > graph.nodes.length
-                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
-                : ""}
+            ${overview
+              ? ""
+              : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
+                ${graph.complete
+                  ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+                  : totalCount > graph.nodes.length
+                    ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                    : ""}`}
           </div>
         </div>
-        ${projectedNodes.length < graph.nodes.length
-          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
-          : ""}`}
+        ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
+        ${projectedNodes.length < graph.nodes.length ? `<div class="graph-limit">${escapeHtml(canvasLimit)}</div>` : ""}
+        ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}`}
     ${reuseCanvas
       ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
       : `<div class="graph-canvas">
@@ -2911,6 +3166,7 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
                     node,
                     board.selected?.id,
                     legacyGraph ? null : graph.centerId ?? null,
+                    overview,
                   ),
                 )
                 .join("")}</div>`,
@@ -2969,12 +3225,13 @@ function graphNode(
   node: GraphNode,
   selectedId: string | undefined,
   centerId: string | null,
+  overview = false,
 ): string {
   const selected = node.id === selectedId ? "sel" : "";
   const closed = node.open ? "" : "closed";
   const center = node.id === centerId ? "root" : "";
   return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
-    <button type="button" class="graph-node-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+    <button type="button" class="graph-node-main" data-act="${overview ? "center-graph" : "focus-issue"}" data-id="${escapeHtml(node.id)}">
       <div class="issue-id">#${node.number}</div>
       <div class="issue-title">${escapeHtml(node.title)}</div>
     </button>
@@ -3033,7 +3290,7 @@ function issueCard(
     .join("");
   const cardAction = "focus-issue";
   const actionTargetId = issue.id;
-  const actions = lane === "frontier"
+  const laneActions = lane === "frontier"
     ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
     : lane === "inProgress" && issue.runId
       ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
@@ -3043,6 +3300,10 @@ function issueCard(
         ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
            <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
         : "";
+  const dependencyAction = mobileClient()
+    ? ""
+    : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`;
+  const actions = `${dependencyAction}${laneActions}`;
   return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
     <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
       <div class="issue-id">#${issue.number}</div>
@@ -3796,13 +4057,13 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "open-overview") {
     sidebarVisible = true;
-    await rpc("openHostOverview");
+    await navigateClient({ workspaceView: "host-overview", focusedRunId: "" });
     render();
     return;
   }
   if (act === "return-board") {
     sidebarVisible = sidebarBeforeLift;
-    await rpc("returnToBoard");
+    await navigateClient({ workspaceView: "project" });
     render();
     return;
   }
@@ -3937,7 +4198,17 @@ app.addEventListener("click", async (event) => {
     mobileScopeOpen = false;
     mobileView = "board";
     sidebarVisible = true;
-    await rpc("focusProject", { projectId: target.dataset.id });
+    await navigateClient({
+      focusedProjectId: target.dataset.id,
+      selectedIssueId: null,
+      focusedRunId: "",
+      workspaceView: "project",
+      parentFilterId: null,
+      search: { title: "", triageRole: null, state: "all" },
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
     resetInlineFormDrafts();
     await reportClientView();
     render();
@@ -4031,7 +4302,13 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-run" && target.dataset.id) {
     sidebarBeforeLift = sidebarVisible;
     issueDetailVisible = true;
-    await rpc("focusRun", { runId: target.dataset.id });
+    const run = snapshot.runs.find((item) => item.id === target.dataset.id);
+    await navigateClient({
+      focusedProjectId: run?.projectId ?? clientView.focusedProjectId,
+      selectedIssueId: run?.issueId ?? clientView.selectedIssueId,
+      focusedRunId: target.dataset.id,
+      workspaceView: "run",
+    });
     if (mobileClient()) {
       mobileView = "run";
       mobileLiveTerminal = false;
@@ -4048,29 +4325,49 @@ app.addEventListener("click", async (event) => {
     settingsOpen = false;
     pairingOpen = false;
     formOpen = null;
-    await rpc("openUsage");
+    await navigateClient({ usageOpen: true });
     render();
     return;
   }
   if (act === "close-usage") {
-    await rpc("closeUsage");
+    await navigateClient({
+      usageOpen: false,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: null },
+    });
     render();
     return;
   }
   if (act === "usage-range" && target.dataset.id) {
     usageCustomDraft = null;
     clearFormOperation(usageCustomFormKey(snapshot.focusedHostId));
-    await rpc("setUsageRange", { range: target.dataset.id });
+    await navigateClient({
+      usageQuery: {
+        ...clientView.usageQuery,
+        range: target.dataset.id as UsageRange,
+      },
+    });
     render();
     return;
   }
   if (act === "open-usage-run" && target.dataset.id) {
-    await rpc("openUsageForRun", { runId: target.dataset.id });
+    await navigateClient({
+      usageOpen: true,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: target.dataset.id },
+    });
     render();
     return;
   }
   if (act === "open-run-usage" && target.dataset.id) {
-    await rpc("openRunFromUsage", { runId: target.dataset.id });
+    const run = snapshot.runs.find((item) => item.id === target.dataset.id);
+    if (!run) return;
+    await navigateClient({
+      focusedProjectId: run.projectId,
+      selectedIssueId: run.issueId ?? null,
+      focusedRunId: run.id,
+      workspaceView: "run",
+      usageOpen: false,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: null },
+    });
     render();
     return;
   }
@@ -4150,7 +4447,7 @@ app.addEventListener("click", async (event) => {
     refreshing = true;
     render();
     try {
-      await rpc("refresh");
+      await refreshProject();
     } finally {
       refreshing = false;
     }
@@ -4239,7 +4536,18 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-host" && target.dataset.id) {
     await reportClientView(false);
-    await rpc("focusHost", { hostId: target.dataset.id });
+    await navigateClient({
+      focusedHostId: target.dataset.id,
+      focusedProjectId: "",
+      selectedIssueId: null,
+      focusedRunId: "",
+      workspaceView: "project",
+      parentFilterId: null,
+      search: { title: "", triageRole: null, state: "all" },
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
     resetInlineFormDrafts();
     hostPickerOpen = false;
     await reportClientView();
@@ -4340,19 +4648,57 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-view" && target.dataset.id) {
-    await rpc("setCenterView", { view: target.dataset.id });
     if (target.dataset.id === "graph") {
       resetGraphUiState();
-      const selectedId = snapshot.board?.selected?.id;
-      if (selectedId && snapshot.board?.graph?.centerId != null) {
-        await rpc("centerDependencyGraph", { issueId: selectedId });
-      }
+      await navigateClient({
+        centerView: "graph",
+        selectedIssueId: null,
+        graphMode: "overview",
+        graphCenterIssueId: null,
+        completeDependencyGraph: false,
+      });
+    } else {
+      await navigateClient({ centerView: "board" });
     }
     render();
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
-    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    const fromOverview = snapshot.board?.graph?.mode === "overview";
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      graphMode: "focused",
+      graphCenterIssueId: target.dataset.id,
+      completeDependencyGraph: fromOverview ? false : clientView.completeDependencyGraph,
+    });
+    render();
+    await loadSelectedIssueDocument();
+    render();
+    return;
+  }
+  if (act === "graph-overview") {
+    resetGraphUiState();
+    await navigateClient({
+      selectedIssueId: null,
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
+    render();
+    return;
+  }
+  if (act === "view-dependencies" && target.dataset.id) {
+    resetGraphUiState();
+    issueDetailVisible = true;
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      focusedRunId: "",
+      centerView: "graph",
+      workspaceView: "project",
+      graphMode: "focused",
+      graphCenterIssueId: target.dataset.id,
+      completeDependencyGraph: false,
+    });
     render();
     await loadSelectedIssueDocument();
     render();
@@ -4360,13 +4706,13 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "graph-complete") {
     resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: true });
+    await navigateClient({ completeDependencyGraph: true });
     render();
     return;
   }
   if (act === "graph-neighborhood") {
     resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: false });
+    await navigateClient({ completeDependencyGraph: false });
     render();
     return;
   }
@@ -4382,7 +4728,11 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-issue" && target.dataset.id) {
     issueDetailVisible = true;
-    await rpc("focusIssue", { issueId: target.dataset.id });
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      focusedRunId: "",
+      workspaceView: "project",
+    });
     render();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
@@ -4390,19 +4740,19 @@ app.addEventListener("click", async (event) => {
       mobileLiveTerminal = false;
     } else if (target.closest(".issue-card") && snapshot.focusedRunId) {
       sidebarBeforeLift = sidebarVisible;
-      await rpc("focusRun", { runId: snapshot.focusedRunId });
+      await navigateClient({ workspaceView: "run" });
       sidebarVisible = false;
     }
     render();
     return;
   }
   if (act === "filter-parent" && target.dataset.id) {
-    await rpc("filterParent", { issueId: target.dataset.id });
+    await navigateClient({ parentFilterId: target.dataset.id });
     render();
     return;
   }
   if (act === "clear-filter") {
-    await rpc("clearParentFilter");
+    await navigateClient({ parentFilterId: null });
     render();
   }
 });
@@ -4420,10 +4770,16 @@ app.addEventListener("submit", async (event) => {
     issueSearchDraft = draft;
     const key = issueSearchFormKey(snapshot.focusedProjectId);
     const success = await runFormOperation(key, async () => {
-      await rpc("searchIssues", {
-        projectId: snapshot?.focusedProjectId ?? "",
-        ...draft,
-      });
+      await navigateClient(
+        {
+          search: {
+            title: draft.title,
+            triageRole: (draft.triageRole || null) as TriageRole | null,
+            state: draft.state === "open" || draft.state === "closed" ? draft.state : "all",
+          },
+        },
+        { clientAction: "searchIssues" },
+      );
     });
     if (success) {
       issueSearchDraft = null;
@@ -4676,7 +5032,16 @@ app.addEventListener("change", async (event) => {
   if (filter === "projectId") next.projectId = target.value;
   if (filter === "agentId") next.agentId = target.value;
   if (filter === "model") next.model = target.value;
-  await rpc("setUsageFilter", next);
+  await navigateClient({
+    usageQuery: {
+      ...clientView.usageQuery,
+      filter: {
+        projectId: next.projectId || null,
+        agentId: next.agentId || null,
+        model: next.model || null,
+      },
+    },
+  });
   render();
 });
 
@@ -4695,7 +5060,14 @@ app.addEventListener("submit", async (event) => {
     usageCustomDraft = draft;
     const key = usageCustomFormKey(snapshot?.focusedHostId ?? "");
     const success = await runFormOperation(key, async () => {
-      await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
+      await navigateClient({
+        usageQuery: {
+          ...clientView.usageQuery,
+          range: "custom",
+          customFromMs: from,
+          customToMs: to,
+        },
+      }, { clientAction: "setUsageRange" });
     });
     if (success) {
       usageCustomDraft = null;
@@ -4707,14 +5079,24 @@ app.addEventListener("submit", async (event) => {
   if (launch && snapshot && launchDraft) {
     event.preventDefault();
     const draft = launchDraft;
+    const existingRunIds = new Set(snapshot.runs.map((run) => run.id));
     await runFormOperation(launchFormKey(draft.projectId), async () => {
-      await rpc("startUnboundRun", {
+      const result = await rpc("startUnboundRun", {
         projectId: draft.projectId,
         issueId: draft.issueId,
         agentId: draft.agentId,
         values: draft.values,
         openingText: draft.openingText,
       });
+      const created = result.snapshot.runs.find((run) => !existingRunIds.has(run.id));
+      if (created && !result.snapshot.launchForm) {
+        await navigateClient({
+          focusedProjectId: created.projectId,
+          selectedIssueId: created.issueId ?? null,
+          focusedRunId: created.id,
+          workspaceView: "project",
+        });
+      }
     });
     return;
   }
@@ -4730,7 +5112,22 @@ app.addEventListener("submit", async (event) => {
     if (formOpen === "edit") {
       await rpc("editProject", { projectId: formProjectId, ...formDraft });
     } else {
-      await rpc("registerProject", formDraft);
+      const existingProjectIds = new Set(snapshot.projects.map((project) => project.id));
+      const result = await rpc("registerProject", formDraft);
+      const created = result.snapshot.projects.find((project) => !existingProjectIds.has(project.id));
+      if (created) {
+        await navigateClient({
+          focusedProjectId: created.id,
+          selectedIssueId: null,
+          focusedRunId: "",
+          workspaceView: "project",
+          parentFilterId: null,
+          search: { title: "", triageRole: null, state: "all" },
+          graphMode: "overview",
+          graphCenterIssueId: null,
+          completeDependencyGraph: false,
+        });
+      }
     }
     formOpen = null;
   } catch (error) {
@@ -4790,7 +5187,7 @@ function onClientForegroundOrHidden(): void {
         await reportClientView(false);
         return;
       }
-      if (!changed) await rpc("refresh");
+      if (changed || clientView.focusedProjectId) await refreshProject();
       render();
     } finally {
       foregroundRefresh = null;
@@ -4814,6 +5211,10 @@ function ensureTick(): void {
 }
 
 function renderAfterTick(): void {
+  if (!snapshot || snapshotRenderKey(snapshot) === renderedSnapshotKey) {
+    tickRenderPending = false;
+    return;
+  }
   if (activePointers.size > 0) {
     tickRenderPending = true;
     return;
@@ -4944,6 +5345,7 @@ rpc("snapshot")
     render();
     ensureTick();
     await reportClientView();
+    if (shouldReportClientView() && clientView.focusedProjectId) await refreshProject();
     render();
     if (desktopShellAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
       startupUpdateChecked = true;

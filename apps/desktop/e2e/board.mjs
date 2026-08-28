@@ -246,6 +246,7 @@ let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
   releaseDocumentRefresh = resolve;
 });
+let cachedDocumentInjected = false;
 const preserveCachedDocumentDuringRefresh = async (route) => {
   if (!route.request().url().endsWith("/rpc")) {
     await route.continue();
@@ -258,7 +259,12 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
     await route.continue();
     return;
   }
-  if (request?.op === "focusIssue" && request.issueId === "you/garden#2") {
+  if (
+    !cachedDocumentInjected
+    && request?.op === "snapshot"
+    && request.clientView?.selectedIssueId === "you/garden#2"
+  ) {
+    cachedDocumentInjected = true;
     const response = await route.fetch();
     const result = await response.json();
     result.snapshot.board.selected.document = {
@@ -318,6 +324,30 @@ const headerTopAfterScroll = await page.$eval(".detail-sticky", (node) => node.g
 if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
   throw new Error("Issue title and actions should stay pinned while document content scrolls");
 }
+const detailScroll = await page.$(".detail-scroll");
+const detailScrollBox = await detailScroll?.boundingBox();
+const detailScrollBeforeTicks = await page.$eval(".detail-scroll", (node) => {
+  node.scrollTop = Math.min(240, node.scrollHeight - node.clientHeight);
+  return node.scrollTop;
+});
+if (!detailScroll || !detailScrollBox || detailScrollBeforeTicks <= 0) {
+  throw new Error("detail scroll regression needs a scrollable Issue document");
+}
+await page.mouse.move(detailScrollBox.x + detailScrollBox.width / 2, detailScrollBox.y + detailScrollBox.height / 2);
+await page.mouse.down();
+for (let tickIndex = 0; tickIndex < 2; tickIndex += 1) {
+  const response = page.waitForResponse((candidate) =>
+    candidate.url().endsWith("/rpc") && candidate.request().postData()?.includes('"op":"tick"'),
+  );
+  await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+  await response;
+}
+await page.mouse.up();
+await page.waitForTimeout(50);
+const detailScrollAfterTicks = await page.$eval(".detail-scroll", (node) => node.scrollTop);
+if (Math.abs(detailScrollAfterTicks - detailScrollBeforeTicks) > 1) {
+  throw new Error(`releasing the pointer after two Host ticks must preserve Issue scroll: ${detailScrollBeforeTicks} -> ${detailScrollAfterTicks}`);
+}
 await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await capture("issue-98-desktop-detail-1440x900.png");
 await assertVisual("issue-99-desktop-1440x900.png");
@@ -362,7 +392,16 @@ if (stillFrontier !== beforeFrontier) {
 }
 
 await page.click("button:has-text('只看这些子票')");
-await page.waitForSelector("button:has-text('清除过滤')");
+try {
+  await page.waitForSelector("button:has-text('清除过滤')", { timeout: 2000 });
+} catch {
+  const diagnostic = await page.evaluate(() => ({
+    clientView: Object.entries(localStorage).filter(([key]) => key.includes("client-view")),
+    boardHint: document.querySelector(".board-hint")?.textContent,
+    detail: document.querySelector(".detail-hd")?.textContent,
+  }));
+  throw new Error(`parent filter did not render: ${JSON.stringify(diagnostic)}`);
+}
 const filtered = await page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
   nodes.map((node) => node.textContent),
 );
@@ -398,12 +437,26 @@ if (!(await graphTabBeforeTick.evaluate((node) => node.isConnected))) {
 }
 await page.mouse.up();
 await page.waitForSelector(".dep-graph", { timeout: 1000 });
+const overviewTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
+  nodes.map((node) => node.textContent),
+);
+for (const title of ["parent", "child ready", "child blocked", "unparented ready", "waiting on history", "blocker", "active work"]) {
+  if (!overviewTitles.includes(title)) {
+    throw new Error(`dependency overview should include open Issue ${title}, got ${JSON.stringify(overviewTitles)}`);
+  }
+}
+if (overviewTitles.includes("older closed") || (await page.$('[data-graph-mode="overview"]')) == null) {
+  throw new Error(`dependency overview should contain only open Issues: ${JSON.stringify(overviewTitles)}`);
+}
+await page.click(".graph-node:has-text('child blocked') .graph-node-main");
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector("button[data-act='graph-overview']");
+await page.click("button[data-act='graph-overview']");
+await page.waitForSelector('[data-graph-mode="overview"]');
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
 
-await page.click(".issue-card:has-text('child blocked') .issue-card-main");
-await page.waitForSelector(".detail-hd:has-text('child blocked')");
-await page.click("button[data-act='center-view'][data-id='graph']");
+await page.click(".issue-card:has-text('child blocked') button[data-act='view-dependencies']");
 await page.waitForSelector(".dep-graph");
 if (await page.$(".lanes")) {
   throw new Error("graph view should replace the four columns");
@@ -466,12 +519,9 @@ await page.waitForFunction(() => document.querySelector(".graph-center-label")?.
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await page.waitForSelector(".graph-index");
-const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
-if (!limitedGraphText?.includes("画布显示 48/61")) {
-  throw new Error(`large complete closure should keep the canvas bounded, got ${limitedGraphText}`);
-}
-if ((await page.$$(".graph-node")).length !== 48) {
-  throw new Error("large complete closure should not render every node at once");
+await page.waitForFunction(() => document.querySelectorAll(".graph-node").length === 61);
+if (await page.$("button[data-act='graph-more']")) {
+  throw new Error("large dependency graphs should fill remaining node batches automatically");
 }
 if ((await page.$$(".graph-index-row")).length !== 50 || !(await page.$("button[data-act='graph-list-more']"))) {
   throw new Error("complete relationship list should paginate instead of mounting every Issue row");
@@ -576,7 +626,7 @@ const emptyRunsOverviewResponse = async (route) => {
     await route.continue();
     return;
   }
-  if (request?.op !== "openHostOverview") {
+  if (request?.op !== "snapshot" || request.clientView?.workspaceView !== "host-overview") {
     await route.continue();
     return;
   }

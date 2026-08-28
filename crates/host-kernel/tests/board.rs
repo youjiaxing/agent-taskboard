@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, FrontierEmptyReason, GraphRelation,
-    HostKernel, IssueRecord, LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance,
-    TriageRole, DEFAULT_RECENT_LIMIT,
+    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, DependencyGraphMode,
+    FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, LoopbackAssets, LoopbackServer,
+    MemoryTracker, SystemAppearance, TriageRole, DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -119,6 +119,67 @@ fn ids(cards: &[host_kernel::IssueCard]) -> Vec<String> {
 
 fn node_ids(graph: &host_kernel::DependencyGraph) -> Vec<String> {
     graph.nodes.iter().map(|node| node.id.clone()).collect()
+}
+
+#[test]
+fn snapshots_honor_each_clients_explicit_view_without_shared_focus() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "first client issue"));
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "second client issue"));
+    let mut host = boot(tmp.path(), tracker);
+    let project_id = register(&mut host, &dir, "you/garden");
+
+    let snapshot_for = |host: &mut HostKernel, issue_id: &str| {
+        host.handle(serde_json::json!({
+            "op": "snapshot",
+            "clientView": {
+                "focusedHostId": "local",
+                "focusedProjectId": project_id,
+                "selectedIssueId": issue_id,
+                "focusedRunId": "",
+                "centerView": "board",
+                "workspaceView": "project",
+                "parentFilterId": null,
+                "search": {
+                    "title": "",
+                    "triageRole": null,
+                    "state": "all"
+                },
+                "graphMode": "overview",
+                "graphCenterIssueId": null,
+                "completeDependencyGraph": false
+            }
+        }))
+        .unwrap()
+        .snapshot
+    };
+
+    let first = snapshot_for(&mut host, "you/garden#1");
+    assert_eq!(
+        first.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/garden#1"
+    );
+
+    let second = snapshot_for(&mut host, "you/garden#2");
+    assert_eq!(
+        second.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/garden#2"
+    );
+
+    let first_again = snapshot_for(&mut host, "you/garden#1");
+    assert_eq!(
+        first_again
+            .board
+            .as_ref()
+            .unwrap()
+            .selected
+            .as_ref()
+            .unwrap()
+            .id,
+        "you/garden#1"
+    );
 }
 
 fn edge_pairs(graph: &host_kernel::DependencyGraph) -> Vec<(String, String)> {
@@ -581,6 +642,70 @@ fn dependency_graph_contains_only_dependency_edges() {
 }
 
 #[test]
+fn dependency_overview_caps_open_issues_and_prioritizes_dependency_participants() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "old dependency origin").blocking(
+            "you/garden",
+            2,
+            "old dependency target",
+        ),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "old dependency target"));
+    for number in 3..=205 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("open {number}"),
+        ));
+    }
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 999, "closed").closed_at("2026-08-20T10:00:00Z"),
+    );
+    let mut host = boot(tmp.path(), tracker);
+    let project_id = register(&mut host, &dir, "you/garden");
+
+    let snapshot = host
+        .handle(serde_json::json!({
+            "op": "snapshot",
+            "clientView": {
+                "focusedHostId": "local",
+                "focusedProjectId": project_id,
+                "selectedIssueId": null,
+                "focusedRunId": "",
+                "centerView": "graph",
+                "workspaceView": "project",
+                "parentFilterId": null,
+                "search": { "title": "", "triageRole": null, "state": "all" },
+                "graphMode": "overview",
+                "graphCenterIssueId": null,
+                "completeDependencyGraph": false
+            }
+        }))
+        .unwrap()
+        .snapshot;
+    let graph = snapshot.board.unwrap().graph.expect("overview graph");
+    let ids = node_ids(&graph);
+
+    assert_eq!(graph.mode, DependencyGraphMode::Overview);
+    assert_eq!(graph.center_id, None);
+    assert_eq!(graph.total_count, 205);
+    assert_eq!(graph.nodes.len(), 200);
+    assert!(graph.truncated);
+    assert!(graph.nodes.iter().all(|node| node.open));
+    assert!(ids.contains(&"you/garden#1".into()));
+    assert!(ids.contains(&"you/garden#2".into()));
+    assert!(ids.contains(&"you/garden#205".into()));
+    assert!(!ids.contains(&"you/garden#7".into()));
+    assert_eq!(
+        edge_pairs(&graph),
+        vec![("you/garden#1".into(), "you/garden#2".into())]
+    );
+}
+
+#[test]
 fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
     let graph: DependencyGraph = serde_json::from_value(serde_json::json!({
         "nodes": [{
@@ -597,6 +722,8 @@ fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
     .unwrap();
 
     assert_eq!(graph.center_id, None);
+    assert_eq!(graph.mode, DependencyGraphMode::Focused);
+    assert!(!graph.truncated);
     assert_eq!(graph.total_count, 0);
     assert!(!graph.complete);
     assert_eq!(graph.max_distance, 0);
@@ -845,6 +972,26 @@ fn unknown_move_op_does_not_change_tracker_state() {
     let columns = host.snapshot().board.unwrap().columns.unwrap();
     assert_eq!(ids(&columns.frontier), vec!["you/garden#1"]);
     assert!(columns.recently_completed.is_empty());
+}
+
+#[test]
+fn browser_clients_keep_independent_issue_navigation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/multi-client");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(
+        "you/multi-client",
+        1,
+        "first client issue",
+    ));
+    tracker.add_issue(IssueRecord::open(
+        "you/multi-client",
+        2,
+        "second client issue",
+    ));
+    let mut host = boot(tmp.path(), tracker);
+    register(&mut host, &dir, "you/multi-client");
+    run_browser_e2e(host, "multi-client-navigation.mjs", &[]);
 }
 
 #[test]
@@ -1181,6 +1328,18 @@ fn browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retr
     pin_board_test_time(&mut host);
     register(&mut host, &dir, "you/garden");
     run_browser_e2e(host, "run-launch-resilience.mjs", &[]);
+}
+
+#[test]
+fn browser_preserves_the_custom_usage_range_when_submission_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 100, "core user journey"));
+    let mut host = boot(tmp.path(), tracker);
+    pin_board_test_time(&mut host);
+    register(&mut host, &dir, "you/garden");
+    run_browser_e2e(host, "usage-form-resilience.mjs", &[]);
 }
 
 #[test]

@@ -39,7 +39,11 @@ const failFirstRpc = (op, message, matches = () => true) => {
   return rpcFailure;
 };
 
-let failure = failFirstRpc("searchIssues", "search temporarily unavailable");
+let failure = failFirstRpc(
+  "snapshot",
+  "search temporarily unavailable",
+  (request) => request.clientAction === "searchIssues",
+);
 await page.fill("#issue-title-search", "active lifecycle issue");
 const tickResponse = page.waitForResponse((response) =>
   response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
@@ -131,7 +135,14 @@ await page.click(".lifted-terminal button[data-act='open-usage-run']");
 await page.waitForSelector(".usage-page");
 await page.click("button[data-act='usage-range'][data-id='custom']");
 await page.waitForSelector("form[data-act='usage-custom']");
-failure = failFirstRpc("setUsageRange", "usage range temporarily unavailable", (request) => request.range === "custom" && "fromMs" in request);
+failure = failFirstRpc(
+  "snapshot",
+  "usage range temporarily unavailable",
+  (request) =>
+    request.clientAction === "setUsageRange"
+    && request.clientView?.usageQuery?.range === "custom"
+    && typeof request.clientView?.usageQuery?.customFromMs === "number",
+);
 await page.$eval("form[data-act='usage-custom']", (form) => {
   form.requestSubmit();
   form.requestSubmit();
@@ -151,7 +162,19 @@ await page.click("button[data-act='close-usage']");
 await page.waitForSelector(".lifted-terminal");
 await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("button[data-act='return-board']");
-await page.waitForSelector(".lanes");
+try {
+  await page.waitForSelector(".lanes", { timeout: 2000 });
+} catch {
+  const diagnostic = await page.evaluate(() => ({
+    clientView: Object.entries(localStorage).filter(([key]) => key.includes("client-view")),
+    workspace: document.querySelector(".workspace")?.className,
+    lifted: Boolean(document.querySelector(".lifted-run")),
+    overview: Boolean(document.querySelector(".overview-page")),
+    usage: Boolean(document.querySelector(".usage-page")),
+    empty: document.querySelector(".board-empty")?.textContent,
+  }));
+  throw new Error(`returning from a stopped Run did not restore the board: ${JSON.stringify(diagnostic)}`);
+}
 
 await card("continue lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".detail-hd:has-text('continue lifecycle issue')");
