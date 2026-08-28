@@ -369,7 +369,8 @@ type FormKey =
   | `inject-run:${string}`
   | `change-note:${string}`
   | `usage-custom:${string}`
-  | `launch:${string}`;
+  | `launch:${string}`
+  | `pairing:${string}`;
 
 type FormOperationState = {
   pending: Set<FormKey>;
@@ -2083,8 +2084,9 @@ function render(): void {
                 <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
                 <input id="pairing-address" data-field="address" value="${escapeHtml(pairingAddress)}" />
                 <div class="actions">
-                  <button type="button" class="primary" data-act="show-offer">${escapeHtml(copy.pairingShow)}</button>
+                  <button type="button" class="primary" data-act="show-offer" ${formOperations.pending.has(pairingFormKey("offer")) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey("offer")) ? copy.operationPending : copy.pairingShow)}</button>
                 </div>
+                ${formFeedback(pairingFormKey("offer"))}
                 ${
                   snapshot.pairingOffer
                     ? `<div class="offer">
@@ -2102,7 +2104,7 @@ function render(): void {
                     ? snapshot.pairedClients
                         .map(
                           (client) =>
-                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}">${escapeHtml(copy.revokeClient)}</button></div>`,
+                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}" ${formOperations.pending.has(pairingFormKey(`revoke:${client.id}`)) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey(`revoke:${client.id}`)) ? copy.operationPending : copy.revokeClient)}</button>${formFeedback(pairingFormKey(`revoke:${client.id}`))}</div>`,
                         )
                         .join("")
                     : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`
@@ -2112,8 +2114,9 @@ function render(): void {
                 <div class="label">${escapeHtml(copy.pairingToAnother)}</div>
                 <textarea data-field="paste" rows="4" placeholder="${escapeHtml(copy.pairingPaste)}">${escapeHtml(pairingPaste)}</textarea>
                 <div class="actions">
-                  <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
+                  <button type="button" class="primary" data-act="connect-host" ${formOperations.pending.has(pairingFormKey("connect")) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey("connect")) ? copy.operationPending : copy.pairingConnect)}</button>
                 </div>
+                ${formFeedback(pairingFormKey("connect"))}
               </div>
               ${pairingError ? `<p class="notice">${escapeHtml(pairingError)}</p>` : ""}
             </div>
@@ -2423,6 +2426,10 @@ function usageCustomFormKey(hostId: string): FormKey {
 
 function launchFormKey(projectId: string): FormKey {
   return `launch:${projectId}`;
+}
+
+function pairingFormKey(action: string): FormKey {
+  return `pairing:${action}`;
 }
 
 function formFeedback(key: FormKey): string {
@@ -4248,6 +4255,9 @@ app.addEventListener("click", async (event) => {
     removeProject = null;
     projectMenuId = "";
     pairingError = "";
+    for (const key of formOperations.errors.keys()) {
+      if (key.startsWith("pairing:")) formOperations.errors.delete(key);
+    }
     render();
     return;
   }
@@ -4674,12 +4684,9 @@ app.addEventListener("click", async (event) => {
     pairingError = "";
     const addressInput = app.querySelector<HTMLInputElement>("[data-field='address']");
     pairingAddress = addressInput?.value ?? pairingAddress;
-    try {
+    await runFormOperation(pairingFormKey("offer"), async () => {
       await rpc("beginPairingOffer", { address: pairingAddress });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "copy-offer" && snapshot.pairingOffer) {
@@ -4688,16 +4695,14 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "revoke" && target.dataset.id) {
     pairingError = "";
-    try {
+    await runFormOperation(pairingFormKey(`revoke:${target.dataset.id}`), async () => {
       await rpc("revokeClient", { clientId: target.dataset.id });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "connect-host") {
     pairingError = "";
+    clearFormOperation(pairingFormKey("connect"));
     const pasteInput = app.querySelector<HTMLTextAreaElement>("[data-field='paste']");
     pairingPaste = pasteInput?.value ?? pairingPaste;
     const parsed = parsePairingPayload(pairingPaste);
@@ -4706,14 +4711,11 @@ app.addEventListener("click", async (event) => {
       render();
       return;
     }
-    try {
+    await runFormOperation(pairingFormKey("connect"), async () => {
       await rpc("pairRemoteHost", parsed);
       pairingPaste = "";
       pairingOpen = false;
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "language" && target.dataset.id) {

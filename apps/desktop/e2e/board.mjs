@@ -55,6 +55,40 @@ if (visibleHosts.length < 2) {
   throw new Error(`daily shell fixture should expose multiple Hosts, got ${JSON.stringify(visibleHosts)}`);
 }
 await page.click("button[data-act='toggle-hosts']");
+
+let pairingOfferRequests = 0;
+const countPairingOfferRequests = (request) => {
+  if (request.method() !== "POST" || !request.url().includes("/rpc")) return;
+  try {
+    if (request.postDataJSON()?.op === "beginPairingOffer") pairingOfferRequests += 1;
+  } catch {
+    // Ignore requests without JSON bodies.
+  }
+};
+await page.route("**/rpc", async (route) => {
+  try {
+    if (route.request().postDataJSON()?.op === "beginPairingOffer") {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  } catch {
+    // Let the Host report malformed requests normally.
+  }
+  await route.continue();
+});
+page.on("request", countPairingOfferRequests);
+await page.click("button[data-act='pair']");
+await page.waitForSelector(".pairing-sheet");
+const pairingOfferButton = page.locator(".pairing-sheet button[data-act='show-offer']");
+await pairingOfferButton.click();
+await page.waitForFunction(() => document.querySelector(".pairing-sheet button[data-act='show-offer']")?.disabled === true);
+await page.waitForFunction(() => document.querySelector(".pairing-sheet .offer") !== null);
+if (pairingOfferRequests !== 1) {
+  throw new Error(`pairing offer should deduplicate while pending, got ${pairingOfferRequests} requests`);
+}
+page.off("request", countPairingOfferRequests);
+await page.unroute("**/rpc");
+await page.click(".overlay[data-act='close-pairing']", { position: { x: 2, y: 2 } });
+await page.waitForFunction(() => !document.querySelector(".pairing-sheet"));
 if (await page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
 }
@@ -993,11 +1027,6 @@ const startedIssueRun = await page.evaluate(async ({ protocol, issueId }) => {
 if (!startedIssueRun?.id || startedIssueRun.status !== "running") {
   throw new Error(`mobile should start a Frontier Run through the normal launch form: ${JSON.stringify(startedIssueRun)}`);
 }
-await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ op: "focusRun", runId }),
-}), startedIssueRun.id);
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 await page.click(".mobile-run-view button[data-act='stop-run']");
@@ -1066,14 +1095,9 @@ if (!(await page.$(".telemetry-mobile .capsule")) || !(await page.$(".telemetry-
 }
 await page.click("button[data-act='mobile-live-terminal']");
 await page.waitForSelector(".mobile-run-view .pty-slot");
-const endedRunId = await page.$eval(".mobile-run-view .pty-slot", (node) => node.getAttribute("data-run"));
 await page.click(".mobile-run-view button[data-act='stop-run']");
 await page.waitForSelector(".mobile-board-view");
-await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ op: "focusRun", runId }),
-}), endedRunId);
+await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") button[data-act="focus-run"]');
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 const endedRecentOutput = await page.$eval(".mobile-run-output", (node) => node.textContent ?? "");
