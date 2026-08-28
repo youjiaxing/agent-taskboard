@@ -119,6 +119,17 @@ type ShellCopy = {
   viewBoard: string;
   viewGraph: string;
   showClosedContext: string;
+  graphCenter: string;
+  graphCenterHere: string;
+  graphShowComplete: string;
+  graphShowNeighborhood: string;
+  graphShowMore: string;
+  graphCanvasLimit: string;
+  graphCompleteList: string;
+  graphSearchPlaceholder: string;
+  graphUpstream: string;
+  graphDownstream: string;
+  graphBoth: string;
   clearFilter: string;
   colBlocked: string;
   colFrontier: string;
@@ -138,8 +149,6 @@ type ShellCopy = {
   issueDocumentRetry: string;
   issueDocumentStale: string;
   issueDocumentFailed: string;
-  issueDetailWiden: string;
-  issueDetailNarrow: string;
   family: string;
   deps: string;
   parent: string;
@@ -230,6 +239,7 @@ type ShellCopy = {
   usageHint: string;
   hostOverview: string;
   hostOverviewHint: string;
+  hostOverviewEmpty: string;
   returnToBoard: string;
   showSidebar: string;
   hideSidebar: string;
@@ -315,6 +325,17 @@ type Project = {
   autoAdvance?: boolean;
   restoreAutoAdvance?: boolean;
   restoreDelayMs?: number;
+  issueCounts?: ProjectIssueCounts;
+};
+
+type ProjectIssueCounts = {
+  dataAvailable: boolean;
+  total: number;
+  open: number;
+  closed: number;
+  blocked: number;
+  frontier: number;
+  inProgress: number;
 };
 
 type ProjectDraft = {
@@ -421,6 +442,8 @@ type GraphNode = {
   title: string;
   open: boolean;
   rank: number;
+  distance?: number;
+  relation?: "center" | "upstream" | "downstream" | "both";
 };
 
 type GraphEdge = {
@@ -431,6 +454,11 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  centerId?: string | null;
+  totalCount?: number;
+  complete?: boolean;
+  maxDistance?: number;
+  closedCount?: number;
 };
 
 type CenterView = "board" | "graph";
@@ -824,6 +852,8 @@ let projectOperation: "save" | "remove" | null = null;
 let removeProject: Project | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
+const activePointers = new Set<number>();
+let tickRenderPending = false;
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let termHost: HTMLDivElement | null = null;
@@ -842,7 +872,12 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
-let issueDetailWide = false;
+let renderedGraphKey = "";
+let renderedGraphProjectId = "";
+let renderedGraphCenterId = "";
+let graphCanvasLimit = 48;
+let graphListLimit = 50;
+let graphListQuery = "";
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
@@ -858,6 +893,19 @@ const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
 
+const GRAPH_RELATION_META: Record<
+  NonNullable<GraphNode["relation"]>,
+  { order: number; label: (copy: ShellCopy) => string }
+> = {
+  upstream: { order: 0, label: (copy) => copy.graphUpstream },
+  center: {
+    order: 1,
+    label: (copy) => copy.graphCenter.replace("：{issue}", "").replace(": {issue}", ""),
+  },
+  both: { order: 2, label: (copy) => copy.graphBoth },
+  downstream: { order: 3, label: (copy) => copy.graphDownstream },
+};
+
 function sessionClientId(): string {
   const key = "agent-taskboard-client-id";
   const existing = sessionStorage.getItem(key);
@@ -872,6 +920,12 @@ function sessionClientId(): string {
 
 function emptyDraft(): ProjectDraft {
   return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+}
+
+function resetGraphUiState(): void {
+  graphCanvasLimit = 48;
+  graphListLimit = 50;
+  graphListQuery = "";
 }
 
 const MOBILE_BREAKPOINT = 640;
@@ -1450,6 +1504,20 @@ function restoreActiveField(field: {
   next.scrollLeft = field.scrollLeft;
 }
 
+function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
+  if (!board?.graph) return "";
+  return JSON.stringify([board.graph, graphCanvasLimit]);
+}
+
+function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
+  if (typeof graph.closedCount === "number") {
+    return copy.showClosedContext.replace("{count}", String(graph.closedCount));
+  }
+  return copy.showClosedContext
+    .replace(/\s*（[^）]*\{count\}[^）]*）/, "")
+    .replace(/\s*\([^)]*\{count\}[^)]*\)/, "");
+}
+
 function render(): void {
   if (!snapshot || !app) return;
   const snap = snapshot;
@@ -1462,6 +1530,7 @@ function render(): void {
     ? clientCopy(appearance.language, snap.copy)
     : snap.copy;
   const { hosts, projects } = snap;
+  const project = currentProject(snap);
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
   document.documentElement.dataset.theme = appearance.theme;
   document.documentElement.dataset.mobile = isMobile ? "true" : "false";
@@ -1474,26 +1543,73 @@ function render(): void {
   const selectedIssue = snap.board?.selected;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
+  const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
+  const previousGraph = previousGraphCanvas
+    ? {
+        canvas: previousGraphCanvas,
+        projectId: renderedGraphProjectId,
+        centerId: renderedGraphCenterId,
+        renderKey: renderedGraphKey,
+        scrollLeft: previousGraphCanvas.scrollLeft,
+        scrollTop: previousGraphCanvas.scrollTop,
+        clientWidth: previousGraphCanvas.clientWidth,
+        clientHeight: previousGraphCanvas.clientHeight,
+        scrollWidth: previousGraphCanvas.scrollWidth,
+        scrollHeight: previousGraphCanvas.scrollHeight,
+      }
+    : null;
+  const desktopProjectGraph =
+    !isMobile &&
+    !empty &&
+    !snap.usageOpen &&
+    snap.workspaceView === "project" &&
+    !runLifted &&
+    snap.centerView === "graph" &&
+    Boolean(snap.board?.graph);
+  const nextGraphKey = desktopProjectGraph ? dependencyGraphRenderKey(snap.board) : "";
+  const nextGraphCenterId = desktopProjectGraph ? snap.board?.graph?.centerId ?? "" : "";
+  const graphContentChanged = Boolean(previousGraph && previousGraph.renderKey !== nextGraphKey);
+  const reuseGraphCanvas = Boolean(
+    previousGraph &&
+      previousGraph.projectId === snap.focusedProjectId &&
+      previousGraph.renderKey === nextGraphKey,
+  );
   if (!pairingAddress) {
     pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
 
   app.innerHTML = `
     <div class="frame">
-      <header class="chrome">
-        ${isMobile
-          ? `<button type="button" class="ghost" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
-          : `<button type="button" class="ghost" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-             ${showIssueToggle
-               ? `<button type="button" class="ghost ${inspectorOpen ? "active" : ""}" data-act="toggle-issue">${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}</button>`
-               : ""}`}
-        ${!isMobile && !showSidebar ? `<button type="button" class="ghost ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
-        ${runLifted ? `<button type="button" class="ghost" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
-        <button type="button" class="ghost" data-act="settings">${escapeHtml(copy.settings)}</button>
-        <span class="chrome-trail">
-          <button type="button" class="ghost ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
-          <button type="button" class="ghost ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
-        </span>
+      <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
+        <div class="chrome-lead">
+          ${isMobile
+            ? `<button type="button" class="chrome-button" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
+            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
+               ${showSidebar ? `<span class="chrome-app">${escapeHtml(copy.appName)}</span>` : ""}`}
+        </div>
+        <div class="chrome-main">
+          <div class="chrome-primary">
+            ${!isMobile && !empty && !snap.usageOpen && snap.workspaceView === "project" && !runLifted
+              ? `<div class="view-switch" role="tablist">
+                  <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
+                  <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+                </div>`
+              : ""}
+            ${runLifted ? `<button type="button" class="chrome-button" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
+            ${!isMobile && snap.workspaceView === "host-overview" ? `<span class="chrome-title">${escapeHtml(copy.hostOverview)}</span>` : ""}
+            ${!isMobile && snap.usageOpen ? `<span class="chrome-title">${escapeHtml(copy.usage)}</span>` : ""}
+            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
+          </div>
+          ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
+          <div class="chrome-trail">
+            ${showIssueToggle
+              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
+              : ""}
+            <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
+            <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
+            <button type="button" class="chrome-button ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
+          </div>
+        </div>
       </header>
       <div class="body ${showSidebar ? "" : "side-collapsed"}">
         ${showSidebar ? `<aside class="side">
@@ -1558,7 +1674,7 @@ function render(): void {
                     ? hostOverviewPage(copy, snap)
                     : runLifted
                       ? liftedRunView(copy, snap)
-                      : `${projectMain(copy, snap)}${runDock(copy, snap)}`
+                      : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
           }
         </main>
       </div>
@@ -1702,7 +1818,38 @@ function render(): void {
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
-  paintGraphEdges();
+  const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
+  if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
+    graphPlaceholder.replaceWith(previousGraph.canvas);
+  }
+  const graphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
+  const sameGraphCenter = Boolean(
+    previousGraph &&
+      previousGraph.projectId === snap.focusedProjectId &&
+      previousGraph.centerId === nextGraphCenterId,
+  );
+  if (graphCanvas && sameGraphCenter && !graphContentChanged && previousGraph) {
+    graphCanvas.scrollLeft = previousGraph.scrollLeft;
+    graphCanvas.scrollTop = previousGraph.scrollTop;
+  }
+  renderedGraphKey = graphCanvas ? nextGraphKey : "";
+  renderedGraphProjectId = graphCanvas ? snap.focusedProjectId : "";
+  renderedGraphCenterId = graphCanvas ? nextGraphCenterId : "";
+  const graphLayoutChanged = Boolean(
+    graphCanvas &&
+      previousGraph &&
+      (graphCanvas.clientWidth !== previousGraph.clientWidth ||
+        graphCanvas.clientHeight !== previousGraph.clientHeight ||
+        graphCanvas.scrollWidth !== previousGraph.scrollWidth ||
+        graphCanvas.scrollHeight !== previousGraph.scrollHeight),
+  );
+  if (!reuseGraphCanvas || graphLayoutChanged) {
+    paintGraphEdges();
+  }
+  syncGraphSelection(graphCanvas, snap.board?.selected?.id);
+  if (graphCanvas && (!sameGraphCenter || graphContentChanged)) {
+    centerGraphViewport(graphCanvas, nextGraphCenterId);
+  }
   restoreActiveField(activeField);
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
@@ -1742,6 +1889,26 @@ function paintGraphEdges(): void {
     })
     .join("");
   svg.innerHTML = `<defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"></path></marker></defs>${paths}`;
+}
+
+function syncGraphSelection(canvas: HTMLElement | null, selectedId: string | undefined): void {
+  if (!canvas) return;
+  for (const node of canvas.querySelectorAll<HTMLElement>(".graph-node")) {
+    node.classList.toggle("sel", node.dataset.id === selectedId);
+  }
+}
+
+function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
+  if (!centerId) return;
+  const center = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((node) => node.dataset.id === centerId);
+  if (!center) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const centerRect = center.getBoundingClientRect();
+  const centerX = centerRect.left - canvasRect.left + canvas.scrollLeft + centerRect.width / 2;
+  const centerY = centerRect.top - canvasRect.top + canvas.scrollTop + centerRect.height / 2;
+  canvas.scrollLeft = Math.max(0, centerX - canvas.clientWidth / 2);
+  canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
 }
 
 function currentProject(snap: Snapshot): Project | undefined {
@@ -1787,7 +1954,7 @@ function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
 function mobileMain(copy: ShellCopy, snap: Snapshot): string {
   if (mobileView === "run") return mobileRunView(copy, snap);
   if (mobileView === "issue") {
-    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board) : ""}</aside></section>`;
+    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board, false) : ""}</aside></section>`;
   }
   return `<section class="mobile-board-view">${projectMain(copy, snap)}</section>`;
 }
@@ -2024,6 +2191,12 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
 }
 
 function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+  if (overviewProjectId && !snap.projects.some((project) => project.id === overviewProjectId)) {
+    overviewProjectId = "";
+  }
+  const visibleProjects = snap.projects.filter(
+    (project) => !overviewProjectId || project.id === overviewProjectId,
+  );
   const visibleRuns = (snap.runs ?? []).filter(
     (run) => !overviewProjectId || run.projectId === overviewProjectId,
   );
@@ -2038,6 +2211,20 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       (project) => `<option value="${escapeHtml(project.id)}" ${project.id === overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
     )
     .join("");
+  const totalCounts = visibleProjects.reduce(
+    (total, project) => {
+      const counts = projectIssueCounts(project);
+      if (counts.dataAvailable) {
+        total.open += counts.open;
+        total.frontier += counts.frontier;
+        total.available += 1;
+      }
+      return total;
+    },
+    { open: 0, frontier: 0, available: 0 },
+  );
+  const allCountsAvailable = visibleProjects.length > 0 && totalCounts.available === visibleProjects.length;
+  const activeRuns = visibleRuns.filter((run) => run.status !== "ended").length;
   return `<div class="overview-page">
     <div class="board-head">
       <div class="board-head-row">
@@ -2051,18 +2238,68 @@ function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       </label>
       <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
     </div>
-    <div class="overview-groups">
-      ${groups
-        .filter(([id]) => id !== "ended" || overviewShowEnded)
-        .map(
-          ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
-            <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
-            <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
-          </section>`,
-        )
-        .join("")}
+    <div class="overview-stats">
+      <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.open : "—"}</b><span>Open Issue</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.frontier : "—"}</b><span>Frontier</span></div>
+      <div><b>${activeRuns}</b><span>Run</span></div>
     </div>
+    <section class="overview-project-section">
+      <div class="lane-hd">${escapeHtml(copy.projects)} <span>${visibleProjects.length}</span></div>
+      <div class="overview-projects">
+        ${visibleProjects.map((project) => overviewProjectCard(copy, project)).join("")}
+      </div>
+    </section>
+    <section class="overview-run-section">
+      <div class="lane-hd">Run <span>${visibleRuns.length}</span></div>
+      ${visibleRuns.length === 0
+        ? `<div class="overview-runs-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
+        : `<div class="overview-groups">
+          ${groups
+            .filter(([id]) => id !== "ended" || overviewShowEnded)
+            .map(
+              ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
+                <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
+                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+              </section>`,
+            )
+            .join("")}
+        </div>`}
+    </section>
   </div>`;
+}
+
+function projectIssueCounts(project: Project): ProjectIssueCounts {
+  return project.issueCounts ?? {
+    dataAvailable: false,
+    total: 0,
+    open: 0,
+    closed: 0,
+    blocked: 0,
+    frontier: 0,
+    inProgress: 0,
+  };
+}
+
+function overviewProjectCard(copy: ShellCopy, project: Project): string {
+  const counts = projectIssueCounts(project);
+  const metric = (label: string, value: number) =>
+    `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
+  const connection = project.connection.status === "ready"
+    ? copy.connectionReady
+    : project.connection.status === "unreachable"
+      ? copy.connectionUnavailable
+      : copy.authFailed;
+  return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-metrics">
+      ${metric("Open", counts.open)}
+      ${metric(copy.colBlocked, counts.blocked)}
+      ${metric(copy.colFrontier, counts.frontier)}
+      ${metric(copy.colInProgress, counts.inProgress)}
+      ${metric("Closed", counts.closed)}
+    </span>
+  </button>`;
 }
 
 function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
@@ -2163,7 +2400,7 @@ function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
   const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}">
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}">
     ${terminalPanel(copy, run, "lifted-terminal")}
     ${inspectorOpen && snap.board ? `<aside class="issue-detail">${issueDetail(copy, snap.board)}</aside>` : ""}
   </section>`;
@@ -2380,21 +2617,16 @@ function keyboardHelpDialog(copy: ShellCopy): string {
   </div>`;
 }
 
-function projectMain(copy: ShellCopy, snap: Snapshot): string {
+function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
   if (!project) return loopbackNotice(snap.loopbackPage);
   return `<div class="project-board">
     ${loopbackNotice(snap.loopbackPage)}
     <div class="board-head">
       <div class="board-head-row">
-        <div>
+        <div class="project-heading">
           <h1>${escapeHtml(project.name)}</h1>
-          <p>${escapeHtml(project.localPath)}</p>
-          <p>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
-        </div>
-        <div class="view-switch" role="tablist">
-          <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
-          <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
         </div>
       </div>
     </div>
@@ -2402,7 +2634,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot): string {
     ${issueSearch(copy, snap)}
     ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
-    ${boardView(copy, snap)}
+    ${boardView(copy, snap, reuseGraphCanvas)}
   </div>`;
 }
 
@@ -2432,7 +2664,7 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
   </form>`;
 }
 
-function boardView(copy: ShellCopy, snap: Snapshot): string {
+function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const board = snap.board;
   if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
     const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
@@ -2450,7 +2682,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
   const inspectorOpen = issueDetailVisible && Boolean(board.selected);
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${issueDetailWide ? "issue-wide" : ""}" data-center-view="${onGraph ? "graph" : "board"}">
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
       <div class="board-hint">
         ${escapeHtml(hint)}
@@ -2460,7 +2692,7 @@ function boardView(copy: ShellCopy, snap: Snapshot): string {
             : ""
         }
       </div>
-      ${onGraph ? dependencyGraphView(copy, board) : boardLanes(copy, board)}
+      ${onGraph ? dependencyGraphView(copy, board, reuseGraphCanvas) : boardLanes(copy, board)}
     </div>
     ${inspectorOpen ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
   </div>`;
@@ -2498,46 +2730,155 @@ function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
   </div>`;
 }
 
-function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot): string {
+function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas: boolean): string {
   const graph = board.graph;
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
+  const legacyGraph = graph.centerId == null;
+  const projectedNodes = [...graph.nodes]
+    .sort((a, b) =>
+      (a.distance ?? 0) - (b.distance ?? 0) ||
+      a.rank - b.rank ||
+      a.number - b.number,
+    )
+    .slice(0, graphCanvasLimit);
   const columns = new Map<number, GraphNode[]>();
-  for (const node of graph.nodes) {
+  for (const node of projectedNodes) {
     const list = columns.get(node.rank) ?? [];
     list.push(node);
     columns.set(node.rank, list);
   }
   const ranks = [...columns.keys()].sort((a, b) => a - b);
+  const center = graph.nodes.find((node) => node.id === graph.centerId);
+  const totalCount = graph.totalCount ?? graph.nodes.length;
+  const centerLabel = copy.graphCenter.replace(
+    "{issue}",
+    center ? `#${center.number} ${center.title}` : graph.centerId ?? "—",
+  );
+  const completeLabel = copy.graphShowComplete.replace("{count}", String(totalCount));
+  const canvasLimit = copy.graphCanvasLimit
+    .replace("{shown}", String(projectedNodes.length))
+    .replace("{total}", String(graph.nodes.length));
   return `<div class="dep-graph">
-    <label class="graph-opt">
-      <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
-      ${escapeHtml(copy.showClosedContext)}
-    </label>
-    <div class="graph-canvas">
+    ${legacyGraph
+      ? `<label class="graph-opt">
+          <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
+          ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
+        </label>`
+      : `<div class="graph-toolbar">
+          <span class="graph-center-label">${escapeHtml(centerLabel)}</span>
+          <div class="actions">
+            ${graph.complete
+              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+              : totalCount > graph.nodes.length
+                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                : ""}
+          </div>
+        </div>
+        ${projectedNodes.length < graph.nodes.length
+          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
+          : ""}`}
+    ${reuseCanvas
+      ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
+      : `<div class="graph-canvas">
       <svg class="graph-edges" aria-hidden="true"></svg>
       <div class="graph-flow">
         ${ranks
           .map(
             (rank) =>
               `<div class="graph-col" data-rank="${rank}">${(columns.get(rank) ?? [])
-                .map((node) => graphNode(node, board.selected?.id))
+                .map((node) =>
+                  graphNode(
+                    copy,
+                    node,
+                    board.selected?.id,
+                    legacyGraph ? null : graph.centerId ?? null,
+                  ),
+                )
                 .join("")}</div>`,
           )
           .join("")}
       </div>
-    </div>
+    </div>`}
+    ${!legacyGraph && graph.complete ? dependencyGraphIndex(copy, graph) : ""}
   </div>`;
 }
 
-function graphNode(node: GraphNode, selectedId: string | undefined): string {
+function dependencyGraphIndex(copy: ShellCopy, graph: DependencyGraph): string {
+  const query = graphListQuery.trim().toLowerCase();
+  const matches = graph.nodes
+    .filter((node) =>
+      !query ||
+      node.title.toLowerCase().includes(query) ||
+      node.id.toLowerCase().includes(query) ||
+      `#${node.number}`.includes(query),
+    )
+    .sort((a, b) =>
+      graphRelationMeta(a.relation).order - graphRelationMeta(b.relation).order ||
+      (a.distance ?? 0) - (b.distance ?? 0) ||
+      a.number - b.number,
+    );
+  const visible = matches.slice(0, graphListLimit);
+  return `<details class="graph-index" open>
+    <summary>${escapeHtml(copy.graphCompleteList)} <span>${matches.length}</span></summary>
+    <input id="dependency-graph-search" type="search" data-field="graphSearch" value="${escapeHtml(graphListQuery)}" placeholder="${escapeHtml(copy.graphSearchPlaceholder)}" />
+    <div class="graph-index-list">
+      ${visible.map((node) => graphIndexRow(copy, node, graph.centerId ?? "")).join("")}
+    </div>
+    ${visible.length < matches.length
+      ? `<button type="button" class="graph-index-more" data-act="graph-list-more">${escapeHtml(copy.graphShowMore)}</button>`
+      : ""}
+  </details>`;
+}
+
+function graphRelationMeta(relation: GraphNode["relation"]): (typeof GRAPH_RELATION_META)["center"] {
+  return GRAPH_RELATION_META[relation ?? "center"];
+}
+
+function graphIndexRow(copy: ShellCopy, node: GraphNode, centerId: string): string {
+  return `<div class="graph-index-row ${node.open ? "" : "closed"}">
+    <button type="button" class="graph-index-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+      <span class="graph-relation">${escapeHtml(graphRelationMeta(node.relation).label(copy))}</span>
+      <span class="issue-id">#${node.number}</span>
+      <span class="issue-title">${escapeHtml(node.title)}</span>
+    </button>
+    ${node.id === centerId ? "" : graphCenterButton(copy, node)}
+  </div>`;
+}
+
+function graphNode(
+  copy: ShellCopy,
+  node: GraphNode,
+  selectedId: string | undefined,
+  centerId: string | null,
+): string {
   const selected = node.id === selectedId ? "sel" : "";
   const closed = node.open ? "" : "closed";
-  return `<button type="button" class="graph-node ${selected} ${closed}" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
-    <div class="issue-id">#${node.number}</div>
-    <div class="issue-title">${escapeHtml(node.title)}</div>
+  const center = node.id === centerId ? "root" : "";
+  return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
+    <button type="button" class="graph-node-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+      <div class="issue-id">#${node.number}</div>
+      <div class="issue-title">${escapeHtml(node.title)}</div>
+    </button>
+    ${center || centerId == null ? "" : graphCenterButton(copy, node)}
+  </article>`;
+}
+
+function graphCenterButton(copy: ShellCopy, node: GraphNode): string {
+  const label = `${copy.graphCenterHere} #${node.number}`;
+  return `<button type="button" class="graph-center-act" data-act="center-graph" data-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
+    ${escapeHtml(copy.graphCenterHere)}
   </button>`;
+}
+
+function issuePanelIcon(open: boolean): string {
+  const chevron = open ? "M13 9l3 3-3 3" : "M16 9l-3 3 3 3";
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+    <path d="M10 4v16"></path>
+    <path d="${chevron}"></path>
+  </svg>`;
 }
 
 function frontierEmptyText(
@@ -2595,7 +2936,7 @@ function issueCard(
   </article>`;
 }
 
-function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
+function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
   const issue = board.selected;
   if (!issue) {
     return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
@@ -2616,7 +2957,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot): string {
     <header class="detail-sticky">
       <div class="detail-title-row">
         <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        <button type="button" class="detail-width" data-act="toggle-issue-width">${escapeHtml(issueDetailWide ? copy.issueDetailNarrow : copy.issueDetailWiden)}</button>
+        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
       </div>
       <div class="detail-meta">
         ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
@@ -3326,11 +3667,6 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
-  if (act === "toggle-issue-width") {
-    issueDetailWide = !issueDetailWide;
-    render();
-    return;
-  }
   if (act === "open-overview") {
     sidebarVisible = true;
     await rpc("openHostOverview");
@@ -3861,6 +4197,42 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "center-view" && target.dataset.id) {
     await rpc("setCenterView", { view: target.dataset.id });
+    if (target.dataset.id === "graph") {
+      resetGraphUiState();
+      const selectedId = snapshot.board?.selected?.id;
+      if (selectedId && snapshot.board?.graph?.centerId != null) {
+        await rpc("centerDependencyGraph", { issueId: selectedId });
+      }
+    }
+    render();
+    return;
+  }
+  if (act === "center-graph" && target.dataset.id) {
+    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    render();
+    await loadSelectedIssueDocument();
+    render();
+    return;
+  }
+  if (act === "graph-complete") {
+    resetGraphUiState();
+    await rpc("setDependencyGraphComplete", { complete: true });
+    render();
+    return;
+  }
+  if (act === "graph-neighborhood") {
+    resetGraphUiState();
+    await rpc("setDependencyGraphComplete", { complete: false });
+    render();
+    return;
+  }
+  if (act === "graph-more") {
+    graphCanvasLimit += 48;
+    render();
+    return;
+  }
+  if (act === "graph-list-more") {
+    graphListLimit += 50;
     render();
     return;
   }
@@ -3939,7 +4311,14 @@ app.addEventListener("submit", async (event) => {
 
 app.addEventListener("input", (event) => {
   const target = event.target as HTMLInputElement | null;
-  if (!target || !formOpen) return;
+  if (!target) return;
+  if (target.getAttribute("data-field") === "graphSearch") {
+    graphListQuery = target.value;
+    graphListLimit = 50;
+    render();
+    return;
+  }
+  if (!formOpen) return;
   const field = target.getAttribute("data-field");
   if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
     formDraft = { ...formDraft, [field]: target.value };
@@ -4228,9 +4607,34 @@ function ensureTick(): void {
           visible: clientIsVisible(),
         }
       : {};
-    rpc("tick", extra).then(render).catch(() => {});
+    rpc("tick", extra).then(renderAfterTick).catch(() => {});
   }, 1000);
 }
+
+function renderAfterTick(): void {
+  if (activePointers.size > 0) {
+    tickRenderPending = true;
+    return;
+  }
+  render();
+}
+
+function finishPointerInteraction(pointerId: number): void {
+  activePointers.delete(pointerId);
+  if (activePointers.size > 0 || !tickRenderPending) return;
+  window.setTimeout(() => {
+    if (activePointers.size > 0 || !tickRenderPending) return;
+    tickRenderPending = false;
+    render();
+  }, 0);
+}
+
+document.addEventListener("pointerdown", (event) => activePointers.add(event.pointerId), true);
+document.addEventListener("pointerup", (event) => finishPointerInteraction(event.pointerId), true);
+document.addEventListener("pointercancel", (event) => finishPointerInteraction(event.pointerId), true);
+window.addEventListener("blur", () => {
+  for (const pointerId of activePointers) finishPointerInteraction(pointerId);
+});
 
 document.addEventListener("visibilitychange", onClientForegroundOrHidden);
 

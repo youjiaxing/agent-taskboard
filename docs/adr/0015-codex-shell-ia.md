@@ -6,7 +6,7 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 
 **中间**只跟当前 Project：看板 | 依赖图。列序仍是阻塞中 → Frontier → 进行中 → 最近完成。
 
-**总览**跟 Host，不跟当前 Project：铺开这台 Host 上的 Run 缩略图，按终端状态分组，可按 Project 过滤。不是 Frontier 聚合板，也不是跨 Host 总览。入口在左侧 Host 区；侧栏收起后留在顶栏。
+**总览**跟 Host，不跟当前 Project：先汇总这台 Host 上各 Project 的 Open、阻塞中、Frontier、进行中与 Closed Issue 数量，再铺开 Run 缩略图并按终端状态分组；Project 过滤同时作用于两部分。它不是完整看板，也不是跨 Host 总览。即使尚未通过 Agent Taskboard 启动 Run，Project 态势仍必须可见。入口在左侧 Host 区；侧栏收起后留在顶栏。
 
 **底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端。绑票开工走配置表，不再一步认领并启动，见 [ADR 0018](0018-run-launch-form.md)。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
 
@@ -24,12 +24,12 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 | --- | --- |
 | 把 Codex 的会话列表和聊天当首页 | 产品模型是 Issue，不是线程 |
 | 不改 #15 结构、只换气质 | 学不像；提出者要结构可以改、已钉能力不能丢 |
-| 总览和看板、依赖图并排 | 看板/图跟当前 Project，总览跟 Host |
+| 总览和看板、依赖图并排 | 看板/图跟当前 Project，总览跟 Host；总览只给摘要，不复制完整四列 |
 | 折叠后留一条身份条 | 仍占布局；Codex 是整栏消失，只留开关 |
 | 自动推进只记在 Host 上 | 提出者要跟 Project；Host 只留总开关 |
 
 ## Consequences
 
-- `/to-spec` 按「左侧 Host/Project、中间看板|图、Host 级总览、底栏跟 Issue、看板点 Run Issue 直达中间终端、折叠不占位」写，不要写回顶栏 Host 条或默认列出全部 Run 的底栏。
+- `/to-spec` 按「左侧 Host/Project、中间看板|图、Host 级 Project 态势 + Run 总览、底栏跟 Issue、看板点 Run Issue 直达中间终端、折叠不占位」写，不要写回顶栏 Host 条或默认列出全部 Run 的底栏。
 - 手机按当前 Project 聚焦，不平铺全部 Host / Project；切换范围是次级面板。
 - 四列、依赖图、空状态三件套、最近完成 N、查看改动、Embedded Terminal 官方 CLI 仍按已钉能力做。

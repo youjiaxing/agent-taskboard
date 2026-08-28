@@ -1,6 +1,11 @@
 import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  assertShellRegionsDoNotOverlap,
+  createVisualAssert,
+  installDeterministicHostProtocol,
+} from "./visual-regression.mjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -16,6 +21,7 @@ const capture = async (name) => {
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 const page = await context.newPage();
+const assertVisual = createVisualAssert(page);
 page.on("pageerror", (error) => {
   console.error("pageerror", error);
 });
@@ -24,14 +30,14 @@ page.on("console", (msg) => {
     console.error("console", msg.text());
   }
 });
-await page.addInitScript((protocol) => {
-  window.__HOST_PROTOCOL__ = protocol;
+await installDeterministicHostProtocol(page, url);
+await page.addInitScript(() => {
   window.__OPENED_URLS__ = [];
   window.open = (target) => {
     window.__OPENED_URLS__.push(String(target));
     return null;
   };
-}, url);
+});
 await page.goto(url, { waitUntil: "domcontentloaded" });
 try {
   await page.waitForSelector(".lanes");
@@ -40,6 +46,14 @@ try {
   console.error("page html", html.slice(0, 4000));
   throw error;
 }
+await page.click("button[data-act='toggle-hosts']");
+const visibleHosts = await page.$$eval(".host-picker button[data-act='focus-host']", (nodes) =>
+  nodes.map((node) => node.textContent?.replace(/\s+/g, " ").trim()),
+);
+if (visibleHosts.length < 2) {
+  throw new Error(`daily shell fixture should expose multiple Hosts, got ${JSON.stringify(visibleHosts)}`);
+}
+await page.click("button[data-act='toggle-hosts']");
 if (await page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
 }
@@ -164,6 +178,68 @@ if (!headers[0].startsWith("阻塞中") || !headers[1].startsWith("Frontier") ||
   throw new Error(`unexpected column order: ${JSON.stringify(headers)}`);
 }
 
+const dailyShellGeometry = await page.evaluate(() => {
+  const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect();
+  const chrome = rect(".chrome");
+  const side = rect(".side");
+  const lanes = [...document.querySelectorAll(".lane")].map((node) => node.getBoundingClientRect());
+  const boardTabs = [...document.querySelectorAll('.chrome [data-act="center-view"]')];
+  return {
+    chromeHeight: chrome?.height ?? 0,
+    sideWidth: side?.width ?? 0,
+    boardTabs: boardTabs.map((node) => node.textContent?.trim()),
+    laneLefts: lanes.map((lane) => lane.left),
+    laneWidths: lanes.map((lane) => lane.width),
+    laneBorderWidths: lanes.map((_, index) =>
+      getComputedStyle(document.querySelectorAll(".lane")[index]).borderLeftWidth,
+    ),
+    horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+});
+if (dailyShellGeometry.chromeHeight > 40) {
+  throw new Error(`desktop chrome should stay native and compact, got ${dailyShellGeometry.chromeHeight}px`);
+}
+if (dailyShellGeometry.sideWidth < 220 || dailyShellGeometry.sideWidth > 250) {
+  throw new Error(`desktop Host / Project hierarchy should keep a stable native rail, got ${dailyShellGeometry.sideWidth}px`);
+}
+if (dailyShellGeometry.boardTabs.join("|") !== "看板|依赖图") {
+  throw new Error(`board and graph controls should live in the stable middle chrome, got ${JSON.stringify(dailyShellGeometry.boardTabs)}`);
+}
+if (dailyShellGeometry.laneLefts.some((left, index, all) => index > 0 && left <= all[index - 1])) {
+  throw new Error(`four desktop lanes should remain ordered left to right: ${JSON.stringify(dailyShellGeometry.laneLefts)}`);
+}
+if (dailyShellGeometry.laneWidths.some((width) => width < 140)) {
+  throw new Error(`four desktop lanes should remain scannable without horizontal paging: ${JSON.stringify(dailyShellGeometry.laneWidths)}`);
+}
+if (dailyShellGeometry.laneBorderWidths.some((width) => width !== "0px")) {
+  throw new Error(`main board lanes should be calm surfaces instead of bordered dashboard cards: ${JSON.stringify(dailyShellGeometry.laneBorderWidths)}`);
+}
+if (dailyShellGeometry.horizontalOverflow > 0) {
+  throw new Error(`daily desktop shell should not create page-level horizontal scrolling: ${dailyShellGeometry.horizontalOverflow}px`);
+}
+await assertVisual("issue-99-desktop-1280x840.png");
+await assertShellRegionsDoNotOverlap(page);
+
+const shellStructure = async () => page.evaluate(() => ({
+  regions: [".chrome", ".side", ".board-main", ".issue-detail"]
+    .map((selector) => Boolean(document.querySelector(selector))),
+  lanes: [...document.querySelectorAll(".lane")].map((node) => ({
+    lane: node.getAttribute("data-lane"),
+    left: Math.round(node.getBoundingClientRect().left),
+    width: Math.round(node.getBoundingClientRect().width),
+  })),
+}));
+const warmStructure = await shellStructure();
+for (const theme of ["plain-paper", "plain-night", "warm-paper"]) {
+  await page.click("button[data-act='settings']");
+  await page.click(`button[data-act='theme'][data-id='${theme}']`);
+  await page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+  const themedStructure = await shellStructure();
+  if (JSON.stringify(themedStructure) !== JSON.stringify(warmStructure)) {
+    throw new Error(`theme ${theme} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);
+  }
+}
+
 await page.setViewportSize({ width: 1440, height: 900 });
 let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
@@ -243,13 +319,33 @@ if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
 }
 await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await capture("issue-98-desktop-detail-1440x900.png");
+await assertVisual("issue-99-desktop-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 const normalDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
-await page.click('button[data-act="toggle-issue-width"]');
-const wideDetailWidth = await page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
-if (wideDetailWidth <= normalDetailWidth || !(await page.getByRole("button", { name: "收窄详情" }).count())) {
-  throw new Error(`details should have explicit widen/narrow actions, got ${normalDetailWidth} -> ${wideDetailWidth}`);
+if (normalDetailWidth < 340) {
+  throw new Error(`Issue document should be readable in the default desktop shell, got ${normalDetailWidth}px`);
 }
-await page.click('button[data-act="toggle-issue-width"]');
+if (await page.$('button[data-act="toggle-issue-width"]')) {
+  throw new Error("Issue details should not expose a widen/narrow action");
+}
+const detailHide = page.locator('.issue-detail .detail-title-row button[data-act="toggle-issue"]');
+if ((await detailHide.count()) !== 1) {
+  throw new Error("Issue details should expose one local hide control");
+}
+if ((await detailHide.getAttribute("aria-label")) !== "收起详情" || (await detailHide.textContent())?.trim()) {
+  throw new Error("Issue detail hide control should be icon-only with an accessible label");
+}
+if ((await detailHide.locator("svg").count()) !== 1) {
+  throw new Error("Issue detail hide control should use a meaningful panel icon");
+}
+await detailHide.click();
+await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+const restoreDetail = page.locator('button[data-act="toggle-issue"][aria-label="显示详情"]');
+if ((await restoreDetail.count()) !== 1 || (await restoreDetail.locator("svg").count()) !== 1) {
+  throw new Error("collapsed Issue details should keep an icon-only restore control in chrome");
+}
+await restoreDetail.click();
+await page.waitForSelector(".board-shell > .issue-detail");
 await page.click(".issue-detail button[data-act='open-issue']");
 const openedDetailUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
 if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
@@ -283,6 +379,29 @@ if (!boardActive) {
   throw new Error("factory default should be the board view");
 }
 
+const graphTabBeforeTick = await page.$("button[data-act='center-view'][data-id='graph']");
+const graphTabBox = await graphTabBeforeTick?.boundingBox();
+if (!graphTabBeforeTick || !graphTabBox) {
+  throw new Error("single-click navigation regression needs the graph tab");
+}
+await page.mouse.move(graphTabBox.x + graphTabBox.width / 2, graphTabBox.y + graphTabBox.height / 2);
+await page.mouse.down();
+const navigationTickResponse = page.waitForResponse((response) =>
+  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+);
+await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+await navigationTickResponse;
+await page.waitForTimeout(50);
+if (!(await graphTabBeforeTick.evaluate((node) => node.isConnected))) {
+  throw new Error("Host tick should not replace a navigation target while its pointer is pressed");
+}
+await page.mouse.up();
+await page.waitForSelector(".dep-graph", { timeout: 1000 });
+await page.click("button[data-act='center-view'][data-id='board']");
+await page.waitForSelector(".lanes");
+
+await page.click(".issue-card:has-text('child blocked') .issue-card-main");
+await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.click("button[data-act='center-view'][data-id='graph']");
 await page.waitForSelector(".dep-graph");
 if (await page.$(".lanes")) {
@@ -291,36 +410,127 @@ if (await page.$(".lanes")) {
 const graphTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
   nodes.map((node) => node.textContent),
 );
-if (!graphTitles.includes("unparented ready") || !graphTitles.includes("blocker")) {
-  throw new Error(`graph should include all open issues, got ${JSON.stringify(graphTitles)}`);
+for (const title of ["blocker", "child blocked", "waiting on history", "active work"]) {
+  if (!graphTitles.includes(title)) {
+    throw new Error(`one-hop graph should include ${title}, got ${JSON.stringify(graphTitles)}`);
+  }
 }
-if (graphTitles.includes("old gate") || graphTitles.includes("just closed")) {
-  throw new Error("closed context should be off by default");
+for (const unrelated of ["parent", "unparented ready", "older closed"]) {
+  if (graphTitles.includes(unrelated)) {
+    throw new Error(`centered graph should exclude unrelated Issue ${unrelated}`);
+  }
+}
+const graphCenterText = await page.$eval(".graph-center-label", (node) => node.textContent?.trim());
+if (graphCenterText !== "中心 Issue：#3 child blocked") {
+  throw new Error(`graph should name its stable center Issue, got ${graphCenterText}`);
+}
+const completeGraphAction = page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" });
+if ((await completeGraphAction.count()) !== 1) {
+  throw new Error("graph should offer the complete connected upstream/downstream closure with a count");
 }
 const edge = await page.$('path[data-from="you/garden#9"][data-to="you/garden#3"]');
 if (!edge) {
   throw new Error("graph should draw the blocker edge from left to right");
 }
+if (!(await page.$('path[data-from="you/garden#3"][data-to="you/garden#5"]'))) {
+  throw new Error("graph should draw downstream dependencies from the center Issue");
+}
 if (await page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]')) {
   throw new Error("graph should not draw parent/child as an edge");
 }
 
-await page.click(".graph-node:has-text('unparented ready')");
-await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+const stableGraphCanvas = await page.$(".graph-canvas");
+await page.click(".graph-node:has-text('blocker') .graph-node-main");
+await page.waitForSelector(".detail-hd:has-text('blocker')");
 if (await page.$("button[data-act='clear-filter']")) {
   throw new Error("clicking a graph node should not filter the board");
 }
-
-await page.click("[data-field='closedContext']");
-await page.waitForSelector(".graph-node:has-text('old gate')");
-if (await page.$(".graph-node:has-text('just closed')")) {
-  throw new Error("closed context should only add dependency neighbors");
+if ((await page.$eval(".graph-center-label", (node) => node.textContent?.trim())) !== "中心 Issue：#3 child blocked") {
+  throw new Error("clicking a graph node should only change details, not the graph center");
+}
+if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isConnected))) {
+  throw new Error("changing graph node details should preserve the graph canvas");
 }
 
-await page.click(".graph-node:has-text('active work')");
+const expandFromWaiting = page.getByRole("button", { name: "从此处展开 #5" });
+if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
+  throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
+}
+await expandFromWaiting.click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
+await page.waitForSelector(".detail-hd:has-text('waiting on history')");
+
+await page.getByRole("button", { name: "从此处展开 #3" }).click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector(".detail-hd:has-text('child blocked')");
+await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
+await page.waitForSelector(".graph-index");
+const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!limitedGraphText?.includes("画布显示 48/61")) {
+  throw new Error(`large complete closure should keep the canvas bounded, got ${limitedGraphText}`);
+}
+if ((await page.$$(".graph-node")).length !== 48) {
+  throw new Error("large complete closure should not render every node at once");
+}
+if ((await page.$$(".graph-index-row")).length !== 50 || !(await page.$("button[data-act='graph-list-more']"))) {
+  throw new Error("complete relationship list should paginate instead of mounting every Issue row");
+}
+await page.fill('[data-field="graphSearch"]', "just closed");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 1);
+const searchedRelationship = await page.$eval(".graph-index-row", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!searchedRelationship?.includes("just closed")) {
+  throw new Error(`complete relationship search should find closed downstream Issues, got ${searchedRelationship}`);
+}
+await page.fill('[data-field="graphSearch"]', "waiting on history");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 1);
+await page.getByRole("button", { name: "从此处展开 #5" }).first().click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
+await page.waitForSelector(".detail-hd:has-text('waiting on history')");
+if (!(await page.$(".graph-index")) || !(await page.getByRole("button", { name: "收起到一跳上下游" }).count())) {
+  throw new Error("re-centering a complete upstream/downstream view should preserve its range");
+}
+if ((await page.inputValue('[data-field="graphSearch"]')) !== "waiting on history") {
+  throw new Error("re-centering a complete upstream/downstream view should preserve its search context");
+}
+await page.fill('[data-field="graphSearch"]', "");
+await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 50);
+await page.getByRole("button", { name: "从此处展开 #3" }).first().click();
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector(".graph-index");
+
+await page.click(".graph-node:has-text('active work') .graph-node-main");
 await page.waitForSelector(".detail-hd:has-text('active work')");
+await page.waitForSelector('.issue-markdown:has-text("Active Run Question")');
 if (await page.$(".lifted-run")) {
   throw new Error("dependency graph nodes should only change Issue details");
+}
+await assertVisual("issue-99-graph-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
+
+const graphCanvas = await page.$(".graph-canvas");
+const graphEdgePath = await page.$(".graph-edges path");
+const graphScrollLeft = await page.$eval(".graph-canvas", (node) => {
+  const flow = node.querySelector(".graph-flow");
+  flow.style.width = "1600px";
+  node.scrollLeft = Math.floor((node.scrollWidth - node.clientWidth) / 2);
+  return node.scrollLeft;
+});
+if (!graphCanvas || graphScrollLeft <= 0) {
+  throw new Error(`graph scroll regression needs horizontal overflow, got ${graphScrollLeft}`);
+}
+const tickResponse = page.waitForResponse((response) =>
+  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+);
+await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+await tickResponse;
+await page.waitForTimeout(50);
+const graphCanvasConnected = await graphCanvas.evaluate((node) => node.isConnected);
+const graphEdgeConnected = graphEdgePath ? await graphEdgePath.evaluate((node) => node.isConnected) : false;
+const graphScrollAfterTick = await page.$eval(".graph-canvas", (node) => node.scrollLeft);
+if (!graphCanvasConnected || !graphEdgeConnected || graphScrollAfterTick !== graphScrollLeft) {
+  throw new Error(
+    `Host tick should preserve the dependency graph DOM and viewport, got canvas=${graphCanvasConnected} edge=${graphEdgeConnected} scroll=${graphScrollLeft}->${graphScrollAfterTick}`,
+  );
 }
 
 await page.click("button[data-act='center-view'][data-id='board']");
@@ -348,6 +558,52 @@ const filteredProjects = await page.$$eval(".run-thumbnail .run-project", (nodes
 if (filteredProjects.some((name) => name !== "garden")) {
   throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
 }
+await assertVisual("issue-99-overview-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
+await page.click("button[data-act='return-board']");
+await page.waitForSelector(".lanes");
+
+const emptyRunsOverviewResponse = async (route) => {
+  if (!route.request().url().endsWith("/rpc")) {
+    await route.continue();
+    return;
+  }
+  let request;
+  try {
+    request = route.request().postDataJSON();
+  } catch {
+    await route.continue();
+    return;
+  }
+  if (request?.op !== "openHostOverview") {
+    await route.continue();
+    return;
+  }
+  const response = await route.fetch();
+  const result = await response.json();
+  result.snapshot.runs = [];
+  result.snapshot.projects = result.snapshot.projects
+    .filter((project) => project.name === "tools")
+    .map((project) => ({
+      ...project,
+      hasActiveRun: false,
+      hasExecutionStopped: false,
+    }));
+  await route.fulfill({ response, json: result });
+};
+await page.route("**/*", emptyRunsOverviewResponse);
+await page.click("button[data-act='open-overview']");
+await page.waitForSelector(".overview-page");
+const toolsOverview = await page.$$eval(".overview-project:has-text('tools') .overview-project-metrics > span", (nodes) =>
+  Object.fromEntries(nodes.map((node) => [node.querySelector("i")?.textContent, node.querySelector("b")?.textContent])),
+);
+if (toolsOverview.Open !== "1" || toolsOverview.Frontier !== "1") {
+  throw new Error(`Host overview should discard a stale cross-Host Project filter and keep Issue data without Runs, got ${JSON.stringify(toolsOverview)}`);
+}
+if (!(await page.$(".overview-runs-empty"))) {
+  throw new Error("a Host with no Runs should keep a compact Run empty state below Project data");
+}
+await page.unroute("**/*", emptyRunsOverviewResponse);
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 
@@ -366,13 +622,29 @@ if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes
   throw new Error(`entering a Run should retain the complete Issue document, got ${liftedDocument}`);
 }
 await capture("issue-98-existing-run-1440x900.png");
+await assertVisual("issue-99-run-1440x900.png");
+await assertShellRegionsDoNotOverlap(page);
 const liftedWidths = await page.evaluate(() => {
   const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
   const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
-  return { terminal, detail };
+  const lifted = document.querySelector(".lifted-run");
+  const style = lifted ? getComputedStyle(lifted) : null;
+  return {
+    terminal,
+    detail,
+    gap: style?.columnGap ?? "",
+    padding: style?.padding ?? "",
+    horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
 });
 if (liftedWidths.terminal < liftedWidths.detail * 1.8 || liftedWidths.terminal > liftedWidths.detail * 2.2) {
   throw new Error(`lifted Run should use about a 2:1 split, got ${JSON.stringify(liftedWidths)}`);
+}
+if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
+  throw new Error(`lifted Run and Issue should share one continuous workspace seam, got ${JSON.stringify(liftedWidths)}`);
+}
+if (liftedWidths.horizontalOverflow > 0) {
+  throw new Error(`lifted Run should not create page-level horizontal scrolling: ${liftedWidths.horizontalOverflow}px`);
 }
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
@@ -386,9 +658,18 @@ if (await page.$(".run-dock")) {
   throw new Error("selecting an Issue without an active Run should remove the terminal dock");
 }
 
+const issueToggleLeftBeforeSidebarFold = await page.$eval("button[data-act='toggle-issue']", (node) =>
+  node.getBoundingClientRect().left,
+);
 await page.click("button[data-act='toggle-sidebar']");
 if (await page.$(".side")) {
   throw new Error("the sidebar toggle should remove the sidebar from layout");
+}
+const issueToggleLeftAfterSidebarFold = await page.$eval("button[data-act='toggle-issue']", (node) =>
+  node.getBoundingClientRect().left,
+);
+if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold) > 1) {
+  throw new Error(`Issue detail toggle should keep its chrome coordinate when the sidebar folds: ${issueToggleLeftBeforeSidebarFold} -> ${issueToggleLeftAfterSidebarFold}`);
 }
 await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
 await page.waitForSelector(".lifted-run");
@@ -644,7 +925,12 @@ if (!mobileDocument?.includes("Can the operator read every constraint") || !mobi
 if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
   throw new Error("mobile Issue view should still omit full view changes");
 }
+if (await page.$('.mobile-issue-view button[data-act="toggle-issue"]')) {
+  throw new Error("mobile Issue view should not expose a desktop panel-collapse control");
+}
 await capture("issue-98-mobile-390x844.png");
+await assertVisual("issue-99-mobile-390x844.png");
+await assertShellRegionsDoNotOverlap(page);
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
 

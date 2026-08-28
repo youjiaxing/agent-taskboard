@@ -6,10 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, FrontierEmptyReason, HostKernel, IssueRecord,
-    LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TriageRole,
-    DEFAULT_RECENT_LIMIT,
+    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, FrontierEmptyReason, GraphRelation,
+    HostKernel, IssueRecord, LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance,
+    TriageRole, DEFAULT_RECENT_LIMIT,
 };
+
+const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
 
 fn boot_req(root: &Path) -> BootRequest {
     BootRequest {
@@ -28,11 +30,23 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
 }
 
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+    let mut host = HostKernel::boot_with(boot_req(root), tracker).unwrap();
+    pin_board_test_time(&mut host);
+    host
 }
 
 fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+    let mut host = HostKernel::boot_with(boot_req(root), tracker).unwrap();
+    pin_board_test_time(&mut host);
+    host
+}
+
+fn pin_board_test_time(host: &mut HostKernel) {
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": BOARD_TEST_NOW_MS,
+    }))
+    .unwrap();
 }
 
 fn register(host: &mut HostKernel, dir: &Path, repository: &str) -> String {
@@ -53,7 +67,7 @@ fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) 
         .join("../../apps/desktop/dist")
         .canonicalize()
         .expect("built desktop client");
-    let client = LoopbackServer::attach_with(
+    let client = LoopbackServer::attach_without_host_tick(
         Arc::clone(&kernel),
         0,
         LoopbackAssets::Directory(dist),
@@ -144,6 +158,15 @@ fn selecting_a_github_project_projects_four_columns_left_to_right() {
     );
     assert_eq!(board.recent_limit, DEFAULT_RECENT_LIMIT);
     assert!(board.empty.is_none());
+
+    let counts = &host.snapshot().projects[0].issue_counts;
+    assert!(counts.data_available);
+    assert_eq!(counts.total, 5);
+    assert_eq!(counts.open, 3);
+    assert_eq!(counts.closed, 2);
+    assert_eq!(counts.blocked, 1);
+    assert_eq!(counts.frontier, 1);
+    assert_eq!(counts.in_progress, 1);
 }
 
 #[test]
@@ -309,6 +332,19 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
     host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let before = host.snapshot().board.unwrap().graph.expect("graph");
+    assert_eq!(before.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(node_ids(&before), vec!["you/garden#9", "you/garden#3"]);
+    host.handle(serde_json::json!({
         "op": "filterParent",
         "issueId": "you/garden#1",
     }))
@@ -316,8 +352,8 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
     let board = host.snapshot().board.unwrap();
     assert_eq!(ids(&board.columns.unwrap().frontier), vec!["you/garden#2"]);
     let graph = board.graph.expect("graph");
-    assert!(node_ids(&graph).contains(&"you/garden#4".into()));
-    assert!(node_ids(&graph).contains(&"you/garden#9".into()));
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(node_ids(&graph), vec!["you/garden#9", "you/garden#3"]);
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#9".into(), "you/garden#3".into())]
@@ -499,74 +535,181 @@ fn dependency_graph_contains_only_dependency_edges() {
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
     let board = host.snapshot().board.unwrap();
     let graph = board.graph.expect("graph");
 
-    assert_eq!(
-        node_ids(&graph),
-        vec![
-            "you/garden#1",
-            "you/garden#2",
-            "you/garden#4",
-            "you/garden#9",
-            "you/garden#3",
-        ]
-    );
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#3"));
+    assert_eq!(graph.total_count, 2);
+    assert!(!graph.complete);
+    assert_eq!(node_ids(&graph), vec!["you/garden#9", "you/garden#3"]);
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#9".into(), "you/garden#3".into())]
     );
     assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#3"));
-    assert!(!board.show_closed_graph_context);
 }
 
 #[test]
-fn closed_context_toggle_only_adds_nodes() {
+fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
+    let graph: DependencyGraph = serde_json::from_value(serde_json::json!({
+        "nodes": [{
+            "id": "you/garden#3",
+            "repository": "you/garden",
+            "number": 3,
+            "title": "legacy node",
+            "open": true,
+            "rank": 0
+        }],
+        "edges": [],
+        "closedCount": 0
+    }))
+    .unwrap();
+
+    assert_eq!(graph.center_id, None);
+    assert_eq!(graph.total_count, 0);
+    assert!(!graph.complete);
+    assert_eq!(graph.max_distance, 0);
+    assert_eq!(graph.nodes[0].distance, 0);
+    assert_eq!(graph.nodes[0].relation, GraphRelation::Center);
+}
+
+#[test]
+fn centered_dependency_graph_expands_the_complete_upstream_and_downstream_closure() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(
-        IssueRecord::open("you/garden", 10, "waiting")
-            .parent("you/garden", 1, "parent")
-            .blocked_by("you/garden", 9, "already closed", false),
+        IssueRecord::open("you/garden", 10, "center")
+            .blocked_by("you/garden", 9, "upstream", true)
+            .blocking("you/garden", 11, "downstream"),
     );
-    tracker.add_issue(IssueRecord::open("you/garden", 1, "parent").child(
+    tracker.add_issue(IssueRecord::open("you/garden", 9, "upstream").blocked_by(
         "you/garden",
-        10,
-        "waiting",
+        8,
+        "closed origin",
+        false,
     ));
     tracker.add_issue(
-        IssueRecord::open("you/garden", 9, "already closed").closed_at("2026-08-20T10:00:00Z"),
+        IssueRecord::open("you/garden", 8, "closed origin").closed_at("2026-08-19T10:00:00Z"),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 11, "downstream").blocking(
+        "you/garden",
+        12,
+        "closed result",
+    ));
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 12, "closed result").closed_at("2026-08-20T10:00:00Z"),
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 8, "unrelated closed").closed_at("2026-08-19T10:00:00Z"),
+        IssueRecord::open("you/garden", 99, "unrelated history").closed_at("2026-08-21T10:00:00Z"),
     );
     let mut host = boot(tmp.path(), tracker);
     register(&mut host, &dir, "you/garden");
-    let before = host.snapshot().board.unwrap();
-    let graph = before.graph.expect("graph");
-    assert!(!before.show_closed_graph_context);
-    assert_eq!(node_ids(&graph), vec!["you/garden#1", "you/garden#10"]);
-    assert!(edge_pairs(&graph).is_empty());
-
     host.handle(serde_json::json!({
-        "op": "setShowClosedGraphContext",
-        "show": true,
+        "op": "focusIssue",
+        "issueId": "you/garden#10",
     }))
     .unwrap();
-    let after = host.snapshot().board.unwrap();
-    let graph = after.graph.expect("graph");
-    assert!(after.show_closed_graph_context);
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let before = host.snapshot().board.unwrap();
+    let graph = before.graph.expect("graph");
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#10"));
+    assert_eq!(graph.total_count, 5);
+    assert!(!graph.complete);
     assert_eq!(
         node_ids(&graph),
-        vec!["you/garden#1", "you/garden#9", "you/garden#10"]
+        vec!["you/garden#9", "you/garden#10", "you/garden#11"]
     );
     assert_eq!(
         edge_pairs(&graph),
-        vec![("you/garden#9".into(), "you/garden#10".into())]
+        vec![
+            ("you/garden#10".into(), "you/garden#11".into()),
+            ("you/garden#9".into(), "you/garden#10".into()),
+        ]
     );
-    assert!(!node_ids(&graph).contains(&"you/garden#8".into()));
-    assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#10"));
+
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#9",
+    }))
+    .unwrap();
+    let detail_only = host.snapshot().board.unwrap();
+    assert_eq!(detail_only.selected.unwrap().id, "you/garden#9");
+    assert_eq!(
+        detail_only.graph.expect("graph").center_id.as_deref(),
+        Some("you/garden#10")
+    );
+
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#10",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setDependencyGraphComplete",
+        "complete": true,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#9",
+    }))
+    .unwrap();
+    let recentered_board = host.snapshot().board.unwrap();
+    assert_eq!(recentered_board.selected.unwrap().id, "you/garden#9");
+    let recentered = recentered_board.graph.expect("graph");
+    assert_eq!(recentered.center_id.as_deref(), Some("you/garden#9"));
+    assert!(recentered.complete);
+    assert_eq!(
+        node_ids(&recentered),
+        vec![
+            "you/garden#8",
+            "you/garden#9",
+            "you/garden#10",
+            "you/garden#11",
+            "you/garden#12",
+        ]
+    );
+    assert!(!recentered.nodes[0].open);
+
+    let graph = host.snapshot().board.unwrap().graph.expect("graph");
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#9"));
+    assert!(graph.complete);
+    assert_eq!(graph.total_count, 5);
+    assert_eq!(
+        node_ids(&graph),
+        vec![
+            "you/garden#8",
+            "you/garden#9",
+            "you/garden#10",
+            "you/garden#11",
+            "you/garden#12",
+        ]
+    );
+    assert_eq!(
+        edge_pairs(&graph),
+        vec![
+            ("you/garden#10".into(), "you/garden#11".into()),
+            ("you/garden#11".into(), "you/garden#12".into()),
+            ("you/garden#8".into(), "you/garden#9".into()),
+            ("you/garden#9".into(), "you/garden#10".into()),
+        ]
+    );
+    assert!(!node_ids(&graph).contains(&"you/garden#99".into()));
 }
 
 #[test]
@@ -610,6 +753,13 @@ fn focusing_a_graph_node_only_changes_details() {
         "view": "graph",
     }))
     .unwrap();
+    let center_before = host
+        .snapshot()
+        .board
+        .unwrap()
+        .graph
+        .expect("graph")
+        .center_id;
     host.handle(serde_json::json!({
         "op": "focusIssue",
         "issueId": "you/garden#9",
@@ -618,6 +768,7 @@ fn focusing_a_graph_node_only_changes_details() {
     let board = host.snapshot().board.unwrap();
     assert_eq!(host.snapshot().center_view, CenterView::Graph);
     assert_eq!(board.selected.unwrap().id, "you/garden#9");
+    assert_eq!(board.graph.expect("graph").center_id, center_before);
     assert!(board.parent_filter.is_none());
     assert!(ids(&board.columns.unwrap().frontier).contains(&"you/garden#4".into()));
 }
@@ -693,11 +844,18 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     tracker.add_issue(
         IssueRecord::open("you/garden", 3, "child blocked")
             .parent("you/garden", 1, "parent")
-            .blocked_by("you/garden", 9, "blocker", true),
+            .blocked_by("you/garden", 9, "blocker", true)
+            .blocking("you/garden", 5, "waiting on history")
+            .blocking("you/garden", 10, "active work"),
     );
     tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
     tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
-    tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker"));
+    tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker").blocked_by(
+        "you/garden",
+        6,
+        "old gate",
+        false,
+    ));
     tracker.set_issue_body(
         "you/garden#2",
         "# Question\n\nCan the operator read **every constraint** beside the official TUI?\n\n## Constraints\n\n- Keep Tracker markdown unchanged\n- Render `inline code` clearly\n- Keep [the GitHub Issue](https://github.com/you/garden/issues/2) available\n- Reject [dangerous links](javascript:alert(1))\n\n<script>window.__ISSUE_HTML_EXECUTED__ = true</script>\n\n## Long document\n\nParagraph one explains why the Issue document remains the source material while the board stays read-only.\n\nParagraph two is intentionally long enough to require scrolling in the inspector at 1440 by 900.\n\nParagraph three keeps family and Dependency sections below the complete document.\n\nParagraph four verifies that the title and primary actions remain available while this content scrolls.\n\nParagraph five provides enough vertical depth for the mobile Issue view at 390 by 844.\n\nParagraph six confirms that entering a Run must retain this same complete Issue document.",
@@ -707,16 +865,29 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "# Active Run Question\n\nKeep this **same complete Issue** visible after entering the Run.\n\n- terminal stays primary\n- document stays readable\n- browser link still points to Tracker",
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 5, "waiting on history").blocked_by(
-            "you/garden",
-            6,
-            "old gate",
-            false,
-        ),
+        IssueRecord::open("you/garden", 5, "waiting on history")
+            .blocked_by("you/garden", 6, "old gate", false)
+            .blocking("you/garden", 7, "just closed"),
     );
     tracker.add_issue(
-        IssueRecord::open("you/garden", 6, "old gate").closed_at("2026-08-18T10:00:00Z"),
+        IssueRecord::open("you/garden", 6, "old gate")
+            .blocked_by("you/garden", 100, "history 100", false)
+            .closed_at("2026-08-18T10:00:00Z"),
     );
+    for number in 100..=154 {
+        let issue = IssueRecord::open("you/garden", number, format!("history {number}"))
+            .closed_at("2020-01-01T00:00:00Z");
+        tracker.add_issue(if number < 154 {
+            issue.blocked_by(
+                "you/garden",
+                number + 1,
+                format!("history {}", number + 1),
+                false,
+            )
+        } else {
+            issue
+        });
+    }
     tracker.add_issue(
         IssueRecord::open("you/garden", 8, "older closed").closed_at("2026-08-20T10:00:00Z"),
     );
@@ -739,6 +910,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         },
     )
     .unwrap();
+    pin_board_test_time(&mut host);
     let garden_project_id = register(&mut host, &dir, "you/garden");
     assert_eq!(
         host.snapshot().board.unwrap().empty,
@@ -823,7 +995,106 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "projectId": garden_project_id,
     }))
     .unwrap();
+    let remote_tmp = tempfile::tempdir().unwrap();
+    let mut remote_req = boot_req(remote_tmp.path());
+    remote_req.host_display_name = "Mini".into();
+    let mut remote_host = HostKernel::boot(remote_req).unwrap();
+    pin_board_test_time(&mut remote_host);
+    let remote = Arc::new(Mutex::new(remote_host));
+    let _remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
+    let remote_address = _remote_server
+        .protocol_url()
+        .trim_end_matches('/')
+        .to_string();
+    let remote_code = remote
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": remote_address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+    host.handle(serde_json::json!({
+        "op": "pairRemoteHost",
+        "address": remote_address,
+        "code": remote_code,
+    }))
+    .unwrap();
+    assert_eq!(host.snapshot().hosts.len(), 2);
+    host.handle(serde_json::json!({
+        "op": "setRecentCompletedLimit",
+        "limit": 3,
+    }))
+    .unwrap();
     run_browser_e2e(host, "board.mjs", &[]);
+}
+
+fn run_degraded_shell_edge_state(
+    state: &str,
+    repository: &str,
+    inject_failure: impl FnOnce(&MemoryTracker, &str),
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), &format!("work/{state}"));
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(repository, 1, "cached"));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &project_dir, repository);
+    inject_failure(&tracker, repository);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    run_browser_e2e(
+        host,
+        "shell-edge-state.mjs",
+        &[("SHELL_EDGE_STATE", Path::new(state))],
+    );
+}
+
+#[test]
+fn browser_renders_shell_edge_state_fixtures() {
+    let empty_tmp = tempfile::tempdir().unwrap();
+    run_browser_e2e(
+        boot(empty_tmp.path(), Arc::new(MemoryTracker::new())),
+        "shell-edge-state.mjs",
+        &[("SHELL_EDGE_STATE", Path::new("empty-host"))],
+    );
+
+    let single_tmp = tempfile::tempdir().unwrap();
+    let single_dir = make_dir(single_tmp.path(), "work/single");
+    let single_tracker = Arc::new(MemoryTracker::new());
+    single_tracker.add_issue(IssueRecord::open("you/single", 1, "ready"));
+    let mut single = boot(single_tmp.path(), single_tracker);
+    register(&mut single, &single_dir, "you/single");
+    run_browser_e2e(
+        single,
+        "shell-edge-state.mjs",
+        &[("SHELL_EDGE_STATE", Path::new("single-project"))],
+    );
+
+    let frontier_tmp = tempfile::tempdir().unwrap();
+    let frontier_dir = make_dir(frontier_tmp.path(), "work/frontier");
+    let frontier_tracker = Arc::new(MemoryTracker::new());
+    frontier_tracker.add_issue(IssueRecord::open("you/frontier", 1, "claimed").assignee("ada"));
+    let mut frontier = boot(frontier_tmp.path(), frontier_tracker);
+    register(&mut frontier, &frontier_dir, "you/frontier");
+    run_browser_e2e(
+        frontier,
+        "shell-edge-state.mjs",
+        &[("SHELL_EDGE_STATE", Path::new("frontier-empty"))],
+    );
+
+    run_degraded_shell_edge_state("offline", "you/offline", |tracker, repository| {
+        tracker.fail_read(repository);
+    });
+    run_degraded_shell_edge_state("rate-limited", "you/rate", |tracker, repository| {
+        tracker.fail_rate_limited(repository, Some(120_000));
+    });
+    run_degraded_shell_edge_state("auth-failed", "you/auth", |tracker, repository| {
+        tracker.fail_auth(repository);
+    });
 }
 
 #[test]
@@ -844,7 +1115,7 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
     let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(IssueRecord::open("you/first", 1, "first tracker issue"));
     tracker.add_issue(IssueRecord::open("manual/retry", 1, "retry tracker issue"));
-    let host = HostKernel::boot_with_ports(
+    let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         host_kernel::KernelPorts {
             tracker: Arc::clone(&tracker) as _,
@@ -854,6 +1125,7 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
         },
     )
     .unwrap();
+    pin_board_test_time(&mut host);
     assert!(host.snapshot().projects.is_empty());
     run_browser_e2e(
         host,

@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use host_kernel::{
     bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, BootRequest, Command,
-    EmptyAction, HostKernel, HostMode, Language, LoopbackAssets, LoopbackPage, LoopbackServer,
-    ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
+    EmptyAction, HostKernel, HostMode, IssueRecord, Language, LoopbackAssets, LoopbackPage,
+    LoopbackServer, MemoryTracker, ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -642,8 +642,19 @@ fn loopback_page_can_proxy_the_dev_client() {
     let up_addr = upstream.local_addr().unwrap();
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = upstream.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let mut request = Vec::new();
             let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = stream.read(&mut buf).unwrap();
+                request.extend_from_slice(&buf[..read]);
+            }
+            let mut extra = [0u8; 1];
+            if matches!(stream.read(&mut extra), Ok(0)) {
+                return;
+            }
             let body = b"<title>dev-empty-shell</title>";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1035,6 +1046,85 @@ fn a_client_window_can_switch_among_local_and_paired_hosts() {
             || err.to_string().contains("pairing failed")
             || err.to_string().contains("invalid pairing")
     );
+}
+
+#[test]
+fn dependency_graph_centering_and_expansion_are_forwarded_to_a_remote_host() {
+    let host_dir = tempfile::tempdir().unwrap();
+    let client_dir = tempfile::tempdir().unwrap();
+    let project_dir = host_dir.path().join("work/garden");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "center").blocking(
+        "you/garden",
+        2,
+        "next",
+    ));
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "next").blocking("you/garden", 3, "last"));
+    tracker.add_issue(IssueRecord::open("you/garden", 3, "last"));
+    let mut host_req = boot_req(host_dir.path());
+    host_req.host_display_name = "Mini".into();
+    let mut host_kernel = HostKernel::boot_with(host_req, tracker).unwrap();
+    host_kernel
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "garden",
+            "localPath": project_dir,
+            "repository": "you/garden",
+        }))
+        .unwrap();
+    let host = Arc::new(Mutex::new(host_kernel));
+    let server = LoopbackServer::attach(Arc::clone(&host), 0, |_| {}).unwrap();
+    let address = server.protocol_url().trim_end_matches('/').to_string();
+    let code = host
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+
+    let mut client = HostKernel::boot(boot_req(client_dir.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": address,
+            "code": code,
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    client
+        .handle(serde_json::json!({ "op": "focusHost", "hostId": remote_id }))
+        .unwrap();
+    client
+        .handle(serde_json::json!({
+            "op": "centerDependencyGraph",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+    let expanded = client
+        .handle(serde_json::json!({
+            "op": "setDependencyGraphComplete",
+            "complete": true,
+        }))
+        .unwrap();
+    let graph = expanded.snapshot.board.unwrap().graph.unwrap();
+    assert_eq!(graph.center_id.as_deref(), Some("you/garden#1"));
+    assert!(graph.complete);
+    assert_eq!(graph.total_count, 3);
+    assert_eq!(graph.nodes.len(), 3);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -73,6 +73,25 @@ impl LoopbackServer {
         assets: LoopbackAssets,
         on_outcome: impl Fn(CommandOutcome) + Send + Sync + 'static,
     ) -> io::Result<Self> {
+        Self::attach_configured(kernel, page_port, assets, on_outcome, true)
+    }
+
+    pub fn attach_without_host_tick(
+        kernel: Arc<Mutex<HostKernel>>,
+        page_port: u16,
+        assets: LoopbackAssets,
+        on_outcome: impl Fn(CommandOutcome) + Send + Sync + 'static,
+    ) -> io::Result<Self> {
+        Self::attach_configured(kernel, page_port, assets, on_outcome, false)
+    }
+
+    fn attach_configured(
+        kernel: Arc<Mutex<HostKernel>>,
+        page_port: u16,
+        assets: LoopbackAssets,
+        on_outcome: impl Fn(CommandOutcome) + Send + Sync + 'static,
+        host_tick: bool,
+    ) -> io::Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let running = kernel
             .lock()
@@ -110,7 +129,7 @@ impl LoopbackServer {
                     assets,
                     Arc::clone(&stop),
                     on_outcome,
-                    true,
+                    host_tick,
                 );
                 Ok(Self { protocol_url, stop })
             }
@@ -133,7 +152,7 @@ impl LoopbackServer {
                     assets,
                     Arc::clone(&stop),
                     on_outcome,
-                    true,
+                    host_tick,
                 );
                 Ok(Self { protocol_url, stop })
             }
@@ -700,7 +719,6 @@ fn proxy_loopback_get(
     if !request.body.is_empty() {
         upstream.write_all(&request.body)?;
     }
-    let _ = upstream.shutdown(Shutdown::Write);
     io::copy(&mut upstream, stream)?;
     Ok(())
 }
