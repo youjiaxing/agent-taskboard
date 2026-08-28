@@ -19,7 +19,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 | 5 游离 Run | PASS | `board.mjs`：从 Project 行「新建」进入同一表单，初始指令可明确填写；打开表单前后及启动成功后逐 Issue 比较认领状态不变，同时出现未绑定 Issue 的运行中 Run。 |
 | 6 运行中 | PASS | `run-lifecycle.mjs`：从进行中卡片进入 Terminal，按需加载并保留完整 Issue；等待操作、注入一行、查看改动、停止、继续和释放认领均从可见入口完成；注入与改动备注另覆盖提交中、防重复、失败保留草稿和显式重试。 |
 | 7 结束后 | PASS | `run-lifecycle.mjs`：停止 Run 后仍为已认领、未关闭的 Issue，留在进行中；释放认领后回 Frontier；不会进入最近完成。`board.mjs` 另覆盖真正关闭的 Issue、最近完成和结束 Run 的查看改动。 |
-| 8 异常恢复 | PASS | `shell-edge-state.mjs` 对离线、限流、鉴权分别断言网络检查、可重试时间或凭据修复位置，并实际触发手动刷新；`agent-unavailable.mjs` 列出 command、PATH 与已知安装位置；`run-launch-resilience.mjs` 覆盖启动失败重试；`run-lifecycle.mjs` 覆盖全部轻量表单、PTY 异常和隔离目录消失恢复；`loopback-occupied.mjs` 覆盖端口占用。 |
+| 8 异常恢复 | PASS（自动化；PTY 中断仍需真人壳验收） | `shell-edge-state.mjs` 对离线、限流、鉴权分别断言网络检查、可重试时间或凭据修复位置，并实际触发手动刷新；`agent-unavailable.mjs` 列出 command、PATH 与已知安装位置；`run-launch-resilience.mjs` 覆盖启动失败重试；`run-lifecycle.mjs` 覆盖轻量表单、PTY stop/continue 和隔离目录消失恢复；真实 PTY/session 中途断开仍在最后脚本中验收；`loopback-occupied.mjs` 覆盖端口占用。 |
 | 9 手机 | PASS | `board.mjs` 在 390×844 覆盖看板 / 票 / Run、Host/Project 切换、完整 Issue、启动/停止 Run、只读最近输出与注入一行；不出现完整查看改动，完整 Terminal 仅作逃生入口。 |
 
 ## 本票修复的链路断点
