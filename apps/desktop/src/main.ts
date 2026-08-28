@@ -173,16 +173,19 @@ type ShellCopy = {
   refreshAsOf: string;
   refreshNext: string;
   refreshOffline: string;
+  refreshOfflineRecovery: string;
   refreshNever: string;
   refreshRateLimited: string;
   refreshRetry: string;
   refreshPaused: string;
   refreshAuth: string;
+  refreshAuthRecovery: string;
   refreshIncomplete: string;
   refreshTrackerError: string;
   newRun: string;
   executeRun: string;
   startRun: string;
+  startRunPending: string;
   switchAgent: string;
   pickAgent: string;
   launchTitle: string;
@@ -343,6 +346,29 @@ type ProjectDraft = {
   localPath: string;
   githubHost: string;
   repository: string;
+};
+
+type IssueSearchDraft = {
+  title: string;
+  triageRole: string;
+  state: string;
+};
+
+type UsageCustomDraft = {
+  from: string;
+  to: string;
+};
+
+type FormKey =
+  | `issue-search:${string}`
+  | `inject-run:${string}`
+  | `change-note:${string}`
+  | `usage-custom:${string}`
+  | `launch:${string}`;
+
+type FormOperationState = {
+  pending: Set<FormKey>;
+  errors: Map<FormKey, string>;
 };
 
 type ProjectInferenceState =
@@ -561,6 +587,7 @@ type AgentSummary = {
   id: string;
   name: string;
   installed: boolean;
+  unavailableReason?: string | null;
   fields: AgentField[];
 };
 
@@ -867,6 +894,13 @@ let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
 let noteDraft = "";
 let noteTarget: { repo: string; path: string; line: number } | null = null;
+let issueSearchDraft: IssueSearchDraft | null = null;
+let usageCustomDraft: UsageCustomDraft | null = null;
+const injectDrafts = new Map<string, string>();
+const formOperations: FormOperationState = {
+  pending: new Set<FormKey>(),
+  errors: new Map<FormKey, string>(),
+};
 let telemetryExpanded = false;
 let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
@@ -926,6 +960,13 @@ function resetGraphUiState(): void {
   graphCanvasLimit = 48;
   graphListLimit = 50;
   graphListQuery = "";
+}
+
+function resetInlineFormDrafts(): void {
+  issueSearchDraft = null;
+  usageCustomDraft = null;
+  injectDrafts.clear();
+  formOperations.errors.clear();
 }
 
 const MOBILE_BREAKPOINT = 640;
@@ -1980,13 +2021,79 @@ function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
         : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
     </section>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : injectRunForm(copy, run.id)}
     ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
   </section>`;
 }
 
 function focusedRun(snap: Snapshot): RunSummary | undefined {
   return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
+}
+
+function issueSearchFormKey(projectId: string): FormKey {
+  return `issue-search:${projectId}`;
+}
+
+function editableIssueSearchDraft(): IssueSearchDraft {
+  if (issueSearchDraft) return issueSearchDraft;
+  const search = snapshot?.board?.search;
+  issueSearchDraft = {
+    title: search?.title ?? "",
+    triageRole: search?.triageRole ?? "",
+    state: search?.state ?? "all",
+  };
+  return issueSearchDraft;
+}
+
+function injectFormKey(runId: string): FormKey {
+  return `inject-run:${runId}`;
+}
+
+function changeNoteFormKey(runId: string): FormKey {
+  return `change-note:${runId}`;
+}
+
+function usageCustomFormKey(hostId: string): FormKey {
+  return `usage-custom:${hostId}`;
+}
+
+function launchFormKey(projectId: string): FormKey {
+  return `launch:${projectId}`;
+}
+
+function formFeedback(key: FormKey): string {
+  const error = formOperations.errors.get(key);
+  return error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : "";
+}
+
+function clearFormOperation(key: FormKey): void {
+  formOperations.errors.delete(key);
+}
+
+async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
+  if (formOperations.pending.has(key)) return false;
+  formOperations.pending.add(key);
+  formOperations.errors.delete(key);
+  render();
+  try {
+    await operation();
+    return true;
+  } catch (error) {
+    formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
+    return false;
+  } finally {
+    formOperations.pending.delete(key);
+    render();
+  }
+}
+
+function injectRunForm(copy: ShellCopy, runId: string): string {
+  const key = injectFormKey(runId);
+  const pending = formOperations.pending.has(key);
+  return `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(runId)}" aria-busy="${pending ? "true" : "false"}">
+    <input name="text" maxlength="4000" required value="${escapeHtml(injectDrafts.get(runId) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" ${pending ? "disabled" : ""} />
+    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.injectLine)}</button>
+  </form>${formFeedback(key)}`;
 }
 
 function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
@@ -2118,6 +2225,12 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
   const usage = snap.usage;
   if (!usage) return "";
   const range = usage.range;
+  const customKey = usageCustomFormKey(snap.focusedHostId);
+  const customPending = formOperations.pending.has(customKey);
+  const customDraft = usageCustomDraft ?? {
+    from: toLocalInput(usage.fromMs),
+    to: toLocalInput(usage.toMs),
+  };
   const rangeBtn = (id: UsageRange, label: string) =>
     `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
   const optionList = (items: UsageOption[], selected: string | null | undefined) =>
@@ -2165,11 +2278,11 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
     </div>
     ${
       range === "custom"
-        ? `<form class="usage-custom" data-act="usage-custom">
-            <input type="datetime-local" name="from" value="${escapeHtml(toLocalInput(usage.fromMs))}" />
-            <input type="datetime-local" name="to" value="${escapeHtml(toLocalInput(usage.toMs))}" />
-            <button type="submit">${escapeHtml(copy.rangeCustom)}</button>
-          </form>`
+        ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
+            <input type="datetime-local" name="from" required value="${escapeHtml(customDraft.from)}" ${customPending ? "disabled" : ""} />
+            <input type="datetime-local" name="to" required value="${escapeHtml(customDraft.to)}" ${customPending ? "disabled" : ""} />
+            <button type="submit" ${customPending ? "disabled" : ""}>${escapeHtml(customPending ? copy.operationPending : copy.rangeCustom)}</button>
+          </form>${formFeedback(customKey)}`
         : ""
     }
     <div class="usage-filters">
@@ -2384,7 +2497,7 @@ function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): str
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : injectRunForm(copy, run.id)}
   </div>`;
 }
 
@@ -2488,11 +2601,13 @@ function changeLineRow(
     noteTarget.repo === repo.displayPath &&
     noteTarget.path === file.path &&
     noteTarget.line === line.newLine;
+  const noteKey = changeNoteFormKey(view.runId);
+  const notePending = formOperations.pending.has(noteKey);
   const noteForm = active
-    ? `<form class="note-form" data-act="write-note">
-        <input name="text" maxlength="400" value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" />
-        <button type="submit">${escapeHtml(copy.addChangeNote)}</button>
-      </form>`
+    ? `<form class="note-form" data-act="write-note" aria-busy="${notePending ? "true" : "false"}">
+        <input name="text" maxlength="400" required value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" ${notePending ? "disabled" : ""} />
+        <button type="submit" ${notePending ? "disabled" : ""}>${escapeHtml(notePending ? copy.operationPending : copy.addChangeNote)}</button>
+      </form>${formFeedback(noteKey)}`
     : "";
   const noteList = notes
     .map(
@@ -2639,7 +2754,9 @@ function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false):
 }
 
 function issueSearch(copy: ShellCopy, snap: Snapshot): string {
-  const search = snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
+  const search = issueSearchDraft ?? snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
+  const key = issueSearchFormKey(snap.focusedProjectId);
+  const pending = formOperations.pending.has(key);
   const triageRoles: TriageRole[] = [
     "needs-triage",
     "needs-info",
@@ -2647,21 +2764,21 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
     "ready-for-human",
     "wontfix",
   ];
-  return `<form class="issue-search" data-act="issue-search">
+  return `<form class="issue-search" data-act="issue-search" aria-busy="${pending ? "true" : "false"}">
     <label class="sr-only" for="issue-title-search">${escapeHtml(copy.searchTitle)}</label>
-    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" />
-    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}">
+    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" ${pending ? "disabled" : ""} />
+    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}" ${pending ? "disabled" : ""}>
       <option value="">${escapeHtml(copy.searchAllTriage)}</option>
       ${triageRoles.map((role) => `<option value="${role}" ${search.triageRole === role ? "selected" : ""}>${role}</option>`).join("")}
     </select>
-    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}">
+    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}" ${pending ? "disabled" : ""}>
       <option value="all" ${search.state === "all" ? "selected" : ""}>${escapeHtml(copy.searchAllStates)}</option>
       <option value="open" ${search.state === "open" ? "selected" : ""}>${escapeHtml(copy.searchOpen)}</option>
       <option value="closed" ${search.state === "closed" ? "selected" : ""}>${escapeHtml(copy.searchClosed)}</option>
     </select>
-    <button type="submit">${escapeHtml(copy.searchSubmit)}</button>
+    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.searchSubmit)}</button>
     <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
-  </form>`;
+  </form>${formFeedback(key)}`;
 }
 
 function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
@@ -3130,6 +3247,7 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
     parts.push(copy.refreshNever);
   } else if (status.kind === "offline") {
     parts.push(`${copy.refreshOffline} · ${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    parts.push(copy.refreshOfflineRecovery);
     if (status.nextRefreshInMs != null) {
       parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
     }
@@ -3145,6 +3263,7 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
     }
   } else if (status.kind === "auth-failed") {
     parts.push(copy.refreshAuth);
+    parts.push(copy.refreshAuthRecovery);
     if (status.fetchedAtMs) {
       parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
     }
@@ -3233,7 +3352,10 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
           ${form.agents
             .map(
               (agent) =>
-                `<button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>`,
+                `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
+                  <button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>
+                  ${agent.installed || !agent.unavailableReason ? "" : `<p class="notice bad">${escapeHtml(agent.unavailableReason)}</p>`}
+                </div>`,
             )
             .join("")}
         </div>
@@ -3246,61 +3368,66 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
   const folded = form.fields.filter((field) => field.folded);
   const intentActive = draft.custom ? "" : draft.intentId;
+  const key = launchFormKey(form.projectId);
+  const pending = formOperations.pending.has(key);
+  const error = formOperations.errors.get(key) || form.error || "";
   return `<div class="overlay modal" data-act="close-launch">
-    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch">
+    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch" aria-busy="${pending ? "true" : "false"}">
       <h2>${escapeHtml(copy.launchTitle)}</h2>
-      <div class="launch-agent">
-        <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
-        <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
-      </div>
-      <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
-      <div class="field">
-        <div class="label">${escapeHtml(copy.runIntent)}</div>
-        <div class="choices">
-          <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
-          ${form.intents
-            .map(
-              (intent) =>
-                `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
-            )
-            .join("")}
-          <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
+      <fieldset class="launch-fields" ${pending ? "disabled" : ""}>
+        <div class="launch-agent">
+          <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
+          <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
         </div>
-      </div>
-      <div class="field">
-        <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
-        <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
-      </div>
-      ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
-      <div class="field">
-        <div class="label">${escapeHtml(copy.workingDirectory)}</div>
-        <input value="${escapeHtml(form.workingDirectory)}" readonly />
-      </div>
-      <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
-        <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
-        ${escapeHtml(copy.isolation)}
-      </label>
-      <p class="hint">${escapeHtml(copy.isolationHint)}</p>
-      ${
-        form.isolationSupported
-          ? ""
-          : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
-      }
-      <details class="folded" ${launchFolded ? "open" : ""}>
-        <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
+        <div class="field">
+          <div class="label">${escapeHtml(copy.runIntent)}</div>
+          <div class="choices">
+            <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
+            ${form.intents
+              .map(
+                (intent) =>
+                  `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
+              )
+              .join("")}
+            <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
+          <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
+        </div>
+        ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        <div class="field">
+          <div class="label">${escapeHtml(copy.workingDirectory)}</div>
+          <input value="${escapeHtml(form.workingDirectory)}" readonly />
+        </div>
+        <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
+          <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
+          ${escapeHtml(copy.isolation)}
+        </label>
+        <p class="hint">${escapeHtml(copy.isolationHint)}</p>
         ${
-          snap.showCommandPreview
-            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
-            : ""
+          form.isolationSupported
+            ? ""
+            : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
         }
-      </details>
-      <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
-      ${form.error ? `<p class="notice bad">${escapeHtml(form.error)}</p>` : ""}
-      <div class="actions">
-        <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary">${escapeHtml(copy.startRun)}</button>
-      </div>
+        <details class="folded" ${launchFolded ? "open" : ""}>
+          <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
+          ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+          ${
+            snap.showCommandPreview
+              ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
+              : ""
+          }
+        </details>
+        <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
+        ${error ? `<p class="notice bad">${escapeHtml(error)}</p>` : ""}
+        <div class="actions">
+          <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+          <button type="submit" class="primary">${escapeHtml(pending ? copy.startRunPending : copy.startRun)}</button>
+        </div>
+      </fieldset>
     </form>
   </div>`;
 }
@@ -3811,6 +3938,7 @@ app.addEventListener("click", async (event) => {
     mobileView = "board";
     sidebarVisible = true;
     await rpc("focusProject", { projectId: target.dataset.id });
+    resetInlineFormDrafts();
     await reportClientView();
     render();
     return;
@@ -3821,6 +3949,7 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
+    clearFormOperation(launchFormKey(target.dataset.id));
     await rpc("prepareRunLaunch", { projectId: target.dataset.id });
     render();
     return;
@@ -3830,6 +3959,7 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
+    clearFormOperation(launchFormKey(snapshot.focusedProjectId));
     await rpc("prepareRunLaunch", {
       projectId: snapshot.focusedProjectId,
       issueId: target.dataset.id,
@@ -3848,8 +3978,11 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
+    const projectId = snapshot.launchForm?.projectId ?? launchDraft?.projectId;
+    if (projectId && formOperations.pending.has(launchFormKey(projectId))) return;
     await rpc("cancelRunLaunch");
     launchDraft = null;
+    if (projectId) clearFormOperation(launchFormKey(projectId));
     render();
     return;
   }
@@ -3857,6 +3990,7 @@ app.addEventListener("click", async (event) => {
     const form = snapshot.launchForm;
     if (!form) return;
     launchDraft = null;
+    clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -3869,6 +4003,7 @@ app.addEventListener("click", async (event) => {
     const form = snapshot.launchForm;
     if (!form) return;
     launchDraft = null;
+    clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -3904,6 +4039,8 @@ app.addEventListener("click", async (event) => {
       sidebarVisible = false;
     }
     render();
+    await loadSelectedIssueDocument();
+    render();
     return;
   }
   if (act === "open-usage") {
@@ -3921,6 +4058,8 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "usage-range" && target.dataset.id) {
+    usageCustomDraft = null;
+    clearFormOperation(usageCustomFormKey(snapshot.focusedHostId));
     await rpc("setUsageRange", { range: target.dataset.id });
     render();
     return;
@@ -3954,15 +4093,18 @@ app.addEventListener("click", async (event) => {
     changesScope = "this-round";
     noteTarget = null;
     noteDraft = "";
+    clearFormOperation(changeNoteFormKey(target.dataset.id));
     await loadViewChanges(target.dataset.id, changesScope);
     render();
     return;
   }
   if (act === "close-changes") {
+    const runId = changesView?.runId;
     changesOpen = false;
     changesView = null;
     noteTarget = null;
     noteDraft = "";
+    if (runId) clearFormOperation(changeNoteFormKey(runId));
     render();
     return;
   }
@@ -3981,6 +4123,7 @@ app.addEventListener("click", async (event) => {
       line: Number(target.dataset.line),
     };
     noteDraft = "";
+    if (changesView) clearFormOperation(changeNoteFormKey(changesView.runId));
     render();
     const input = app.querySelector<HTMLInputElement>(".note-form input");
     input?.focus();
@@ -4097,6 +4240,7 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-host" && target.dataset.id) {
     await reportClientView(false);
     await rpc("focusHost", { hostId: target.dataset.id });
+    resetInlineFormDrafts();
     hostPickerOpen = false;
     await reportClientView();
     render();
@@ -4268,14 +4412,24 @@ app.addEventListener("submit", async (event) => {
   if (search && snapshot) {
     event.preventDefault();
     const data = new FormData(search);
-    await rpc("searchIssues", {
-      projectId: snapshot.focusedProjectId,
+    const draft = {
       title: String(data.get("title") ?? ""),
       triageRole: String(data.get("triageRole") ?? ""),
       state: String(data.get("state") ?? "all"),
+    };
+    issueSearchDraft = draft;
+    const key = issueSearchFormKey(snapshot.focusedProjectId);
+    const success = await runFormOperation(key, async () => {
+      await rpc("searchIssues", {
+        projectId: snapshot?.focusedProjectId ?? "",
+        ...draft,
+      });
     });
-    keyboardCursorIssueId = "";
-    render();
+    if (success) {
+      issueSearchDraft = null;
+      keyboardCursorIssueId = "";
+      render();
+    }
     return;
   }
   const inject = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
@@ -4285,9 +4439,14 @@ app.addEventListener("submit", async (event) => {
     const input = inject.querySelector<HTMLInputElement>("input[name='text']");
     const text = input?.value ?? "";
     if (!runId || !text.trim()) return;
-    await rpc("injectRunInput", { runId, text });
-    if (input) input.value = "";
-    render();
+    injectDrafts.set(runId, text);
+    const success = await runFormOperation(injectFormKey(runId), async () => {
+      await rpc("injectRunInput", { runId, text });
+    });
+    if (success) {
+      injectDrafts.delete(runId);
+      render();
+    }
     return;
   }
   const noteForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='write-note']");
@@ -4296,17 +4455,24 @@ app.addEventListener("submit", async (event) => {
   const input = noteForm.querySelector<HTMLInputElement>("input[name='text']");
   const text = input?.value ?? noteDraft;
   if (!text.trim()) return;
-  await rpc("writeChangeNote", {
-    runId: changesView.runId,
-    repo: noteTarget.repo,
-    path: noteTarget.path,
-    line: noteTarget.line,
-    text,
+  noteDraft = text;
+  const target = { ...noteTarget };
+  const runId = changesView.runId;
+  const success = await runFormOperation(changeNoteFormKey(runId), async () => {
+    await rpc("writeChangeNote", {
+      runId,
+      repo: target.repo,
+      path: target.path,
+      line: target.line,
+      text,
+    });
+    await loadViewChanges(runId, changesScope);
   });
-  noteDraft = "";
-  noteTarget = null;
-  await loadViewChanges(changesView.runId, changesScope);
-  render();
+  if (success) {
+    noteDraft = "";
+    noteTarget = null;
+    render();
+  }
 });
 
 app.addEventListener("input", (event) => {
@@ -4446,6 +4612,24 @@ app.addEventListener("input", (event) => {
   if (target.closest(".note-form") && "value" in target) {
     noteDraft = (target as HTMLInputElement).value;
   }
+  const injectForm = target.closest<HTMLFormElement>("form[data-act='inject-run']");
+  if (injectForm?.dataset.id && "value" in target) {
+    injectDrafts.set(injectForm.dataset.id, (target as HTMLInputElement).value);
+  }
+  if (target.closest("form[data-act='issue-search']") && "value" in target) {
+    const name = (target as HTMLInputElement).name;
+    if (name === "title") editableIssueSearchDraft().title = (target as HTMLInputElement).value;
+  }
+  if (target.closest("form[data-act='usage-custom']") && "value" in target) {
+    const input = target as HTMLInputElement;
+    const usage = snapshot?.usage;
+    if (usage && !usageCustomDraft) {
+      usageCustomDraft = { from: toLocalInput(usage.fromMs), to: toLocalInput(usage.toMs) };
+    }
+    if (usageCustomDraft && (input.name === "from" || input.name === "to")) {
+      usageCustomDraft[input.name] = input.value;
+    }
+  }
   if (
     (field === "name" || field === "githubHost" || field === "repository") &&
     "value" in target
@@ -4472,6 +4656,11 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
+  if (target instanceof HTMLSelectElement && target.closest("form[data-act='issue-search']")) {
+    const draft = editableIssueSearchDraft();
+    if (target.name === "triageRole") draft.triageRole = target.value;
+    if (target.name === "state") draft.state = target.value;
+  }
   if (target?.getAttribute("data-overview-filter") === "project" && target instanceof HTMLSelectElement) {
     overviewProjectId = target.value;
     render();
@@ -4496,24 +4685,37 @@ app.addEventListener("submit", async (event) => {
   if (custom) {
     event.preventDefault();
     const data = new FormData(custom);
-    const from = Date.parse(String(data.get("from") ?? ""));
-    const to = Date.parse(String(data.get("to") ?? ""));
+    const draft = {
+      from: String(data.get("from") ?? ""),
+      to: String(data.get("to") ?? ""),
+    };
+    const from = Date.parse(draft.from);
+    const to = Date.parse(draft.to);
     if (Number.isNaN(from) || Number.isNaN(to)) return;
-    await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
-    render();
+    usageCustomDraft = draft;
+    const key = usageCustomFormKey(snapshot?.focusedHostId ?? "");
+    const success = await runFormOperation(key, async () => {
+      await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
+    });
+    if (success) {
+      usageCustomDraft = null;
+      render();
+    }
     return;
   }
   const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
   if (launch && snapshot && launchDraft) {
     event.preventDefault();
-    await rpc("startUnboundRun", {
-      projectId: launchDraft.projectId,
-      issueId: launchDraft.issueId,
-      agentId: launchDraft.agentId,
-      values: launchDraft.values,
-      openingText: launchDraft.openingText,
+    const draft = launchDraft;
+    await runFormOperation(launchFormKey(draft.projectId), async () => {
+      await rpc("startUnboundRun", {
+        projectId: draft.projectId,
+        issueId: draft.issueId,
+        agentId: draft.agentId,
+        values: draft.values,
+        openingText: draft.openingText,
+      });
     });
-    render();
     return;
   }
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");

@@ -709,13 +709,29 @@ fn uninstalled_agent_cannot_start_from_form() {
     missing.set_installed(false);
     let mut h = harness_with(tmp.path(), vec![grok, Arc::new(missing)]);
     let project_id = register(&mut h.host, &dir, "garden", "you/garden");
-    h.host
+    let prepared = h
+        .host
         .handle(serde_json::json!({
             "op": "prepareRunLaunch",
             "projectId": project_id,
             "agentId": "codex",
         }))
         .unwrap();
+    let unavailable = prepared
+        .snapshot
+        .launch_form
+        .as_ref()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|agent| agent.id == "codex")
+        .unwrap()
+        .unavailable_reason
+        .as_deref()
+        .unwrap();
+    assert!(unavailable.contains("codex"), "{unavailable}");
+    assert!(unavailable.contains("PATH"), "{unavailable}");
+    assert!(unavailable.contains("安装位置"), "{unavailable}");
     let out = h
         .host
         .handle(serde_json::json!({

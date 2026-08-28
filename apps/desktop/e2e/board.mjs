@@ -6,6 +6,7 @@ import {
   createVisualAssert,
   installDeterministicHostProtocol,
 } from "./visual-regression.mjs";
+import { hostSnapshot } from "./issue-100-harness.mjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -646,6 +647,17 @@ if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
 if (liftedWidths.horizontalOverflow > 0) {
   throw new Error(`lifted Run should not create page-level horizontal scrolling: ${liftedWidths.horizontalOverflow}px`);
 }
+const telemetryCapsule = page.locator(".lifted-terminal .telemetry-desktop .capsule").first();
+if (!(await telemetryCapsule.count())) {
+  throw new Error("Run telemetry should expose a model/lane capsule beside the Terminal");
+}
+await telemetryCapsule.click();
+await page.waitForSelector(".lifted-terminal .telemetry-cards .telemetry-card");
+const telemetryText = (await page.locator(".lifted-terminal .telemetry-cards").textContent())?.replace(/\s+/g, " ").trim() ?? "";
+if (!telemetryText.includes("grok-4.6") || (!telemetryText.includes("不管理") && !telemetryText.includes("does not manage"))) {
+  throw new Error(`expanded telemetry should keep model identity and the network boundary: ${telemetryText}`);
+}
+await telemetryCapsule.click();
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 await page.waitForSelector(".side");
@@ -692,6 +704,24 @@ if (usageTitle !== "用量" && usageTitle !== "Usage") {
 }
 if (!(await page.$("button.active[data-act='usage-range'][data-id='today']"))) {
   throw new Error("usage range should default to today");
+}
+if ((await page.locator(".usage-trend-block").count()) !== 2) {
+  throw new Error("usage should render separate TTFT and generation-rate trends");
+}
+const usageDisclaimer = (await page.locator(".usage-page > .tiny").textContent())?.replace(/\s+/g, " ").trim() ?? "";
+if (!usageDisclaimer.includes("不管理") && !usageDisclaimer.includes("does not manage")) {
+  throw new Error(`usage should state the proxy/network boundary: ${usageDisclaimer}`);
+}
+const trendColors = await page.evaluate(() => {
+  const bars = [...document.querySelectorAll(".usage-trend i")];
+  if (bars.length < 2) return [];
+  const normal = getComputedStyle(bars[0]).backgroundColor;
+  bars[1].classList.add("slow");
+  const slow = getComputedStyle(bars[1]).backgroundColor;
+  return [normal, slow];
+});
+if (trendColors.length !== 2 || trendColors[0] === trendColors[1]) {
+  throw new Error(`slow usage samples should be visibly distinguished: ${JSON.stringify(trendColors)}`);
 }
 await page.click("button[data-act='close-usage']");
 await page.waitForSelector(".lanes");
@@ -749,8 +779,19 @@ if (!pickerNotice?.includes("系统目录选择只在本机桌面窗口可用"))
 }
 await page.click("form[data-form='project'] button[data-act='close-form']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
+const claimsBeforeUnbound = Object.values((await hostSnapshot(page, url)).board.columns)
+  .flat()
+  .map((issue) => [issue.id, issue.claimedBy])
+  .sort(([left], [right]) => left.localeCompare(right));
 await page.click("button[data-act='new-run']");
 await page.waitForSelector(".launch-sheet");
+const claimsWithUnboundFormOpen = Object.values((await hostSnapshot(page, url)).board.columns)
+  .flat()
+  .map((issue) => [issue.id, issue.claimedBy])
+  .sort(([left], [right]) => left.localeCompare(right));
+if (JSON.stringify(claimsWithUnboundFormOpen) !== JSON.stringify(claimsBeforeUnbound)) {
+  throw new Error("opening an unbound Run form must not claim any Issue");
+}
 const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
 if (await pick.count()) {
   await pick.click();
@@ -774,6 +815,17 @@ if ((await openingText.inputValue()) !== "e2e unbound run" || !(await openingTex
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForSelector(".run-dock");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
+const afterUnbound = await hostSnapshot(page, url);
+const claimsAfterUnbound = Object.values(afterUnbound.board.columns)
+  .flat()
+  .map((issue) => [issue.id, issue.claimedBy])
+  .sort(([left], [right]) => left.localeCompare(right));
+if (JSON.stringify(claimsAfterUnbound) !== JSON.stringify(claimsBeforeUnbound)) {
+  throw new Error("starting an unbound Run must not claim any Issue");
+}
+if (!afterUnbound.runs.some((run) => run.unbound && run.status === "running")) {
+  throw new Error("starting an unbound Run must create a running Run without an Issue binding");
+}
 const dockText = await page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
   throw new Error(`unbound Run dock missing identity, got ${dockText}`);

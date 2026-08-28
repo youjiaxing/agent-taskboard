@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::agent::prepare_launch_env;
+use crate::agent::{format_not_found, prepare_launch_env};
 use crate::agent::{
     intent_prefix, AgentField, AgentFieldKind, AgentPort, AgentSummary, IntentOption,
     PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
@@ -313,22 +313,44 @@ pub fn summarize_agents(
     cwd: &Path,
     language: Language,
 ) -> Vec<AgentSummary> {
-    let captured = launch_env.capture(cwd).ok();
+    let captured = launch_env.capture(cwd);
     agents
         .iter()
         .map(|agent| {
-            let installed = captured
-                .as_ref()
-                .map(|env| {
+            let (installed, unavailable_reason) = match &captured {
+                Ok(env) => {
                     let env =
                         prepare_launch_env(env.clone(), &[], &agent.known_install_locations());
-                    matches!(agent.probe(&env), ProbeResult::Found { .. })
-                })
-                .unwrap_or(false);
+                    match agent.probe(&env) {
+                        ProbeResult::Found { .. } => (true, None),
+                        ProbeResult::Missing {
+                            command,
+                            searched_path,
+                            known_locations,
+                        } => (
+                            false,
+                            Some(format_not_found(
+                                language,
+                                &command,
+                                &searched_path,
+                                &known_locations,
+                            )),
+                        ),
+                    }
+                }
+                Err(error) => (
+                    false,
+                    Some(match language {
+                        Language::ZhCn => format!("无法读取启动环境：{error}"),
+                        Language::En => format!("Could not read the launch environment: {error}"),
+                    }),
+                ),
+            };
             AgentSummary {
                 id: agent.id().to_string(),
                 name: agent.name().to_string(),
                 installed,
+                unavailable_reason,
                 fields: localize_fields(agent.config_fields(), language),
             }
         })

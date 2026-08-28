@@ -67,6 +67,8 @@ pub struct AgentSummary {
     pub id: String,
     pub name: String,
     pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
     pub fields: Vec<AgentField>,
 }
 

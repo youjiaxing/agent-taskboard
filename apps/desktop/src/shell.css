@@ -664,6 +664,23 @@ html[data-theme="plain-night"] button.danger.primary {
   max-height: calc(100vh - 80px);
   overflow: auto;
 }
+.launch-fields {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.agent-picks {
+  align-items: stretch;
+}
+.agent-choice {
+  display: grid;
+  gap: 6px;
+}
+.agent-choice .notice {
+  margin: 0;
+  white-space: pre-line;
+}
 .form-sheet input, .form-sheet textarea, .form-sheet select {
   width: 100%;
   font: inherit;
