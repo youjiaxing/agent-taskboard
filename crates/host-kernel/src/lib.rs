@@ -1801,6 +1801,14 @@ impl HostKernel {
             .iter()
             .find(|project| project.id == view.focused_project_id)
             .map(|project| project.id.clone())
+            .or_else(|| {
+                self.focused_project_id.as_ref().and_then(|focused| {
+                    self.projects
+                        .iter()
+                        .find(|project| &project.id == focused)
+                        .map(|project| project.id.clone())
+                })
+            })
             .or_else(|| self.projects.first().map(|project| project.id.clone()))
             .unwrap_or_default();
         let selected_issue_id = view.selected_issue_id.as_deref().filter(|issue_id| {

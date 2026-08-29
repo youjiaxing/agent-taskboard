@@ -9,7 +9,8 @@ use common::{ReadMode, SeamTracker};
 use host_kernel::{
     BoardEmptyReason, BootRequest, CenterView, DependencyGraph, DependencyGraphMode,
     FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, LoopbackAssets, LoopbackServer,
-    MemoryTracker, SystemAppearance, TriageRole, DEFAULT_RECENT_LIMIT,
+    MemoryTracker, SystemAppearance, TrackerRouter, TriageRole, WorkspaceView,
+    DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -180,6 +181,171 @@ fn snapshots_honor_each_clients_explicit_view_without_shared_focus() {
             .id,
         "you/garden#1"
     );
+}
+
+#[test]
+fn removing_a_project_keeps_another_clients_project_and_issue_focus() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first_dir = make_dir(tmp.path(), "work/first");
+    let second_dir = make_dir(tmp.path(), "work/second");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/first", 1, "first issue"));
+    tracker.add_issue(IssueRecord::open("you/second", 2, "second issue"));
+    let mut host = boot(tmp.path(), tracker);
+    let first_id = register(&mut host, &first_dir, "you/first");
+    let second_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "second",
+            "localPath": second_dir,
+            "repository": "you/second",
+        }))
+        .unwrap()
+        .snapshot
+        .projects
+        .iter()
+        .find(|project| project.id != first_id)
+        .unwrap()
+        .id
+        .clone();
+    let second_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": second_id,
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+
+    let client_b_view = serde_json::json!({
+        "focusedHostId": "local",
+        "focusedProjectId": second_id,
+        "selectedIssueId": "you/second#2",
+        "focusedRunId": second_run_id,
+        "centerView": "graph",
+        "workspaceView": "run",
+        "parentFilterId": null,
+        "search": { "title": "", "triageRole": null, "state": "all" },
+        "graphMode": "focused",
+        "graphCenterIssueId": "you/second#2",
+        "completeDependencyGraph": true
+    });
+
+    let before = host
+        .handle(serde_json::json!({
+            "op": "snapshot",
+            "clientId": "client-b",
+            "clientView": client_b_view,
+        }))
+        .unwrap()
+        .snapshot;
+    assert_eq!(before.focused_project_id, second_id);
+    assert_eq!(
+        before.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/second#2"
+    );
+
+    let removed = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": first_id,
+            "clientId": "client-a",
+            "clientView": {
+                "focusedHostId": "local",
+                "focusedProjectId": first_id,
+                "selectedIssueId": "you/first#1",
+                "focusedRunId": "",
+                "centerView": "board",
+                "workspaceView": "project",
+                "parentFilterId": null,
+                "search": { "title": "", "triageRole": null, "state": "all" },
+                "graphMode": "overview",
+                "graphCenterIssueId": null,
+                "completeDependencyGraph": false
+            },
+        }))
+        .unwrap()
+        .snapshot;
+    assert_eq!(removed.focused_project_id, second_id);
+    assert_eq!(removed.board.as_ref().unwrap().project_id, second_id);
+
+    let after = host
+        .handle(serde_json::json!({
+            "op": "snapshot",
+            "clientId": "client-b",
+            "clientView": client_b_view,
+        }))
+        .unwrap()
+        .snapshot;
+    assert_eq!(after.focused_project_id, second_id);
+    assert_eq!(after.focused_run_id, second_run_id);
+    assert_eq!(after.center_view, CenterView::Graph);
+    assert_eq!(after.workspace_view, WorkspaceView::Run);
+    assert_eq!(
+        after.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/second#2"
+    );
+}
+
+#[test]
+fn removing_a_middle_project_uses_the_host_fallback_for_the_removing_client() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first_dir = make_dir(tmp.path(), "work/first");
+    let removed_dir = make_dir(tmp.path(), "work/removed");
+    let fallback_dir = make_dir(tmp.path(), "work/fallback");
+    let mut host = boot(tmp.path(), Arc::new(MemoryTracker::new()));
+    let first_id = register(&mut host, &first_dir, "you/first");
+    let removed_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "removed",
+            "localPath": removed_dir,
+            "repository": "you/removed",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id;
+    let fallback_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "fallback",
+            "localPath": fallback_dir,
+            "repository": "you/fallback",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id;
+    host.handle(serde_json::json!({
+        "op": "focusProject",
+        "projectId": removed_id,
+    }))
+    .unwrap();
+
+    let snapshot = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": removed_id,
+            "clientId": "client-a",
+            "clientView": {
+                "focusedHostId": "local",
+                "focusedProjectId": removed_id,
+                "selectedIssueId": null,
+                "focusedRunId": "",
+                "centerView": "board",
+                "workspaceView": "project",
+                "parentFilterId": null,
+                "search": { "title": "", "triageRole": null, "state": "all" },
+                "graphMode": "overview",
+                "graphCenterIssueId": null,
+                "completeDependencyGraph": false
+            },
+        }))
+        .unwrap()
+        .snapshot;
+
+    assert_eq!(snapshot.focused_project_id, fallback_id);
+    assert_ne!(snapshot.focused_project_id, first_id);
+    assert_eq!(snapshot.board.as_ref().unwrap().project_id, fallback_id);
 }
 
 fn edge_pairs(graph: &host_kernel::DependencyGraph) -> Vec<(String, String)> {
@@ -1303,6 +1469,56 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
             ("STALE_PROJECT_DIR", stale.as_path()),
             ("MISSING_PROJECT_DIR", missing.as_path()),
             ("RETRY_PROJECT_DIR", retry.as_path()),
+        ],
+    );
+}
+
+#[test]
+fn browser_registers_local_markdown_and_self_hosted_git_projects_through_the_form() {
+    let tmp = tempfile::tempdir().unwrap();
+    let local = make_dir(tmp.path(), "work/local-tracker");
+    let remote = make_dir(tmp.path(), "work/gitlab-project");
+    let fallback = make_dir(tmp.path(), "work/fallback-project");
+    for (dir, number, title) in [(&local, 1, "local issue"), (&fallback, 2, "fallback issue")] {
+        let issue_dir = dir.join(".scratch/feature/issues");
+        std::fs::create_dir_all(&issue_dir).unwrap();
+        std::fs::write(
+            issue_dir.join(format!("{number:02}-issue.md")),
+            format!("# {number} — {title}\n\nStatus: ready-for-agent\n\nBlocked by: None\n"),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir(remote.join(".git")).unwrap();
+    std::fs::write(
+        remote.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://gitlab.example.com/acme/platform/garden.git\n",
+    )
+    .unwrap();
+
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(
+        "acme/platform/garden",
+        3,
+        "self-hosted issue",
+    ));
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(TrackerRouter::new(Arc::clone(&tracker) as _)) as _,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    run_browser_e2e(
+        host,
+        "project-tracker-lifecycle.mjs",
+        &[
+            ("LOCAL_PROJECT_DIR", local.as_path()),
+            ("REMOTE_PROJECT_DIR", remote.as_path()),
+            ("FALLBACK_PROJECT_DIR", fallback.as_path()),
         ],
     );
 }
