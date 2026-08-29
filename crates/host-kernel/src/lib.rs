@@ -256,6 +256,10 @@ pub enum Command {
         agent_id: Option<String>,
         pick_agent: bool,
     },
+    PreviewRunLaunch {
+        project_id: String,
+        config: RunLaunchConfig,
+    },
     CancelRunLaunch,
     StopRun {
         run_id: String,
@@ -2212,6 +2216,9 @@ impl HostKernel {
             } => {
                 self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent)?;
             }
+            Command::PreviewRunLaunch { project_id, config } => {
+                self.preview_run_launch(&project_id, config)?;
+            }
             Command::CancelRunLaunch => {
                 self.launch_form = None;
             }
@@ -2382,7 +2389,7 @@ impl HostKernel {
             .unwrap_or("snapshot");
         let mut outcome = if let Some(client_id) = client_id.as_deref() {
             match op {
-                "prepareRunLaunch" | "cancelRunLaunch" | "startUnboundRun" => {
+                "prepareRunLaunch" | "previewRunLaunch" | "cancelRunLaunch" | "startUnboundRun" => {
                     self.handle_client_launch_request(request, client_id)?
                 }
                 _ => self.handle_inner(request)?,
@@ -3427,6 +3434,10 @@ impl HostKernel {
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
             }),
+            "previewRunLaunch" => self.dispatch(Command::PreviewRunLaunch {
+                project_id: required_string(&request, "projectId")?,
+                config: parse_launch_config(&request)?,
+            }),
             "cancelRunLaunch" => self.dispatch(Command::CancelRunLaunch),
             "startUnboundRun" => {
                 let project_id = required_string(&request, "projectId")?;
@@ -3966,7 +3977,10 @@ impl HostKernel {
         let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
         let change_notes_text = changes::format_notes(&pending);
         opening_text = changes::append_notes(&opening_text, &pending);
-        let fields = launch::localize_fields(agent.config_fields(), language);
+        let fields = launch::localize_fields(
+            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
+            language,
+        );
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
         let (isolation_supported, isolation_reason) =
             launch::isolation_availability(agent.as_ref(), &project.local_path, language);
@@ -4009,6 +4023,52 @@ impl HostKernel {
             warnings,
             error: None,
         });
+        Ok(())
+    }
+
+    fn preview_run_launch(
+        &mut self,
+        project_id: &str,
+        config: RunLaunchConfig,
+    ) -> Result<(), KernelError> {
+        let project = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == config.agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let language = self.appearance.language;
+        let fields = launch::localize_fields(
+            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
+            language,
+        );
+        let preview =
+            launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
+        let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+        warnings.extend(launch::side_effect_warnings(
+            &project.local_path,
+            self.runs
+                .iter()
+                .any(|run| run.project_id == project_id && run.is_active()),
+            language,
+        ));
+        let form = self
+            .launch_form
+            .as_mut()
+            .filter(|form| form.project_id == project_id)
+            .ok_or_else(|| KernelError::Protocol("launch form is no longer open".into()))?;
+        form.selected_agent_id = config.agent_id;
+        form.values = config.values;
+        form.opening_text = config.opening_text;
+        form.command_preview = preview;
+        form.warnings = warnings;
+        form.error = None;
         Ok(())
     }
 
@@ -4066,7 +4126,10 @@ impl HostKernel {
                     .insert(launch::ISOLATION_FIELD.into(), "false".into());
             }
         }
-        let fields = launch::localize_fields(agent.config_fields(), language);
+        let fields = launch::localize_fields(
+            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
+            language,
+        );
         if let Some(form) = &mut self.launch_form {
             launch::apply_submitted_form(form, &config);
             let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);

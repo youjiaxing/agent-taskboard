@@ -15,7 +15,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 | 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，明确的 Local Markdown 或单一合法 Git remote 自动采用；多个 remote 才显示候选供确认；失败保留草稿并可重试。 |
 | 2 已有 Project 新增、编辑、移除 | PASS | `project-management.mjs`：从已有 Project 的桌面侧栏新增并看到首批 Issue，再由行尾菜单完成编辑与移除；活跃 Run 明确禁止移除；执行已停提示 Tracker 认领仍保留；移除当前 Project 后回退且不残留旧 Issue。 |
 | 3 找工作 | PASS | `board.mjs`：四列、标题搜索、triage/open/closed 筛选、父子过滤、Project open Issue 依赖概览、单 Issue 一跳上下游、完整连通闭包、图中心与详情分离、返回同一 Issue 上下文、键盘 `j` / Enter / `?`。 |
-| 4 绑定 Issue 开 Run | PASS | `run-launch-resilience.mjs` + `board.mjs`：从「执行」进入同一启动配置表；选择 Agent、预填来源、命令预览和隔离说明可见；打开表单后再次核对未认领且无 Run，提交成功后断言同一 Issue 已认领并只创建一条 Run。 |
+| 4 绑定 Issue 开 Run | PASS | `run-launch-resilience.mjs` + `board.mjs`：从「执行」进入同一启动配置表；选择 Agent、动态 model / effort 选项（仍可手填）、预填来源、命令预览和隔离说明可见；打开表单后再次核对未认领且无 Run，提交成功后断言同一 Issue 已认领并只创建一条 Run。 |
 | 5 游离 Run | PASS | `board.mjs`：从 Project 行「新建」进入同一表单，初始指令可明确填写；打开表单前后及启动成功后逐 Issue 比较认领状态不变，同时出现未绑定 Issue 的运行中 Run。 |
 | 6 运行中 | PASS | `run-lifecycle.mjs`：从进行中卡片进入 Terminal，按需加载并保留完整 Issue；等待操作、注入一行、查看改动、停止、继续和释放认领均从可见入口完成；注入与改动备注另覆盖提交中、防重复、失败保留草稿和显式重试。 |
 | 7 结束后 | PASS | `run-lifecycle.mjs`：停止 Run 后仍为已认领、未关闭的 Issue，留在进行中；释放认领后回 Frontier；不会进入最近完成。`board.mjs` 另覆盖真正关闭的 Issue、最近完成和结束 Run 的查看改动。 |
@@ -27,7 +27,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 - Run 启动表单增加提交中状态，整表禁用并阻止重复 RPC；协议失败和 Host 业务失败都保留完整草稿供显式重试。
 - 绑定 Run 成功启动时，Host 原子同步当前 Issue；不会出现 Run 已创建但 Terminal 因身份不一致被隐藏。
 - 从 Run 卡片进入 Terminal 时按需加载同一 Issue 正文；不把正文加入看板全量快照。
-- Agent 选择页对未安装 Adapter 展示 command、搜索 PATH 与已知安装位置；动作禁用但不再静默。
+- Agent 选择页对未安装 Adapter 展示 command、搜索 PATH 与已知安装位置；动作禁用但不再静默。启动配置读取各 Agent CLI 的本地 model cache，在 10 分钟内复用；model 与对应 effort 可选，也保留手动输入兜底。
 - 搜索、Terminal 注入、改动备注和自定义用量表单共用异步提交保护：提交中禁用、防重复，协议失败保留完整草稿与错误，原按钮可显式重试。
 - 配对、生成本机连接信息、撤销 Client 和连接远端 Host 也使用同一提交中/防重复/错误反馈契约；失败不清空地址或粘贴草稿，可直接重试。
 
@@ -111,7 +111,7 @@ cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_por
 3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮自动刷新，确认两边不会互相抢 Project、Issue、Run 或视图焦点。
 4. 在任一 Client 顶栏直接打开依赖图，确认先看到未关闭 Issue 概览；点击 Issue 进入其 Dependency 上下游，再用「返回依赖概览」退出。回看板后通过卡片「查看依赖」再次进入单 Issue 模式。
 5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两个刷新倒计时后松开，确认滚动位置不跳顶。
-6. 点击「执行」，查看 Agent、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写一条可安全停止的指令后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
+6. 点击「执行」，查看 Agent、model / effort 可选项、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写一条可安全停止的指令后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
 7. 进入 Terminal，确认右侧仍是 Issue #100；向 Run 注入一行；打开「查看改动」，然后停止 Run 或返回看板。
 8. 确认 Run 停止没有把 Issue #100 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
 9. 在本 PR 留言明确 `ACCEPTED` 或列出失败步骤、截图和期望。只有明确接受后才 merge PR 并由 `Closes #100` 关闭 Issue。

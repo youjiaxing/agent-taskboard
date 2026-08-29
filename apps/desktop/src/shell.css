@@ -731,6 +731,8 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .form-sheet .actions { justify-content: flex-end; }
 .launch-sheet { width: min(760px, calc(100% - 24px)); max-height: calc(100vh - 48px); }
+.field-choice-row { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 8px; align-items: start; }
+.field-choice-row > input, .field-choice-row > select { margin-top: 0; }
 .launch-agent {
   display: flex;
   align-items: center;

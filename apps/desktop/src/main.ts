@@ -615,6 +615,7 @@ type AgentField = {
   label: string;
   kind: AgentFieldKind;
   options?: string[];
+  optionGroups?: Record<string, string[]>;
   required: boolean;
   folded: boolean;
 };
@@ -935,6 +936,8 @@ let ptyPumping = false;
 let launchDraft: LaunchDraft | null = null;
 let launchFolded = false;
 let agentPickerSelection = "";
+let launchPreviewTimer: number | undefined;
+let launchPreviewSequence = 0;
 let changesOpen = false;
 let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
@@ -1223,6 +1226,11 @@ function saveMobileAppearance(appearance: MobileAppearance): void {
 function syncLaunchDraft(snap: Snapshot): void {
   const form = snap.launchForm;
   if (!form) {
+    if (launchPreviewTimer !== undefined) {
+      window.clearTimeout(launchPreviewTimer);
+      launchPreviewTimer = undefined;
+    }
+    launchPreviewSequence += 1;
     launchDraft = null;
     return;
   }
@@ -1231,6 +1239,7 @@ function syncLaunchDraft(snap: Snapshot): void {
     || launchDraft.projectId !== form.projectId
     || launchDraft.agentId !== form.selectedAgentId
   ) {
+    launchPreviewSequence += 1;
     launchDraft = {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -1268,6 +1277,7 @@ function liveEnumWarnings(form: RunLaunchForm, draft: LaunchDraft, language: Lan
 }
 
 function refreshLaunchWarnings(): void {
+  scheduleLaunchPreview();
   const node = app?.querySelector<HTMLElement>(".launch-warnings");
   if (!node || !snapshot?.launchForm || !launchDraft) return;
   const live = liveEnumWarnings(
@@ -1281,6 +1291,32 @@ function refreshLaunchWarnings(): void {
   const warnings = [...preserved, ...live];
   node.textContent = warnings.join(" ");
   node.hidden = warnings.length === 0;
+}
+
+function scheduleLaunchPreview(): void {
+  if (!launchDraft || !snapshot?.launchForm) return;
+  if (launchPreviewTimer !== undefined) {
+    window.clearTimeout(launchPreviewTimer);
+  }
+  const sequence = ++launchPreviewSequence;
+  launchPreviewTimer = window.setTimeout(async () => {
+    launchPreviewTimer = undefined;
+    const draft = launchDraft;
+    if (!draft || !snapshot?.launchForm) return;
+    try {
+      await rpc("previewRunLaunch", {
+        projectId: draft.projectId,
+        agentId: draft.agentId,
+        values: draft.values,
+        openingText: draft.openingText,
+      });
+      if (sequence === launchPreviewSequence && launchDraft === draft && snapshot?.launchForm) {
+        render();
+      }
+    } catch {
+      // The preview is advisory; keep the local draft usable if the Host is unavailable.
+    }
+  }, 120);
 }
 
 function refreshIntentChoices(): void {
@@ -3884,7 +3920,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
           <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
           <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
         </div>
-        ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
         <div class="field">
           <div class="label">${escapeHtml(copy.workingDirectory)}</div>
           <input value="${escapeHtml(form.workingDirectory)}" readonly />
@@ -3901,7 +3937,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
         }
         <details class="folded" ${launchFolded ? "open" : ""}>
           <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-          ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+          ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
           ${
             snap.showCommandPreview
               ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
@@ -3919,7 +3955,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
-function launchField(field: AgentField, value: string): string {
+function launchField(field: AgentField, value: string, values: Record<string, string>): string {
   const id = `launch-${field.id}`;
   if (field.kind === "boolean") {
     return `<label class="graph-opt">
@@ -3929,11 +3965,25 @@ function launchField(field: AgentField, value: string): string {
   }
   if (field.kind === "select") {
     const options = field.options ?? [];
+    const dependentOptions = field.id === "effort" && field.optionGroups && values.model
+      ? field.optionGroups[values.model] ?? options
+      : options;
     const listId = `${id}-list`;
+    const selectedOption = dependentOptions.includes(value) ? value : "";
+    const choiceControl = field.id === "model" || field.id === "effort";
     return `<div class="field">
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-      <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+      ${choiceControl
+        ? `<div class="field-choice-row">
+            <select id="${id}-options" data-launch-option="${escapeHtml(field.id)}" aria-label="${escapeHtml(field.label)} options">
+              <option value="">从已发现选项选择…</option>
+              ${dependentOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === selectedOption ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+            </select>
+            <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} aria-describedby="${id}-hint" placeholder="也可手动输入" />
+          </div>`
+        : `<input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} aria-describedby="${id}-hint" />`}
+      <datalist id="${listId}">${dependentOptions.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+      ${choiceControl ? `<p class="tiny" id="${id}-hint">可从 Agent CLI 已发现的选项中选择，也可手动输入。</p>` : ""}
     </div>`;
   }
   if (field.kind === "multiline") {
@@ -5231,6 +5281,16 @@ app.addEventListener("change", async (event) => {
     } else if ("value" in target) {
       launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
     }
+    if (launchId === "model" && snapshot?.launchForm) {
+      const effortField = snapshot.launchForm.fields.find((field) => field.id === "effort");
+      const available = effortField?.optionGroups?.[launchDraft.values.model];
+      if (available?.length && !available.includes(launchDraft.values.effort ?? "")) {
+        launchDraft.values.effort = available[0];
+      }
+      scheduleLaunchPreview();
+      render();
+      return;
+    }
     refreshLaunchWarnings();
   }
 });
@@ -5292,6 +5352,24 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
+  const launchOptionId = target?.getAttribute("data-launch-option");
+  if (launchOptionId && launchDraft && target instanceof HTMLSelectElement) {
+    launchDraft.values[launchOptionId] = target.value;
+    const input = document.querySelector<HTMLInputElement>(`input[data-launch="${CSS.escape(launchOptionId)}"]`);
+    if (input) input.value = target.value;
+    if (launchOptionId === "model") {
+      const effortField = snapshot?.launchForm?.fields.find((field) => field.id === "effort");
+      const available = effortField?.optionGroups?.[target.value];
+      if (available?.length && !available.includes(launchDraft.values.effort ?? "")) {
+        launchDraft.values.effort = available[0];
+      }
+      scheduleLaunchPreview();
+      render();
+      return;
+    }
+    refreshLaunchWarnings();
+    return;
+  }
   if (target instanceof HTMLSelectElement && target.closest("form[data-act='issue-search']")) {
     const draft = editableIssueSearchDraft();
     if (target.name === "triageRole") draft.triageRole = target.value;

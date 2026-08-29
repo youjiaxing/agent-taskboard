@@ -73,6 +73,7 @@ fn field(id: &str, folded: bool) -> AgentField {
         label: id.into(),
         kind: AgentFieldKind::Text,
         options: Vec::new(),
+        option_groups: std::collections::BTreeMap::new(),
         required: false,
         folded,
     }
@@ -310,6 +311,47 @@ fn memory_prefers_current_project_then_other_project() {
         Some("from-garden")
     );
     assert!(form.skip_agent_picker);
+}
+
+#[test]
+fn preview_run_launch_updates_command_preview_without_starting_a_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap();
+
+    let mut values = grok_values();
+    values["model"] = serde_json::json!("grok-custom");
+    values["effort"] = serde_json::json!("low");
+    h.host
+        .handle(serde_json::json!({
+            "op": "previewRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": values,
+            "openingText": "预览当前命令",
+        }))
+        .unwrap();
+
+    let snapshot = h.host.snapshot();
+    let form = snapshot.launch_form.as_ref().unwrap();
+    assert_eq!(
+        form.command_preview,
+        "grok --model grok-custom --effort low --sandbox off"
+    );
+    assert_eq!(
+        form.values.get("model").map(String::as_str),
+        Some("grok-custom")
+    );
+    assert_eq!(form.opening_text, "预览当前命令");
+    assert!(snapshot.runs.is_empty());
 }
 
 #[test]

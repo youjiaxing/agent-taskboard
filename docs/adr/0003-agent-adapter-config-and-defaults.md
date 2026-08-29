@@ -9,7 +9,7 @@
 - 不写回用户家里的 CLI 配置文件。
 - 允许折叠的附加参数，追加在 Adapter 组装结果之后；禁止整条命令可编辑。附加参数可记入本地 Run，禁止写入 Tracker（与 [决策：Run 生命周期与 Issue 的绑定方式](https://github.com/youjiaxing/agent-taskboard/issues/9) 的写回白名单一致）。
 - 命令预览可以有，但不是一等展示，设置里能关掉。
-- model / effort 尽量问本机 CLI；未知枚举警告但不拦启动。
+- model / effort 尽量问本机 CLI；启动表单将本机 CLI 的 model cache 映射成可选项，并按 model 展示对应 effort；仍允许手动输入特殊值。选项探测在 Host 进程内缓存 10 分钟，缓存缺失或过期时回退到 Adapter 静态字段；未知枚举警告但不拦启动。
 - 隔离执行目录见 [并行 Run 默认共用主目录，隔离只走 Agent 原生 git worktree](./0004-native-worktree-isolation.md)；不在本合同里再拍板。
 
 ## 明确不做
