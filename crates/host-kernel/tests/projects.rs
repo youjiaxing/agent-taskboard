@@ -249,6 +249,355 @@ fn inference_is_only_a_candidate_until_register() {
 }
 
 #[test]
+fn inference_prefers_local_markdown_tracker_over_git_remote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir_all(project_dir.join(".scratch/feature/issues")).unwrap();
+    std::fs::write(
+        project_dir.join(".scratch/feature/issues/01-foundation.md"),
+        "# 01 — Foundation\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = git@gitlab.example.com:acme/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+    let inference = host
+        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
+        .unwrap()
+        .inference
+        .unwrap();
+    assert_eq!(inference.tracker, TrackerKind::LocalMarkdown);
+    assert_eq!(inference.github_host, "local");
+    assert_eq!(inference.repository, project_dir.to_string_lossy());
+}
+
+#[test]
+fn local_markdown_project_reads_and_claims_issue_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let issue_dir = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issue_dir).unwrap();
+    std::fs::write(
+        issue_dir.join("01-foundation.md"),
+        "# 01 — Foundation\n\nStatus: ready-for-agent\n\nBlocked by: None\n\nBody\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "garden",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+    assert_eq!(out.snapshot.projects[0].tracker, TrackerKind::LocalMarkdown);
+    assert_eq!(out.snapshot.projects[0].issue_counts.total, 1);
+    assert_eq!(
+        out.snapshot
+            .board
+            .as_ref()
+            .and_then(|board| board.columns.as_ref())
+            .map(|columns| columns.frontier.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn local_markdown_parses_status_type_assignee_parent_and_dependency_semantics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-foundation.md"),
+        "# 01 — Foundation\n\nStatus: claimed\nType: task\nAssignee: alice\n\n## Comments\n\nStatus: resolved\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-follow-up.md"),
+        "# 02 — Follow up\n\nStatus: ready-for-agent\nPart of: 01 — Foundation\nBlocked by: 01 — Foundation\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "garden",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+    let board = out.snapshot.board.unwrap();
+    let selected = board
+        .columns
+        .as_ref()
+        .and_then(|columns| columns.in_progress.iter().find(|issue| issue.number == 1))
+        .expect("claimed issue card");
+    assert!(selected.labels.iter().any(|label| label == "type:task"));
+    assert!(selected
+        .labels
+        .iter()
+        .any(|label| label == "status:claimed"));
+    assert_eq!(selected.claimed_by, vec!["alice"]);
+    let follow_up = board
+        .columns
+        .unwrap()
+        .blocked
+        .into_iter()
+        .find(|issue| issue.number == 2)
+        .expect("blocked follow-up");
+    assert!(follow_up
+        .labels
+        .iter()
+        .any(|label| label == "ready-for-agent"));
+}
+
+#[test]
+fn local_markdown_parses_bullet_relationship_sections() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/bullets");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-child.md"),
+        "# 02 — Child\n\nStatus: ready-for-agent\n\n## Parent\n\n- #1\n\n## Blocked by\n\n- #1\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "bullets", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    let board = out.snapshot.board.unwrap();
+    let child = board
+        .columns
+        .unwrap()
+        .blocked
+        .into_iter()
+        .find(|issue| issue.number == 2)
+        .expect("bullet dependency should block child");
+    assert_eq!(child.claimed_by, Vec::<String>::new());
+}
+
+#[test]
+fn local_markdown_invalid_metadata_is_fail_closed_and_does_not_draw_frontier() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/invalid");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-invalid.md"),
+        "# 01 — Invalid\n\nStatus: done\nBlocked by: missing\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "invalid",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+    let board = out.snapshot.board.unwrap();
+    assert!(
+        board.columns.is_none(),
+        "invalid metadata must not be treated as a real board"
+    );
+    assert_eq!(
+        board.empty,
+        Some(host_kernel::BoardEmptyReason::IncompleteRead)
+    );
+    match board.refresh {
+        host_kernel::RefreshStatus::Incomplete {
+            detail: Some(detail),
+            ..
+        } => {
+            assert!(detail.contains("invalid Status"));
+            assert!(detail.contains("invalid dependency"));
+        }
+        other => panic!("expected incomplete refresh, got {other:?}"),
+    }
+    assert!(!format!("{:?}", out.snapshot.projects[0].connection).contains("GitHub"));
+}
+
+#[test]
+fn local_markdown_supports_create_edit_comment_and_relationship_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-child.md"),
+        "# 02 — Child\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let project_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "garden", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id;
+    host.handle(serde_json::json!({ "op": "updateIssue", "issueId": format!("{}#2", project_dir.display()), "title": "Child renamed", "body": "new body" })).unwrap();
+    host.handle(serde_json::json!({ "op": "addIssueComment", "issueId": format!("{}#2", project_dir.display()), "body": "looks good" })).unwrap();
+    host.handle(serde_json::json!({ "op": "setIssueParent", "issueId": format!("{}#2", project_dir.display()), "parent": format!("{}#1", project_dir.display()) })).unwrap();
+    host.handle(serde_json::json!({ "op": "setIssueBlockedBy", "issueId": format!("{}#2", project_dir.display()), "blockedBy": [format!("{}#1", project_dir.display())] })).unwrap();
+    host.handle(serde_json::json!({ "op": "createIssue", "projectId": project_id, "title": "Created", "body": "created body" })).unwrap();
+    let body = std::fs::read_to_string(issues.join("02-child.md")).unwrap();
+    assert!(body.contains("Child renamed"));
+    assert!(body.contains("new body"));
+    assert!(body.contains("## Comments"));
+    assert!(body.contains("looks good"));
+    assert!(body.contains("Part of: 1"));
+    assert!(body.contains("Blocked by: 1"));
+    assert!(issues.join("03-created.md").exists());
+}
+
+#[test]
+fn local_markdown_can_clear_body_and_release_explicit_assignee() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/clear");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-work.md"),
+        "# 01 — Work\n\nStatus: claimed\nAssignee: alice\n\nOld body\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({
+        "op": "registerProject", "name": "clear", "localPath": project_dir,
+        "githubHost": "local", "repository": project_dir,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({ "op": "updateIssue", "issueId": issue_id, "title": "Work", "body": "" }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "releaseIssue", "issueId": issue_id }))
+        .unwrap();
+    let body = std::fs::read_to_string(issues.join("01-work.md")).unwrap();
+    assert!(!body.contains("Assignee:"));
+    assert!(!body.contains("Old body"));
+    assert!(body.contains("Status: ready-for-agent"));
+}
+
+#[test]
+fn local_markdown_claim_release_and_restart_preserve_tracker_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-work.md"),
+        "# 01 — Work\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({ "op": "registerProject", "name": "garden", "localPath": project_dir, "githubHost": "local", "repository": project_dir })).unwrap();
+    host.handle(serde_json::json!({ "op": "claimIssue", "issueId": issue_id }))
+        .unwrap();
+    assert!(std::fs::read_to_string(issues.join("01-work.md"))
+        .unwrap()
+        .contains("Status: claimed"));
+    host.handle(serde_json::json!({ "op": "releaseIssue", "issueId": issue_id }))
+        .unwrap();
+    assert!(std::fs::read_to_string(issues.join("01-work.md"))
+        .unwrap()
+        .contains("Status: ready-for-agent"));
+    drop(host);
+    let host = boot_memory_with_local(tmp.path());
+    let issue = host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .frontier
+        .into_iter()
+        .find(|issue| issue.number == 1)
+        .expect("reloaded frontier issue");
+    assert_eq!(issue.title, "Work");
+}
+
+#[test]
+fn local_markdown_accepts_legacy_closed_true_but_rejects_dependency_cycles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(issues.join("01-done.md"), "# 01 — Done\n\nClosed: true\n").unwrap();
+    std::fs::write(
+        issues.join("02-a.md"),
+        "# 02 — A\n\nStatus: ready-for-agent\nBlocked by: 03\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("03-b.md"),
+        "# 03 — B\n\nStatus: ready-for-agent\nBlocked by: 02\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host.handle(serde_json::json!({ "op": "registerProject", "name": "legacy", "localPath": project_dir, "githubHost": "local", "repository": project_dir })).unwrap();
+    let board = out.snapshot.board.unwrap();
+    assert!(board.columns.is_none());
+    match board.refresh {
+        host_kernel::RefreshStatus::Incomplete {
+            detail: Some(detail),
+            ..
+        } => assert!(detail.contains("dependency cycle")),
+        other => panic!("expected cycle warning, got {other:?}"),
+    }
+}
+
+#[test]
+fn local_markdown_failure_does_not_mention_github_credentials() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/missing-local-tracker");
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "missing-local-tracker",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+
+    match &out.snapshot.projects[0].connection {
+        ProjectConnection::Unreachable { message, .. } => {
+            assert!(message.contains("本地 Markdown tracker"), "{message}");
+            assert!(!message.contains("GitHub"), "{message}");
+        }
+        other => panic!("expected local tracker failure, got {other:?}"),
+    }
+}
+
+#[test]
 fn remove_only_unregisters_and_falls_back_to_the_neighbor() {
     let tmp = tempfile::tempdir().unwrap();
     let first = make_dir(tmp.path(), "work/first");

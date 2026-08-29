@@ -36,6 +36,8 @@ pub struct IssueCard {
     pub title: String,
     pub url: String,
     pub claimed_by: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
     pub triage_role: Option<TriageRole>,
     pub open: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -821,6 +823,7 @@ fn card(issue: &IssueRecord, mapping_active: bool) -> IssueCard {
         title: issue.title.clone(),
         url: issue.url.clone(),
         claimed_by: issue.assignees.clone(),
+        labels: issue.labels.clone(),
         triage_role: if mapping_active {
             issue.triage_role()
         } else {

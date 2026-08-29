@@ -365,6 +365,7 @@ type IssueCard = {
   title: string;
   url: string;
   claimedBy: string[];
+  labels: string[];
   triageRole: TriageRole | null;
   open: boolean;
   activity?: "running" | "waiting" | "execution-stopped" | null;
@@ -2898,6 +2899,16 @@ function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activity"]): s
   return "";
 }
 
+function issueMetadataTags(labels: string[] | undefined): string {
+  return (labels ?? [])
+    .filter((label) => label.startsWith("type:") || label.startsWith("status:"))
+    .map((label) => {
+      const [kind, ...rest] = label.split(":");
+      return `<span class="tag">${escapeHtml(`${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`)}</span>`;
+    })
+    .join("");
+}
+
 function issueCard(
   copy: ShellCopy,
   issue: IssueCard,
@@ -2908,6 +2919,7 @@ function issueCard(
   const tags = [
     activity ? `<span class="tag">${escapeHtml(activity)}</span>` : "",
     issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
+    issueMetadataTags(issue.labels),
     issue.claimedBy.length
       ? `<span class="tag">${escapeHtml(copy.claimed)} ${escapeHtml(issue.claimedBy.join(", "))}</span>`
       : "",
@@ -2961,6 +2973,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
       </div>
       <div class="detail-meta">
         ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
+        ${issueMetadataTags(issue.labels)}
         <span class="tag">${escapeHtml(claim)}</span>
         ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
         ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
