@@ -13,6 +13,8 @@ pub struct ProjectInference {
     pub tracker: TrackerKind,
     pub github_host: String,
     pub repository: String,
+    #[serde(default)]
+    pub ambiguous: bool,
 }
 
 pub(crate) fn normalize_github_host(raw: &str) -> Result<String, String> {
@@ -94,17 +96,19 @@ pub(crate) fn infer_github_project(local_path: &Path) -> Option<ProjectInference
             tracker: TrackerKind::LocalMarkdown,
             github_host: "local".into(),
             repository: local_path.to_string_lossy().to_string(),
+            ambiguous: false,
         });
     }
     let config = git_config_path(local_path)?;
     let text = fs::read_to_string(config).ok()?;
-    let (github_host, repository) = github_remote_from_config(&text)?;
+    let (github_host, repository, ambiguous) = github_remote_from_config(&text)?;
     Some(ProjectInference {
         name,
         local_path: local_path.to_path_buf(),
         tracker: TrackerKind::Github,
         github_host,
         repository,
+        ambiguous,
     })
 }
 
@@ -154,10 +158,9 @@ fn git_config_path(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-fn github_remote_from_config(text: &str) -> Option<(String, String)> {
+fn github_remote_from_config(text: &str) -> Option<(String, String, bool)> {
     let mut current_remote = None;
-    let mut origin = None;
-    let mut first = None;
+    let mut remotes = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(name) = remote_section(trimmed) {
@@ -177,13 +180,19 @@ fn github_remote_from_config(text: &str) -> Option<(String, String)> {
         let Some(parsed) = parse_git_remote_url(&url) else {
             continue;
         };
-        if remote == "origin" {
-            origin = Some(parsed);
-        } else if first.is_none() {
-            first = Some(parsed);
+        if !remotes
+            .iter()
+            .any(|(name, existing)| name == remote && existing == &parsed)
+        {
+            remotes.push((remote.to_string(), parsed));
         }
     }
-    origin.or(first)
+    let selected = remotes
+        .iter()
+        .find(|(name, _)| name == "origin")
+        .or_else(|| remotes.first())
+        .map(|(_, parsed)| parsed.clone())?;
+    Some((selected.0, selected.1, remotes.len() > 1))
 }
 
 fn remote_section(line: &str) -> Option<String> {

@@ -356,6 +356,7 @@ type ProjectDraft = {
   githubHost: string;
   repository: string;
   tracker?: "github" | "local-markdown";
+  ambiguous?: boolean;
 };
 
 type IssueSearchDraft = {
@@ -1371,16 +1372,19 @@ async function inferFromLocalPath(path: string): Promise<void> {
   try {
     const result = await rpc("inferProject", { localPath: requestedPath });
     if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
-    if (result.inference?.tracker === "local-markdown") {
+    if (result.inference && (result.inference.tracker === "local-markdown" || !result.inference.ambiguous)) {
       const candidate = result.inference;
       const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
+      const useCandidateConnection =
+        candidate.tracker === "local-markdown" ||
+        (!formDraft.repository.trim() && (!formDraft.githubHost.trim() || formDraft.githubHost === "github.com"));
       formDraft = {
         ...formDraft,
         name: useCandidateName ? candidate.name : formDraft.name,
         localPath: candidate.localPath,
-        githubHost: candidate.githubHost,
-        repository: candidate.repository,
-        tracker: candidate.tracker,
+        githubHost: useCandidateConnection ? candidate.githubHost : formDraft.githubHost,
+        repository: useCandidateConnection ? candidate.repository : formDraft.repository,
+        tracker: useCandidateConnection ? candidate.tracker : formDraft.tracker,
       };
       autoFilledProjectName = useCandidateName ? candidate.name : autoFilledProjectName;
       projectInference = { status: "idle", requestId };

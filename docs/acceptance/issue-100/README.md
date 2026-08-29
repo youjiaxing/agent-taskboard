@@ -12,7 +12,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 
 | # | 结果 | 用户路径与证据 |
 | --- | --- | --- |
-| 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，明确的 Local Markdown 推断自动采用；远程候选由用户确认后看到首批 Issue；失败保留草稿并可重试。 |
+| 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，明确的 Local Markdown 或单一合法 Git remote 自动采用；多个 remote 才显示候选供确认；失败保留草稿并可重试。 |
 | 2 已有 Project 新增、编辑、移除 | PASS | `project-management.mjs`：从已有 Project 的桌面侧栏新增并看到首批 Issue，再由行尾菜单完成编辑与移除；活跃 Run 明确禁止移除；执行已停提示 Tracker 认领仍保留；移除当前 Project 后回退且不残留旧 Issue。 |
 | 3 找工作 | PASS | `board.mjs`：四列、标题搜索、triage/open/closed 筛选、父子过滤、Project open Issue 依赖概览、单 Issue 一跳上下游、完整连通闭包、图中心与详情分离、返回同一 Issue 上下文、键盘 `j` / Enter / `?`。 |
 | 4 绑定 Issue 开 Run | PASS | `run-launch-resilience.mjs` + `board.mjs`：从「执行」进入同一启动配置表；选择 Agent、预填来源、命令预览和隔离说明可见；打开表单后再次核对未认领且无 Run，提交成功后断言同一 Issue 已认领并只创建一条 Run。 |
@@ -107,7 +107,7 @@ cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_por
 ## 提出者 ≤15 分钟真实验收脚本
 
 1. 在本分支运行 `npm --prefix apps/desktop run tauri -- dev`，打开真实产品壳；不要使用一次性原型或已安装旧版本。
-2. 若 Host 为空，登记本仓 Project；否则选择本仓。确认目录推断候选后提交，并等到真实 GitHub Issue 出现或看到明确可重试错误。
+2. 若 Host 为空，登记本仓 Project；否则选择本仓。选择目录后，单一合法 Git remote 应自动填入；只有多个 remote 才确认候选，然后等到真实 GitHub Issue 出现或看到明确可重试错误。
 3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮自动刷新，确认两边不会互相抢 Project、Issue、Run 或视图焦点。
 4. 在任一 Client 顶栏直接打开依赖图，确认先看到未关闭 Issue 概览；点击 Issue 进入其 Dependency 上下游，再用「返回依赖概览」退出。回看板后通过卡片「查看依赖」再次进入单 Issue 模式。
 5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两个刷新倒计时后松开，确认滚动位置不跳顶。

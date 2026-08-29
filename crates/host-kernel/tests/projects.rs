@@ -241,6 +241,7 @@ fn inference_is_only_a_candidate_until_register() {
     assert_eq!(inference.name, "garden");
     assert_eq!(inference.github_host, "github.com");
     assert_eq!(inference.repository, "you/garden");
+    assert!(!inference.ambiguous);
     assert!(out.snapshot.projects.is_empty());
 
     let out = host
@@ -302,6 +303,30 @@ fn inference_accepts_a_non_github_git_remote() {
     assert_eq!(inference.tracker, TrackerKind::Github);
     assert_eq!(inference.github_host, "gitlab.example.com");
     assert_eq!(inference.repository, "acme/garden");
+    assert!(!inference.ambiguous);
+}
+
+#[test]
+fn inference_marks_multiple_valid_git_remotes_as_ambiguous() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = git@github.com:you/garden.git\n[remote \"mirror\"]\n\turl = ssh://git@gitlab.example.com/acme/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+
+    let inference = host
+        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
+        .unwrap()
+        .inference
+        .unwrap();
+
+    assert_eq!(inference.github_host, "github.com");
+    assert_eq!(inference.repository, "you/garden");
+    assert!(inference.ambiguous);
 }
 
 #[test]
