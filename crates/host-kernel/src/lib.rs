@@ -753,11 +753,13 @@ pub struct ShellCopy {
     pub got_it: String,
     pub auth_failed: String,
     pub connection_unavailable: String,
+    pub local_tracker_unavailable: String,
     pub repair_cli: String,
     pub repair_secrets: String,
     pub repair_env: String,
     pub no_gh_detected: String,
     pub connection_ready: String,
+    pub local_tracker_ready: String,
     pub project_menu: String,
     pub board_hint: String,
     pub child_hint: String,
@@ -1319,6 +1321,7 @@ impl BackgroundRefreshTask {
                 self.tracker.probe(&ctx),
                 &self.host_secrets_path,
                 self.language,
+                &self.github_host,
             )
         });
         let result = self.tracker.read_all(&ctx);
@@ -1400,6 +1403,7 @@ impl BackgroundTrackerWriteTask {
                 self.refresh.tracker.probe(&ctx),
                 &self.refresh.host_secrets_path,
                 self.refresh.language,
+                &self.refresh.github_host,
             )
         });
         let write_result = read_result.as_ref().ok().map(|_| {
@@ -1475,7 +1479,12 @@ impl BackgroundProjectProbeTask {
             secrets_pat: pat.as_deref(),
             secrets_path: &self.host_secrets_path,
         });
-        let connection = connection_from_probe(outcome, &self.host_secrets_path, self.language);
+        let connection = connection_from_probe(
+            outcome,
+            &self.host_secrets_path,
+            self.language,
+            &self.github_host,
+        );
         BackgroundProjectProbeCompletion {
             task: self,
             connection,
@@ -6514,6 +6523,7 @@ impl HostKernel {
                         self.appearance.language,
                         AuthFailureKind::Unreachable,
                         detail.as_deref(),
+                        &github_host,
                     ),
                 };
                 let has_data = self.loaded_issues.contains_key(&project_id);
@@ -6556,6 +6566,7 @@ impl HostKernel {
                         self.appearance.language,
                         kind,
                         detail.as_deref(),
+                        &github_host,
                     ),
                 };
                 self.refresh.insert(
@@ -6984,6 +6995,7 @@ impl HostKernel {
             outcome,
             &self.data.host_secrets_path,
             self.appearance.language,
+            github_host,
         )
     }
 }
@@ -7108,11 +7120,13 @@ impl ShellCopy {
                 got_it: "知道了".into(),
                 auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
                 connection_unavailable: "这个 Project 暂时连不上 GitHub。".into(),
+                local_tracker_unavailable: "这个 Project 的 Local Markdown tracker 不可用。".into(),
                 repair_cli: "用 gh 登录".into(),
                 repair_secrets: "在 Host 秘密文件里写入这个 host 的 PAT".into(),
                 repair_env: "设置应用专用或通用环境变量".into(),
                 no_gh_detected: "这台电脑上没检测到 gh。".into(),
                 connection_ready: "GitHub 已连通".into(),
+                local_tracker_ready: "Local Markdown 已就绪".into(),
                 project_menu: "管理".into(),
                 board_hint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。".into(),
                 child_hint: "只看这些直接子票。仍是看板视图，不是第二种 Frontier。".into(),
@@ -7391,11 +7405,13 @@ impl ShellCopy {
                 got_it: "Got it".into(),
                 auth_failed: "GitHub credentials for this Project are not available.".into(),
                 connection_unavailable: "This Project cannot reach GitHub right now.".into(),
+                local_tracker_unavailable: "The Local Markdown tracker for this Project is unavailable.".into(),
                 repair_cli: "Sign in with gh".into(),
                 repair_secrets: "Write a PAT for this host in the Host secrets file".into(),
                 repair_env: "Set the app-specific or generic environment variable".into(),
                 no_gh_detected: "gh was not detected on this machine.".into(),
                 connection_ready: "GitHub is connected".into(),
+                local_tracker_ready: "Local Markdown is ready".into(),
                 project_menu: "Manage".into(),
                 board_hint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.".into(),
                 child_hint: "Direct children only. Still a board, not a second Frontier.".into(),
@@ -7978,6 +7994,7 @@ fn probe_record(
         secrets_pat: pat.as_deref(),
         secrets_path,
     });
+    let connection = connection_from_probe(outcome, secrets_path, language, &stored.github_host);
     ProjectRecord {
         id: stored.id,
         name: stored.name,
@@ -7985,7 +8002,7 @@ fn probe_record(
         tracker: stored.tracker,
         github_host: stored.github_host,
         repository: stored.repository,
-        connection: connection_from_probe(outcome, secrets_path, language),
+        connection,
         tracker_synced: false,
         auto_advance: stored.auto_advance,
         restore_auto_advance: stored.restore_auto_advance,
@@ -7998,6 +8015,7 @@ fn connection_from_probe(
     outcome: tracker::ProbeOutcome,
     secrets_path: &Path,
     language: Language,
+    github_host: &str,
 ) -> ProjectConnection {
     match outcome {
         tracker::ProbeOutcome::Ready { source } => ProjectConnection::Ready { source },
@@ -8013,6 +8031,7 @@ fn connection_from_probe(
                 language,
                 AuthFailureKind::Unreachable,
                 detail.as_deref(),
+                github_host,
             ),
         },
         tracker::ProbeOutcome::Failed {
@@ -8024,31 +8043,54 @@ fn connection_from_probe(
             source,
             kind,
             repair: tracker::repair_hint(cli_detected, secrets_path),
-            message: auth_failure_message(language, kind, detail.as_deref()),
+            message: auth_failure_message(language, kind, detail.as_deref(), github_host),
         },
     }
 }
 
-fn auth_failure_message(language: Language, kind: AuthFailureKind, detail: Option<&str>) -> String {
+fn auth_failure_message(
+    language: Language,
+    kind: AuthFailureKind,
+    detail: Option<&str>,
+    github_host: &str,
+) -> String {
+    if github_host == "local" {
+        let base = match language {
+            Language::ZhCn => "本地 Markdown tracker 不可用。".to_string(),
+            Language::En => "Local Markdown tracker is unavailable.".to_string(),
+        };
+        return match detail {
+            Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
+            _ => base,
+        };
+    }
+    let host = tracker_display_name(github_host);
     let base = match (language, kind) {
         (Language::ZhCn, AuthFailureKind::MissingCredentials) => {
-            "没有可用的 GitHub 凭据。".to_string()
+            format!("没有可用的 {host} 凭据。")
         }
         (Language::En, AuthFailureKind::MissingCredentials) => {
-            "No GitHub credentials are available.".to_string()
+            format!("No {host} credentials are available.")
         }
-        (Language::ZhCn, AuthFailureKind::Rejected) => "GitHub 拒绝了当前凭据。".to_string(),
+        (Language::ZhCn, AuthFailureKind::Rejected) => format!("{host} 拒绝了当前凭据。"),
         (Language::En, AuthFailureKind::Rejected) => {
-            "GitHub rejected the current credentials.".to_string()
+            format!("{host} rejected the current credentials.")
         }
-        (Language::ZhCn, AuthFailureKind::Unreachable) => "连不上这个 GitHub host。".to_string(),
+        (Language::ZhCn, AuthFailureKind::Unreachable) => format!("连不上这个 {host} host。"),
         (Language::En, AuthFailureKind::Unreachable) => {
-            "This GitHub host could not be reached.".to_string()
+            format!("This {host} host could not be reached.")
         }
     };
     match detail {
         Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
         _ => base,
+    }
+}
+
+fn tracker_display_name(github_host: &str) -> String {
+    match github_host.trim() {
+        "" | "github.com" => "GitHub".to_string(),
+        host => host.to_string(),
     }
 }
 
