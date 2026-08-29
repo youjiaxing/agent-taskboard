@@ -111,11 +111,13 @@ type ShellCopy = {
   gotIt: string;
   authFailed: string;
   connectionUnavailable: string;
+  localTrackerUnavailable: string;
   repairCli: string;
   repairSecrets: string;
   repairEnv: string;
   noGhDetected: string;
   connectionReady: string;
+  localTrackerReady: string;
   projectMenu: string;
   boardHint: string;
   childHint: string;
@@ -1412,8 +1414,8 @@ async function inferFromLocalPath(path: string): Promise<void> {
       const candidate = result.inference;
       const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
       const useCandidateConnection =
-        candidate.tracker === "local-markdown" ||
-        (!formDraft.repository.trim() && (!formDraft.githubHost.trim() || formDraft.githubHost === "github.com"));
+        !formDraft.repository.trim() &&
+        (!formDraft.githubHost.trim() || formDraft.githubHost === "github.com");
       formDraft = {
         ...formDraft,
         name: useCandidateName ? candidate.name : formDraft.name,
@@ -2463,6 +2465,17 @@ function projectTrackerLabel(project: Project): string {
     : `${project.githubHost}/${project.repository}`;
 }
 
+function projectConnectionLabel(copy: ShellCopy, project: Project): string {
+  if (project.tracker === "local-markdown") {
+    return project.connection.status === "ready" ? copy.localTrackerReady : copy.localTrackerUnavailable;
+  }
+  return project.connection.status === "ready"
+    ? copy.connectionReady
+    : project.connection.status === "unreachable"
+      ? copy.connectionUnavailable
+      : copy.authFailed;
+}
+
 function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   return `<nav class="mobile-nav" aria-label="${escapeHtml([copy.mobileBoard, copy.mobileIssue, copy.mobileRun].join(" / "))}">
@@ -2621,7 +2634,7 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
       <b>${escapeHtml(project.name)}</b>
       <span>${escapeHtml(projectTrackerLabel(project))}</span>
     </button>
-    ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
+    ${degraded ? `<span class="dot warn" title="${escapeHtml(projectConnectionLabel(copy, project))}"></span>` : ""}
     <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
@@ -2907,11 +2920,7 @@ function overviewProjectCard(copy: ShellCopy, project: Project): string {
   const counts = projectIssueCounts(project);
   const metric = (label: string, value: number) =>
     `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
-  const connection = project.connection.status === "ready"
-    ? copy.connectionReady
-    : project.connection.status === "unreachable"
-      ? copy.connectionUnavailable
-      : copy.authFailed;
+  const connection = projectConnectionLabel(copy, project);
   return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
     <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(projectTrackerLabel(project))}</small></span><em>${escapeHtml(connection)}</em></span>
     <span class="overview-project-metrics">
@@ -3843,6 +3852,12 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
   if (project.connection.status === "ready") {
     return "";
   }
+  if (project.tracker === "local-markdown") {
+    return `<div class="notice bad">
+      <b>${escapeHtml(copy.localTrackerUnavailable)}</b>
+      <p>${escapeHtml(project.connection.message)}</p>
+    </div>`;
+  }
   if (project.connection.status === "unreachable") {
     return `<div class="notice bad">
       <b>${escapeHtml(copy.connectionUnavailable)}</b>
@@ -4064,6 +4079,18 @@ function projectForm(copy: ShellCopy): string {
       </div>
     </form>
   </div>`;
+}
+
+function projectDraftFromForm(form: HTMLFormElement): ProjectDraft {
+  const value = (field: string, fallback: string): string =>
+    form.querySelector<HTMLInputElement>(`[data-field='${field}']`)?.value ?? fallback;
+  return {
+    ...formDraft,
+    name: value("name", formDraft.name),
+    localPath: value("localPath", formDraft.localPath),
+    githubHost: value("githubHost", formDraft.githubHost),
+    repository: value("repository", formDraft.repository),
+  };
 }
 
 function removeDialog(copy: ShellCopy, project: Project): string {
@@ -4767,6 +4794,7 @@ app.addEventListener("click", async (event) => {
     formDraft = {
       name: project.name,
       localPath: project.localPath,
+      tracker: project.tracker,
       githubHost: project.githubHost,
       repository: project.repository,
     };
@@ -5462,6 +5490,12 @@ app.addEventListener("submit", async (event) => {
   if (!form || !snapshot) return;
   event.preventDefault();
   if (projectOperation) return;
+  const draft = projectDraftFromForm(form);
+  const pathChanged = draft.localPath.trim() !== formDraft.localPath.trim();
+  formDraft = draft;
+  if (pathChanged && focusedHostIsLocal()) {
+    await inferFromLocalPath(draft.localPath);
+  }
   supersedeProjectInference();
   formError = "";
   projectOperation = "save";

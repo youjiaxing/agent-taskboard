@@ -307,6 +307,31 @@ fn inference_accepts_a_non_github_git_remote() {
 }
 
 #[test]
+fn inference_preserves_nested_self_hosted_git_namespaces() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://gitlab.example.com/acme/platform/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+
+    let inference = host
+        .handle(serde_json::json!({
+            "op": "inferProject",
+            "localPath": project_dir,
+        }))
+        .unwrap()
+        .inference
+        .unwrap();
+
+    assert_eq!(inference.github_host, "gitlab.example.com");
+    assert_eq!(inference.repository, "acme/platform/garden");
+}
+
+#[test]
 fn inference_marks_multiple_valid_git_remotes_as_ambiguous() {
     let tmp = tempfile::tempdir().unwrap();
     let project_dir = make_dir(tmp.path(), "work/garden");
@@ -360,6 +385,30 @@ fn local_markdown_project_reads_and_claims_issue_files() {
             .map(|columns| columns.frontier.len()),
         Some(1)
     );
+}
+
+#[test]
+fn local_markdown_failure_does_not_mention_github_credentials() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/missing-local-tracker");
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "missing-local-tracker",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+
+    match &out.snapshot.projects[0].connection {
+        ProjectConnection::Unreachable { message, .. } => {
+            assert!(message.contains("本地 Markdown tracker"), "{message}");
+            assert!(!message.contains("GitHub"), "{message}");
+        }
+        other => panic!("expected local tracker failure, got {other:?}"),
+    }
 }
 
 #[test]

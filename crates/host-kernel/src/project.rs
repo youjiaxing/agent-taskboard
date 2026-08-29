@@ -47,8 +47,8 @@ pub(crate) fn normalize_repository(raw: &str) -> Result<String, String> {
     if Path::new(trimmed).is_absolute() {
         return Ok(trimmed.to_string());
     }
-    if let Some((owner, repo)) = owner_repo(trimmed) {
-        return Ok(format!("{owner}/{repo}"));
+    if let Some(repository) = repository_path(trimmed) {
+        return Ok(repository);
     }
     Err("repository must be owner/repo".into())
 }
@@ -237,22 +237,22 @@ fn git_host_and_repo(host: &str, repo: &str) -> Option<(String, String)> {
         .next()
         .unwrap_or(host)
         .trim();
-    let (owner, name) = owner_repo(repo)?;
-    Some((host.to_ascii_lowercase(), format!("{owner}/{name}")))
+    Some((host.to_ascii_lowercase(), repository_path(repo)?))
 }
 
-fn owner_repo(raw: &str) -> Option<(&str, &str)> {
+fn repository_path(raw: &str) -> Option<String> {
     let raw = raw.trim().trim_start_matches('/');
-    let (owner, rest) = raw.split_once('/')?;
-    let repo = rest.split('/').next().unwrap_or(rest);
-    if owner.is_empty()
-        || repo.is_empty()
-        || owner.contains(' ')
-        || repo.contains(' ')
-        || owner.contains('\\')
-        || repo.contains('\\')
+    let segments: Vec<&str> = raw.split('/').collect();
+    if segments.len() < 2
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || segment.contains(' ')
+                || segment.contains('\\')
+                || *segment == "."
+                || *segment == ".."
+        })
     {
         return None;
     }
-    Some((owner, repo))
+    Some(segments.join("/"))
 }
