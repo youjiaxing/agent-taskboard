@@ -7,7 +7,7 @@ use std::time::Duration;
 use host_kernel::{
     bind_local_rpc, spawn_local_rpc, AuthFailureKind, BootRequest, CredentialSource, GitHubTracker,
     HostKernel, KernelError, MemoryTracker, ProjectConnection, ScriptedGitHub, SystemAppearance,
-    TrackerKind,
+    TrackerKind, TrackerRouter,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -22,6 +22,14 @@ fn boot_req(root: &Path) -> BootRequest {
 
 fn boot_memory(root: &Path) -> HostKernel {
     HostKernel::boot_with(boot_req(root), Arc::new(MemoryTracker::new())).unwrap()
+}
+
+fn boot_memory_with_local(root: &Path) -> HostKernel {
+    HostKernel::boot_with(
+        boot_req(root),
+        Arc::new(TrackerRouter::new(Arc::new(MemoryTracker::new()))),
+    )
+    .unwrap()
 }
 
 fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
@@ -233,6 +241,7 @@ fn inference_is_only_a_candidate_until_register() {
     assert_eq!(inference.name, "garden");
     assert_eq!(inference.github_host, "github.com");
     assert_eq!(inference.repository, "you/garden");
+    assert!(!inference.ambiguous);
     assert!(out.snapshot.projects.is_empty());
 
     let out = host
@@ -246,6 +255,160 @@ fn inference_is_only_a_candidate_until_register() {
         .unwrap();
     assert_eq!(out.snapshot.projects.len(), 1);
     assert_eq!(out.snapshot.projects[0].repository, "you/garden");
+}
+
+#[test]
+fn inference_prefers_local_markdown_tracker_over_git_remote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir_all(project_dir.join(".scratch/feature/issues")).unwrap();
+    std::fs::write(
+        project_dir.join(".scratch/feature/issues/01-foundation.md"),
+        "# 01 — Foundation\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = git@gitlab.example.com:acme/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+    let inference = host
+        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
+        .unwrap()
+        .inference
+        .unwrap();
+    assert_eq!(inference.tracker, TrackerKind::LocalMarkdown);
+    assert_eq!(inference.github_host, "local");
+    assert_eq!(inference.repository, project_dir.to_string_lossy());
+}
+
+#[test]
+fn inference_accepts_a_non_github_git_remote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = ssh://git@gitlab.example.com/acme/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+    let inference = host
+        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
+        .unwrap()
+        .inference
+        .unwrap();
+    assert_eq!(inference.tracker, TrackerKind::Github);
+    assert_eq!(inference.github_host, "gitlab.example.com");
+    assert_eq!(inference.repository, "acme/garden");
+    assert!(!inference.ambiguous);
+}
+
+#[test]
+fn inference_preserves_nested_self_hosted_git_namespaces() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://gitlab.example.com/acme/platform/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+
+    let inference = host
+        .handle(serde_json::json!({
+            "op": "inferProject",
+            "localPath": project_dir,
+        }))
+        .unwrap()
+        .inference
+        .unwrap();
+
+    assert_eq!(inference.github_host, "gitlab.example.com");
+    assert_eq!(inference.repository, "acme/platform/garden");
+}
+
+#[test]
+fn inference_marks_multiple_valid_git_remotes_as_ambiguous() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir(project_dir.join(".git")).unwrap();
+    std::fs::write(
+        project_dir.join(".git/config"),
+        "[remote \"origin\"]\n\turl = git@github.com:you/garden.git\n[remote \"mirror\"]\n\turl = ssh://git@gitlab.example.com/acme/garden.git\n",
+    )
+    .unwrap();
+    let mut host = boot_memory(tmp.path());
+
+    let inference = host
+        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
+        .unwrap()
+        .inference
+        .unwrap();
+
+    assert_eq!(inference.github_host, "github.com");
+    assert_eq!(inference.repository, "you/garden");
+    assert!(inference.ambiguous);
+}
+
+#[test]
+fn local_markdown_project_reads_and_claims_issue_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/garden");
+    let issue_dir = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issue_dir).unwrap();
+    std::fs::write(
+        issue_dir.join("01-foundation.md"),
+        "# 01 — Foundation\n\nStatus: ready-for-agent\n\nBlocked by: None\n\nBody\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "garden",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+    assert_eq!(out.snapshot.projects[0].tracker, TrackerKind::LocalMarkdown);
+    assert_eq!(out.snapshot.projects[0].issue_counts.total, 1);
+    assert_eq!(
+        out.snapshot
+            .board
+            .as_ref()
+            .and_then(|board| board.columns.as_ref())
+            .map(|columns| columns.frontier.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn local_markdown_failure_does_not_mention_github_credentials() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/missing-local-tracker");
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "missing-local-tracker",
+            "localPath": project_dir,
+            "githubHost": "local",
+            "repository": project_dir,
+        }))
+        .unwrap();
+
+    match &out.snapshot.projects[0].connection {
+        ProjectConnection::Unreachable { message, .. } => {
+            assert!(message.contains("本地 Markdown tracker"), "{message}");
+            assert!(!message.contains("GitHub"), "{message}");
+        }
+        other => panic!("expected local tracker failure, got {other:?}"),
+    }
 }
 
 #[test]

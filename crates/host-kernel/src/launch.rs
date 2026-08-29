@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use crate::agent::prepare_launch_env;
+use serde_json::Value;
+
+use crate::agent::{format_not_found, prepare_launch_env};
 use crate::agent::{
     intent_prefix, AgentField, AgentFieldKind, AgentPort, AgentSummary, IntentOption,
     PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
@@ -11,6 +16,21 @@ use crate::{Language, LaunchEnvPort};
 
 pub const INITIAL_INSTRUCTION: &str = "initial-instruction";
 pub const ISOLATION_FIELD: &str = "isolation";
+const AGENT_OPTIONS_CACHE_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DynamicAgentOptions {
+    models: Vec<String>,
+    effort_by_model: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedAgentOptions {
+    loaded_at: Instant,
+    options: DynamicAgentOptions,
+}
+
+static AGENT_OPTIONS_CACHE: OnceLock<Mutex<BTreeMap<String, CachedAgentOptions>>> = OnceLock::new();
 
 pub fn is_ephemeral_field(id: &str) -> bool {
     id == INITIAL_INSTRUCTION || id == ISOLATION_FIELD
@@ -307,29 +327,287 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn cached_agent_options(agent_id: &str) -> DynamicAgentOptions {
+    let cache = AGENT_OPTIONS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(entry) = cache
+        .lock()
+        .expect("agent options cache")
+        .get(agent_id)
+        .filter(|entry| entry.loaded_at.elapsed() < AGENT_OPTIONS_CACHE_TTL)
+        .cloned()
+    {
+        return entry.options;
+    }
+
+    let options = agent_options_from_disk(agent_id);
+    cache.lock().expect("agent options cache").insert(
+        agent_id.to_string(),
+        CachedAgentOptions {
+            loaded_at: Instant::now(),
+            options: options.clone(),
+        },
+    );
+    options
+}
+
+fn agent_options_from_disk(agent_id: &str) -> DynamicAgentOptions {
+    let Some(home) = crate::agent::home_dir() else {
+        return DynamicAgentOptions::default();
+    };
+    let paths = match agent_id {
+        crate::agent::GROK_BUILD_ID => vec![home.join(".grok/models_cache.json")],
+        crate::agent::CODEX_ID => vec![home.join(".codex/models_cache.json")],
+        crate::agent::CLAUDE_CODE_ID => vec![
+            home.join(".claude/models_cache.json"),
+            home.join(".claude/settings.json"),
+        ],
+        crate::agent::ANTIGRAVITY_ID => vec![
+            home.join(".agy/models_cache.json"),
+            home.join(".config/agy/models_cache.json"),
+        ],
+        _ => Vec::new(),
+    };
+    paths
+        .into_iter()
+        .find_map(|path| {
+            let text = fs::read_to_string(path).ok()?;
+            let value = serde_json::from_str::<Value>(&text).ok()?;
+            let options = parse_agent_options(agent_id, &value);
+            (options != DynamicAgentOptions::default()).then_some(options)
+        })
+        .unwrap_or_default()
+}
+
+fn parse_agent_options(agent_id: &str, value: &Value) -> DynamicAgentOptions {
+    if agent_id == crate::agent::CLAUDE_CODE_ID && value.get("env").is_some() {
+        return parse_claude_settings(value);
+    }
+
+    let mut parsed = DynamicAgentOptions::default();
+    match value.get("models") {
+        Some(Value::Array(models)) => {
+            for model in models {
+                let Some(object) = model.as_object() else {
+                    continue;
+                };
+                if object
+                    .get("visibility")
+                    .and_then(Value::as_str)
+                    .is_some_and(|visibility| visibility.eq_ignore_ascii_case("hidden"))
+                {
+                    continue;
+                }
+                let model_id = ["slug", "id", "model", "name"]
+                    .iter()
+                    .find_map(|key| object.get(*key).and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(ToOwned::to_owned);
+                let Some(model_id) = model_id else {
+                    continue;
+                };
+                parsed.models.push(model_id.clone());
+                let efforts = object
+                    .get("supported_reasoning_levels")
+                    .or_else(|| object.get("reasoning_efforts"))
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                item.get("effort")
+                                    .or_else(|| item.get("id"))
+                                    .or_else(|| item.get("value"))
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|effort| !effort.is_empty())
+                                    .map(ToOwned::to_owned)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if !efforts.is_empty() {
+                    parsed.effort_by_model.insert(model_id, efforts);
+                }
+            }
+        }
+        Some(Value::Object(models)) => {
+            for (key, model) in models {
+                let info = model.get("info").unwrap_or(model);
+                if info.get("hidden").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                let model_id = ["slug", "id", "model"]
+                    .iter()
+                    .find_map(|field| info.get(*field).and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or(key)
+                    .to_string();
+                parsed.models.push(model_id.clone());
+                let efforts = info
+                    .get("reasoning_efforts")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                item.get("id")
+                                    .or_else(|| item.get("value"))
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|effort| !effort.is_empty())
+                                    .map(ToOwned::to_owned)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if !efforts.is_empty() {
+                    parsed.effort_by_model.insert(model_id, efforts);
+                }
+            }
+        }
+        _ => {}
+    }
+    normalize_agent_options(&mut parsed);
+    parsed
+}
+
+fn parse_claude_settings(value: &Value) -> DynamicAgentOptions {
+    let mut parsed = DynamicAgentOptions::default();
+    if let Some(env) = value.get("env").and_then(Value::as_object) {
+        for (key, value) in env {
+            if key.ends_with("_MODEL_NAME") {
+                if let Some(model) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                {
+                    parsed.models.push(model.to_string());
+                }
+            }
+        }
+    }
+    if let Some(model) = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        parsed.models.push(model.to_string());
+    }
+    if let Some(effort) = value
+        .get("effortLevel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+    {
+        for model in parsed.models.clone() {
+            parsed
+                .effort_by_model
+                .insert(model, vec![effort.to_string()]);
+        }
+    }
+    normalize_agent_options(&mut parsed);
+    parsed
+}
+
+fn normalize_agent_options(options: &mut DynamicAgentOptions) {
+    options.models.sort();
+    options.models.dedup();
+    for efforts in options.effort_by_model.values_mut() {
+        efforts.sort_by_key(|effort| match effort.as_str() {
+            "low" => 0,
+            "medium" => 1,
+            "high" => 2,
+            "xhigh" => 3,
+            "max" => 4,
+            "ultra" => 5,
+            _ => 10,
+        });
+        efforts.dedup();
+    }
+}
+
+pub(crate) fn enrich_agent_fields(agent_id: &str, mut fields: Vec<AgentField>) -> Vec<AgentField> {
+    let options = cached_agent_options(agent_id);
+    apply_agent_options(&mut fields, &options);
+    fields
+}
+
+fn apply_agent_options(fields: &mut [AgentField], options: &DynamicAgentOptions) {
+    if options.models.is_empty() && options.effort_by_model.is_empty() {
+        return;
+    }
+    let mut effort_options = Vec::new();
+    for field in fields.iter_mut() {
+        if field.id == "model" && !options.models.is_empty() {
+            field.options = options.models.clone();
+            field.kind = AgentFieldKind::Select;
+        }
+        if field.id == "effort" && !options.effort_by_model.is_empty() {
+            field.option_groups = options.effort_by_model.clone();
+            for efforts in field.option_groups.values() {
+                for effort in efforts {
+                    if !effort_options.contains(effort) {
+                        effort_options.push(effort.clone());
+                    }
+                }
+            }
+            field.options = effort_options.clone();
+            field.kind = AgentFieldKind::Select;
+        }
+    }
+}
+
 pub fn summarize_agents(
     agents: &[std::sync::Arc<dyn AgentPort>],
     launch_env: &dyn LaunchEnvPort,
     cwd: &Path,
     language: Language,
 ) -> Vec<AgentSummary> {
-    let captured = launch_env.capture(cwd).ok();
+    let captured = launch_env.capture(cwd);
     agents
         .iter()
         .map(|agent| {
-            let installed = captured
-                .as_ref()
-                .map(|env| {
+            let (installed, unavailable_reason) = match &captured {
+                Ok(env) => {
                     let env =
                         prepare_launch_env(env.clone(), &[], &agent.known_install_locations());
-                    matches!(agent.probe(&env), ProbeResult::Found { .. })
-                })
-                .unwrap_or(false);
+                    match agent.probe(&env) {
+                        ProbeResult::Found { .. } => (true, None),
+                        ProbeResult::Missing {
+                            command,
+                            searched_path,
+                            known_locations,
+                        } => (
+                            false,
+                            Some(format_not_found(
+                                language,
+                                &command,
+                                &searched_path,
+                                &known_locations,
+                            )),
+                        ),
+                    }
+                }
+                Err(error) => (
+                    false,
+                    Some(match language {
+                        Language::ZhCn => format!("无法读取启动环境：{error}"),
+                        Language::En => format!("Could not read the launch environment: {error}"),
+                    }),
+                ),
+            };
             AgentSummary {
                 id: agent.id().to_string(),
                 name: agent.name().to_string(),
                 installed,
-                fields: localize_fields(agent.config_fields(), language),
+                unavailable_reason,
+                fields: localize_fields(
+                    enrich_agent_fields(agent.id(), agent.config_fields()),
+                    language,
+                ),
             }
         })
         .collect()
@@ -347,7 +625,11 @@ pub fn default_agent_id(
     if let Some(id) = requested.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
         return id.to_string();
     }
-    if let Some(id) = last_successful.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
+    if let Some(id) = last_successful.filter(|id| {
+        agents
+            .iter()
+            .any(|agent| agent.id == *id && agent.installed)
+    }) {
         return id.to_string();
     }
     agents
@@ -363,4 +645,73 @@ pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) 
     form.values = config.values.clone();
     form.opening_text = config.opening_text.clone();
     form.error = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_model_and_model_specific_effort_options_from_cli_cache() {
+        let catalog = serde_json::json!({
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"},
+                        {"effort": "high"},
+                        {"effort": "ultra"}
+                    ]
+                },
+                {
+                    "slug": "gpt-5.5",
+                    "supported_reasoning_levels": [
+                        {"effort": "medium"}
+                    ]
+                }
+            ]
+        });
+        let options = parse_agent_options(crate::agent::CODEX_ID, &catalog);
+        assert_eq!(options.models, vec!["gpt-5.5", "gpt-5.6-sol"]);
+        assert_eq!(
+            options.effort_by_model.get("gpt-5.6-sol"),
+            Some(&vec!["low".into(), "high".into(), "ultra".into()])
+        );
+    }
+
+    #[test]
+    fn enriches_model_and_effort_fields_while_preserving_manual_fallback() {
+        let mut fields = vec![
+            AgentField {
+                id: "model".into(),
+                label: "model".into(),
+                kind: AgentFieldKind::Text,
+                options: Vec::new(),
+                option_groups: BTreeMap::new(),
+                required: true,
+                folded: false,
+            },
+            AgentField {
+                id: "effort".into(),
+                label: "effort".into(),
+                kind: AgentFieldKind::Select,
+                options: vec!["low".into(), "medium".into(), "high".into()],
+                option_groups: BTreeMap::new(),
+                required: true,
+                folded: false,
+            },
+        ];
+        let catalog = serde_json::json!({
+            "models": {
+                "one": {"info": {"model": "model-a", "reasoning_efforts": [{"id": "low"}, {"id": "high"}]}},
+                "two": {"info": {"model": "model-b", "reasoning_efforts": [{"id": "medium"}]}}
+            }
+        });
+        let options = parse_agent_options(crate::agent::GROK_BUILD_ID, &catalog);
+        apply_agent_options(&mut fields, &options);
+        assert_eq!(fields[0].options, vec!["model-a", "model-b"]);
+        assert_eq!(fields[0].kind, AgentFieldKind::Select);
+        assert_eq!(fields[1].option_groups["model-a"], vec!["low", "high"]);
+        assert_eq!(fields[1].option_groups["model-b"], vec!["medium"]);
+    }
 }

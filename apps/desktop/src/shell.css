@@ -232,6 +232,10 @@ body {
   padding: 5px;
   z-index: 8;
 }
+.host-picker-row { display: flex; align-items: center; gap: 2px; }
+.host-picker-row .item { flex: 1; min-width: 0; }
+.host-forget { border: 0; background: transparent; color: var(--muted); padding: 4px 8px; font-size: 16px; }
+.host-forget:hover { color: var(--danger, #a33); background: var(--hover); }
 .project-menu button {
   display: block;
   width: 100%;
@@ -304,14 +308,14 @@ html[data-theme="plain-night"] button.danger.primary {
   background: var(--chip);
 }
 .board-shell {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 38%);
-  gap: 0;
+  display: block;
+  position: relative;
   min-height: 0;
   flex: 1;
 }
 .board-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
-.board-shell.issue-collapsed { grid-template-columns: 1fr; }
+.board-shell:not(.issue-collapsed) .board-main { width: 58%; }
+.board-shell.issue-collapsed { display: block; }
 .board-hint {
   display: flex;
   align-items: center;
@@ -333,6 +337,8 @@ html[data-theme="plain-night"] button.danger.primary {
   overflow: auto;
   background: var(--paper);
 }
+.board-shell:not(.issue-collapsed) .lanes { width: 100%; }
+.board-shell.issue-collapsed .lanes { width: 100%; }
 .lane {
   background: var(--paper-2);
   border: 0;
@@ -563,18 +569,28 @@ html[data-theme="plain-night"] button.danger.primary {
 .issue-title { font-size: 13px; margin-top: 2px; }
 .issue-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .issue-detail {
-  border: 0;
-  border-left: 1px solid var(--line);
-  border-radius: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px 0 0 12px;
   background: var(--paper);
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, calc(100% - 24px));
+  min-width: 360px;
+  max-width: 640px;
+  box-shadow: -12px 0 28px rgba(0, 0, 0, .12);
+  z-index: 12;
   padding: 0;
-  min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   animation: issue-detail-in 150ms ease-out;
 }
+.issue-card.recently-completed.subdued { opacity: .72; }
+.issue-card.recently-completed.subdued .issue-title { text-decoration: line-through; opacity: .68; }
+.issue-card.recently-completed.subdued .issue-card-actions { opacity: .78; }
 .detail-sticky {
   flex: 0 0 auto;
   padding: 12px 12px 10px;
@@ -633,8 +649,9 @@ html[data-theme="plain-night"] button.danger.primary {
 }
 .muted { color: var(--muted); font-size: 12px; }
 @media (max-width: 960px) {
-  .board-shell { grid-template-columns: minmax(0, 1fr) minmax(200px, 240px); }
-  .board-shell.issue-collapsed { grid-template-columns: 1fr; }
+  .board-shell { display: block; }
+  .board-shell:not(.issue-collapsed) .board-main { width: 58%; }
+  .board-shell.issue-collapsed { display: block; }
   .lanes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .issue-search { flex-wrap: wrap; }
   .issue-search input { flex-basis: 100%; }
@@ -663,6 +680,23 @@ html[data-theme="plain-night"] button.danger.primary {
   width: min(510px, calc(100% - 24px));
   max-height: calc(100vh - 80px);
   overflow: auto;
+}
+.launch-fields {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.agent-picks {
+  align-items: stretch;
+}
+.agent-choice {
+  display: grid;
+  gap: 6px;
+}
+.agent-choice .notice {
+  margin: 0;
+  white-space: pre-line;
 }
 .form-sheet input, .form-sheet textarea, .form-sheet select {
   width: 100%;
@@ -696,7 +730,9 @@ html[data-theme="plain-night"] button.danger.primary {
   margin: 4px 0 8px;
 }
 .form-sheet .actions { justify-content: flex-end; }
-.launch-sheet { width: min(560px, calc(100% - 24px)); }
+.launch-sheet { width: min(760px, calc(100% - 24px)); max-height: calc(100vh - 48px); }
+.field-choice-row { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 8px; align-items: start; }
+.field-choice-row > input, .field-choice-row > select { margin-top: 0; }
 .launch-agent {
   display: flex;
   align-items: center;
@@ -833,6 +869,14 @@ html[data-theme="plain-night"] button.danger.primary {
   padding: 0;
 }
 .lifted-run.issue-collapsed { grid-template-columns: 1fr; }
+.lifted-run .issue-detail {
+  position: static;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  border-radius: 0;
+  box-shadow: none;
+}
 .lifted-terminal {
   min-width: 0;
   min-height: 0;
@@ -1235,6 +1279,7 @@ html[data-theme="plain-night"] button.danger.primary {
   .board-shell { display: block; }
   .board-main { gap: 10px; }
   .lanes { display: flex; flex-direction: column; gap: 10px; padding: 0; overflow: visible; }
+  .board-shell:not(.issue-collapsed) .lanes, .board-shell.issue-collapsed .lanes { width: 100%; }
   .lane { min-height: 0; }
   .lane[data-lane="inProgress"] { order: 0; }
   .lane[data-lane="frontier"] { order: 1; }
@@ -1246,12 +1291,13 @@ html[data-theme="plain-night"] button.danger.primary {
   button[data-act="view-changes"] { display: none; }
   .mobile-nav {
     display: grid;
+    position: relative;
     grid-template-columns: repeat(3, 1fr);
     gap: 6px;
     padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
     background: var(--paper);
-    z-index: 10;
+    z-index: 100;
   }
   .mobile-nav button { min-height: 38px; }
   .mobile-scope-sheet { width: min(100%, 480px); max-height: 82vh; overflow: auto; }
@@ -1268,7 +1314,7 @@ html[data-theme="plain-night"] button.danger.primary {
   }
   .mobile-scope-project.active { background: var(--sel); }
   .mobile-issue-view, .mobile-run-view { width: 100%; min-height: 0; height: 100%; padding: 12px; }
-  .mobile-issue-view .issue-detail { display: flex; height: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+  .mobile-issue-view .issue-detail { display: flex; position: relative; z-index: 1; height: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
   .mobile-issue-view .detail-scroll { overflow: auto; }
   .mobile-run-view { display: flex; flex-direction: column; gap: 8px; }
   .mobile-output-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; }

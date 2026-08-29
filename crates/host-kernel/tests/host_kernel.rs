@@ -1128,6 +1128,115 @@ fn dependency_graph_centering_and_expansion_are_forwarded_to_a_remote_host() {
 }
 
 #[test]
+fn remote_host_snapshots_honor_each_clients_explicit_issue_navigation() {
+    let host_dir = tempfile::tempdir().unwrap();
+    let client_dir = tempfile::tempdir().unwrap();
+    let project_dir = host_dir.path().join("work/garden");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "first remote issue"));
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "second remote issue"));
+    let mut host_req = boot_req(host_dir.path());
+    host_req.host_display_name = "Mini".into();
+    let mut host_kernel = HostKernel::boot_with(host_req, tracker).unwrap();
+    let project_id = host_kernel
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "garden",
+            "localPath": project_dir,
+            "repository": "you/garden",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id;
+    let host = Arc::new(Mutex::new(host_kernel));
+    let server = LoopbackServer::attach(Arc::clone(&host), 0, |_| {}).unwrap();
+    let address = server.protocol_url().trim_end_matches('/').to_string();
+    let code = host
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+
+    let mut client = HostKernel::boot(boot_req(client_dir.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": address,
+            "code": code,
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+
+    let snapshot_for = |client: &mut HostKernel, client_id: &str, issue_id: &str| {
+        client
+            .handle(serde_json::json!({
+                "op": "snapshot",
+                "clientId": client_id,
+                "clientView": {
+                    "focusedHostId": remote_id,
+                    "focusedProjectId": project_id,
+                    "selectedIssueId": issue_id,
+                }
+            }))
+            .unwrap()
+            .snapshot
+    };
+
+    let first = snapshot_for(&mut client, "client-a", "you/garden#1");
+    assert_eq!(first.focused_host_id, remote_id);
+    assert_eq!(
+        first.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/garden#1"
+    );
+
+    let second = snapshot_for(&mut client, "client-b", "you/garden#2");
+    assert_eq!(
+        second.board.as_ref().unwrap().selected.as_ref().unwrap().id,
+        "you/garden#2"
+    );
+
+    let first_again = client
+        .handle(serde_json::json!({
+            "op": "setTheme",
+            "theme": "plain-paper",
+            "clientId": "client-a",
+            "clientView": {
+                "focusedHostId": remote_id,
+                "focusedProjectId": project_id,
+                "selectedIssueId": "you/garden#1",
+            }
+        }))
+        .unwrap()
+        .snapshot;
+    assert_eq!(
+        first_again
+            .board
+            .as_ref()
+            .unwrap()
+            .selected
+            .as_ref()
+            .unwrap()
+            .id,
+        "you/garden#1"
+    );
+}
+
+#[test]
 fn closing_the_client_does_not_stop_the_remote_host() {
     let host_dir = tempfile::tempdir().unwrap();
     let client_dir = tempfile::tempdir().unwrap();

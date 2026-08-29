@@ -45,15 +45,40 @@ if (state === "empty-host") {
   } else if (state === "offline") {
     await page.waitForSelector('.refresh-bar[data-kind="offline"]');
     await page.waitForSelector(".lanes");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("检查运行 Host 的电脑网络") || !text.includes("刷新")) {
+      throw new Error(`offline state must provide a concrete manual recovery step: ${text}`);
+    }
   } else if (state === "rate-limited") {
     await page.waitForSelector('.refresh-bar[data-kind="rate-limited"]');
     await page.waitForSelector(".lanes");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("大约可再刷新") || !text.includes("刷新")) {
+      throw new Error(`rate-limited state must show retry timing and the retry action: ${text}`);
+    }
   } else if (state === "auth-failed") {
     await page.waitForSelector('.refresh-bar[data-kind="auth-failed"]');
     await page.waitForSelector(".notice.bad");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("更新 GitHub 凭据") || !text.includes("刷新")) {
+      throw new Error(`auth failure must explain where to repair credentials and how to retry: ${text}`);
+    }
   } else {
     throw new Error(`unknown shell edge state ${state}`);
   }
+}
+
+if (["offline", "rate-limited", "auth-failed"].includes(state)) {
+  const refreshRequest = page.waitForRequest((request) => {
+    if (!request.url().includes("/rpc")) return false;
+    try {
+      return request.postDataJSON()?.op === "refresh";
+    } catch {
+      return false;
+    }
+  });
+  await page.click('.refresh-bar button[data-act="refresh"]');
+  await refreshRequest;
 }
 
 await assertShellRegionsDoNotOverlap(page);

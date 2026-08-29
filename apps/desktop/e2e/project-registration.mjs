@@ -50,21 +50,16 @@ if (await page.locator("form[data-form='project'] button[data-act='close-form']"
 if (await page.locator("#project-path").isDisabled()) {
   throw new Error("inference must not disable changing the path");
 }
+await page.fill("#project-host", "");
+await page.fill("#project-repo", "");
 await page.fill("#project-path", firstProjectDir);
 await page.locator("#project-path").dispatchEvent("change");
-await page.waitForSelector("[data-inference='candidate']:has-text('you/first')");
+await page.waitForFunction(() => document.querySelector("#project-host")?.value === "github.com" && document.querySelector("#project-repo")?.value === "you/first");
 if ((await page.inputValue("#project-name")) !== "first") {
   throw new Error("changing the path should replace the previous directory-derived display name");
 }
-if (await page.locator("[data-inference='candidate']:has-text('you/stale')").count()) {
-  throw new Error("a superseded inference result must not replace the current candidate");
-}
-if ((await page.inputValue("#project-host")) !== "manual.example.com" || (await page.inputValue("#project-repo")) !== "manual/kept") {
-  throw new Error("automatic inference must remain a candidate until the user confirms it");
-}
-await page.click("button[data-act='apply-infer']");
-if ((await page.inputValue("#project-host")) !== "github.com" || (await page.inputValue("#project-repo")) !== "you/first") {
-  throw new Error("confirming the inference candidate should adopt its GitHub connection");
+if (await page.locator("[data-inference='candidate']").count()) {
+  throw new Error("a unique Git remote should be adopted automatically instead of showing a confirmation candidate");
 }
 await page.click("form[data-form='project'] button[type='submit']");
 await page.waitForSelector('[data-lane="frontier"] .issue-card:has-text("first tracker issue")');

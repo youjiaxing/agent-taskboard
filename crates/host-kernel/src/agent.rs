@@ -47,6 +47,8 @@ pub struct AgentField {
     pub kind: AgentFieldKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub option_groups: BTreeMap<String, Vec<String>>,
     pub required: bool,
     pub folded: bool,
 }
@@ -67,6 +69,8 @@ pub struct AgentSummary {
     pub id: String,
     pub name: String,
     pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
     pub fields: Vec<AgentField>,
 }
 
@@ -622,6 +626,7 @@ fn text_field(id: &str, label: &str, required: bool, folded: bool) -> AgentField
         label: label.into(),
         kind: AgentFieldKind::Text,
         options: Vec::new(),
+        option_groups: BTreeMap::new(),
         required,
         folded,
     }
@@ -639,6 +644,7 @@ fn select_field(
         label: label.into(),
         kind: AgentFieldKind::Select,
         options: options.iter().map(|option| (*option).to_string()).collect(),
+        option_groups: BTreeMap::new(),
         required,
         folded,
     }
@@ -650,6 +656,7 @@ fn boolean_field(id: &str, label: &str, folded: bool) -> AgentField {
         label: label.into(),
         kind: AgentFieldKind::Boolean,
         options: Vec::new(),
+        option_groups: BTreeMap::new(),
         required: false,
         folded,
     }
@@ -661,6 +668,7 @@ fn multiline_field(id: &str, label: &str) -> AgentField {
         label: label.into(),
         kind: AgentFieldKind::Multiline,
         options: Vec::new(),
+        option_groups: BTreeMap::new(),
         required: false,
         folded: false,
     }

@@ -1,13 +1,145 @@
 mod common;
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, LoopbackServer,
-    MemoryTracker, RefreshStatus, SystemAppearance, DEFAULT_REFRESH_INTERVAL_MS,
+    BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, KernelPorts,
+    LoopbackServer, MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker,
+    ProbeContext, ProbeOutcome, RefreshStatus, RunStatus, SystemAppearance, TrackerReadError,
+    TrackerReadOutcome, TrackerSeam, TrackerWriteError, TrackerWriteOp,
+    DEFAULT_REFRESH_INTERVAL_MS, PENDING_CONFIRM_MS,
 };
+
+struct BlockingTracker {
+    inner: SeamTracker,
+    gate: Mutex<(Option<BlockedCall>, bool)>,
+    changed: Condvar,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockedCall {
+    Read,
+    Probe,
+    Write,
+}
+
+impl BlockingTracker {
+    fn new() -> Self {
+        Self {
+            inner: SeamTracker::new(),
+            gate: Mutex::new((None, false)),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn add_issue(&self, issue: IssueRecord) {
+        self.inner.add_issue(issue);
+    }
+
+    fn set_issues(&self, repository: &str, issues: Vec<IssueRecord>) {
+        self.inner.set_issues(repository, issues);
+    }
+
+    fn block_reads(&self) {
+        self.block(BlockedCall::Read);
+    }
+
+    fn block_probes(&self) {
+        self.block(BlockedCall::Probe);
+    }
+
+    fn block_writes(&self) {
+        self.block(BlockedCall::Write);
+    }
+
+    fn block(&self, call: BlockedCall) {
+        *self.gate.lock().unwrap() = (Some(call), false);
+    }
+
+    fn wait_until_blocked(&self) {
+        let mut gate = self.gate.lock().unwrap();
+        while !gate.1 {
+            gate = self.changed.wait(gate).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        let mut gate = self.gate.lock().unwrap();
+        gate.0 = None;
+        self.changed.notify_all();
+    }
+
+    fn wait_for_release(&self, call: BlockedCall) {
+        let mut gate = self.gate.lock().unwrap();
+        if gate.0 == Some(call) {
+            gate.1 = true;
+            self.changed.notify_all();
+            while gate.0 == Some(call) {
+                gate = self.changed.wait(gate).unwrap();
+            }
+        }
+    }
+}
+
+impl TrackerSeam for BlockingTracker {
+    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
+        self.wait_for_release(BlockedCall::Probe);
+        self.inner.probe(ctx)
+    }
+
+    fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
+        self.wait_for_release(BlockedCall::Read);
+        self.inner.read_all(ctx)
+    }
+
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<host_kernel::IssueDocument, TrackerReadError> {
+        self.wait_for_release(BlockedCall::Read);
+        self.inner.read_issue_document(ctx, issue_id)
+    }
+
+    fn write_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: Option<&str>,
+        op: &TrackerWriteOp,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        self.wait_for_release(BlockedCall::Write);
+        self.inner.write_issue(ctx, issue_id, op)
+    }
+}
+
+fn post_rpc(url: &str, body: &str) -> String {
+    let address = url.trim_start_matches("http://");
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /rpc HTTP/1.1\r\nHost: {address}\r\nOrigin: {url}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn rpc_json(response: &str) -> serde_json::Value {
+    let (_, body) = response
+        .split_once("\r\n\r\n")
+        .expect("RPC response must contain a body");
+    serde_json::from_str(body).expect("RPC response body must be JSON")
+}
 
 fn boot_req(root: &Path) -> BootRequest {
     BootRequest {
@@ -59,6 +191,874 @@ fn frontier_ids(host: &HostKernel) -> Vec<String> {
 
 fn refresh_status(host: &HostKernel) -> RefreshStatus {
     host.snapshot().board.unwrap().refresh
+}
+
+fn boot_with_runs(
+    root: &Path,
+    tracker: Arc<BlockingTracker>,
+) -> (HostKernel, Arc<MemorySessionFactory>) {
+    let sessions = MemorySessionFactory::new();
+    let host = HostKernel::boot_with_ports(
+        boot_req(root),
+        KernelPorts {
+            tracker,
+            agents: vec![Arc::new(MemoryAgent::installed_grok())],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")),
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    (host, sessions)
+}
+
+fn start_bound_run(host: &mut HostKernel, project_id: &str, issue_id: &str) -> String {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "normal",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": issue_id,
+    }))
+    .unwrap()
+    .snapshot
+    .runs
+    .iter()
+    .rev()
+    .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.status == RunStatus::Running)
+    .expect("bound Run must start")
+    .id
+    .clone()
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_tracker_refresh_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker.clone()).unwrap();
+    register(&mut host, &dir, "garden", "you/garden");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    tracker.block_reads();
+    let refresh_url = url.clone();
+    let refresh = std::thread::spawn(move || post_rpc(&refresh_url, r#"{"op":"refresh"}"#));
+    tracker.wait_until_blocked();
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = url.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(&snapshot_url, r#"{"op":"snapshot"}"#);
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    let _ = refresh.join();
+    let (elapsed, response) = responsive.expect("snapshot exceeded the 250ms navigation gate");
+    assert!(
+        elapsed <= Duration::from_millis(250),
+        "snapshot took {elapsed:?}"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_issue_document_load_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker.clone()).unwrap();
+    register(&mut host, &dir, "garden", "you/garden");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    tracker.block_reads();
+    let document_url = url.clone();
+    let document = std::thread::spawn(move || {
+        post_rpc(
+            &document_url,
+            r#"{"op":"loadIssueDocument","issueId":"you/garden#1"}"#,
+        )
+    });
+    tracker.wait_until_blocked();
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = url.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(&snapshot_url, r#"{"op":"snapshot"}"#);
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    let _ = document.join();
+    let (elapsed, response) = responsive.expect("snapshot exceeded the 250ms document-load gate");
+    assert!(
+        elapsed <= Duration::from_millis(250),
+        "snapshot took {elapsed:?}"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_action_refresh_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker.clone()).unwrap();
+    register(&mut host, &dir, "garden", "you/garden");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    tracker.block_reads();
+    let claim_url = url.clone();
+    let claim = std::thread::spawn(move || {
+        post_rpc(
+            &claim_url,
+            r#"{"op":"claimIssue","issueId":"you/garden#1"}"#,
+        )
+    });
+    tracker.wait_until_blocked();
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = url.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(&snapshot_url, r#"{"op":"snapshot"}"#);
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    let claim_response = claim.join().unwrap();
+    let (elapsed, response) = responsive.expect("snapshot exceeded the 250ms action gate");
+    assert!(
+        elapsed <= Duration::from_millis(250),
+        "snapshot took {elapsed:?}"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        claim_response.starts_with("HTTP/1.1 200"),
+        "{claim_response}"
+    );
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_run_exit_refresh_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "running"));
+    let (mut host, sessions) = boot_with_runs(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    start_bound_run(&mut host, &project_id, "you/garden#1");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    sessions.last_session().unwrap().finish(0);
+    tracker.block_reads();
+    let exit_url = url.clone();
+    let exit_observer = std::thread::spawn(move || post_rpc(&exit_url, r#"{"op":"snapshot"}"#));
+    tracker.wait_until_blocked();
+
+    let received = begin_snapshot_measurement(&url);
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    assert!(exit_observer.join().unwrap().starts_with("HTTP/1.1 200"));
+    assert_navigation_gate_result(responsive, "Run-exit refresh");
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_pending_auto_advance_refresh_is_blocked() {
+    const T0: u64 = 1_000_000;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 1, "first").label("ready-for-agent"),
+            IssueRecord::open("you/garden", 2, "second").label("ready-for-agent"),
+        ],
+    );
+    let (mut host, sessions) = boot_with_runs(tmp.path(), Arc::clone(&tracker));
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": T0 }))
+        .unwrap();
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    host.handle(serde_json::json!({
+        "op": "setHostAutoAdvance",
+        "enabled": true,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setProjectAutoAdvance",
+        "projectId": project_id,
+        "enabled": true,
+    }))
+    .unwrap();
+    start_bound_run(&mut host, &project_id, "you/garden#1");
+    sessions.last_session().unwrap().set_session_end(true);
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 1, "first")
+                .closed_at("2026-08-29T00:00:00Z")
+                .assignee("me")
+                .label("ready-for-agent"),
+            IssueRecord::open("you/garden", 2, "second").label("ready-for-agent"),
+        ],
+    );
+    sessions.last_session().unwrap().finish(0);
+    host.handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    assert!(host.snapshot().pending_confirmation.is_some());
+    host.handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
+
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+    tracker.block_reads();
+    let tick_url = url.clone();
+    let tick = std::thread::spawn(move || {
+        post_rpc(
+            &tick_url,
+            &serde_json::json!({
+                "op": "tick",
+                "nowMs": T0 + PENDING_CONFIRM_MS,
+            })
+            .to_string(),
+        )
+    });
+    tracker.wait_until_blocked();
+
+    let received = begin_snapshot_measurement(&url);
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    assert!(tick.join().unwrap().starts_with("HTTP/1.1 200"));
+    assert_navigation_gate_result(responsive, "pending auto-advance refresh");
+    let mut snapshot = kernel.lock().unwrap().snapshot();
+    for _ in 0..100 {
+        if snapshot.pending_confirmation.is_none() && sessions.spawn_count() == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        snapshot = kernel.lock().unwrap().snapshot();
+    }
+    assert!(snapshot.pending_confirmation.is_none());
+    assert_eq!(sessions.spawn_count(), 2);
+    assert!(snapshot.runs.iter().any(|run| {
+        run.issue_id.as_deref() == Some("you/garden#2") && run.status == RunStatus::Running
+    }));
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_pending_auto_advance_claim_is_blocked() {
+    const T0: u64 = 1_000_000;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 1, "first").label("ready-for-agent"),
+            IssueRecord::open("you/garden", 2, "second").label("ready-for-agent"),
+        ],
+    );
+    let (mut host, sessions) = boot_with_runs(tmp.path(), Arc::clone(&tracker));
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": T0 }))
+        .unwrap();
+    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    host.handle(serde_json::json!({
+        "op": "setHostAutoAdvance",
+        "enabled": true,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setProjectAutoAdvance",
+        "projectId": project_id,
+        "enabled": true,
+    }))
+    .unwrap();
+    start_bound_run(&mut host, &project_id, "you/garden#1");
+    sessions.last_session().unwrap().set_session_end(true);
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 1, "first")
+                .closed_at("2026-08-29T00:00:00Z")
+                .assignee("me")
+                .label("ready-for-agent"),
+            IssueRecord::open("you/garden", 2, "second").label("ready-for-agent"),
+        ],
+    );
+    sessions.last_session().unwrap().finish(0);
+    host.handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    assert!(host.snapshot().pending_confirmation.is_some());
+    host.handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
+
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+    tracker.block_writes();
+    let tick_url = url.clone();
+    let tick = std::thread::spawn(move || {
+        post_rpc(
+            &tick_url,
+            &serde_json::json!({
+                "op": "tick",
+                "nowMs": T0 + PENDING_CONFIRM_MS,
+            })
+            .to_string(),
+        )
+    });
+    tracker.wait_until_blocked();
+
+    let received = begin_snapshot_measurement(&url);
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    assert!(tick.join().unwrap().starts_with("HTTP/1.1 200"));
+    assert_navigation_gate_result(responsive, "pending auto-advance Claim");
+    let mut snapshot = kernel.lock().unwrap().snapshot();
+    for _ in 0..100 {
+        if snapshot.pending_confirmation.is_none() && sessions.spawn_count() == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        snapshot = kernel.lock().unwrap().snapshot();
+    }
+    assert!(snapshot.pending_confirmation.is_none());
+    assert_eq!(sessions.spawn_count(), 2);
+    assert!(snapshot.runs.iter().any(|run| {
+        run.issue_id.as_deref() == Some("you/garden#2") && run.status == RunStatus::Running
+    }));
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_remote_rpc_is_blocked() {
+    let remote_root = tempfile::tempdir().unwrap();
+    let remote_dir = make_dir(remote_root.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "remote ready"));
+    let mut remote_host =
+        HostKernel::boot_with(boot_req(remote_root.path()), tracker.clone()).unwrap();
+    let project_id = register(&mut remote_host, &remote_dir, "garden", "you/garden");
+    let remote_kernel = Arc::new(Mutex::new(remote_host));
+    let remote_server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&remote_kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let remote_url = remote_server.protocol_url().to_string();
+    let pairing_code = remote_kernel
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": remote_url.trim_end_matches('/'),
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+
+    let client_root = tempfile::tempdir().unwrap();
+    let mut client = HostKernel::boot(boot_req(client_root.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": remote_url.trim_end_matches('/'),
+            "code": pairing_code,
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    let client_kernel = Arc::new(Mutex::new(client));
+    let client_server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&client_kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let client_url = client_server.protocol_url().to_string();
+
+    tracker.block_reads();
+    let claim_url = client_url.clone();
+    let claim = std::thread::spawn(move || {
+        post_rpc(
+            &claim_url,
+            &serde_json::json!({
+                "op": "claimIssue",
+                "issueId": "you/garden#1",
+                "clientId": "remote-client",
+                "clientView": {
+                    "focusedHostId": remote_id,
+                    "focusedProjectId": project_id,
+                    "selectedIssueId": "you/garden#1",
+                },
+            })
+            .to_string(),
+        )
+    });
+    tracker.wait_until_blocked();
+
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = client_url.clone();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(
+            &snapshot_url,
+            r#"{"op":"snapshot","clientId":"local-client","clientView":{"focusedHostId":"local"}}"#,
+        );
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    tracker.release();
+    let claim_response = claim.join().unwrap();
+    let (elapsed, response) = responsive.expect("snapshot exceeded the 250ms remote-RPC gate");
+    assert!(
+        elapsed <= Duration::from_millis(250),
+        "snapshot took {elapsed:?}"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        claim_response.starts_with("HTTP/1.1 200"),
+        "{claim_response}"
+    );
+}
+
+#[test]
+fn autonomous_host_tick_does_not_follow_a_persisted_remote_focus() {
+    let remote = TcpListener::bind("127.0.0.1:0").unwrap();
+    let remote_addr = remote.local_addr().unwrap();
+    let remote_address = format!("http://{remote_addr}");
+    let (third_request_tx, third_request_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let remote_thread = std::thread::spawn(move || {
+        let responses = [
+            serde_json::json!({
+                "pairing": {
+                    "hostId": "slow-remote",
+                    "displayName": "Slow Remote",
+                    "token": "paired-token",
+                }
+            }),
+            serde_json::json!({
+                "process": "keep-running",
+                "snapshot": {
+                    "projects": [],
+                    "emptyActions": [],
+                    "focusedProjectId": "",
+                    "board": null,
+                    "runs": [],
+                    "focusedRunId": "",
+                    "workspaceView": "project",
+                    "quitOffer": null,
+                    "launchForm": null,
+                    "usageOpen": false,
+                }
+            }),
+        ];
+        for body in responses {
+            let (mut stream, _) = remote.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = body.to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            )
+            .unwrap();
+        }
+
+        let (mut stream, _) = remote.accept().unwrap();
+        third_request_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        let body = serde_json::json!({
+            "process": "keep-running",
+            "snapshot": {
+                "projects": [],
+                "emptyActions": [],
+                "focusedProjectId": "",
+                "board": null,
+                "runs": [],
+                "focusedRunId": "",
+                "workspaceView": "project",
+            }
+        })
+        .to_string();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut client = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": remote_address,
+            "code": "123456",
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    client
+        .handle(serde_json::json!({
+            "op": "focusHost",
+            "hostId": remote_id,
+        }))
+        .unwrap();
+
+    let kernel = Arc::new(Mutex::new(client));
+    let server = LoopbackServer::attach(Arc::clone(&kernel), 0, |_| {}).unwrap();
+    std::thread::sleep(Duration::from_millis(1_250));
+    let contacted_remote = third_request_rx.try_recv().is_ok();
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = server.protocol_url().to_string();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(
+            &snapshot_url,
+            r#"{"op":"snapshot","clientId":"local-check","clientView":{"focusedHostId":"local"}}"#,
+        );
+        let _ = sent.send((started.elapsed(), response));
+    });
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+
+    if !contacted_remote {
+        let _ = TcpStream::connect(remote_addr);
+    }
+    release_tx.send(()).unwrap();
+    remote_thread.join().unwrap();
+    assert!(
+        !contacted_remote,
+        "the autonomous Host tick must not inherit a Client's remote focus"
+    );
+    assert_navigation_gate_result(responsive, "autonomous Host tick with remote focus");
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_pairing_rpc_is_blocked() {
+    let remote = TcpListener::bind("127.0.0.1:0").unwrap();
+    let remote_address = format!("http://{}", remote.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let remote_thread = std::thread::spawn(move || {
+        let (mut stream, _) = remote.accept().unwrap();
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).unwrap();
+        assert!(
+            String::from_utf8_lossy(&request[..read]).contains("redeemPairing"),
+            "pairing request must reach the remote Host"
+        );
+        accepted_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        let body = serde_json::json!({
+            "pairing": {
+                "hostId": "remote-test",
+                "displayName": "Remote Test",
+                "token": "paired-token",
+            }
+        })
+        .to_string();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        )
+        .unwrap();
+    });
+
+    let tmp = tempfile::tempdir().unwrap();
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+    let pair_url = url.clone();
+    let pairing = std::thread::spawn(move || {
+        post_rpc(
+            &pair_url,
+            &serde_json::json!({
+                "op": "pairRemoteHost",
+                "address": remote_address,
+                "code": "123456",
+            })
+            .to_string(),
+        )
+    });
+    accepted_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    let received = begin_snapshot_measurement(&url);
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    release_tx.send(()).unwrap();
+    remote_thread.join().unwrap();
+    assert!(pairing.join().unwrap().starts_with("HTTP/1.1 200"));
+    assert_navigation_gate_result(responsive, "pairing RPC");
+}
+
+#[test]
+fn background_issue_document_load_uses_the_explicit_project_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first_dir = make_dir(tmp.path(), "work/first");
+    let second_dir = make_dir(tmp.path(), "work/second");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "shared issue"));
+    tracker.set_issue_body("you/garden#1", "Loaded for the requested Project.");
+    let mut host = boot(tmp.path(), tracker);
+    let first_project = register(&mut host, &first_dir, "first", "you/garden");
+    let second_project = register(&mut host, &second_dir, "second", "you/garden");
+    assert_ne!(first_project, second_project);
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+    let view = serde_json::json!({
+        "clientId": "client-b",
+        "focusedHostId": "local",
+        "focusedProjectId": second_project,
+        "selectedIssueId": "you/garden#1",
+    });
+    let load = post_rpc(
+        &url,
+        &serde_json::json!({
+            "op": "loadIssueDocument",
+            "issueId": "you/garden#1",
+            "clientView": view,
+        })
+        .to_string(),
+    );
+    assert!(load.starts_with("HTTP/1.1 200"), "{load}");
+
+    let mut selected_document = serde_json::Value::Null;
+    for _ in 0..50 {
+        let response = post_rpc(
+            &url,
+            &serde_json::json!({
+                "op": "snapshot",
+                "clientView": view,
+            })
+            .to_string(),
+        );
+        let json = rpc_json(&response);
+        selected_document = json["snapshot"]["board"]["selected"]["document"].clone();
+        if selected_document["kind"] == "ready" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(selected_document["kind"], "ready", "{selected_document}");
+    assert_eq!(
+        selected_document["body"],
+        "Loaded for the requested Project."
+    );
+
+    let first = rpc_json(&post_rpc(
+        &url,
+        &serde_json::json!({
+            "op": "snapshot",
+            "clientView": {
+                "clientId": "client-a",
+                "focusedHostId": "local",
+                "focusedProjectId": first_project,
+                "selectedIssueId": "you/garden#1",
+            },
+        })
+        .to_string(),
+    ));
+    assert_eq!(
+        first["snapshot"]["board"]["selected"]["document"]["kind"],
+        "unloaded"
+    );
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_tracker_probe_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first_dir = make_dir(tmp.path(), "work/garden");
+    let second_dir = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker.clone()).unwrap();
+    register(&mut host, &first_dir, "garden", "you/garden");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    tracker.block_probes();
+    let register_url = url.clone();
+    let register = std::thread::spawn(move || {
+        post_rpc(
+            &register_url,
+            &serde_json::json!({
+                "op": "registerProject",
+                "name": "notes",
+                "localPath": second_dir,
+                "repository": "you/notes",
+            })
+            .to_string(),
+        )
+    });
+    tracker.wait_until_blocked();
+
+    assert_snapshot_within_navigation_gate(&url, "probe");
+    tracker.release();
+    assert!(register.join().unwrap().starts_with("HTTP/1.1 200"));
+}
+
+#[test]
+fn loopback_snapshot_stays_responsive_while_tracker_write_is_blocked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(BlockingTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker.clone()).unwrap();
+    register(&mut host, &dir, "garden", "you/garden");
+    let kernel = Arc::new(Mutex::new(host));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let url = server.protocol_url().to_string();
+
+    tracker.block_writes();
+    let claim_url = url.clone();
+    let claim = std::thread::spawn(move || {
+        post_rpc(
+            &claim_url,
+            r#"{"op":"claimIssue","issueId":"you/garden#1"}"#,
+        )
+    });
+    tracker.wait_until_blocked();
+
+    assert_snapshot_within_navigation_gate(&url, "write");
+    tracker.release();
+    assert!(claim.join().unwrap().starts_with("HTTP/1.1 200"));
+}
+
+fn assert_snapshot_within_navigation_gate(url: &str, blocked_call: &str) {
+    let received = begin_snapshot_measurement(url);
+    let responsive = received.recv_timeout(Duration::from_millis(250));
+    assert_navigation_gate_result(responsive, blocked_call);
+}
+
+fn begin_snapshot_measurement(url: &str) -> std::sync::mpsc::Receiver<(Duration, String)> {
+    let (sent, received) = std::sync::mpsc::channel();
+    let snapshot_url = url.to_string();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let response = post_rpc(&snapshot_url, r#"{"op":"snapshot"}"#);
+        let _ = sent.send((started.elapsed(), response));
+    });
+    received
+}
+
+fn assert_navigation_gate_result(
+    responsive: Result<(Duration, String), std::sync::mpsc::RecvTimeoutError>,
+    blocked_call: &str,
+) {
+    let (elapsed, response) =
+        responsive.unwrap_or_else(|_| panic!("snapshot exceeded the 250ms {blocked_call} gate"));
+    assert!(
+        elapsed <= Duration::from_millis(250),
+        "snapshot took {elapsed:?} while {blocked_call} was blocked"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 }
 
 fn snapshot_path(host: &HostKernel, project_id: &str) -> std::path::PathBuf {
@@ -218,7 +1218,7 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
 }
 
 #[test]
-fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
+fn visible_project_polls_every_five_minutes_and_hidden_does_not() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -246,7 +1246,10 @@ fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
     match refresh_status(&host) {
         RefreshStatus::Ready {
             next_refresh_in_ms, ..
-        } => assert_eq!(next_refresh_in_ms, Some(30_000)),
+        } => assert_eq!(
+            next_refresh_in_ms,
+            Some(DEFAULT_REFRESH_INTERVAL_MS - 30_000)
+        ),
         other => panic!("expected countdown, got {other:?}"),
     }
 
@@ -491,7 +1494,7 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), after_limit);
@@ -740,7 +1743,7 @@ fn run_end_refreshes_even_when_rate_limited() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(

@@ -216,14 +216,23 @@ fn spawn_local_rpc_inner(
                     if tick_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let should_exit = {
+                    let (should_exit, tasks) = {
                         let Ok(mut host) = tick_kernel.lock() else {
                             break;
                         };
-                        host.dispatch(crate::Command::Tick { now_ms: None })
-                            .ok()
-                            .is_some_and(|outcome| outcome.process == ProcessIntent::Exit)
+                        match host.begin_background_tick_request(&serde_json::json!({
+                            "op": "tick"
+                        })) {
+                            Ok((outcome, tasks)) => (outcome.process == ProcessIntent::Exit, tasks),
+                            Err(_) => (false, Vec::new()),
+                        }
                     };
+                    for task in tasks {
+                        spawn_background_task(
+                            Arc::clone(&tick_kernel),
+                            BackgroundRpcTask::Refresh(task),
+                        );
+                    }
                     if should_exit {
                         tick_stop.store(true, Ordering::Relaxed);
                     }
@@ -337,7 +346,7 @@ fn browser_same_origin_request(request: &HttpRequest, server_port: u16) -> bool 
 
 fn serve_connection(
     mut stream: TcpStream,
-    kernel: &Mutex<HostKernel>,
+    kernel: &Arc<Mutex<HostKernel>>,
     assets: &LoopbackAssets,
     server_port: u16,
 ) -> io::Result<Option<CommandOutcome>> {
@@ -419,15 +428,107 @@ fn serve_connection(
                 return Ok(None);
             }
         };
-        let mut kernel = kernel
+        let remote_request = kernel
             .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?;
-        match kernel.handle(value) {
-            Ok(outcome) => {
-                let body = serde_json::to_string(&outcome.to_json())?;
-                write_json(&mut stream, 200, response_origin, &body)?;
-                return Ok(Some(outcome));
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?
+            .begin_background_remote_request(&value);
+        match remote_request {
+            Ok(Some(task)) => {
+                let completion = task.execute();
+                let result = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .finish_background_remote_request(completion);
+                match result {
+                    Ok(outcome) => {
+                        let body = serde_json::to_string(&outcome.to_json())?;
+                        write_json(&mut stream, 200, response_origin, &body)?;
+                        return Ok(Some(outcome));
+                    }
+                    Err(err) => {
+                        write_kernel_error(&mut stream, response_origin, &err)?;
+                        return Ok(None);
+                    }
+                }
             }
+            Ok(None) => {}
+            Err(err) => {
+                write_kernel_error(&mut stream, response_origin, &err)?;
+                return Ok(None);
+            }
+        }
+        let pair_remote_host = kernel
+            .lock()
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?
+            .begin_background_pair_remote_host_request(&value);
+        match pair_remote_host {
+            Ok(Some(task)) => {
+                let completion = task.execute();
+                let result = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .finish_background_pair_remote_host_request(&value, completion);
+                match result {
+                    Ok(outcome) => {
+                        let body = serde_json::to_string(&outcome.to_json())?;
+                        write_json(&mut stream, 200, response_origin, &body)?;
+                        return Ok(Some(outcome));
+                    }
+                    Err(err) => {
+                        write_kernel_error(&mut stream, response_origin, &err)?;
+                        return Ok(None);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                write_kernel_error(&mut stream, response_origin, &err)?;
+                return Ok(None);
+            }
+        }
+        let project_probe = kernel
+            .lock()
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?
+            .begin_background_project_probe_request(&value);
+        match project_probe {
+            Ok(Some(task)) => {
+                let completion = task.execute();
+                let result = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .finish_background_project_probe_request(completion);
+                match result {
+                    Ok((outcome, tasks)) => {
+                        let body = serde_json::to_string(&outcome.to_json())?;
+                        write_json(&mut stream, 200, response_origin, &body)?;
+                        for task in tasks {
+                            spawn_background_task(
+                                Arc::clone(kernel),
+                                BackgroundRpcTask::Refresh(task),
+                            );
+                        }
+                        return Ok(Some(outcome));
+                    }
+                    Err(err) => {
+                        let status = match err {
+                            KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                            KernelError::Denied(_) => 403,
+                            KernelError::Io(_) => 500,
+                        };
+                        write_json(
+                            &mut stream,
+                            status,
+                            response_origin,
+                            &format!(
+                                r#"{{"error":{}}}"#,
+                                serde_json::to_string(&err.to_string()).unwrap()
+                            ),
+                        )?;
+                        return Ok(None);
+                    }
+                }
+            }
+            Ok(None) => {}
             Err(err) => {
                 let status = match err {
                     KernelError::Protocol(_) | KernelError::Json(_) => 400,
@@ -446,6 +547,200 @@ fn serve_connection(
                 return Ok(None);
             }
         }
+        let tracker_write = kernel
+            .lock()
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?
+            .begin_background_tracker_write_request(&value);
+        match tracker_write {
+            Ok(Some(task)) => {
+                let completion = task.execute();
+                let finished = kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .finish_background_tracker_write_request(&value, completion);
+                let result = if let Some(rollback) = finished.rollback {
+                    let rollback = rollback.execute();
+                    let rollback_result = kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                        .finish_background_claim_rollback(&value, rollback);
+                    match finished.result {
+                        Ok(_) => rollback_result,
+                        Err(error) => match rollback_result {
+                            Ok(_) => Err(error),
+                            Err(rollback_error) => Err(rollback_error),
+                        },
+                    }
+                } else {
+                    finished.result
+                };
+                match result {
+                    Ok(outcome) => {
+                        let body = serde_json::to_string(&outcome.to_json())?;
+                        write_json(&mut stream, 200, response_origin, &body)?;
+                        return Ok(Some(outcome));
+                    }
+                    Err(err) => {
+                        let status = match err {
+                            KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                            KernelError::Denied(_) => 403,
+                            KernelError::Io(_) => 500,
+                        };
+                        write_json(
+                            &mut stream,
+                            status,
+                            response_origin,
+                            &format!(
+                                r#"{{"error":{}}}"#,
+                                serde_json::to_string(&err.to_string()).unwrap()
+                            ),
+                        )?;
+                        return Ok(None);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let status = match err {
+                    KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                    KernelError::Denied(_) => 403,
+                    KernelError::Io(_) => 500,
+                };
+                write_json(
+                    &mut stream,
+                    status,
+                    response_origin,
+                    &format!(
+                        r#"{{"error":{}}}"#,
+                        serde_json::to_string(&err.to_string()).unwrap()
+                    ),
+                )?;
+                return Ok(None);
+            }
+        }
+        let background_result = match value.get("op").and_then(|op| op.as_str()) {
+            Some("refresh") => Some(
+                kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .begin_background_refresh_request(&value)
+                    .map(|(outcome, task)| {
+                        (
+                            outcome,
+                            task.into_iter()
+                                .map(BackgroundRpcTask::Refresh)
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+            ),
+            Some("loadIssueDocument") => Some(
+                kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .begin_background_issue_document_request(&value)
+                    .map(|(outcome, task)| {
+                        (
+                            outcome,
+                            task.into_iter()
+                                .map(BackgroundRpcTask::IssueDocument)
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+            ),
+            Some("setClientView") => Some(
+                kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .begin_background_client_view_request(&value)
+                    .map(|(outcome, task)| {
+                        (
+                            outcome,
+                            task.into_iter()
+                                .map(BackgroundRpcTask::Refresh)
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+            ),
+            Some("tick") => Some(
+                kernel
+                    .lock()
+                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
+                    .begin_background_tick_request(&value)
+                    .map(|(outcome, tasks)| {
+                        (
+                            outcome,
+                            tasks
+                                .into_iter()
+                                .map(BackgroundRpcTask::Refresh)
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+            ),
+            _ => None,
+        };
+        if let Some(result) = background_result {
+            match result {
+                Ok((outcome, tasks)) => {
+                    let body = serde_json::to_string(&outcome.to_json())?;
+                    write_json(&mut stream, 200, response_origin, &body)?;
+                    for task in tasks {
+                        spawn_background_task(Arc::clone(kernel), task);
+                    }
+                    return Ok(Some(outcome));
+                }
+                Err(err) => {
+                    let status = match err {
+                        KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                        KernelError::Denied(_) => 403,
+                        KernelError::Io(_) => 500,
+                    };
+                    write_json(
+                        &mut stream,
+                        status,
+                        response_origin,
+                        &format!(
+                            r#"{{"error":{}}}"#,
+                            serde_json::to_string(&err.to_string()).unwrap()
+                        ),
+                    )?;
+                    return Ok(None);
+                }
+            }
+        }
+        let (result, tasks) = kernel
+            .lock()
+            .map_err(|_| io::Error::other("kernel lock poisoned"))?
+            .handle_with_deferred_refreshes(value);
+        match result {
+            Ok(outcome) => {
+                let body = serde_json::to_string(&outcome.to_json())?;
+                write_json(&mut stream, 200, response_origin, &body)?;
+                for task in tasks {
+                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
+                }
+                return Ok(Some(outcome));
+            }
+            Err(err) => {
+                let status = match err {
+                    KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                    KernelError::Denied(_) => 403,
+                    KernelError::Io(_) => 500,
+                };
+                write_json(
+                    &mut stream,
+                    status,
+                    response_origin,
+                    &format!(
+                        r#"{{"error":{}}}"#,
+                        serde_json::to_string(&err.to_string()).unwrap()
+                    ),
+                )?;
+                for task in tasks {
+                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
+                }
+                return Ok(None);
+            }
+        }
     }
 
     write_json(
@@ -457,11 +752,61 @@ fn serve_connection(
     Ok(None)
 }
 
+enum BackgroundRpcTask {
+    Refresh(crate::BackgroundRefreshTask),
+    IssueDocument(crate::BackgroundIssueDocumentTask),
+    AutoAdvance(crate::BackgroundAutoAdvanceTask),
+}
+
+fn spawn_background_task(kernel: Arc<Mutex<HostKernel>>, task: BackgroundRpcTask) {
+    let name = match &task {
+        BackgroundRpcTask::Refresh(_) => "host-tracker-refresh",
+        BackgroundRpcTask::IssueDocument(_) => "host-issue-document",
+        BackgroundRpcTask::AutoAdvance(_) => "host-auto-advance",
+    };
+    let _ = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || match task {
+            BackgroundRpcTask::Refresh(task) => {
+                let completion = task.execute();
+                let auto_advance = kernel.lock().ok().and_then(|mut host| {
+                    let (_, auto_advance) = host.finish_background_refresh_task(completion);
+                    auto_advance
+                });
+                if let Some(task) = auto_advance {
+                    spawn_background_task(
+                        Arc::clone(&kernel),
+                        BackgroundRpcTask::AutoAdvance(task),
+                    );
+                }
+            }
+            BackgroundRpcTask::IssueDocument(task) => {
+                let completion = task.execute();
+                if let Ok(mut host) = kernel.lock() {
+                    host.finish_issue_document_task(completion);
+                }
+            }
+            BackgroundRpcTask::AutoAdvance(task) => {
+                let completion = task.execute();
+                let rollback = kernel
+                    .lock()
+                    .ok()
+                    .and_then(|mut host| host.finish_background_auto_advance(completion));
+                if let Some(task) = rollback {
+                    let completion = task.execute();
+                    if let Ok(mut host) = kernel.lock() {
+                        host.finish_background_auto_advance_rollback(completion);
+                    }
+                }
+            }
+        });
+}
+
 fn serve_run_io(
     stream: &mut TcpStream,
     request: &HttpRequest,
     origin: Option<&str>,
-    kernel: &Mutex<HostKernel>,
+    kernel: &Arc<Mutex<HostKernel>>,
 ) -> io::Result<Option<Option<CommandOutcome>>> {
     let Some((run_id, action)) = parse_run_route(&request.path) else {
         return Ok(None);
@@ -486,8 +831,12 @@ fn serve_run_io(
             };
             let chunk = session.read_after(after, Duration::from_secs(8));
             if let Some(code) = chunk.exit_code {
-                if let Ok(mut host) = kernel.lock() {
-                    host.note_run_exit(&run_id, code);
+                let tasks = kernel
+                    .lock()
+                    .map(|mut host| host.note_run_exit_with_deferred_refreshes(&run_id, code))
+                    .unwrap_or_default();
+                for task in tasks {
+                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
                 }
             }
             let body = serde_json::json!({
@@ -898,6 +1247,27 @@ fn write_json(
         body.len()
     );
     stream.write_all(response.as_bytes())
+}
+
+fn write_kernel_error(
+    stream: &mut TcpStream,
+    origin: Option<&str>,
+    error: &KernelError,
+) -> io::Result<()> {
+    let status = match error {
+        KernelError::Protocol(_) | KernelError::Json(_) => 400,
+        KernelError::Denied(_) => 403,
+        KernelError::Io(_) => 500,
+    };
+    write_json(
+        stream,
+        status,
+        origin,
+        &format!(
+            r#"{{"error":{}}}"#,
+            serde_json::to_string(&error.to_string()).unwrap()
+        ),
+    )
 }
 
 fn authorize(

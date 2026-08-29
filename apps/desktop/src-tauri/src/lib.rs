@@ -21,7 +21,16 @@ struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
     protocol_url: String,
     startup_settings_path: PathBuf,
+    menu_signature: Mutex<Option<ShellMenuSignature>>,
     _loopback: LoopbackServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellMenuSignature {
+    app_name: String,
+    show_window: String,
+    quit_host: String,
+    edit_menu: String,
 }
 
 pub fn run() {
@@ -84,6 +93,7 @@ pub fn run() {
                 kernel,
                 protocol_url: protocol_url.clone(),
                 startup_settings_path,
+                menu_signature: Mutex::new(None),
                 _loopback: loopback,
             });
             build_tray(app.handle())?;
@@ -264,8 +274,25 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String> {
+    let signature = ShellMenuSignature {
+        app_name: snapshot.copy.app_name.clone(),
+        show_window: snapshot.copy.show_window.clone(),
+        quit_host: snapshot.copy.quit_host.clone(),
+        edit_menu: snapshot.copy.edit_menu.clone(),
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        let cached = state.menu_signature.lock().map_err(|err| err.to_string())?;
+        if cached.as_ref() == Some(&signature) {
+            return Ok(());
+        }
+    }
     rebuild_tray_menu(app, snapshot).map_err(|err| err.to_string())?;
-    rebuild_app_menu(app, snapshot).map_err(|err| err.to_string())
+    rebuild_app_menu(app, snapshot).map_err(|err| err.to_string())?;
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut cached = state.menu_signature.lock().map_err(|err| err.to_string())?;
+        *cached = Some(signature);
+    }
+    Ok(())
 }
 
 fn resident_items(

@@ -45,6 +45,10 @@ type ShellCopy = {
   hosts: string;
   projects: string;
   thisMachine: string;
+  nextStep: string;
+  forgetHost: string;
+  forgetHostConfirmTitle: string;
+  forgetHostConfirmBody: string;
   shadeLight: string;
   shadeDark: string;
   editMenu: string;
@@ -107,17 +111,24 @@ type ShellCopy = {
   gotIt: string;
   authFailed: string;
   connectionUnavailable: string;
+  localTrackerUnavailable: string;
   repairCli: string;
   repairSecrets: string;
   repairEnv: string;
   noGhDetected: string;
   connectionReady: string;
+  localTrackerReady: string;
   projectMenu: string;
   boardHint: string;
   childHint: string;
   graphHint: string;
   viewBoard: string;
   viewGraph: string;
+  viewDependencies: string;
+  graphOverview: string;
+  graphReturnOverview: string;
+  graphTruncated: string;
+  graphNoDependencies: string;
   showClosedContext: string;
   graphCenter: string;
   graphCenterHere: string;
@@ -173,16 +184,19 @@ type ShellCopy = {
   refreshAsOf: string;
   refreshNext: string;
   refreshOffline: string;
+  refreshOfflineRecovery: string;
   refreshNever: string;
   refreshRateLimited: string;
   refreshRetry: string;
   refreshPaused: string;
   refreshAuth: string;
+  refreshAuthRecovery: string;
   refreshIncomplete: string;
   refreshTrackerError: string;
   newRun: string;
   executeRun: string;
   startRun: string;
+  startRunPending: string;
   switchAgent: string;
   pickAgent: string;
   launchTitle: string;
@@ -285,7 +299,7 @@ type ShellCopy = {
   mobileLiveTerminal: string;
 };
 
-type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
+type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env" | "local-file";
 
 type Repair = {
   cliDetected: boolean;
@@ -315,7 +329,7 @@ type Project = {
   id: string;
   name: string;
   localPath: string;
-  tracker: "github";
+  tracker: "github" | "local-markdown";
   githubHost: string;
   repository: string;
   connection: ProjectConnection;
@@ -343,6 +357,32 @@ type ProjectDraft = {
   localPath: string;
   githubHost: string;
   repository: string;
+  tracker?: "github" | "local-markdown";
+  ambiguous?: boolean;
+};
+
+type IssueSearchDraft = {
+  title: string;
+  triageRole: string;
+  state: string;
+};
+
+type UsageCustomDraft = {
+  from: string;
+  to: string;
+};
+
+type FormKey =
+  | `issue-search:${string}`
+  | `inject-run:${string}`
+  | `change-note:${string}`
+  | `usage-custom:${string}`
+  | `launch:${string}`
+  | `pairing:${string}`;
+
+type FormOperationState = {
+  pending: Set<FormKey>;
+  errors: Map<FormKey, string>;
 };
 
 type ProjectInferenceState =
@@ -454,15 +494,39 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  mode?: "overview" | "focused";
   centerId?: string | null;
   totalCount?: number;
   complete?: boolean;
   maxDistance?: number;
+  truncated?: boolean;
   closedCount?: number;
 };
 
 type CenterView = "board" | "graph";
 type WorkspaceView = "project" | "host-overview" | "run";
+type ClientGraphMode = "overview" | "focused";
+type ClientViewState = {
+  focusedHostId: string;
+  focusedProjectId: string;
+  selectedIssueId: string | null;
+  focusedRunId: string;
+  centerView: CenterView;
+  workspaceView: WorkspaceView;
+  parentFilterId: string | null;
+  search: BoardSnapshot["search"];
+  graphMode: ClientGraphMode;
+  graphCenterIssueId: string | null;
+  completeDependencyGraph: boolean;
+  usageOpen: boolean;
+  usageQuery: {
+    range: UsageRange;
+    customFromMs?: number | null;
+    customToMs?: number | null;
+    filter: UsageFilter;
+    highlightedRunId?: string | null;
+  };
+};
 
 type BoardSnapshot = {
   projectId: string;
@@ -553,6 +617,7 @@ type AgentField = {
   label: string;
   kind: AgentFieldKind;
   options?: string[];
+  optionGroups?: Record<string, string[]>;
   required: boolean;
   folded: boolean;
 };
@@ -561,6 +626,7 @@ type AgentSummary = {
   id: string;
   name: string;
   installed: boolean;
+  unavailableReason?: string | null;
   fields: AgentField[];
 };
 
@@ -850,6 +916,15 @@ let formError = "";
 let removeError = "";
 let projectOperation: "save" | "remove" | null = null;
 let removeProject: Project | null = null;
+let forgetHostId = "";
+let forgetHostError = "";
+let forgetHostPending = false;
+type GraphViewportAnchor = {
+  issueId: string;
+  viewportX: number;
+  viewportY: number;
+};
+let pendingGraphAnchor: GraphViewportAnchor | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
 const activePointers = new Set<number>();
@@ -862,20 +937,33 @@ let ptyRunId = "";
 let ptyPumping = false;
 let launchDraft: LaunchDraft | null = null;
 let launchFolded = false;
+let agentPickerSelection = "";
+let launchPreviewTimer: number | undefined;
+let launchPreviewSequence = 0;
 let changesOpen = false;
 let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
 let noteDraft = "";
 let noteTarget: { repo: string; path: string; line: number } | null = null;
+let issueSearchDraft: IssueSearchDraft | null = null;
+let usageCustomDraft: UsageCustomDraft | null = null;
+const injectDrafts = new Map<string, string>();
+const formOperations: FormOperationState = {
+  pending: new Set<FormKey>(),
+  errors: new Map<FormKey, string>(),
+};
 let telemetryExpanded = false;
 let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let renderedDetailIssueId = "";
+let renderedSnapshotKey = "";
 let renderedGraphKey = "";
 let renderedGraphProjectId = "";
 let renderedGraphCenterId = "";
 let graphCanvasLimit = 48;
+let graphBatchTimer: number | undefined;
 let graphListLimit = 50;
 let graphListQuery = "";
 let overviewProjectId = "";
@@ -892,6 +980,8 @@ let mobilePtyPumping = false;
 const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
+let clientView = loadClientView(clientId);
+let clientViewRevision = 0;
 
 const GRAPH_RELATION_META: Record<
   NonNullable<GraphNode["relation"]>,
@@ -918,14 +1008,173 @@ function sessionClientId(): string {
   return id;
 }
 
+function defaultClientView(): ClientViewState {
+  return {
+    focusedHostId: "local",
+    focusedProjectId: "",
+    selectedIssueId: null,
+    focusedRunId: "",
+    centerView: "board",
+    workspaceView: "project",
+    parentFilterId: null,
+    search: { title: "", triageRole: null, state: "all" },
+    graphMode: "overview",
+    graphCenterIssueId: null,
+    completeDependencyGraph: false,
+    usageOpen: false,
+    usageQuery: {
+      range: "today",
+      customFromMs: null,
+      customToMs: null,
+      filter: {},
+      highlightedRunId: null,
+    },
+  };
+}
+
+function clientViewStorageKey(id: string): string {
+  return `agent-taskboard-client-view:${id}`;
+}
+
+function loadClientView(id: string): ClientViewState {
+  const fallback = defaultClientView();
+  try {
+    const raw = localStorage.getItem(clientViewStorageKey(id));
+    if (!raw) return fallback;
+    const stored = JSON.parse(raw) as Partial<ClientViewState>;
+    return {
+      ...fallback,
+      focusedHostId: typeof stored.focusedHostId === "string" ? stored.focusedHostId : fallback.focusedHostId,
+      focusedProjectId: typeof stored.focusedProjectId === "string" ? stored.focusedProjectId : "",
+      selectedIssueId: typeof stored.selectedIssueId === "string" ? stored.selectedIssueId : null,
+      focusedRunId: typeof stored.focusedRunId === "string" ? stored.focusedRunId : "",
+      centerView: stored.centerView === "graph" ? "graph" : "board",
+      workspaceView:
+        stored.workspaceView === "host-overview" || stored.workspaceView === "run"
+          ? stored.workspaceView
+          : "project",
+      parentFilterId: typeof stored.parentFilterId === "string" ? stored.parentFilterId : null,
+      search: {
+        title: typeof stored.search?.title === "string" ? stored.search.title : "",
+        triageRole: stored.search?.triageRole ?? null,
+        state:
+          stored.search?.state === "open" || stored.search?.state === "closed"
+            ? stored.search.state
+            : "all",
+      },
+      graphMode: stored.graphMode === "focused" ? "focused" : "overview",
+      graphCenterIssueId:
+        typeof stored.graphCenterIssueId === "string" ? stored.graphCenterIssueId : null,
+      completeDependencyGraph: Boolean(stored.completeDependencyGraph),
+      usageOpen: Boolean(stored.usageOpen),
+      usageQuery: {
+        range:
+          stored.usageQuery?.range === "24-hours"
+          || stored.usageQuery?.range === "7-days"
+          || stored.usageQuery?.range === "30-days"
+          || stored.usageQuery?.range === "custom"
+            ? stored.usageQuery.range
+            : "today",
+        customFromMs:
+          typeof stored.usageQuery?.customFromMs === "number" ? stored.usageQuery.customFromMs : null,
+        customToMs:
+          typeof stored.usageQuery?.customToMs === "number" ? stored.usageQuery.customToMs : null,
+        filter: {
+          projectId:
+            typeof stored.usageQuery?.filter?.projectId === "string"
+              ? stored.usageQuery.filter.projectId
+              : null,
+          agentId:
+            typeof stored.usageQuery?.filter?.agentId === "string"
+              ? stored.usageQuery.filter.agentId
+              : null,
+          model:
+            typeof stored.usageQuery?.filter?.model === "string"
+              ? stored.usageQuery.filter.model
+              : null,
+        },
+        highlightedRunId:
+          typeof stored.usageQuery?.highlightedRunId === "string"
+            ? stored.usageQuery.highlightedRunId
+            : null,
+      },
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveClientView(): void {
+  localStorage.setItem(clientViewStorageKey(clientId), JSON.stringify(clientView));
+}
+
+function commitClientView(next: ClientViewState): void {
+  if (JSON.stringify(next) !== JSON.stringify(clientView)) clientViewRevision += 1;
+  clientView = next;
+  saveClientView();
+}
+
+function updateClientView(patch: Partial<ClientViewState>): void {
+  commitClientView({ ...clientView, ...patch });
+}
+
+function reconcileClientView(snap: Snapshot): void {
+  const board = snap.board;
+  const projectChanged = snap.focusedProjectId !== clientView.focusedProjectId;
+  const selectedIssueConfirmedMissing = Boolean(
+    !projectChanged
+      && clientView.selectedIssueId
+      && board
+      && board.refresh.kind === "ready"
+      && !board.selected,
+  );
+  const next: ClientViewState = {
+    ...clientView,
+    focusedHostId: snap.focusedHostId,
+    focusedProjectId: snap.focusedProjectId,
+    selectedIssueId:
+      board?.selected?.id
+      ?? (projectChanged || selectedIssueConfirmedMissing ? null : clientView.selectedIssueId),
+    focusedRunId: snap.focusedRunId,
+    centerView: snap.centerView,
+    workspaceView: snap.workspaceView,
+    parentFilterId: board?.parentFilter?.id ?? null,
+    search: board?.search ?? (projectChanged ? defaultClientView().search : clientView.search),
+    graphCenterIssueId:
+      clientView.graphMode === "focused"
+        ? board?.graph?.centerId ?? clientView.graphCenterIssueId
+        : null,
+    completeDependencyGraph: Boolean(board?.graph?.complete),
+    usageOpen: Boolean(snap.usageOpen),
+    usageQuery: {
+      range: snap.usage?.range ?? clientView.usageQuery.range,
+      customFromMs: snap.usage?.customFromMs ?? clientView.usageQuery.customFromMs ?? null,
+      customToMs: snap.usage?.customToMs ?? clientView.usageQuery.customToMs ?? null,
+      filter: { ...(snap.usage?.filter ?? clientView.usageQuery.filter) },
+      highlightedRunId:
+        snap.usage?.highlightedRunId ?? clientView.usageQuery.highlightedRunId ?? null,
+    },
+  };
+  commitClientView(next);
+}
+
 function emptyDraft(): ProjectDraft {
-  return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+  return { name: "", localPath: "", githubHost: "github.com", repository: "", tracker: "github" };
 }
 
 function resetGraphUiState(): void {
+  if (graphBatchTimer != null) window.clearTimeout(graphBatchTimer);
+  graphBatchTimer = undefined;
   graphCanvasLimit = 48;
   graphListLimit = 50;
   graphListQuery = "";
+}
+
+function resetInlineFormDrafts(): void {
+  issueSearchDraft = null;
+  usageCustomDraft = null;
+  injectDrafts.clear();
+  formOperations.errors.clear();
 }
 
 const MOBILE_BREAKPOINT = 640;
@@ -979,6 +1228,11 @@ function saveMobileAppearance(appearance: MobileAppearance): void {
 function syncLaunchDraft(snap: Snapshot): void {
   const form = snap.launchForm;
   if (!form) {
+    if (launchPreviewTimer !== undefined) {
+      window.clearTimeout(launchPreviewTimer);
+      launchPreviewTimer = undefined;
+    }
+    launchPreviewSequence += 1;
     launchDraft = null;
     return;
   }
@@ -987,6 +1241,7 @@ function syncLaunchDraft(snap: Snapshot): void {
     || launchDraft.projectId !== form.projectId
     || launchDraft.agentId !== form.selectedAgentId
   ) {
+    launchPreviewSequence += 1;
     launchDraft = {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -996,6 +1251,9 @@ function syncLaunchDraft(snap: Snapshot): void {
       intentId: "",
       custom: false,
     };
+  }
+  if (!form.skipAgentPicker && !agentPickerSelection) {
+    agentPickerSelection = "";
   }
 }
 
@@ -1021,6 +1279,7 @@ function liveEnumWarnings(form: RunLaunchForm, draft: LaunchDraft, language: Lan
 }
 
 function refreshLaunchWarnings(): void {
+  scheduleLaunchPreview();
   const node = app?.querySelector<HTMLElement>(".launch-warnings");
   if (!node || !snapshot?.launchForm || !launchDraft) return;
   const live = liveEnumWarnings(
@@ -1034,6 +1293,32 @@ function refreshLaunchWarnings(): void {
   const warnings = [...preserved, ...live];
   node.textContent = warnings.join(" ");
   node.hidden = warnings.length === 0;
+}
+
+function scheduleLaunchPreview(): void {
+  if (!launchDraft || !snapshot?.launchForm) return;
+  if (launchPreviewTimer !== undefined) {
+    window.clearTimeout(launchPreviewTimer);
+  }
+  const sequence = ++launchPreviewSequence;
+  launchPreviewTimer = window.setTimeout(async () => {
+    launchPreviewTimer = undefined;
+    const draft = launchDraft;
+    if (!draft || !snapshot?.launchForm) return;
+    try {
+      await rpc("previewRunLaunch", {
+        projectId: draft.projectId,
+        agentId: draft.agentId,
+        values: draft.values,
+        openingText: draft.openingText,
+      });
+      if (sequence === launchPreviewSequence && launchDraft === draft && snapshot?.launchForm) {
+        render();
+      }
+    } catch {
+      // The preview is advisory; keep the local draft usable if the Host is unavailable.
+    }
+  }, 120);
 }
 
 function refreshIntentChoices(): void {
@@ -1125,9 +1410,27 @@ async function inferFromLocalPath(path: string): Promise<void> {
   try {
     const result = await rpc("inferProject", { localPath: requestedPath });
     if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
-    projectInference = result.inference
-      ? { status: "candidate", requestId, candidate: result.inference }
-      : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
+    if (result.inference && (result.inference.tracker === "local-markdown" || !result.inference.ambiguous)) {
+      const candidate = result.inference;
+      const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
+      const useCandidateConnection =
+        !formDraft.repository.trim() &&
+        (!formDraft.githubHost.trim() || formDraft.githubHost === "github.com");
+      formDraft = {
+        ...formDraft,
+        name: useCandidateName ? candidate.name : formDraft.name,
+        localPath: candidate.localPath,
+        githubHost: useCandidateConnection ? candidate.githubHost : formDraft.githubHost,
+        repository: useCandidateConnection ? candidate.repository : formDraft.repository,
+        tracker: useCandidateConnection ? candidate.tracker : formDraft.tracker,
+      };
+      autoFilledProjectName = useCandidateName ? candidate.name : autoFilledProjectName;
+      projectInference = { status: "idle", requestId };
+    } else {
+      projectInference = result.inference
+        ? { status: "candidate", requestId, candidate: result.inference }
+        : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
+    }
   } catch (error) {
     if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
     projectInference = {
@@ -1318,11 +1621,16 @@ async function protocolBase(): Promise<string> {
 let rpcQueue: Promise<void> = Promise.resolve();
 
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
+  const requestClientViewRevision = clientViewRevision;
+  const requestClientView: ClientViewState = {
+    ...clientView,
+    search: { ...clientView.search },
+  };
   const request = rpcQueue.then(async () => {
     const response = await fetch(`${await protocolBase()}/rpc`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op, ...extra }),
+      body: JSON.stringify({ op, ...extra, clientId, clientView: requestClientView }),
     });
     if (!response.ok) {
       const text = await response.text();
@@ -1343,19 +1651,40 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
     result.snapshot.notifySound = result.snapshot.notifySound ?? true;
     result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
+    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
     result.events = result.events ?? [];
-    syncLaunchDraft(result.snapshot);
     deliverHostEvents(result.events, result.snapshot);
-    snapshot = result.snapshot;
-    if (result.viewChanges) {
-      changesView = result.viewChanges;
-      changesOpen = true;
+    if (requestClientViewRevision === clientViewRevision) {
+      reconcileClientView(result.snapshot);
+      syncLaunchDraft(result.snapshot);
+      snapshot = result.snapshot;
+      if (result.viewChanges) {
+        changesView = result.viewChanges;
+        changesOpen = true;
+      }
     }
     return result;
   });
   rpcQueue = request.then(() => undefined, () => undefined);
   return request;
+}
+
+async function navigateClient(
+  patch: Partial<ClientViewState>,
+  request: Record<string, unknown> = {},
+): Promise<void> {
+  updateClientView(patch);
+  await rpc("snapshot", request);
+}
+
+async function refreshProject(projectId = clientView.focusedProjectId): Promise<void> {
+  let result = await rpc("refresh", projectId ? { projectId } : {});
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const board = result.snapshot.board;
+    if (board?.projectId !== projectId || board.refresh.kind !== "refreshing") return;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    result = await rpc("snapshot");
+  }
 }
 
 async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
@@ -1372,7 +1701,14 @@ async function loadSelectedIssueDocument(force = false): Promise<void> {
     ? { kind: "loading", body: state.body, fetchedAtMs: state.fetchedAtMs }
     : { kind: "loading" };
   render();
-  await rpc("loadIssueDocument", { issueId: issue.id });
+  const issueId = issue.id;
+  let result = await rpc("loadIssueDocument", { issueId });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const selected = result.snapshot.board?.selected;
+    if (selected?.id !== issueId || selected.document?.kind !== "loading") return;
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    result = await rpc("snapshot");
+  }
 }
 
 function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
@@ -1404,16 +1740,13 @@ function playNotifySound(): void {
 
 async function jumpToNotification(event: Extract<HostEvent, { type: "notification" }>): Promise<void> {
   await rpc("showWindow");
-  if (event.projectId) {
-    await rpc("focusProject", { projectId: event.projectId });
-  }
-  if (event.issueId) {
-    issueDetailVisible = true;
-    await rpc("focusIssue", { issueId: event.issueId });
-  }
-  if (event.runId) {
-    await rpc("focusRun", { runId: event.runId });
-  }
+  issueDetailVisible = Boolean(event.issueId) || issueDetailVisible;
+  await navigateClient({
+    focusedProjectId: event.projectId || clientView.focusedProjectId,
+    selectedIssueId: event.issueId ?? clientView.selectedIssueId,
+    focusedRunId: event.runId || "",
+    workspaceView: event.runId ? "run" : "project",
+  });
   render();
 }
 
@@ -1469,44 +1802,88 @@ function languageLabel(copy: ShellCopy, language: Language): string {
 }
 
 function captureActiveField(): {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
+  scrollTop: number;
 } | null {
-  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  if (!active || !app?.contains(active) || active.id === "") return null;
-  if (!("value" in active)) return null;
+  const active = document.activeElement;
+  if (
+    !(active instanceof HTMLInputElement)
+    && !(active instanceof HTMLTextAreaElement)
+    && !(active instanceof HTMLSelectElement)
+  ) return null;
+  if (!app?.contains(active)) return null;
+  let selector = active.id ? `#${CSS.escape(active.id)}` : "";
+  if (!selector) {
+    const name = active.getAttribute("name");
+    const form = active.closest<HTMLFormElement>("form[data-act]");
+    const action = form?.dataset.act;
+    if (name && action) {
+      const formId = form.dataset.id;
+      selector = `form[data-act="${CSS.escape(action)}"]${
+        formId ? `[data-id="${CSS.escape(formId)}"]` : ""
+      } [name="${CSS.escape(name)}"]`;
+    }
+  }
+  for (const attribute of ["data-field", "data-usage-filter"] as const) {
+    if (selector) break;
+    const value = active.getAttribute(attribute);
+    if (value) {
+      selector = `${active.tagName.toLowerCase()}[${attribute}="${CSS.escape(value)}"]`;
+    }
+  }
+  if (!selector) return null;
+  const textControl = active instanceof HTMLTextAreaElement
+    || (active instanceof HTMLInputElement
+      && ["text", "search", "url", "tel", "password"].includes(active.type));
   return {
-    id: active.id,
-    start: active.selectionStart,
-    end: active.selectionEnd,
-    direction: active.selectionDirection,
+    selector,
+    start: textControl ? active.selectionStart : null,
+    end: textControl ? active.selectionEnd : null,
+    direction: textControl ? active.selectionDirection : null,
     scrollLeft: active.scrollLeft,
+    scrollTop: active.scrollTop,
   };
 }
 
 function restoreActiveField(field: {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
+  scrollTop: number;
 } | null): void {
   if (!field) return;
-  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(field.id)}`);
+  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+    field.selector,
+  );
   if (!next) return;
   next.focus();
-  if (field.start != null && field.end != null) {
+  if (
+    field.start != null
+    && field.end != null
+    && (next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement)
+  ) {
     next.setSelectionRange(field.start, field.end, field.direction ?? "none");
   }
   next.scrollLeft = field.scrollLeft;
+  next.scrollTop = field.scrollTop;
 }
 
 function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
   if (!board?.graph) return "";
   return JSON.stringify([board.graph, graphCanvasLimit]);
+}
+
+function snapshotRenderKey(snap: Snapshot): string {
+  return JSON.stringify(snap, (key, value) => {
+    if (key === "nextRefreshInMs" || key === "remainingMs") return undefined;
+    return value;
+  });
 }
 
 function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
@@ -1541,8 +1918,25 @@ function render(): void {
   const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
   const showSidebar = !isMobile && sidebarVisible && !runLifted;
   const selectedIssue = snap.board?.selected;
+  const previousDetailScrollNode = app.querySelector<HTMLElement>(".detail-scroll");
+  const previousDetailScroll = previousDetailScrollNode
+    ? {
+        issueId: renderedDetailIssueId,
+        scrollTop: previousDetailScrollNode.scrollTop,
+        scrollLeft: previousDetailScrollNode.scrollLeft,
+      }
+    : null;
+  const previousLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
+  const previousLaunchScroll = previousLaunchSheet
+    ? {
+        key: snapshot.launchForm ? `${snapshot.launchForm.projectId}:${snapshot.launchForm.selectedAgentId}` : "",
+        scrollTop: previousLaunchSheet.scrollTop,
+        scrollLeft: previousLaunchSheet.scrollLeft,
+      }
+    : null;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
+  const previousGraphToolbar = app.querySelector<HTMLElement>(".graph-toolbar");
   const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
   const previousGraph = previousGraphCanvas
     ? {
@@ -1630,7 +2024,10 @@ function render(): void {
                 ? `<div class="host-picker">${hosts
                     .map(
                       (item) =>
-                        `<button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`,
+                        `<div class="host-picker-row">
+                          <button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
+                          ${item.local ? "" : `<button type="button" class="host-forget" data-act="forget-host" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(copy.forgetHost)}" title="${escapeHtml(copy.forgetHost)}">×</button>`}
+                        </div>`,
                     )
                     .join("")}</div>`
                 : ""
@@ -1716,7 +2113,7 @@ function render(): void {
               ${updateSettings(copy)}
               <div class="field">
                 <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" max="600" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
+                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 300_000) / 1000)}" />
                 <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
               </div>
               <div class="field">
@@ -1773,8 +2170,9 @@ function render(): void {
                 <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
                 <input id="pairing-address" data-field="address" value="${escapeHtml(pairingAddress)}" />
                 <div class="actions">
-                  <button type="button" class="primary" data-act="show-offer">${escapeHtml(copy.pairingShow)}</button>
+                  <button type="button" class="primary" data-act="show-offer" ${formOperations.pending.has(pairingFormKey("offer")) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey("offer")) ? copy.operationPending : copy.pairingShow)}</button>
                 </div>
+                ${formFeedback(pairingFormKey("offer"))}
                 ${
                   snapshot.pairingOffer
                     ? `<div class="offer">
@@ -1792,7 +2190,7 @@ function render(): void {
                     ? snapshot.pairedClients
                         .map(
                           (client) =>
-                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}">${escapeHtml(copy.revokeClient)}</button></div>`,
+                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}" ${formOperations.pending.has(pairingFormKey(`revoke:${client.id}`)) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey(`revoke:${client.id}`)) ? copy.operationPending : copy.revokeClient)}</button>${formFeedback(pairingFormKey(`revoke:${client.id}`))}</div>`,
                         )
                         .join("")
                     : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`
@@ -1802,8 +2200,9 @@ function render(): void {
                 <div class="label">${escapeHtml(copy.pairingToAnother)}</div>
                 <textarea data-field="paste" rows="4" placeholder="${escapeHtml(copy.pairingPaste)}">${escapeHtml(pairingPaste)}</textarea>
                 <div class="actions">
-                  <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
+                  <button type="button" class="primary" data-act="connect-host" ${formOperations.pending.has(pairingFormKey("connect")) ? "disabled" : ""}>${escapeHtml(formOperations.pending.has(pairingFormKey("connect")) ? copy.operationPending : copy.pairingConnect)}</button>
                 </div>
+                ${formFeedback(pairingFormKey("connect"))}
               </div>
               ${pairingError ? `<p class="notice">${escapeHtml(pairingError)}</p>` : ""}
             </div>
@@ -1813,11 +2212,20 @@ function render(): void {
     ${formOpen ? projectForm(copy) : ""}
     ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
+    ${forgetHostId ? forgetHostDialog(copy, hosts.find((item) => item.id === forgetHostId)) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
     ${updateDialog(copy)}
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
+  const graphToolbar = app.querySelector<HTMLElement>(".graph-toolbar");
+  if (
+    previousGraphToolbar
+    && graphToolbar
+    && previousGraphToolbar.outerHTML === graphToolbar.outerHTML
+  ) {
+    graphToolbar.replaceWith(previousGraphToolbar);
+  }
   const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
   if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
     graphPlaceholder.replaceWith(previousGraph.canvas);
@@ -1848,9 +2256,29 @@ function render(): void {
   }
   syncGraphSelection(graphCanvas, snap.board?.selected?.id);
   if (graphCanvas && (!sameGraphCenter || graphContentChanged)) {
-    centerGraphViewport(graphCanvas, nextGraphCenterId);
+    const restored = pendingGraphAnchor
+      ? restoreGraphAnchor(graphCanvas, pendingGraphAnchor)
+      : false;
+    if (!restored) centerGraphViewport(graphCanvas, nextGraphCenterId);
+    pendingGraphAnchor = null;
   }
   restoreActiveField(activeField);
+  const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
+  if (nextDetailScroll && previousDetailScroll?.issueId === (selectedIssue?.id ?? "")) {
+    nextDetailScroll.scrollTop = previousDetailScroll.scrollTop;
+    nextDetailScroll.scrollLeft = previousDetailScroll.scrollLeft;
+  }
+  const nextLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
+  if (
+    nextLaunchSheet
+    && previousLaunchScroll
+    && previousLaunchScroll.key === (snap.launchForm ? `${snap.launchForm.projectId}:${snap.launchForm.selectedAgentId}` : "")
+  ) {
+    nextLaunchSheet.scrollTop = previousLaunchScroll.scrollTop;
+    nextLaunchSheet.scrollLeft = previousLaunchScroll.scrollLeft;
+  }
+  renderedDetailIssueId = selectedIssue?.id ?? "";
+  renderedSnapshotKey = snapshotRenderKey(snap);
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
     void pumpMobileOutput(snap);
@@ -1858,6 +2286,86 @@ function render(): void {
     mobilePtyPumping = false;
     attachTerminal(snap);
   }
+  scheduleGraphBatch(snap);
+}
+
+function scheduleGraphBatch(snap: Snapshot): void {
+  if (graphBatchTimer != null) return;
+  const graph = snap.centerView === "graph" ? snap.board?.graph : null;
+  if (!graph || graphCanvasLimit >= graph.nodes.length) return;
+  const expectedProject = snap.focusedProjectId;
+  const expectedCenter = graph.centerId ?? "";
+  graphBatchTimer = window.setTimeout(() => {
+    graphBatchTimer = undefined;
+    if (
+      snapshot?.focusedProjectId !== expectedProject
+      || snapshot.centerView !== "graph"
+      || (snapshot.board?.graph?.centerId ?? "") !== expectedCenter
+    ) return;
+    graphCanvasLimit = Math.min(graphCanvasLimit + 48, snapshot.board?.graph?.nodes.length ?? 0);
+    renderGraphBatch(snapshot);
+  }, 50);
+}
+
+function renderGraphBatch(snap: Snapshot): void {
+  const board = snap.board;
+  const graph = board?.graph;
+  const currentGraph = app?.querySelector<HTMLElement>(".dep-graph");
+  const currentCanvas = currentGraph?.querySelector<HTMLElement>(".graph-canvas");
+  const currentFlow = currentCanvas?.querySelector<HTMLElement>(".graph-flow");
+  if (!board || !graph || !currentGraph || !currentCanvas || !currentFlow) {
+    render();
+    return;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = dependencyGraphView(snap.copy, board, false).trim();
+  const nextGraph = template.content.firstElementChild as HTMLElement | null;
+  const nextFlow = nextGraph?.querySelector<HTMLElement>(".graph-flow");
+  if (!nextGraph || !nextFlow) {
+    render();
+    return;
+  }
+
+  for (const nextColumn of [...nextFlow.querySelectorAll<HTMLElement>(":scope > .graph-col")]) {
+    const rank = nextColumn.dataset.rank ?? "";
+    let currentColumn = currentFlow.querySelector<HTMLElement>(
+      `:scope > .graph-col[data-rank="${CSS.escape(rank)}"]`,
+    );
+    if (!currentColumn) {
+      const numericRank = Number(rank);
+      const before = [...currentFlow.querySelectorAll<HTMLElement>(":scope > .graph-col")]
+        .find((column) => Number(column.dataset.rank) > numericRank);
+      currentFlow.insertBefore(nextColumn, before ?? null);
+      currentColumn = nextColumn;
+    } else {
+      for (const nextNode of [...nextColumn.querySelectorAll<HTMLElement>(":scope > .graph-node")]) {
+        const id = nextNode.dataset.id ?? "";
+        if (!currentColumn.querySelector(`:scope > .graph-node[data-id="${CSS.escape(id)}"]`)) {
+          currentColumn.append(nextNode);
+        }
+      }
+    }
+  }
+
+  const currentLimit = currentGraph.querySelector<HTMLElement>(
+    ":scope > .graph-limit:not(.graph-truncated)",
+  );
+  const nextLimit = nextGraph.querySelector<HTMLElement>(
+    ":scope > .graph-limit:not(.graph-truncated)",
+  );
+  if (nextLimit && currentLimit) {
+    currentLimit.textContent = nextLimit.textContent;
+  } else if (nextLimit) {
+    currentCanvas.before(nextLimit);
+  } else {
+    currentLimit?.remove();
+  }
+
+  renderedGraphKey = dependencyGraphRenderKey(board);
+  paintGraphEdges();
+  syncGraphSelection(currentCanvas, board.selected?.id);
+  scheduleGraphBatch(snap);
 }
 
 function paintGraphEdges(): void {
@@ -1911,10 +2419,61 @@ function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
   canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
 }
 
+function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
+  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+  const node = canvas
+    ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")].find((item) => item.dataset.id === issueId)
+    : null;
+  if (!canvas || !node) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    issueId,
+    viewportX: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    viewportY: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+}
+
+function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
+  const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((item) => item.dataset.id === anchor.issueId);
+  if (!node) return false;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const currentX = nodeRect.left - canvasRect.left + nodeRect.width / 2;
+  const currentY = nodeRect.top - canvasRect.top + nodeRect.height / 2;
+  canvas.scrollLeft = Math.max(0, Math.min(
+    canvas.scrollWidth - canvas.clientWidth,
+    canvas.scrollLeft + currentX - anchor.viewportX,
+  ));
+  canvas.scrollTop = Math.max(0, Math.min(
+    canvas.scrollHeight - canvas.clientHeight,
+    canvas.scrollTop + currentY - anchor.viewportY,
+  ));
+  return true;
+}
+
 function currentProject(snap: Snapshot): Project | undefined {
   return (
     snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
   );
+}
+
+function projectTrackerLabel(project: Project): string {
+  return project.tracker === "local-markdown"
+    ? "Local Markdown"
+    : `${project.githubHost}/${project.repository}`;
+}
+
+function projectConnectionLabel(copy: ShellCopy, project: Project): string {
+  if (project.tracker === "local-markdown") {
+    return project.connection.status === "ready" ? copy.localTrackerReady : copy.localTrackerUnavailable;
+  }
+  return project.connection.status === "ready"
+    ? copy.connectionReady
+    : project.connection.status === "unreachable"
+      ? copy.connectionUnavailable
+      : copy.authFailed;
 }
 
 function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
@@ -1932,7 +2491,7 @@ function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
     .join("");
   const projects = snap.projects
     .map((project) => `<div class="mobile-scope-project ${project.id === snap.focusedProjectId ? "active" : ""}">
-      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(project.repository)}</span></button>
+      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(projectTrackerLabel(project))}</span></button>
       <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
       <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
     </div>`)
@@ -1980,13 +2539,83 @@ function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
         : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
     </section>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : injectRunForm(copy, run.id)}
     ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
   </section>`;
 }
 
 function focusedRun(snap: Snapshot): RunSummary | undefined {
   return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
+}
+
+function issueSearchFormKey(projectId: string): FormKey {
+  return `issue-search:${projectId}`;
+}
+
+function editableIssueSearchDraft(): IssueSearchDraft {
+  if (issueSearchDraft) return issueSearchDraft;
+  const search = snapshot?.board?.search;
+  issueSearchDraft = {
+    title: search?.title ?? "",
+    triageRole: search?.triageRole ?? "",
+    state: search?.state ?? "all",
+  };
+  return issueSearchDraft;
+}
+
+function injectFormKey(runId: string): FormKey {
+  return `inject-run:${runId}`;
+}
+
+function changeNoteFormKey(runId: string): FormKey {
+  return `change-note:${runId}`;
+}
+
+function usageCustomFormKey(hostId: string): FormKey {
+  return `usage-custom:${hostId}`;
+}
+
+function launchFormKey(projectId: string): FormKey {
+  return `launch:${projectId}`;
+}
+
+function pairingFormKey(action: string): FormKey {
+  return `pairing:${action}`;
+}
+
+function formFeedback(key: FormKey): string {
+  const error = formOperations.errors.get(key);
+  return error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : "";
+}
+
+function clearFormOperation(key: FormKey): void {
+  formOperations.errors.delete(key);
+}
+
+async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
+  if (formOperations.pending.has(key)) return false;
+  formOperations.pending.add(key);
+  formOperations.errors.delete(key);
+  render();
+  try {
+    await operation();
+    return true;
+  } catch (error) {
+    formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
+    return false;
+  } finally {
+    formOperations.pending.delete(key);
+    render();
+  }
+}
+
+function injectRunForm(copy: ShellCopy, runId: string): string {
+  const key = injectFormKey(runId);
+  const pending = formOperations.pending.has(key);
+  return `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(runId)}" aria-busy="${pending ? "true" : "false"}">
+    <input name="text" maxlength="4000" required value="${escapeHtml(injectDrafts.get(runId) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" ${pending ? "disabled" : ""} />
+    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.injectLine)}</button>
+  </form>${formFeedback(key)}`;
 }
 
 function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
@@ -2003,9 +2632,9 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
   return `<div class="project-row ${active ? "active" : ""}">
     <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
       <b>${escapeHtml(project.name)}</b>
-      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
+      <span>${escapeHtml(projectTrackerLabel(project))}</span>
     </button>
-    ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
+    ${degraded ? `<span class="dot warn" title="${escapeHtml(projectConnectionLabel(copy, project))}"></span>` : ""}
     <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
@@ -2118,6 +2747,12 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
   const usage = snap.usage;
   if (!usage) return "";
   const range = usage.range;
+  const customKey = usageCustomFormKey(snap.focusedHostId);
+  const customPending = formOperations.pending.has(customKey);
+  const customDraft = usageCustomDraft ?? {
+    from: toLocalInput(usage.fromMs),
+    to: toLocalInput(usage.toMs),
+  };
   const rangeBtn = (id: UsageRange, label: string) =>
     `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
   const optionList = (items: UsageOption[], selected: string | null | undefined) =>
@@ -2165,11 +2800,11 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
     </div>
     ${
       range === "custom"
-        ? `<form class="usage-custom" data-act="usage-custom">
-            <input type="datetime-local" name="from" value="${escapeHtml(toLocalInput(usage.fromMs))}" />
-            <input type="datetime-local" name="to" value="${escapeHtml(toLocalInput(usage.toMs))}" />
-            <button type="submit">${escapeHtml(copy.rangeCustom)}</button>
-          </form>`
+        ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
+            <input type="datetime-local" name="from" required value="${escapeHtml(customDraft.from)}" ${customPending ? "disabled" : ""} />
+            <input type="datetime-local" name="to" required value="${escapeHtml(customDraft.to)}" ${customPending ? "disabled" : ""} />
+            <button type="submit" ${customPending ? "disabled" : ""}>${escapeHtml(customPending ? copy.operationPending : copy.rangeCustom)}</button>
+          </form>${formFeedback(customKey)}`
         : ""
     }
     <div class="usage-filters">
@@ -2285,13 +2920,9 @@ function overviewProjectCard(copy: ShellCopy, project: Project): string {
   const counts = projectIssueCounts(project);
   const metric = (label: string, value: number) =>
     `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
-  const connection = project.connection.status === "ready"
-    ? copy.connectionReady
-    : project.connection.status === "unreachable"
-      ? copy.connectionUnavailable
-      : copy.authFailed;
+  const connection = projectConnectionLabel(copy, project);
   return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
-    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(projectTrackerLabel(project))}</small></span><em>${escapeHtml(connection)}</em></span>
     <span class="overview-project-metrics">
       ${metric("Open", counts.open)}
       ${metric(copy.colBlocked, counts.blocked)}
@@ -2384,7 +3015,7 @@ function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): str
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : injectRunForm(copy, run.id)}
   </div>`;
 }
 
@@ -2488,11 +3119,13 @@ function changeLineRow(
     noteTarget.repo === repo.displayPath &&
     noteTarget.path === file.path &&
     noteTarget.line === line.newLine;
+  const noteKey = changeNoteFormKey(view.runId);
+  const notePending = formOperations.pending.has(noteKey);
   const noteForm = active
-    ? `<form class="note-form" data-act="write-note">
-        <input name="text" maxlength="400" value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" />
-        <button type="submit">${escapeHtml(copy.addChangeNote)}</button>
-      </form>`
+    ? `<form class="note-form" data-act="write-note" aria-busy="${notePending ? "true" : "false"}">
+        <input name="text" maxlength="400" required value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" ${notePending ? "disabled" : ""} />
+        <button type="submit" ${notePending ? "disabled" : ""}>${escapeHtml(notePending ? copy.operationPending : copy.addChangeNote)}</button>
+      </form>${formFeedback(noteKey)}`
     : "";
   const noteList = notes
     .map(
@@ -2626,7 +3259,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false):
       <div class="board-head-row">
         <div class="project-heading">
           <h1>${escapeHtml(project.name)}</h1>
-          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+          <p title="${escapeHtml(project.localPath)}">${escapeHtml(projectTrackerLabel(project))}</p>
         </div>
       </div>
     </div>
@@ -2639,7 +3272,9 @@ function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false):
 }
 
 function issueSearch(copy: ShellCopy, snap: Snapshot): string {
-  const search = snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
+  const search = issueSearchDraft ?? snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
+  const key = issueSearchFormKey(snap.focusedProjectId);
+  const pending = formOperations.pending.has(key);
   const triageRoles: TriageRole[] = [
     "needs-triage",
     "needs-info",
@@ -2647,21 +3282,21 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
     "ready-for-human",
     "wontfix",
   ];
-  return `<form class="issue-search" data-act="issue-search">
+  return `<form class="issue-search" data-act="issue-search" aria-busy="${pending ? "true" : "false"}">
     <label class="sr-only" for="issue-title-search">${escapeHtml(copy.searchTitle)}</label>
-    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" />
-    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}">
+    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" ${pending ? "disabled" : ""} />
+    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}" ${pending ? "disabled" : ""}>
       <option value="">${escapeHtml(copy.searchAllTriage)}</option>
       ${triageRoles.map((role) => `<option value="${role}" ${search.triageRole === role ? "selected" : ""}>${role}</option>`).join("")}
     </select>
-    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}">
+    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}" ${pending ? "disabled" : ""}>
       <option value="all" ${search.state === "all" ? "selected" : ""}>${escapeHtml(copy.searchAllStates)}</option>
       <option value="open" ${search.state === "open" ? "selected" : ""}>${escapeHtml(copy.searchOpen)}</option>
       <option value="closed" ${search.state === "closed" ? "selected" : ""}>${escapeHtml(copy.searchClosed)}</option>
     </select>
-    <button type="submit">${escapeHtml(copy.searchSubmit)}</button>
+    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.searchSubmit)}</button>
     <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
-  </form>`;
+  </form>${formFeedback(key)}`;
 }
 
 function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
@@ -2735,12 +3370,13 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
-  const legacyGraph = graph.centerId == null;
+  const overview = graph.mode === "overview";
+  const legacyGraph = graph.mode == null && graph.centerId == null;
   const projectedNodes = [...graph.nodes]
     .sort((a, b) =>
       (a.distance ?? 0) - (b.distance ?? 0) ||
       a.rank - b.rank ||
-      a.number - b.number,
+      (overview ? b.number - a.number : a.number - b.number),
     )
     .slice(0, graphCanvasLimit);
   const columns = new Map<number, GraphNode[]>();
@@ -2760,25 +3396,31 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   const canvasLimit = copy.graphCanvasLimit
     .replace("{shown}", String(projectedNodes.length))
     .replace("{total}", String(graph.nodes.length));
+  const truncated = copy.graphTruncated
+    .replace("{shown}", String(graph.nodes.length))
+    .replace("{total}", String(totalCount));
   return `<div class="dep-graph">
     ${legacyGraph
       ? `<label class="graph-opt">
           <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
           ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
         </label>`
-      : `<div class="graph-toolbar">
-          <span class="graph-center-label">${escapeHtml(centerLabel)}</span>
+      : `<div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
+          <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
           <div class="actions">
-            ${graph.complete
-              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
-              : totalCount > graph.nodes.length
-                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
-                : ""}
+            ${overview
+              ? ""
+              : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
+                ${graph.complete
+                  ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+                  : totalCount > graph.nodes.length
+                    ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                    : ""}`}
           </div>
         </div>
-        ${projectedNodes.length < graph.nodes.length
-          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
-          : ""}`}
+        ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
+        ${projectedNodes.length < graph.nodes.length ? `<div class="graph-limit">${escapeHtml(canvasLimit)}</div>` : ""}
+        ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}`}
     ${reuseCanvas
       ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
       : `<div class="graph-canvas">
@@ -2794,6 +3436,7 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
                     node,
                     board.selected?.id,
                     legacyGraph ? null : graph.centerId ?? null,
+                    overview,
                   ),
                 )
                 .join("")}</div>`,
@@ -2852,12 +3495,13 @@ function graphNode(
   node: GraphNode,
   selectedId: string | undefined,
   centerId: string | null,
+  overview = false,
 ): string {
   const selected = node.id === selectedId ? "sel" : "";
   const closed = node.open ? "" : "closed";
   const center = node.id === centerId ? "root" : "";
   return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
-    <button type="button" class="graph-node-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+    <button type="button" class="graph-node-main" data-act="${overview ? "center-graph" : "focus-issue"}" data-id="${escapeHtml(node.id)}">
       <div class="issue-id">#${node.number}</div>
       <div class="issue-title">${escapeHtml(node.title)}</div>
     </button>
@@ -2916,7 +3560,7 @@ function issueCard(
     .join("");
   const cardAction = "focus-issue";
   const actionTargetId = issue.id;
-  const actions = lane === "frontier"
+  const laneActions = lane === "frontier"
     ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
     : lane === "inProgress" && issue.runId
       ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
@@ -2926,7 +3570,11 @@ function issueCard(
         ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
            <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
         : "";
-  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
+  const dependencyAction = mobileClient()
+    ? ""
+    : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`;
+  const actions = `${dependencyAction}${laneActions}`;
+  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
     <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
       <div class="issue-id">#${issue.number}</div>
       <div class="issue-title">${escapeHtml(issue.title)}</div>
@@ -3130,6 +3778,7 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
     parts.push(copy.refreshNever);
   } else if (status.kind === "offline") {
     parts.push(`${copy.refreshOffline} · ${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    parts.push(copy.refreshOfflineRecovery);
     if (status.nextRefreshInMs != null) {
       parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
     }
@@ -3145,6 +3794,7 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
     }
   } else if (status.kind === "auth-failed") {
     parts.push(copy.refreshAuth);
+    parts.push(copy.refreshAuthRecovery);
     if (status.fetchedAtMs) {
       parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
     }
@@ -3202,6 +3852,12 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
   if (project.connection.status === "ready") {
     return "";
   }
+  if (project.tracker === "local-markdown") {
+    return `<div class="notice bad">
+      <b>${escapeHtml(copy.localTrackerUnavailable)}</b>
+      <p>${escapeHtml(project.connection.message)}</p>
+    </div>`;
+  }
   if (project.connection.status === "unreachable") {
     return `<div class="notice bad">
       <b>${escapeHtml(copy.connectionUnavailable)}</b>
@@ -3233,12 +3889,16 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
           ${form.agents
             .map(
               (agent) =>
-                `<button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>`,
+                `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
+                  <button type="button" class="${agent.id === agentPickerSelection ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>
+                  ${agent.installed || !agent.unavailableReason ? "" : `<p class="notice bad">${escapeHtml(agent.unavailableReason)}</p>`}
+                </div>`,
             )
             .join("")}
         </div>
         <div class="actions">
           <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+          <button type="button" class="primary" data-act="confirm-agent" ${agentPickerSelection ? "" : "disabled"}>${escapeHtml(copy.nextStep)}</button>
         </div>
       </div>
     </div>`;
@@ -3246,66 +3906,71 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
   const folded = form.fields.filter((field) => field.folded);
   const intentActive = draft.custom ? "" : draft.intentId;
+  const key = launchFormKey(form.projectId);
+  const pending = formOperations.pending.has(key);
+  const error = formOperations.errors.get(key) || form.error || "";
   return `<div class="overlay modal" data-act="close-launch">
-    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch">
+    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch" aria-busy="${pending ? "true" : "false"}">
       <h2>${escapeHtml(copy.launchTitle)}</h2>
-      <div class="launch-agent">
-        <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
-        <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
-      </div>
-      <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
-      <div class="field">
-        <div class="label">${escapeHtml(copy.runIntent)}</div>
-        <div class="choices">
-          <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
-          ${form.intents
-            .map(
-              (intent) =>
-                `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
-            )
-            .join("")}
-          <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
+      <fieldset class="launch-fields" ${pending ? "disabled" : ""}>
+        <div class="launch-agent">
+          <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
+          <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
         </div>
-      </div>
-      <div class="field">
-        <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
-        <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
-      </div>
-      ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
-      <div class="field">
-        <div class="label">${escapeHtml(copy.workingDirectory)}</div>
-        <input value="${escapeHtml(form.workingDirectory)}" readonly />
-      </div>
-      <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
-        <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
-        ${escapeHtml(copy.isolation)}
-      </label>
-      <p class="hint">${escapeHtml(copy.isolationHint)}</p>
-      ${
-        form.isolationSupported
-          ? ""
-          : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
-      }
-      <details class="folded" ${launchFolded ? "open" : ""}>
-        <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
+        <div class="field">
+          <div class="label">${escapeHtml(copy.runIntent)}</div>
+          <div class="choices">
+            <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
+            ${form.intents
+              .map(
+                (intent) =>
+                  `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
+              )
+              .join("")}
+            <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
+          <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
+        </div>
+        ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
+        <div class="field">
+          <div class="label">${escapeHtml(copy.workingDirectory)}</div>
+          <input value="${escapeHtml(form.workingDirectory)}" readonly />
+        </div>
+        <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
+          <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
+          ${escapeHtml(copy.isolation)}
+        </label>
+        <p class="hint">${escapeHtml(copy.isolationHint)}</p>
         ${
-          snap.showCommandPreview
-            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
-            : ""
+          form.isolationSupported
+            ? ""
+            : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
         }
-      </details>
-      <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
-      ${form.error ? `<p class="notice bad">${escapeHtml(form.error)}</p>` : ""}
-      <div class="actions">
-        <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary">${escapeHtml(copy.startRun)}</button>
-      </div>
+        <details class="folded" ${launchFolded ? "open" : ""}>
+          <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
+          ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
+          ${
+            snap.showCommandPreview
+              ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
+              : ""
+          }
+        </details>
+        <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
+        ${error ? `<p class="notice bad">${escapeHtml(error)}</p>` : ""}
+        <div class="actions">
+          <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+          <button type="submit" class="primary">${escapeHtml(pending ? copy.startRunPending : copy.startRun)}</button>
+        </div>
+      </fieldset>
     </form>
   </div>`;
 }
 
-function launchField(field: AgentField, value: string): string {
+function launchField(field: AgentField, value: string, values: Record<string, string>): string {
   const id = `launch-${field.id}`;
   if (field.kind === "boolean") {
     return `<label class="graph-opt">
@@ -3315,11 +3980,25 @@ function launchField(field: AgentField, value: string): string {
   }
   if (field.kind === "select") {
     const options = field.options ?? [];
+    const dependentOptions = field.id === "effort" && field.optionGroups && values.model
+      ? field.optionGroups[values.model] ?? options
+      : options;
     const listId = `${id}-list`;
+    const selectedOption = dependentOptions.includes(value) ? value : "";
+    const choiceControl = field.id === "model" || field.id === "effort";
     return `<div class="field">
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-      <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+      ${choiceControl
+        ? `<div class="field-choice-row">
+            <select id="${id}-options" data-launch-option="${escapeHtml(field.id)}" aria-label="${escapeHtml(field.label)} options">
+              <option value="">从已发现选项选择…</option>
+              ${dependentOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === selectedOption ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+            </select>
+            <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} aria-describedby="${id}-hint" placeholder="也可手动输入" />
+          </div>`
+        : `<input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} aria-describedby="${id}-hint" />`}
+      <datalist id="${listId}">${dependentOptions.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+      ${choiceControl ? `<p class="tiny" id="${id}-hint">可从 Agent CLI 已发现的选项中选择，也可手动输入。</p>` : ""}
     </div>`;
   }
   if (field.kind === "multiline") {
@@ -3377,7 +4056,7 @@ function projectForm(copy: ShellCopy): string {
             ${inferenceCandidate
               ? `<div class="notice ok inference-candidate" data-inference="candidate">
                   <div><b>${escapeHtml(inferenceCandidate.name)}</b></div>
-                  <div>${escapeHtml(inferenceCandidate.githubHost)}/${escapeHtml(inferenceCandidate.repository)}</div>
+                  <div>${escapeHtml(inferenceCandidate.tracker === "local-markdown" ? "Local Markdown" : `${inferenceCandidate.githubHost}/${inferenceCandidate.repository}`)}</div>
                   <div class="actions">
                     <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
                   </div>
@@ -3402,6 +4081,18 @@ function projectForm(copy: ShellCopy): string {
   </div>`;
 }
 
+function projectDraftFromForm(form: HTMLFormElement): ProjectDraft {
+  const value = (field: string, fallback: string): string =>
+    form.querySelector<HTMLInputElement>(`[data-field='${field}']`)?.value ?? fallback;
+  return {
+    ...formDraft,
+    name: value("name", formDraft.name),
+    localPath: value("localPath", formDraft.localPath),
+    githubHost: value("githubHost", formDraft.githubHost),
+    repository: value("repository", formDraft.repository),
+  };
+}
+
 function removeDialog(copy: ShellCopy, project: Project): string {
   if (project.hasActiveRun) {
     return `<div class="overlay modal" data-act="close-remove">
@@ -3423,6 +4114,22 @@ function removeDialog(copy: ShellCopy, project: Project): string {
       <div class="actions">
         <button type="button" data-act="close-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
         <button type="button" class="danger primary" data-act="confirm-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(projectOperation === "remove" ? copy.removalPending : copy.removeConfirm)}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function forgetHostDialog(copy: ShellCopy, host?: { id: string; displayName: string; local: boolean }): string {
+  if (!host || host.local) return "";
+  return `<div class="overlay modal" data-act="close-forget-host">
+    <div class="sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.forgetHostConfirmTitle)}</h2>
+      <p class="notice">${escapeHtml(copy.forgetHostConfirmBody)}</p>
+      <p class="hint">${escapeHtml(host.displayName)}</p>
+      ${forgetHostError ? `<p class="notice bad">${escapeHtml(forgetHostError)}</p>` : ""}
+      <div class="actions">
+        <button type="button" data-act="close-forget-host" ${forgetHostPending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="button" class="danger primary" data-act="confirm-forget-host" ${forgetHostPending ? "disabled" : ""}>${escapeHtml(forgetHostPending ? copy.operationPending : copy.forgetHost)}</button>
       </div>
     </div>
   </div>`;
@@ -3669,13 +4376,13 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "open-overview") {
     sidebarVisible = true;
-    await rpc("openHostOverview");
+    await navigateClient({ workspaceView: "host-overview", focusedRunId: "" });
     render();
     return;
   }
   if (act === "return-board") {
     sidebarVisible = sidebarBeforeLift;
-    await rpc("returnToBoard");
+    await navigateClient({ workspaceView: "project" });
     render();
     return;
   }
@@ -3744,6 +4451,9 @@ app.addEventListener("click", async (event) => {
     removeProject = null;
     projectMenuId = "";
     pairingError = "";
+    for (const key of formOperations.errors.keys()) {
+      if (key.startsWith("pairing:")) formOperations.errors.delete(key);
+    }
     render();
     return;
   }
@@ -3810,7 +4520,18 @@ app.addEventListener("click", async (event) => {
     mobileScopeOpen = false;
     mobileView = "board";
     sidebarVisible = true;
-    await rpc("focusProject", { projectId: target.dataset.id });
+    await navigateClient({
+      focusedProjectId: target.dataset.id,
+      selectedIssueId: null,
+      focusedRunId: "",
+      workspaceView: "project",
+      parentFilterId: null,
+      search: { title: "", triageRole: null, state: "all" },
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
+    resetInlineFormDrafts();
     await reportClientView();
     render();
     return;
@@ -3821,6 +4542,8 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
+    agentPickerSelection = "";
+    clearFormOperation(launchFormKey(target.dataset.id));
     await rpc("prepareRunLaunch", { projectId: target.dataset.id });
     render();
     return;
@@ -3830,6 +4553,7 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
+    clearFormOperation(launchFormKey(snapshot.focusedProjectId));
     await rpc("prepareRunLaunch", {
       projectId: snapshot.focusedProjectId,
       issueId: target.dataset.id,
@@ -3848,15 +4572,20 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
+    const projectId = snapshot.launchForm?.projectId ?? launchDraft?.projectId;
+    if (projectId && formOperations.pending.has(launchFormKey(projectId))) return;
     await rpc("cancelRunLaunch");
     launchDraft = null;
+    agentPickerSelection = "";
+    if (projectId) clearFormOperation(launchFormKey(projectId));
     render();
     return;
   }
   if (act === "switch-agent") {
     const form = snapshot.launchForm;
     if (!form) return;
-    launchDraft = null;
+    agentPickerSelection = form.selectedAgentId;
+    clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -3866,14 +4595,22 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "pick-agent" && target.dataset.id) {
+    agentPickerSelection = target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "confirm-agent") {
     const form = snapshot.launchForm;
-    if (!form) return;
+    if (!form || !agentPickerSelection) return;
     launchDraft = null;
+    clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
-      agentId: target.dataset.id,
+      agentId: agentPickerSelection,
+      pickAgent: false,
     });
+    agentPickerSelection = "";
     render();
     return;
   }
@@ -3896,13 +4633,21 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-run" && target.dataset.id) {
     sidebarBeforeLift = sidebarVisible;
     issueDetailVisible = true;
-    await rpc("focusRun", { runId: target.dataset.id });
+    const run = snapshot.runs.find((item) => item.id === target.dataset.id);
+    await navigateClient({
+      focusedProjectId: run?.projectId ?? clientView.focusedProjectId,
+      selectedIssueId: run?.issueId ?? clientView.selectedIssueId,
+      focusedRunId: target.dataset.id,
+      workspaceView: "run",
+    });
     if (mobileClient()) {
       mobileView = "run";
       mobileLiveTerminal = false;
     } else {
       sidebarVisible = false;
     }
+    render();
+    await loadSelectedIssueDocument();
     render();
     return;
   }
@@ -3911,27 +4656,49 @@ app.addEventListener("click", async (event) => {
     settingsOpen = false;
     pairingOpen = false;
     formOpen = null;
-    await rpc("openUsage");
+    await navigateClient({ usageOpen: true });
     render();
     return;
   }
   if (act === "close-usage") {
-    await rpc("closeUsage");
+    await navigateClient({
+      usageOpen: false,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: null },
+    });
     render();
     return;
   }
   if (act === "usage-range" && target.dataset.id) {
-    await rpc("setUsageRange", { range: target.dataset.id });
+    usageCustomDraft = null;
+    clearFormOperation(usageCustomFormKey(snapshot.focusedHostId));
+    await navigateClient({
+      usageQuery: {
+        ...clientView.usageQuery,
+        range: target.dataset.id as UsageRange,
+      },
+    });
     render();
     return;
   }
   if (act === "open-usage-run" && target.dataset.id) {
-    await rpc("openUsageForRun", { runId: target.dataset.id });
+    await navigateClient({
+      usageOpen: true,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: target.dataset.id },
+    });
     render();
     return;
   }
   if (act === "open-run-usage" && target.dataset.id) {
-    await rpc("openRunFromUsage", { runId: target.dataset.id });
+    const run = snapshot.runs.find((item) => item.id === target.dataset.id);
+    if (!run) return;
+    await navigateClient({
+      focusedProjectId: run.projectId,
+      selectedIssueId: run.issueId ?? null,
+      focusedRunId: run.id,
+      workspaceView: "run",
+      usageOpen: false,
+      usageQuery: { ...clientView.usageQuery, highlightedRunId: null },
+    });
     render();
     return;
   }
@@ -3954,15 +4721,18 @@ app.addEventListener("click", async (event) => {
     changesScope = "this-round";
     noteTarget = null;
     noteDraft = "";
+    clearFormOperation(changeNoteFormKey(target.dataset.id));
     await loadViewChanges(target.dataset.id, changesScope);
     render();
     return;
   }
   if (act === "close-changes") {
+    const runId = changesView?.runId;
     changesOpen = false;
     changesView = null;
     noteTarget = null;
     noteDraft = "";
+    if (runId) clearFormOperation(changeNoteFormKey(runId));
     render();
     return;
   }
@@ -3981,6 +4751,7 @@ app.addEventListener("click", async (event) => {
       line: Number(target.dataset.line),
     };
     noteDraft = "";
+    if (changesView) clearFormOperation(changeNoteFormKey(changesView.runId));
     render();
     const input = app.querySelector<HTMLInputElement>(".note-form input");
     input?.focus();
@@ -4007,7 +4778,7 @@ app.addEventListener("click", async (event) => {
     refreshing = true;
     render();
     try {
-      await rpc("refresh");
+      await refreshProject();
     } finally {
       refreshing = false;
     }
@@ -4023,6 +4794,7 @@ app.addEventListener("click", async (event) => {
     formDraft = {
       name: project.name,
       localPath: project.localPath,
+      tracker: project.tracker,
       githubHost: project.githubHost,
       repository: project.repository,
     };
@@ -4079,6 +4851,7 @@ app.addEventListener("click", async (event) => {
       localPath: candidate.localPath,
       githubHost: candidate.githubHost,
       repository: candidate.repository,
+      tracker: candidate.tracker,
     };
     autoFilledProjectName = useCandidateName ? candidate.name : "";
     projectInference = { status: "idle", requestId: projectInference.requestId };
@@ -4094,9 +4867,52 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "forget-host" && target.dataset.id) {
+    forgetHostId = target.dataset.id;
+    forgetHostError = "";
+    hostPickerOpen = false;
+    render();
+    return;
+  }
+  if (act === "close-forget-host" && (event.target === target || target.tagName === "BUTTON")) {
+    if (forgetHostPending) return;
+    forgetHostId = "";
+    forgetHostError = "";
+    render();
+    return;
+  }
+  if (act === "confirm-forget-host" && forgetHostId) {
+    if (forgetHostPending) return;
+    forgetHostPending = true;
+    forgetHostError = "";
+    render();
+    try {
+      await rpc("forgetRemoteHost", { hostId: forgetHostId });
+      forgetHostId = "";
+      hostPickerOpen = false;
+    } catch (error) {
+      forgetHostError = error instanceof Error ? error.message : String(error);
+    } finally {
+      forgetHostPending = false;
+    }
+    render();
+    return;
+  }
   if (act === "focus-host" && target.dataset.id) {
     await reportClientView(false);
-    await rpc("focusHost", { hostId: target.dataset.id });
+    await navigateClient({
+      focusedHostId: target.dataset.id,
+      focusedProjectId: "",
+      selectedIssueId: null,
+      focusedRunId: "",
+      workspaceView: "project",
+      parentFilterId: null,
+      search: { title: "", triageRole: null, state: "all" },
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
+    resetInlineFormDrafts();
     hostPickerOpen = false;
     await reportClientView();
     render();
@@ -4106,12 +4922,9 @@ app.addEventListener("click", async (event) => {
     pairingError = "";
     const addressInput = app.querySelector<HTMLInputElement>("[data-field='address']");
     pairingAddress = addressInput?.value ?? pairingAddress;
-    try {
+    await runFormOperation(pairingFormKey("offer"), async () => {
       await rpc("beginPairingOffer", { address: pairingAddress });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "copy-offer" && snapshot.pairingOffer) {
@@ -4120,16 +4933,14 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "revoke" && target.dataset.id) {
     pairingError = "";
-    try {
+    await runFormOperation(pairingFormKey(`revoke:${target.dataset.id}`), async () => {
       await rpc("revokeClient", { clientId: target.dataset.id });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "connect-host") {
     pairingError = "";
+    clearFormOperation(pairingFormKey("connect"));
     const pasteInput = app.querySelector<HTMLTextAreaElement>("[data-field='paste']");
     pairingPaste = pasteInput?.value ?? pairingPaste;
     const parsed = parsePairingPayload(pairingPaste);
@@ -4138,14 +4949,11 @@ app.addEventListener("click", async (event) => {
       render();
       return;
     }
-    try {
+    await runFormOperation(pairingFormKey("connect"), async () => {
       await rpc("pairRemoteHost", parsed);
       pairingPaste = "";
       pairingOpen = false;
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "language" && target.dataset.id) {
@@ -4196,19 +5004,59 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-view" && target.dataset.id) {
-    await rpc("setCenterView", { view: target.dataset.id });
     if (target.dataset.id === "graph") {
       resetGraphUiState();
-      const selectedId = snapshot.board?.selected?.id;
-      if (selectedId && snapshot.board?.graph?.centerId != null) {
-        await rpc("centerDependencyGraph", { issueId: selectedId });
-      }
+      await navigateClient({
+        centerView: "graph",
+        selectedIssueId: null,
+        graphMode: "overview",
+        graphCenterIssueId: null,
+        completeDependencyGraph: false,
+      });
+    } else {
+      await navigateClient({ centerView: "board" });
     }
     render();
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
-    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
+    const fromOverview = snapshot.board?.graph?.mode === "overview";
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      graphMode: "focused",
+      graphCenterIssueId: target.dataset.id,
+      completeDependencyGraph: fromOverview ? false : clientView.completeDependencyGraph,
+    });
+    render();
+    await loadSelectedIssueDocument();
+    render();
+    return;
+  }
+  if (act === "graph-overview") {
+    resetGraphUiState();
+    await navigateClient({
+      selectedIssueId: null,
+      graphMode: "overview",
+      graphCenterIssueId: null,
+      completeDependencyGraph: false,
+    });
+    render();
+    return;
+  }
+  if (act === "view-dependencies" && target.dataset.id) {
+    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
+    resetGraphUiState();
+    issueDetailVisible = true;
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      focusedRunId: "",
+      centerView: "graph",
+      workspaceView: "project",
+      graphMode: "focused",
+      graphCenterIssueId: target.dataset.id,
+      completeDependencyGraph: false,
+    });
     render();
     await loadSelectedIssueDocument();
     render();
@@ -4216,13 +5064,13 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "graph-complete") {
     resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: true });
+    await navigateClient({ completeDependencyGraph: true });
     render();
     return;
   }
   if (act === "graph-neighborhood") {
     resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: false });
+    await navigateClient({ completeDependencyGraph: false });
     render();
     return;
   }
@@ -4238,7 +5086,11 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-issue" && target.dataset.id) {
     issueDetailVisible = true;
-    await rpc("focusIssue", { issueId: target.dataset.id });
+    await navigateClient({
+      selectedIssueId: target.dataset.id,
+      focusedRunId: "",
+      workspaceView: "project",
+    });
     render();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
@@ -4246,19 +5098,19 @@ app.addEventListener("click", async (event) => {
       mobileLiveTerminal = false;
     } else if (target.closest(".issue-card") && snapshot.focusedRunId) {
       sidebarBeforeLift = sidebarVisible;
-      await rpc("focusRun", { runId: snapshot.focusedRunId });
+      await navigateClient({ workspaceView: "run" });
       sidebarVisible = false;
     }
     render();
     return;
   }
   if (act === "filter-parent" && target.dataset.id) {
-    await rpc("filterParent", { issueId: target.dataset.id });
+    await navigateClient({ parentFilterId: target.dataset.id });
     render();
     return;
   }
   if (act === "clear-filter") {
-    await rpc("clearParentFilter");
+    await navigateClient({ parentFilterId: null });
     render();
   }
 });
@@ -4268,14 +5120,30 @@ app.addEventListener("submit", async (event) => {
   if (search && snapshot) {
     event.preventDefault();
     const data = new FormData(search);
-    await rpc("searchIssues", {
-      projectId: snapshot.focusedProjectId,
+    const draft = {
       title: String(data.get("title") ?? ""),
       triageRole: String(data.get("triageRole") ?? ""),
       state: String(data.get("state") ?? "all"),
+    };
+    issueSearchDraft = draft;
+    const key = issueSearchFormKey(snapshot.focusedProjectId);
+    const success = await runFormOperation(key, async () => {
+      await navigateClient(
+        {
+          search: {
+            title: draft.title,
+            triageRole: (draft.triageRole || null) as TriageRole | null,
+            state: draft.state === "open" || draft.state === "closed" ? draft.state : "all",
+          },
+        },
+        { clientAction: "searchIssues" },
+      );
     });
-    keyboardCursorIssueId = "";
-    render();
+    if (success) {
+      issueSearchDraft = null;
+      keyboardCursorIssueId = "";
+      render();
+    }
     return;
   }
   const inject = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
@@ -4285,9 +5153,14 @@ app.addEventListener("submit", async (event) => {
     const input = inject.querySelector<HTMLInputElement>("input[name='text']");
     const text = input?.value ?? "";
     if (!runId || !text.trim()) return;
-    await rpc("injectRunInput", { runId, text });
-    if (input) input.value = "";
-    render();
+    injectDrafts.set(runId, text);
+    const success = await runFormOperation(injectFormKey(runId), async () => {
+      await rpc("injectRunInput", { runId, text });
+    });
+    if (success) {
+      injectDrafts.delete(runId);
+      render();
+    }
     return;
   }
   const noteForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='write-note']");
@@ -4296,17 +5169,24 @@ app.addEventListener("submit", async (event) => {
   const input = noteForm.querySelector<HTMLInputElement>("input[name='text']");
   const text = input?.value ?? noteDraft;
   if (!text.trim()) return;
-  await rpc("writeChangeNote", {
-    runId: changesView.runId,
-    repo: noteTarget.repo,
-    path: noteTarget.path,
-    line: noteTarget.line,
-    text,
+  noteDraft = text;
+  const target = { ...noteTarget };
+  const runId = changesView.runId;
+  const success = await runFormOperation(changeNoteFormKey(runId), async () => {
+    await rpc("writeChangeNote", {
+      runId,
+      repo: target.repo,
+      path: target.path,
+      line: target.line,
+      text,
+    });
+    await loadViewChanges(runId, changesScope);
   });
-  noteDraft = "";
-  noteTarget = null;
-  await loadViewChanges(changesView.runId, changesScope);
-  render();
+  if (success) {
+    noteDraft = "";
+    noteTarget = null;
+    render();
+  }
 });
 
 app.addEventListener("input", (event) => {
@@ -4429,6 +5309,16 @@ app.addEventListener("change", async (event) => {
     } else if ("value" in target) {
       launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
     }
+    if (launchId === "model" && snapshot?.launchForm) {
+      const effortField = snapshot.launchForm.fields.find((field) => field.id === "effort");
+      const available = effortField?.optionGroups?.[launchDraft.values.model];
+      if (available?.length && !available.includes(launchDraft.values.effort ?? "")) {
+        launchDraft.values.effort = available[0];
+      }
+      scheduleLaunchPreview();
+      render();
+      return;
+    }
     refreshLaunchWarnings();
   }
 });
@@ -4445,6 +5335,24 @@ app.addEventListener("input", (event) => {
   }
   if (target.closest(".note-form") && "value" in target) {
     noteDraft = (target as HTMLInputElement).value;
+  }
+  const injectForm = target.closest<HTMLFormElement>("form[data-act='inject-run']");
+  if (injectForm?.dataset.id && "value" in target) {
+    injectDrafts.set(injectForm.dataset.id, (target as HTMLInputElement).value);
+  }
+  if (target.closest("form[data-act='issue-search']") && "value" in target) {
+    const name = (target as HTMLInputElement).name;
+    if (name === "title") editableIssueSearchDraft().title = (target as HTMLInputElement).value;
+  }
+  if (target.closest("form[data-act='usage-custom']") && "value" in target) {
+    const input = target as HTMLInputElement;
+    const usage = snapshot?.usage;
+    if (usage && !usageCustomDraft) {
+      usageCustomDraft = { from: toLocalInput(usage.fromMs), to: toLocalInput(usage.toMs) };
+    }
+    if (usageCustomDraft && (input.name === "from" || input.name === "to")) {
+      usageCustomDraft[input.name] = input.value;
+    }
   }
   if (
     (field === "name" || field === "githubHost" || field === "repository") &&
@@ -4472,6 +5380,29 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
+  const launchOptionId = target?.getAttribute("data-launch-option");
+  if (launchOptionId && launchDraft && target instanceof HTMLSelectElement) {
+    launchDraft.values[launchOptionId] = target.value;
+    const input = document.querySelector<HTMLInputElement>(`input[data-launch="${CSS.escape(launchOptionId)}"]`);
+    if (input) input.value = target.value;
+    if (launchOptionId === "model") {
+      const effortField = snapshot?.launchForm?.fields.find((field) => field.id === "effort");
+      const available = effortField?.optionGroups?.[target.value];
+      if (available?.length && !available.includes(launchDraft.values.effort ?? "")) {
+        launchDraft.values.effort = available[0];
+      }
+      scheduleLaunchPreview();
+      render();
+      return;
+    }
+    refreshLaunchWarnings();
+    return;
+  }
+  if (target instanceof HTMLSelectElement && target.closest("form[data-act='issue-search']")) {
+    const draft = editableIssueSearchDraft();
+    if (target.name === "triageRole") draft.triageRole = target.value;
+    if (target.name === "state") draft.state = target.value;
+  }
   if (target?.getAttribute("data-overview-filter") === "project" && target instanceof HTMLSelectElement) {
     overviewProjectId = target.value;
     render();
@@ -4487,7 +5418,16 @@ app.addEventListener("change", async (event) => {
   if (filter === "projectId") next.projectId = target.value;
   if (filter === "agentId") next.agentId = target.value;
   if (filter === "model") next.model = target.value;
-  await rpc("setUsageFilter", next);
+  await navigateClient({
+    usageQuery: {
+      ...clientView.usageQuery,
+      filter: {
+        projectId: next.projectId || null,
+        agentId: next.agentId || null,
+        model: next.model || null,
+      },
+    },
+  });
   render();
 });
 
@@ -4496,30 +5436,66 @@ app.addEventListener("submit", async (event) => {
   if (custom) {
     event.preventDefault();
     const data = new FormData(custom);
-    const from = Date.parse(String(data.get("from") ?? ""));
-    const to = Date.parse(String(data.get("to") ?? ""));
+    const draft = {
+      from: String(data.get("from") ?? ""),
+      to: String(data.get("to") ?? ""),
+    };
+    const from = Date.parse(draft.from);
+    const to = Date.parse(draft.to);
     if (Number.isNaN(from) || Number.isNaN(to)) return;
-    await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
-    render();
+    usageCustomDraft = draft;
+    const key = usageCustomFormKey(snapshot?.focusedHostId ?? "");
+    const success = await runFormOperation(key, async () => {
+      await navigateClient({
+        usageQuery: {
+          ...clientView.usageQuery,
+          range: "custom",
+          customFromMs: from,
+          customToMs: to,
+        },
+      }, { clientAction: "setUsageRange" });
+    });
+    if (success) {
+      usageCustomDraft = null;
+      render();
+    }
     return;
   }
   const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
   if (launch && snapshot && launchDraft) {
     event.preventDefault();
-    await rpc("startUnboundRun", {
-      projectId: launchDraft.projectId,
-      issueId: launchDraft.issueId,
-      agentId: launchDraft.agentId,
-      values: launchDraft.values,
-      openingText: launchDraft.openingText,
+    const draft = launchDraft;
+    const existingRunIds = new Set(snapshot.runs.map((run) => run.id));
+    await runFormOperation(launchFormKey(draft.projectId), async () => {
+      const result = await rpc("startUnboundRun", {
+        projectId: draft.projectId,
+        issueId: draft.issueId,
+        agentId: draft.agentId,
+        values: draft.values,
+        openingText: draft.openingText,
+      });
+      const created = result.snapshot.runs.find((run) => !existingRunIds.has(run.id));
+      if (created && !result.snapshot.launchForm) {
+        await navigateClient({
+          focusedProjectId: created.projectId,
+          selectedIssueId: created.issueId ?? null,
+          focusedRunId: created.id,
+          workspaceView: "project",
+        });
+      }
     });
-    render();
     return;
   }
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");
   if (!form || !snapshot) return;
   event.preventDefault();
   if (projectOperation) return;
+  const draft = projectDraftFromForm(form);
+  const pathChanged = draft.localPath.trim() !== formDraft.localPath.trim();
+  formDraft = draft;
+  if (pathChanged && focusedHostIsLocal()) {
+    await inferFromLocalPath(draft.localPath);
+  }
   supersedeProjectInference();
   formError = "";
   projectOperation = "save";
@@ -4528,7 +5504,22 @@ app.addEventListener("submit", async (event) => {
     if (formOpen === "edit") {
       await rpc("editProject", { projectId: formProjectId, ...formDraft });
     } else {
-      await rpc("registerProject", formDraft);
+      const existingProjectIds = new Set(snapshot.projects.map((project) => project.id));
+      const result = await rpc("registerProject", formDraft);
+      const created = result.snapshot.projects.find((project) => !existingProjectIds.has(project.id));
+      if (created) {
+        await navigateClient({
+          focusedProjectId: created.id,
+          selectedIssueId: null,
+          focusedRunId: "",
+          workspaceView: "project",
+          parentFilterId: null,
+          search: { title: "", triageRole: null, state: "all" },
+          graphMode: "overview",
+          graphCenterIssueId: null,
+          completeDependencyGraph: false,
+        });
+      }
     }
     formOpen = null;
   } catch (error) {
@@ -4588,7 +5579,7 @@ function onClientForegroundOrHidden(): void {
         await reportClientView(false);
         return;
       }
-      if (!changed) await rpc("refresh");
+      if (changed || clientView.focusedProjectId) await refreshProject();
       render();
     } finally {
       foregroundRefresh = null;
@@ -4612,6 +5603,10 @@ function ensureTick(): void {
 }
 
 function renderAfterTick(): void {
+  if (!snapshot || snapshotRenderKey(snapshot) === renderedSnapshotKey) {
+    tickRenderPending = false;
+    return;
+  }
   if (activePointers.size > 0) {
     tickRenderPending = true;
     return;
@@ -4742,6 +5737,7 @@ rpc("snapshot")
     render();
     ensureTick();
     await reportClientView();
+    if (shouldReportClientView() && clientView.focusedProjectId) await refreshProject();
     render();
     if (desktopShellAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
       startupUpdateChecked = true;
