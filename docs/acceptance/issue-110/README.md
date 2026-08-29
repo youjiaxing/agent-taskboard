@@ -8,6 +8,8 @@
 
 真实 Tauri 桌面壳结果：**BLOCKED**。窗口可由 Computer Use 读取，但所有写入动作均返回 `noWindowsAvailable`，无法在本轮可靠完成交互；因此任何未实际操作的项保持 BLOCKED，不升级为 PASS。
 
+Codex Desktop 内置 Browser 结果：**PARTIAL / 有条件 PASS**。Local Markdown 登记并看到 Issue、self-hosted Git remote 登记并保留完整 namespace、编辑、活跃 Run 移除防护、移除当前 Project 后回退均已通过内置 Browser；目录选择器和自动推断路径在 Browser Client 中不具备桌面目录选择能力，自动推断由共享 Client E2E 覆盖。
+
 ## 验收矩阵
 
 | Acceptance criterion | 状态 | 证据 |
@@ -19,6 +21,7 @@
 | 单一合法 remote 自动填充，多 remote 才候选，手填值不覆盖 | PASS | `project-registration.mjs`；`projects.rs` inference tests |
 | HTTPS、SSH、自建 GitLab / 其他 Git remote 形式可保留完整仓库身份 | PASS | `projects.rs::inference_accepts_a_non_github_git_remote`；`projects.rs::inference_preserves_nested_self_hosted_git_namespaces` |
 | 真实桌面壳实际登记 Local Markdown、自建 Git remote，编辑、移除、活跃 Run 防护、回退 | BLOCKED | 真实 Tauri 窗口无法接受 Computer Use 写入；以下场景均未执行：Local Markdown 登记、自建 Git remote 登记、编辑、移除当前 Project / 回退、活跃 Run 防护 |
+| Codex Desktop 内置 Browser 实际登记 Local Markdown、自建 Git remote，编辑、移除、活跃 Run 防护、回退 | PARTIAL / PASS | Local Markdown 登记并看到 `#1 Local desktop issue`、self-hosted 完整 namespace、编辑、active Run 防护和当前 Project 回退均通过；自动推断与真实 Tauri 壳仍按边界单独记录 |
 | 每个场景记录 PASS / FAIL / BLOCKED 与实际操作结果 | PASS | 本文件逐项记录自动化证据与真实 Tauri 阻塞原因；未覆盖项不计 PASS |
 
 ## 自动化证据
@@ -46,6 +49,19 @@
 | 活跃 Run 阻止移除 | BLOCKED | 未在真实桌面启动 Run 或点击移除；逻辑 / 共享 Client 覆盖为 PASS |
 
 阻塞证据：Tauri dev binary 成功编译并启动，AX URL 为 `tauri://localhost`；Computer Use 可读截图和 AX 树，但 `click`、`type_text` 等写入动作稳定返回 `Computer Use server error -10005: noWindowsAvailable`。本轮没有填写 credential、没有执行 GitHub 写操作，也没有删除任何本地目录。
+
+## Codex Desktop 内置 Browser 验收日志
+
+| 场景 | 状态 | 实际操作结果 |
+| --- | --- | --- |
+| Local Markdown 登记并看到 Issue | PASS | 在 `http://127.0.0.1:10529/` 手动粘贴临时 Host 路径，登记 `issue110-local-browser`；侧栏显示 `Local Markdown`，看板显示 `#1 Local desktop issue` |
+| self-hosted Git remote 完整 namespace 登记 | PASS（登记） / BLOCKED（真实同步） | 登记 `issue110-gitlab-browser` 后侧栏和页面均显示 `gitlab.example.com/acme/platform/garden`；虚构 host 的真实 Tracker 同步进入“凭据不可用”，未填写 credential |
+| 编辑 Project | PASS | 将 self-hosted Project 名称改为 `issue110-gitlab-edited`，remote identity 保持不变 |
+| 活跃 Run 阻止移除 | PASS | 从 Local Markdown Project 启动临时 `Grok Build` Run；移除入口显示“这个 Project 有活跃 Run。先停止或结束 Run”，随后停止临时 Run，状态为“执行已停” |
+| 移除当前 Project、回退 | PASS | 在确认后点击“只移除登记”移除当前 self-hosted Project；它从侧栏消失，当前 Project 回退到 `issue110-local-browser` |
+| 目录选择与自动推断 | PARTIAL | Browser Client 的“选择目录”明确提示仅桌面窗口可用；本轮使用手动路径和 host/repository 字段完成登记，自动推断由 `project-tracker-lifecycle.mjs` 和 HostKernel 测试覆盖 |
+
+Browser 证据边界：使用 Codex Desktop 内置 Browser 连接本机 loopback Client，所有 UI 操作通过 Browser 的可见 DOM / Playwright / CUA 完成。未调用真实 GitHub 写接口、未填写 credential；临时 fixture 目录和 Markdown Issue 文件已确认保留。为保持测试环境可复用，`issue110-local-browser` 及其已停止 Run 仍保留在本机 Host 登记中。
 
 ## 验证命令
 
