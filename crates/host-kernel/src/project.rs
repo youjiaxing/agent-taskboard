@@ -3,11 +3,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tracker::TrackerKind;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInference {
     pub name: String,
     pub local_path: PathBuf,
+    pub tracker: TrackerKind,
     pub github_host: String,
     pub repository: String,
 }
@@ -31,11 +34,17 @@ pub(crate) fn normalize_github_host(raw: &str) -> Result<String, String> {
     if host.is_empty() || host.contains(' ') {
         return Err("github host is invalid".into());
     }
+    if trimmed == "local" {
+        return Ok("local".into());
+    }
     Ok(host.to_ascii_lowercase())
 }
 
 pub(crate) fn normalize_repository(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim().trim_end_matches('/').trim_end_matches(".git");
+    if Path::new(trimmed).is_absolute() {
+        return Ok(trimmed.to_string());
+    }
     if let Some((owner, repo)) = owner_repo(trimmed) {
         return Ok(format!("{owner}/{repo}"));
     }
@@ -78,14 +87,46 @@ pub(crate) fn infer_github_project(local_path: &Path) -> Option<ProjectInference
     if name.is_empty() {
         return None;
     }
+    if has_local_markdown_tracker(local_path) {
+        return Some(ProjectInference {
+            name,
+            local_path: local_path.to_path_buf(),
+            tracker: TrackerKind::LocalMarkdown,
+            github_host: "local".into(),
+            repository: local_path.to_string_lossy().to_string(),
+        });
+    }
     let config = git_config_path(local_path)?;
     let text = fs::read_to_string(config).ok()?;
     let (github_host, repository) = github_remote_from_config(&text)?;
     Some(ProjectInference {
         name,
         local_path: local_path.to_path_buf(),
+        tracker: TrackerKind::Github,
         github_host,
         repository,
+    })
+}
+
+fn has_local_markdown_tracker(local_path: &Path) -> bool {
+    let scratch = local_path.join(".scratch");
+    let Ok(features) = fs::read_dir(scratch) else {
+        return false;
+    };
+    features.flatten().any(|feature| {
+        let issues = feature.path().join("issues");
+        fs::read_dir(issues).ok().is_some_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry.path().extension().is_some_and(|ext| ext == "md")
+                    && entry
+                        .path()
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .and_then(|s| s.split_once('-'))
+                        .and_then(|(n, _)| n.parse::<u64>().ok())
+                        .is_some()
+            })
+        })
     })
 }
 
@@ -133,7 +174,7 @@ fn github_remote_from_config(text: &str) -> Option<(String, String)> {
         let Some(url) = remote_url(trimmed) else {
             continue;
         };
-        let Some(parsed) = parse_github_remote_url(&url) else {
+        let Some(parsed) = parse_git_remote_url(&url) else {
             continue;
         };
         if remote == "origin" {
@@ -159,12 +200,12 @@ fn remote_url(line: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
-fn parse_github_remote_url(url: &str) -> Option<(String, String)> {
+fn parse_git_remote_url(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
     if let Some(rest) = url.strip_prefix("git@") {
         let (host, repo) = rest.split_once(':')?;
-        return github_host_and_repo(host, repo);
+        return git_host_and_repo(host, repo);
     }
     let rest = url
         .strip_prefix("https://")
@@ -173,10 +214,10 @@ fn parse_github_remote_url(url: &str) -> Option<(String, String)> {
         .or_else(|| url.strip_prefix("ssh://"))?;
     let rest = rest.strip_prefix("git@").unwrap_or(rest);
     let (host, repo) = rest.split_once('/')?;
-    github_host_and_repo(host, repo)
+    git_host_and_repo(host, repo)
 }
 
-fn github_host_and_repo(host: &str, repo: &str) -> Option<(String, String)> {
+fn git_host_and_repo(host: &str, repo: &str) -> Option<(String, String)> {
     let host = host
         .trim()
         .trim_start_matches('[')
@@ -187,16 +228,8 @@ fn github_host_and_repo(host: &str, repo: &str) -> Option<(String, String)> {
         .next()
         .unwrap_or(host)
         .trim();
-    if !is_github_host(host) {
-        return None;
-    }
     let (owner, name) = owner_repo(repo)?;
     Some((host.to_ascii_lowercase(), format!("{owner}/{name}")))
-}
-
-fn is_github_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "github.com" || host.starts_with("github.") || host.contains(".github.")
 }
 
 fn owner_repo(raw: &str) -> Option<(&str, &str)> {

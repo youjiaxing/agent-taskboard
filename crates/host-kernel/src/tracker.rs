@@ -15,6 +15,7 @@ use crate::launch_env::{LaunchEnvPort, LaunchEnvironment};
 #[serde(rename_all = "kebab-case")]
 pub enum TrackerKind {
     Github,
+    LocalMarkdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,7 @@ pub enum CredentialSource {
     SecretsFile,
     Cli,
     GenericEnv,
+    LocalFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,6 +335,491 @@ pub struct MemoryTracker {
     comments: Mutex<BTreeMap<String, Vec<IssueComment>>>,
     actor: String,
     source: CredentialSource,
+}
+
+/// Tracker adapter for the repository-local Markdown convention used by Matt's
+/// local tracker. The project `repository` field contains the absolute checkout
+/// path; files are discovered below `.scratch/*/issues/*.md`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LocalMarkdownTracker;
+
+impl LocalMarkdownTracker {
+    fn root(ctx: &ProbeContext<'_>) -> PathBuf {
+        PathBuf::from(ctx.repository)
+    }
+
+    fn issue_files(root: &Path) -> Vec<PathBuf> {
+        let scratch = root.join(".scratch");
+        let Ok(features) = std::fs::read_dir(scratch) else {
+            return Vec::new();
+        };
+        let mut files = Vec::new();
+        for feature in features.flatten() {
+            let issues = feature.path().join("issues");
+            let Ok(entries) = std::fs::read_dir(issues) else {
+                continue;
+            };
+            files.extend(entries.flatten().map(|entry| entry.path()).filter(|path| {
+                path.extension().is_some_and(|ext| ext == "md")
+                    && path
+                        .file_stem()
+                        .and_then(|name| name.to_str())
+                        .and_then(|name| name.split_once('-'))
+                        .and_then(|(n, _)| n.parse::<u64>().ok())
+                        .is_some()
+            }));
+        }
+        files.sort();
+        files
+    }
+
+    fn parse_file(root: &Path, path: &Path) -> Option<(IssueRecord, String)> {
+        let body = std::fs::read_to_string(path).ok()?;
+        let stem = path.file_stem()?.to_string_lossy();
+        let (number_text, _) = stem.split_once('-')?;
+        let number = number_text.parse::<u64>().ok()?;
+        let title = body
+            .lines()
+            .find_map(|line| {
+                let heading = line.trim().strip_prefix('#')?.trim();
+                let heading = heading
+                    .strip_prefix(&format!("{number} "))
+                    .unwrap_or(heading);
+                heading
+                    .strip_prefix('—')
+                    .or_else(|| heading.strip_prefix('-'))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| stem.to_string());
+        let status = field_value(&body, "Status")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let closed_legacy =
+            field_value(&body, "Closed").is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        let open = !(matches!(status.as_str(), "resolved" | "wontfix") || closed_legacy);
+        let claimed = status == "claimed";
+        let repository = root.to_string_lossy().to_string();
+        let url = format!("file://{}", path.display());
+        let mut issue = IssueRecord {
+            repository,
+            number,
+            title,
+            url,
+            open,
+            closed_at: (!open).then(|| "local-markdown".into()),
+            assignees: claimed
+                .then(|| vec![MEMORY_TRACKER_ACTOR.into()])
+                .unwrap_or_default(),
+            labels: Vec::new(),
+            parent: None,
+            children: Vec::new(),
+            blocked_by: Vec::new(),
+            blocking: Vec::new(),
+        };
+        for reference in blocked_by_refs(&body) {
+            if let Ok(number) = reference
+                .trim_matches(|c: char| !c.is_ascii_digit())
+                .parse::<u64>()
+            {
+                issue.blocked_by.push(DependencyRef::Known(
+                    IssueRef::new(root.to_string_lossy(), number, reference).with_open(true),
+                ));
+            }
+        }
+        if let Some(reference) = field_value(&body, "Part of") {
+            if let Ok(parent_number) = reference
+                .trim_matches(|c: char| !c.is_ascii_digit())
+                .parse::<u64>()
+            {
+                issue.parent = Some(
+                    IssueRef::new(root.to_string_lossy(), parent_number, reference).with_open(true),
+                );
+            }
+        }
+        Some((issue, body))
+    }
+
+    fn write_status(
+        root: &Path,
+        issue_id: &str,
+        status: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        let (_, number) = parse_issue_id(issue_id).ok_or_else(|| TrackerWriteError::Failed {
+            message: "unknown issue".into(),
+        })?;
+        let path = Self::issue_files(root)
+            .into_iter()
+            .find(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.split_once('-'))
+                    .and_then(|(n, _)| n.parse::<u64>().ok())
+                    == Some(number)
+            })
+            .ok_or_else(|| TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            })?;
+        let body = std::fs::read_to_string(&path).map_err(|err| TrackerWriteError::Failed {
+            message: err.to_string(),
+        })?;
+        let mut lines: Vec<String> = body.lines().map(ToOwned::to_owned).collect();
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| field_value(line, "Status").is_some())
+        {
+            let prefix = line
+                .split_once(':')
+                .map(|(prefix, _)| prefix)
+                .unwrap_or("Status");
+            *line = format!("{prefix}: {status}");
+        } else {
+            lines.insert(1.min(lines.len()), format!("Status: {status}"));
+        }
+        std::fs::write(&path, format!("{}\n", lines.join("\n"))).map_err(|err| {
+            TrackerWriteError::Failed {
+                message: err.to_string(),
+            }
+        })?;
+        Self::parse_file(root, &path)
+            .map(|(issue, _)| issue)
+            .ok_or_else(|| TrackerWriteError::Failed {
+                message: "invalid issue file".into(),
+            })
+    }
+
+    fn rewrite_metadata(
+        root: &Path,
+        issue_id: &str,
+        field: &str,
+        value: Option<&str>,
+    ) -> Result<(), TrackerWriteError> {
+        let (_, number) = parse_issue_id(issue_id).ok_or_else(|| TrackerWriteError::Failed {
+            message: "unknown issue".into(),
+        })?;
+        let path = Self::issue_files(root)
+            .into_iter()
+            .find(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.split_once('-'))
+                    .and_then(|(n, _)| n.parse::<u64>().ok())
+                    == Some(number)
+            })
+            .ok_or_else(|| TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            })?;
+        let body = std::fs::read_to_string(&path).map_err(|err| TrackerWriteError::Failed {
+            message: err.to_string(),
+        })?;
+        let mut lines: Vec<String> = body
+            .lines()
+            .filter(|line| {
+                !line
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with(&field.to_ascii_lowercase())
+            })
+            .map(ToOwned::to_owned)
+            .collect();
+        if let Some(value) = value {
+            lines.insert(1.min(lines.len()), format!("{field}: {value}"));
+        }
+        std::fs::write(path, format!("{}\n", lines.join("\n"))).map_err(|err| {
+            TrackerWriteError::Failed {
+                message: err.to_string(),
+            }
+        })
+    }
+
+    fn rewrite_blocked_by(
+        root: &Path,
+        issue_id: &str,
+        blocking_issue_id: &str,
+        add: bool,
+    ) -> Result<(), TrackerWriteError> {
+        let (_, number) = parse_issue_id(issue_id).ok_or_else(|| TrackerWriteError::Failed {
+            message: "unknown issue".into(),
+        })?;
+        let (_, blocker_number) =
+            parse_issue_id(blocking_issue_id).ok_or_else(|| TrackerWriteError::Failed {
+                message: "unknown blocker".into(),
+            })?;
+        let path = Self::issue_files(root)
+            .into_iter()
+            .find(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .and_then(|stem| stem.split_once('-'))
+                    .and_then(|(n, _)| n.parse::<u64>().ok())
+                    == Some(number)
+            })
+            .ok_or_else(|| TrackerWriteError::Failed {
+                message: "unknown issue".into(),
+            })?;
+        let body = std::fs::read_to_string(&path).map_err(|err| TrackerWriteError::Failed {
+            message: err.to_string(),
+        })?;
+        let mut refs = blocked_by_refs(&body);
+        refs.retain(|reference| {
+            reference.trim_matches(|c: char| !c.is_ascii_digit()) != blocker_number.to_string()
+        });
+        if add {
+            refs.push(blocker_number.to_string());
+        }
+        let replacement = if refs.is_empty() {
+            "Blocked by: None".to_string()
+        } else {
+            format!("Blocked by: {}", refs.join(", "))
+        };
+        let mut lines: Vec<String> = body.lines().map(ToOwned::to_owned).collect();
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.trim_start().starts_with("Blocked by:"))
+        {
+            *line = replacement;
+        } else {
+            lines.insert(1.min(lines.len()), replacement);
+        }
+        std::fs::write(path, format!("{}\n", lines.join("\n"))).map_err(|err| {
+            TrackerWriteError::Failed {
+                message: err.to_string(),
+            }
+        })
+    }
+}
+
+fn field_value(text: &str, field: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| {
+            let line = line.trim().trim_matches('*');
+            let (key, value) = line.split_once(':')?;
+            (key.trim().eq_ignore_ascii_case(field))
+                .then(|| value.trim().trim_matches('*').to_string())
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn blocked_by_refs(text: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            in_section = trimmed[3..].trim().eq_ignore_ascii_case("blocked by");
+            continue;
+        }
+        if let Some(value) = trimmed
+            .strip_prefix("Blocked by:")
+            .or_else(|| trimmed.strip_prefix("**Blocked by:**"))
+        {
+            refs.extend(
+                value
+                    .split([',', ';'])
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty() && !item.starts_with("None"))
+                    .map(ToOwned::to_owned),
+            );
+        } else if in_section {
+            let value = trimmed.strip_prefix('-').unwrap_or(trimmed).trim();
+            if !value.is_empty() && !value.starts_with("None") {
+                refs.push(value.to_string());
+            }
+        }
+    }
+    refs
+}
+
+impl TrackerPort for LocalMarkdownTracker {
+    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
+        let root = Self::root(ctx);
+        if root.is_dir() && !Self::issue_files(&root).is_empty() {
+            ProbeOutcome::Ready {
+                source: CredentialSource::LocalFile,
+            }
+        } else {
+            ProbeOutcome::Failed {
+                source: Some(CredentialSource::LocalFile),
+                kind: AuthFailureKind::Unreachable,
+                cli_detected: false,
+                detail: Some(".scratch/*/issues/*.md not found".into()),
+            }
+        }
+    }
+
+    fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError> {
+        let root = Self::root(ctx);
+        if !root.is_dir() {
+            return Err(TrackerReadError::Offline {
+                source: Some(CredentialSource::LocalFile),
+                cli_detected: false,
+                detail: Some("local project directory does not exist".into()),
+            });
+        }
+        let mut issues: Vec<IssueRecord> = Self::issue_files(&root)
+            .iter()
+            .filter_map(|path| Self::parse_file(&root, path).map(|(issue, _)| issue))
+            .collect();
+        let states: BTreeMap<u64, bool> = issues
+            .iter()
+            .map(|issue| (issue.number, issue.open))
+            .collect();
+        for issue in &mut issues {
+            for dependency in &mut issue.blocked_by {
+                if let DependencyRef::Known(reference) = dependency {
+                    reference.open = states.get(&reference.number).copied();
+                }
+            }
+        }
+        let by_number: BTreeMap<u64, (String, String, bool)> = issues
+            .iter()
+            .map(|issue| (issue.number, (issue.id(), issue.title.clone(), issue.open)))
+            .collect();
+        for issue in &mut issues {
+            if let Some(parent) = issue.parent.as_mut() {
+                if let Some((_, title, open)) = by_number.get(&parent.number) {
+                    parent.title = title.clone();
+                    parent.open = Some(*open);
+                }
+            }
+        }
+        let parents: Vec<(u64, IssueRef)> = issues
+            .iter()
+            .filter_map(|issue| issue.parent.clone().map(|parent| (issue.number, parent)))
+            .collect();
+        for (child_number, parent) in parents {
+            let child = by_number
+                .get(&child_number)
+                .map(|(_, title, open)| (title.clone(), *open));
+            if let Some(parent_issue) = issues
+                .iter_mut()
+                .find(|candidate| candidate.number == parent.number)
+            {
+                if !parent_issue
+                    .children
+                    .iter()
+                    .any(|child| child.number == child_number)
+                {
+                    if let Some((title, open)) = child {
+                        parent_issue.children.push(
+                            IssueRef::new(&parent_issue.repository, child_number, title)
+                                .with_open(open),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(issues)
+    }
+
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        let root = Self::root(ctx);
+        let issues = Self::issue_files(&root);
+        issues
+            .iter()
+            .find_map(|path| {
+                Self::parse_file(&root, path)
+                    .filter(|(issue, _)| issue.id() == issue_id)
+                    .map(|(issue, body)| IssueDocument { issue, body })
+            })
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })
+    }
+
+    fn create_issue(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        _title: &str,
+        _body: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Err(TrackerWriteError::Failed {
+            message: "local markdown tracker does not support creating issues from this view"
+                .into(),
+        })
+    }
+    fn update_issue(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        _issue_id: &str,
+        _edit: IssueEdit<'_>,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Err(TrackerWriteError::Failed {
+            message: "local markdown issue editing is not supported".into(),
+        })
+    }
+    fn close_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Self::write_status(&Self::root(ctx), issue_id, "resolved")
+    }
+    fn reopen_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Self::write_status(&Self::root(ctx), issue_id, "open")
+    }
+    fn add_comment(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        _issue_id: &str,
+        _body: &str,
+    ) -> Result<IssueComment, TrackerWriteError> {
+        Err(TrackerWriteError::Failed {
+            message: "local markdown comments are not supported from this view".into(),
+        })
+    }
+    fn claim_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Self::write_status(&Self::root(ctx), issue_id, "claimed")
+    }
+    fn release_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError> {
+        Self::write_status(&Self::root(ctx), issue_id, "open")
+    }
+    fn set_parent(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        parent: Option<&str>,
+    ) -> Result<(), TrackerWriteError> {
+        Self::rewrite_metadata(
+            &Self::root(ctx),
+            issue_id,
+            "Part of",
+            parent.map(|id| id.rsplit_once('#').map(|(_, number)| number).unwrap_or(id)),
+        )
+    }
+    fn add_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        blocking_issue_id: &str,
+    ) -> Result<(), TrackerWriteError> {
+        Self::rewrite_blocked_by(&Self::root(ctx), issue_id, blocking_issue_id, true)
+    }
+    fn remove_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        blocking_issue_id: &str,
+    ) -> Result<(), TrackerWriteError> {
+        Self::rewrite_blocked_by(&Self::root(ctx), issue_id, blocking_issue_id, false)
+    }
 }
 
 impl MemoryTracker {

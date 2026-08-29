@@ -24,6 +24,7 @@ if (!issueWithFormOpen || issueWithFormOpen.claimedBy.length !== 0 || formOpened
 const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
 if (await pick.count()) {
   await pick.click();
+  await page.click("button[data-act='confirm-agent']");
   await page.waitForSelector("form[data-form='launch']");
 }
 const opening = page.locator("textarea[data-field='openingText']");

@@ -63,11 +63,11 @@ pub use session::{
 };
 pub use tracker::{
     gh_known_install_locations, map_github_issue_node, resolve_gh, AuthFailureKind,
-    CredentialSource, GitHubTracker, IssueComment, IssueDocument, IssueEdit, MemoryTracker,
-    ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind,
-    TrackerPort, TrackerReadError, TrackerWriteError,
+    CredentialSource, GitHubTracker, IssueComment, IssueDocument, IssueEdit, LocalMarkdownTracker,
+    MemoryTracker, ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub,
+    TrackerKind, TrackerPort, TrackerReadError, TrackerWriteError,
 };
-pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
+pub use tracker_seam::{TrackerReadOutcome, TrackerRouter, TrackerSeam, TrackerWriteOp};
 pub use usage::{
     BucketKind, RunTelemetryLane, TelemetryLane, TelemetryPoint, TelemetrySample, TokenCounts,
     UsageFilter, UsagePage, UsageRange, RING_LEN,
@@ -133,6 +133,9 @@ pub enum Command {
     PairRemoteHost {
         address: String,
         code: String,
+    },
+    ForgetRemoteHost {
+        host_id: String,
     },
     FocusHost {
         host_id: String,
@@ -680,6 +683,10 @@ pub struct ShellCopy {
     pub hosts: String,
     pub projects: String,
     pub this_machine: String,
+    pub next_step: String,
+    pub forget_host: String,
+    pub forget_host_confirm_title: String,
+    pub forget_host_confirm_body: String,
     pub shade_light: String,
     pub shade_dark: String,
     pub edit_menu: String,
@@ -996,7 +1003,9 @@ impl KernelPorts {
     pub fn live() -> Self {
         let launch_env: Arc<dyn LaunchEnvPort> = Arc::new(ShellLaunchEnv::live());
         Self {
-            tracker: Arc::new(GitHubTracker::live(launch_env.clone())),
+            tracker: Arc::new(TrackerRouter::new(Arc::new(GitHubTracker::live(
+                launch_env.clone(),
+            )))),
             agents: builtin_agents(),
             launch_env,
             sessions: Arc::new(PtySessionFactory),
@@ -2018,6 +2027,9 @@ impl HostKernel {
             }
             Command::PairRemoteHost { address, code } => {
                 self.pair_remote_host(&address, &code)?;
+            }
+            Command::ForgetRemoteHost { host_id } => {
+                self.forget_remote_host(&host_id)?;
             }
             Command::FocusHost { host_id } => {
                 self.focus_host(&host_id)?;
@@ -3173,6 +3185,9 @@ impl HostKernel {
                     .to_string();
                 self.dispatch(Command::PairRemoteHost { address, code })
             }
+            "forgetRemoteHost" => self.dispatch(Command::ForgetRemoteHost {
+                host_id: required_string(&request, "hostId")?,
+            }),
             "focusHost" => {
                 let host_id = request
                     .get("hostId")
@@ -3956,7 +3971,17 @@ impl HostKernel {
         let (isolation_supported, isolation_reason) =
             launch::isolation_availability(agent.as_ref(), &project.local_path, language);
         let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
-        let skip_agent_picker = !pick_agent && (last.is_some() || agent_id.is_some());
+        let remembered_available = last.as_deref().is_some_and(|id| {
+            agents
+                .iter()
+                .any(|candidate| candidate.id == id && candidate.installed)
+        });
+        let explicit_available = agent_id.as_deref().is_some_and(|id| {
+            agents
+                .iter()
+                .any(|candidate| candidate.id == id && candidate.installed)
+        });
+        let skip_agent_picker = !pick_agent && (remembered_available || explicit_available);
         let mut warnings = launch::unknown_enum_warnings(&fields, &values, language);
         warnings.extend(launch::side_effect_warnings(
             &project.local_path,
@@ -5159,6 +5184,34 @@ impl HostKernel {
         self.persist_client_settings(&self.appearance.clone())
     }
 
+    fn forget_remote_host(&mut self, host_id: &str) -> Result<(), KernelError> {
+        if host_id == LOCAL_HOST_ID {
+            return Err(KernelError::Protocol(
+                "local host cannot be forgotten".into(),
+            ));
+        }
+        let before = self.remote_hosts.len();
+        self.remote_hosts.retain(|host| host.id != host_id);
+        if self.remote_hosts.len() == before {
+            return Err(KernelError::Protocol("unknown host".into()));
+        }
+        self.remote_client_views.values_mut().for_each(|views| {
+            views.remove(host_id);
+        });
+        if self.focused_host_id == host_id {
+            self.remote_view = None;
+            self.focused_host_id = if self.host_mode == HostMode::HostAndClient {
+                LOCAL_HOST_ID.to_string()
+            } else {
+                self.remote_hosts
+                    .first()
+                    .map(|host| host.id.clone())
+                    .unwrap_or_default()
+            };
+        }
+        self.persist_client_settings(&self.appearance.clone())
+    }
+
     fn redeem_pairing(
         &mut self,
         code: &str,
@@ -5662,12 +5715,17 @@ impl HostKernel {
                 "a Project is already registered for this directory".into(),
             ));
         }
+        let tracker_kind = if github_host == "local" {
+            TrackerKind::LocalMarkdown
+        } else {
+            TrackerKind::Github
+        };
         let connection = self.probe_github(&github_host, &repository);
         let record = ProjectRecord {
             id: pairing::random_id(),
             name,
             local_path,
-            tracker: TrackerKind::Github,
+            tracker: tracker_kind,
             github_host,
             repository,
             connection,
@@ -5734,7 +5792,13 @@ impl HostKernel {
             .iter()
             .find(|project| project.id == project_id)
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let tracker_kind = if github_host == "local" {
+            TrackerKind::LocalMarkdown
+        } else {
+            TrackerKind::Github
+        };
         let registration_changed = current.local_path != local_path
+            || current.tracker != tracker_kind
             || current.github_host != github_host
             || current.repository != repository;
         if registration_changed && self.refresh_in_flight.contains(project_id) {
@@ -5751,6 +5815,7 @@ impl HostKernel {
         project.name = name;
         if registration_changed {
             project.local_path = local_path;
+            project.tracker = tracker_kind;
             project.github_host = github_host;
             project.repository = repository;
             project.connection = connection.expect("changed registration connection");
@@ -6906,6 +6971,10 @@ impl ShellCopy {
                 hosts: "Host".into(),
                 projects: "Project".into(),
                 this_machine: "本机".into(),
+                next_step: "下一步".into(),
+                forget_host: "忘记 Host".into(),
+                forget_host_confirm_title: "忘记这个远程 Host？".into(),
+                forget_host_confirm_body: "只会从当前 Client 移除连接信息，不会停止远程 Host 或撤销其他 Client。".into(),
                 shade_light: "浅".into(),
                 shade_dark: "深".into(),
                 edit_menu: "编辑".into(),
@@ -7032,7 +7101,7 @@ impl ShellCopy {
                 recent_limit: "最近完成列张数".into(),
                 recent_limit_help: "默认 5。只影响最右那一列。不能拖进这一列来关票。".into(),
                 refresh_interval: "自动刷新间隔（秒）".into(),
-                refresh_interval_help: "有人在看这块看板时，按这个间隔拉 Tracker。最短 15 秒，最长 10 分钟。".into(),
+                refresh_interval_help: "有人在看这块看板时，按这个间隔拉 Tracker。最短 15 秒，不设最长时间。".into(),
                 unclear_issue: "对端看不清".into(),
                 refresh_now: "刷新".into(),
                 refresh_refreshing: "正在刷新".into(),
@@ -7185,6 +7254,10 @@ impl ShellCopy {
                 hosts: "Host".into(),
                 projects: "Project".into(),
                 this_machine: "This machine".into(),
+                next_step: "Next".into(),
+                forget_host: "Forget Host".into(),
+                forget_host_confirm_title: "Forget this remote Host?".into(),
+                forget_host_confirm_body: "This removes the connection from this Client only. It does not stop the remote Host or revoke other Clients.".into(),
                 shade_light: "Light".into(),
                 shade_dark: "Dark".into(),
                 edit_menu: "Edit".into(),
@@ -7311,7 +7384,7 @@ impl ShellCopy {
                 recent_limit: "Recently-closed count".into(),
                 recent_limit_help: "Default 5. Only the rightmost column. Dragging here does not close.".into(),
                 refresh_interval: "Auto-refresh interval (seconds)".into(),
-                refresh_interval_help: "While someone is looking at this board, pull Tracker on this interval. Minimum 15 seconds, maximum 10 minutes.".into(),
+                refresh_interval_help: "While someone is looking at this board, pull Tracker on this interval. Minimum 15 seconds; there is no maximum.".into(),
                 unclear_issue: "The other side is unclear".into(),
                 refresh_now: "Refresh".into(),
                 refresh_refreshing: "Refreshing".into(),

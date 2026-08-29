@@ -12,7 +12,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 
 | # | 结果 | 用户路径与证据 |
 | --- | --- | --- |
-| 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，目录推断只产生候选，用户确认后看到首批 Issue；失败保留草稿并可重试。 |
+| 1 空 Host 登记首个 Project | PASS | `project-registration.mjs`：从空 Host 的「登记 Project」进入，明确的 Local Markdown 推断自动采用；远程候选由用户确认后看到首批 Issue；失败保留草稿并可重试。 |
 | 2 已有 Project 新增、编辑、移除 | PASS | `project-management.mjs`：从已有 Project 的桌面侧栏新增并看到首批 Issue，再由行尾菜单完成编辑与移除；活跃 Run 明确禁止移除；执行已停提示 Tracker 认领仍保留；移除当前 Project 后回退且不残留旧 Issue。 |
 | 3 找工作 | PASS | `board.mjs`：四列、标题搜索、triage/open/closed 筛选、父子过滤、Project open Issue 依赖概览、单 Issue 一跳上下游、完整连通闭包、图中心与详情分离、返回同一 Issue 上下文、键盘 `j` / Enter / `?`。 |
 | 4 绑定 Issue 开 Run | PASS | `run-launch-resilience.mjs` + `board.mjs`：从「执行」进入同一启动配置表；选择 Agent、预填来源、命令预览和隔离说明可见；打开表单后再次核对未认领且无 Run，提交成功后断言同一 Issue 已认领并只创建一条 Run。 |

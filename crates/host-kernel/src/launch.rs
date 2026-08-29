@@ -369,7 +369,11 @@ pub fn default_agent_id(
     if let Some(id) = requested.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
         return id.to_string();
     }
-    if let Some(id) = last_successful.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
+    if let Some(id) = last_successful.filter(|id| {
+        agents
+            .iter()
+            .any(|agent| agent.id == *id && agent.installed)
+    }) {
         return id.to_string();
     }
     agents

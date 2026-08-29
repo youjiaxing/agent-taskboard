@@ -1218,7 +1218,7 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
 }
 
 #[test]
-fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
+fn visible_project_polls_every_five_minutes_and_hidden_does_not() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -1246,7 +1246,10 @@ fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
     match refresh_status(&host) {
         RefreshStatus::Ready {
             next_refresh_in_ms, ..
-        } => assert_eq!(next_refresh_in_ms, Some(30_000)),
+        } => assert_eq!(
+            next_refresh_in_ms,
+            Some(DEFAULT_REFRESH_INTERVAL_MS - 30_000)
+        ),
         other => panic!("expected countdown, got {other:?}"),
     }
 
@@ -1491,7 +1494,7 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), after_limit);
@@ -1740,7 +1743,7 @@ fn run_end_refreshes_even_when_rate_limited() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(

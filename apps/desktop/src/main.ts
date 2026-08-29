@@ -45,6 +45,10 @@ type ShellCopy = {
   hosts: string;
   projects: string;
   thisMachine: string;
+  nextStep: string;
+  forgetHost: string;
+  forgetHostConfirmTitle: string;
+  forgetHostConfirmBody: string;
   shadeLight: string;
   shadeDark: string;
   editMenu: string;
@@ -293,7 +297,7 @@ type ShellCopy = {
   mobileLiveTerminal: string;
 };
 
-type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
+type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env" | "local-file";
 
 type Repair = {
   cliDetected: boolean;
@@ -323,7 +327,7 @@ type Project = {
   id: string;
   name: string;
   localPath: string;
-  tracker: "github";
+  tracker: "github" | "local-markdown";
   githubHost: string;
   repository: string;
   connection: ProjectConnection;
@@ -351,6 +355,7 @@ type ProjectDraft = {
   localPath: string;
   githubHost: string;
   repository: string;
+  tracker?: "github" | "local-markdown";
 };
 
 type IssueSearchDraft = {
@@ -907,6 +912,15 @@ let formError = "";
 let removeError = "";
 let projectOperation: "save" | "remove" | null = null;
 let removeProject: Project | null = null;
+let forgetHostId = "";
+let forgetHostError = "";
+let forgetHostPending = false;
+type GraphViewportAnchor = {
+  issueId: string;
+  viewportX: number;
+  viewportY: number;
+};
+let pendingGraphAnchor: GraphViewportAnchor | null = null;
 let refreshing = false;
 let tickTimer: number | undefined;
 const activePointers = new Set<number>();
@@ -919,6 +933,7 @@ let ptyRunId = "";
 let ptyPumping = false;
 let launchDraft: LaunchDraft | null = null;
 let launchFolded = false;
+let agentPickerSelection = "";
 let changesOpen = false;
 let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
@@ -1138,7 +1153,7 @@ function reconcileClientView(snap: Snapshot): void {
 }
 
 function emptyDraft(): ProjectDraft {
-  return { name: "", localPath: "", githubHost: "github.com", repository: "" };
+  return { name: "", localPath: "", githubHost: "github.com", repository: "", tracker: "github" };
 }
 
 function resetGraphUiState(): void {
@@ -1224,6 +1239,9 @@ function syncLaunchDraft(snap: Snapshot): void {
       intentId: "",
       custom: false,
     };
+  }
+  if (!form.skipAgentPicker && !agentPickerSelection) {
+    agentPickerSelection = "";
   }
 }
 
@@ -1353,9 +1371,24 @@ async function inferFromLocalPath(path: string): Promise<void> {
   try {
     const result = await rpc("inferProject", { localPath: requestedPath });
     if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
-    projectInference = result.inference
-      ? { status: "candidate", requestId, candidate: result.inference }
-      : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
+    if (result.inference?.tracker === "local-markdown") {
+      const candidate = result.inference;
+      const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
+      formDraft = {
+        ...formDraft,
+        name: useCandidateName ? candidate.name : formDraft.name,
+        localPath: candidate.localPath,
+        githubHost: candidate.githubHost,
+        repository: candidate.repository,
+        tracker: candidate.tracker,
+      };
+      autoFilledProjectName = useCandidateName ? candidate.name : autoFilledProjectName;
+      projectInference = { status: "idle", requestId };
+    } else {
+      projectInference = result.inference
+        ? { status: "candidate", requestId, candidate: result.inference }
+        : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
+    }
   } catch (error) {
     if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
     projectInference = {
@@ -1576,7 +1609,7 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
     result.snapshot.notifySound = result.snapshot.notifySound ?? true;
     result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
+    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
     result.events = result.events ?? [];
     deliverHostEvents(result.events, result.snapshot);
     if (requestClientViewRevision === clientViewRevision) {
@@ -1851,6 +1884,14 @@ function render(): void {
         scrollLeft: previousDetailScrollNode.scrollLeft,
       }
     : null;
+  const previousLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
+  const previousLaunchScroll = previousLaunchSheet
+    ? {
+        key: snapshot.launchForm ? `${snapshot.launchForm.projectId}:${snapshot.launchForm.selectedAgentId}` : "",
+        scrollTop: previousLaunchSheet.scrollTop,
+        scrollLeft: previousLaunchSheet.scrollLeft,
+      }
+    : null;
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
   const previousGraphToolbar = app.querySelector<HTMLElement>(".graph-toolbar");
@@ -1941,7 +1982,10 @@ function render(): void {
                 ? `<div class="host-picker">${hosts
                     .map(
                       (item) =>
-                        `<button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`,
+                        `<div class="host-picker-row">
+                          <button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
+                          ${item.local ? "" : `<button type="button" class="host-forget" data-act="forget-host" data-id="${escapeHtml(item.id)}" aria-label="${escapeHtml(copy.forgetHost)}" title="${escapeHtml(copy.forgetHost)}">×</button>`}
+                        </div>`,
                     )
                     .join("")}</div>`
                 : ""
@@ -2027,7 +2071,7 @@ function render(): void {
               ${updateSettings(copy)}
               <div class="field">
                 <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" max="600" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
+                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 300_000) / 1000)}" />
                 <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
               </div>
               <div class="field">
@@ -2126,6 +2170,7 @@ function render(): void {
     ${formOpen ? projectForm(copy) : ""}
     ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${removeProject ? removeDialog(copy, removeProject) : ""}
+    ${forgetHostId ? forgetHostDialog(copy, hosts.find((item) => item.id === forgetHostId)) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
     ${updateDialog(copy)}
     ${changesOpen ? viewChangesPanel(copy) : ""}
@@ -2169,13 +2214,26 @@ function render(): void {
   }
   syncGraphSelection(graphCanvas, snap.board?.selected?.id);
   if (graphCanvas && (!sameGraphCenter || graphContentChanged)) {
-    centerGraphViewport(graphCanvas, nextGraphCenterId);
+    const restored = pendingGraphAnchor
+      ? restoreGraphAnchor(graphCanvas, pendingGraphAnchor)
+      : false;
+    if (!restored) centerGraphViewport(graphCanvas, nextGraphCenterId);
+    pendingGraphAnchor = null;
   }
   restoreActiveField(activeField);
   const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
   if (nextDetailScroll && previousDetailScroll?.issueId === (selectedIssue?.id ?? "")) {
     nextDetailScroll.scrollTop = previousDetailScroll.scrollTop;
     nextDetailScroll.scrollLeft = previousDetailScroll.scrollLeft;
+  }
+  const nextLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
+  if (
+    nextLaunchSheet
+    && previousLaunchScroll
+    && previousLaunchScroll.key === (snap.launchForm ? `${snap.launchForm.projectId}:${snap.launchForm.selectedAgentId}` : "")
+  ) {
+    nextLaunchSheet.scrollTop = previousLaunchScroll.scrollTop;
+    nextLaunchSheet.scrollLeft = previousLaunchScroll.scrollLeft;
   }
   renderedDetailIssueId = selectedIssue?.id ?? "";
   renderedSnapshotKey = snapshotRenderKey(snap);
@@ -2319,10 +2377,50 @@ function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
   canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
 }
 
+function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
+  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+  const node = canvas
+    ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")].find((item) => item.dataset.id === issueId)
+    : null;
+  if (!canvas || !node) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    issueId,
+    viewportX: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    viewportY: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+}
+
+function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
+  const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((item) => item.dataset.id === anchor.issueId);
+  if (!node) return false;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const currentX = nodeRect.left - canvasRect.left + nodeRect.width / 2;
+  const currentY = nodeRect.top - canvasRect.top + nodeRect.height / 2;
+  canvas.scrollLeft = Math.max(0, Math.min(
+    canvas.scrollWidth - canvas.clientWidth,
+    canvas.scrollLeft + currentX - anchor.viewportX,
+  ));
+  canvas.scrollTop = Math.max(0, Math.min(
+    canvas.scrollHeight - canvas.clientHeight,
+    canvas.scrollTop + currentY - anchor.viewportY,
+  ));
+  return true;
+}
+
 function currentProject(snap: Snapshot): Project | undefined {
   return (
     snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
   );
+}
+
+function projectTrackerLabel(project: Project): string {
+  return project.tracker === "local-markdown"
+    ? "Local Markdown"
+    : `${project.githubHost}/${project.repository}`;
 }
 
 function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
@@ -2340,7 +2438,7 @@ function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
     .join("");
   const projects = snap.projects
     .map((project) => `<div class="mobile-scope-project ${project.id === snap.focusedProjectId ? "active" : ""}">
-      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(project.repository)}</span></button>
+      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(projectTrackerLabel(project))}</span></button>
       <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
       <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
     </div>`)
@@ -2481,7 +2579,7 @@ function projectRow(copy: ShellCopy, project: Project, focusedId: string): strin
   return `<div class="project-row ${active ? "active" : ""}">
     <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
       <b>${escapeHtml(project.name)}</b>
-      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
+      <span>${escapeHtml(projectTrackerLabel(project))}</span>
     </button>
     ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
     <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
@@ -2775,7 +2873,7 @@ function overviewProjectCard(copy: ShellCopy, project: Project): string {
       ? copy.connectionUnavailable
       : copy.authFailed;
   return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
-    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(projectTrackerLabel(project))}</small></span><em>${escapeHtml(connection)}</em></span>
     <span class="overview-project-metrics">
       ${metric("Open", counts.open)}
       ${metric(copy.colBlocked, counts.blocked)}
@@ -3112,7 +3210,7 @@ function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false):
       <div class="board-head-row">
         <div class="project-heading">
           <h1>${escapeHtml(project.name)}</h1>
-          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+          <p title="${escapeHtml(project.localPath)}">${escapeHtml(projectTrackerLabel(project))}</p>
         </div>
       </div>
     </div>
@@ -3427,7 +3525,7 @@ function issueCard(
     ? ""
     : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`;
   const actions = `${dependencyAction}${laneActions}`;
-  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
+  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
     <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
       <div class="issue-id">#${issue.number}</div>
       <div class="issue-title">${escapeHtml(issue.title)}</div>
@@ -3737,7 +3835,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
             .map(
               (agent) =>
                 `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
-                  <button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>
+                  <button type="button" class="${agent.id === agentPickerSelection ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>
                   ${agent.installed || !agent.unavailableReason ? "" : `<p class="notice bad">${escapeHtml(agent.unavailableReason)}</p>`}
                 </div>`,
             )
@@ -3745,6 +3843,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
         </div>
         <div class="actions">
           <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+          <button type="button" class="primary" data-act="confirm-agent" ${agentPickerSelection ? "" : "disabled"}>${escapeHtml(copy.nextStep)}</button>
         </div>
       </div>
     </div>`;
@@ -3888,7 +3987,7 @@ function projectForm(copy: ShellCopy): string {
             ${inferenceCandidate
               ? `<div class="notice ok inference-candidate" data-inference="candidate">
                   <div><b>${escapeHtml(inferenceCandidate.name)}</b></div>
-                  <div>${escapeHtml(inferenceCandidate.githubHost)}/${escapeHtml(inferenceCandidate.repository)}</div>
+                  <div>${escapeHtml(inferenceCandidate.tracker === "local-markdown" ? "Local Markdown" : `${inferenceCandidate.githubHost}/${inferenceCandidate.repository}`)}</div>
                   <div class="actions">
                     <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
                   </div>
@@ -3934,6 +4033,22 @@ function removeDialog(copy: ShellCopy, project: Project): string {
       <div class="actions">
         <button type="button" data-act="close-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
         <button type="button" class="danger primary" data-act="confirm-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(projectOperation === "remove" ? copy.removalPending : copy.removeConfirm)}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function forgetHostDialog(copy: ShellCopy, host?: { id: string; displayName: string; local: boolean }): string {
+  if (!host || host.local) return "";
+  return `<div class="overlay modal" data-act="close-forget-host">
+    <div class="sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.forgetHostConfirmTitle)}</h2>
+      <p class="notice">${escapeHtml(copy.forgetHostConfirmBody)}</p>
+      <p class="hint">${escapeHtml(host.displayName)}</p>
+      ${forgetHostError ? `<p class="notice bad">${escapeHtml(forgetHostError)}</p>` : ""}
+      <div class="actions">
+        <button type="button" data-act="close-forget-host" ${forgetHostPending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="button" class="danger primary" data-act="confirm-forget-host" ${forgetHostPending ? "disabled" : ""}>${escapeHtml(forgetHostPending ? copy.operationPending : copy.forgetHost)}</button>
       </div>
     </div>
   </div>`;
@@ -4346,6 +4461,7 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
+    agentPickerSelection = "";
     clearFormOperation(launchFormKey(target.dataset.id));
     await rpc("prepareRunLaunch", { projectId: target.dataset.id });
     render();
@@ -4379,6 +4495,7 @@ app.addEventListener("click", async (event) => {
     if (projectId && formOperations.pending.has(launchFormKey(projectId))) return;
     await rpc("cancelRunLaunch");
     launchDraft = null;
+    agentPickerSelection = "";
     if (projectId) clearFormOperation(launchFormKey(projectId));
     render();
     return;
@@ -4386,7 +4503,7 @@ app.addEventListener("click", async (event) => {
   if (act === "switch-agent") {
     const form = snapshot.launchForm;
     if (!form) return;
-    launchDraft = null;
+    agentPickerSelection = form.selectedAgentId;
     clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
@@ -4397,15 +4514,22 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "pick-agent" && target.dataset.id) {
+    agentPickerSelection = target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "confirm-agent") {
     const form = snapshot.launchForm;
-    if (!form) return;
+    if (!form || !agentPickerSelection) return;
     launchDraft = null;
     clearFormOperation(launchFormKey(form.projectId));
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
-      agentId: target.dataset.id,
+      agentId: agentPickerSelection,
+      pickAgent: false,
     });
+    agentPickerSelection = "";
     render();
     return;
   }
@@ -4645,6 +4769,7 @@ app.addEventListener("click", async (event) => {
       localPath: candidate.localPath,
       githubHost: candidate.githubHost,
       repository: candidate.repository,
+      tracker: candidate.tracker,
     };
     autoFilledProjectName = useCandidateName ? candidate.name : "";
     projectInference = { status: "idle", requestId: projectInference.requestId };
@@ -4657,6 +4782,37 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "toggle-hosts") {
     hostPickerOpen = snapshot.hosts.length > 1 ? !hostPickerOpen : false;
+    render();
+    return;
+  }
+  if (act === "forget-host" && target.dataset.id) {
+    forgetHostId = target.dataset.id;
+    forgetHostError = "";
+    hostPickerOpen = false;
+    render();
+    return;
+  }
+  if (act === "close-forget-host" && (event.target === target || target.tagName === "BUTTON")) {
+    if (forgetHostPending) return;
+    forgetHostId = "";
+    forgetHostError = "";
+    render();
+    return;
+  }
+  if (act === "confirm-forget-host" && forgetHostId) {
+    if (forgetHostPending) return;
+    forgetHostPending = true;
+    forgetHostError = "";
+    render();
+    try {
+      await rpc("forgetRemoteHost", { hostId: forgetHostId });
+      forgetHostId = "";
+      hostPickerOpen = false;
+    } catch (error) {
+      forgetHostError = error instanceof Error ? error.message : String(error);
+    } finally {
+      forgetHostPending = false;
+    }
     render();
     return;
   }
@@ -4782,6 +4938,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
+    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
     const fromOverview = snapshot.board?.graph?.mode === "overview";
     await navigateClient({
       selectedIssueId: target.dataset.id,
@@ -4806,6 +4963,7 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "view-dependencies" && target.dataset.id) {
+    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
     resetGraphUiState();
     issueDetailVisible = true;
     await navigateClient({

@@ -1,8 +1,9 @@
 use crate::issue::{DependencyRef, IssueRecord, IssueRef};
 use crate::tracker::{
-    IssueDocument, IssueEdit, ProbeContext, ProbeOutcome, TrackerPort, TrackerReadError,
-    TrackerWriteError,
+    IssueDocument, IssueEdit, LocalMarkdownTracker, ProbeContext, ProbeOutcome, TrackerPort,
+    TrackerReadError, TrackerWriteError,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackerWriteOp {
@@ -41,6 +42,66 @@ pub trait TrackerSeam: Send + Sync {
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError>;
+}
+
+/// Routes project operations to the configured tracker without making the Host
+/// kernel own tracker-specific branches throughout its refresh/write paths.
+pub struct TrackerRouter {
+    github: Arc<dyn TrackerSeam>,
+    local: LocalMarkdownTracker,
+}
+
+impl TrackerRouter {
+    pub fn new(github: Arc<dyn TrackerSeam>) -> Self {
+        Self {
+            github,
+            local: LocalMarkdownTracker,
+        }
+    }
+
+    fn local(ctx: &ProbeContext<'_>) -> bool {
+        ctx.github_host == "local"
+    }
+}
+
+impl TrackerSeam for TrackerRouter {
+    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
+        if Self::local(ctx) {
+            TrackerPort::probe(&self.local, ctx)
+        } else {
+            self.github.probe(ctx)
+        }
+    }
+    fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
+        if Self::local(ctx) {
+            TrackerPort::read_all(&self.local, ctx)
+        } else {
+            self.github.read_all(ctx)
+        }
+    }
+    fn read_issue_document(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        if Self::local(ctx) {
+            TrackerPort::read_issue_document(&self.local, ctx, issue_id)
+        } else {
+            self.github.read_issue_document(ctx, issue_id)
+        }
+    }
+    fn write_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: Option<&str>,
+        op: &TrackerWriteOp,
+    ) -> Result<crate::issue::IssueRecord, TrackerWriteError> {
+        if Self::local(ctx) {
+            <LocalMarkdownTracker as TrackerSeam>::write_issue(&self.local, ctx, issue_id, op)
+        } else {
+            self.github.write_issue(ctx, issue_id, op)
+        }
+    }
 }
 
 impl<T: TrackerPort> TrackerSeam for T {
