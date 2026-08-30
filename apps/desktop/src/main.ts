@@ -5096,10 +5096,13 @@ function ensureTick(): void {
   }, 1000);
 }
 
-function renderAfterTick(): void {
+async function renderAfterTick(): Promise<void> {
   if (activePointers.size > 0) {
     tickRenderPending = true;
     return;
+  }
+  if (snapshot?.board?.selected?.document.kind === "unloaded") {
+    await loadSelectedIssueDocument();
   }
   render();
 }
@@ -5110,7 +5113,7 @@ function finishPointerInteraction(pointerId: number): void {
   window.setTimeout(() => {
     if (activePointers.size > 0 || !tickRenderPending) return;
     tickRenderPending = false;
-    render();
+    void renderAfterTick().catch(() => {});
   }, 0);
 }
 

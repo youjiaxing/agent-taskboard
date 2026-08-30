@@ -74,7 +74,7 @@ cargo test --workspace --release
 
 Issue #111 Browser E2E 及全量 board/project E2E 也已通过。Release Tauri build 已生成 `.app`；`codesign --verify --deep --strict` 通过。构建命令末尾的非零状态仅来自本机未设置 updater 所需的 `TAURI_SIGNING_PRIVATE_KEY`，不影响 `.app` 的生成和本地验收。
 
-Local Markdown Project 的文件内容 revision 会由 Host tick 检测；即使窗口不在前台，外部新增或修改实际 Markdown 文件也会触发该 Project 刷新。对应 HostKernel 回归通过。
+Local Markdown Project 的文件内容 revision 会由 Host tick 检测；即使窗口不在前台，外部新增或修改实际 Markdown 文件也会触发该 Project 刷新。当前打开的 Issue document cache 会随之失效，并由 Client tick 自动重新读取新正文；Issue #111 的 headless Browser E2E 直接改写实际 Markdown 文件后，已验证详情恢复为 ready、展示新正文且编辑器读到同一内容。
 
 ## 运行稳定性备注
 
