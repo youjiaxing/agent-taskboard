@@ -127,6 +127,7 @@ if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
 }
 await page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
 await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+await page.waitForSelector('.issue-document[data-document-state="ready"]');
 const frontierScrollAfterSwitch = await page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeInspectorActions) > 1) {
   throw new Error(`switching Issues must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterSwitch}`);
@@ -489,12 +490,32 @@ if (!(await graphTabBeforeTick.evaluate((node) => node.isConnected))) {
 }
 await page.mouse.up();
 await page.waitForSelector(".dep-graph", { timeout: 1000 });
+const overviewTitles = await page.$$eval(".graph-node .issue-title", (nodes) =>
+  nodes.map((node) => node.textContent),
+);
+for (const title of ["parent", "child ready", "child blocked", "unparented ready", "waiting on history", "blocker", "active work"]) {
+  if (!overviewTitles.includes(title)) {
+    throw new Error(`dependency overview should include open Issue ${title}, got ${JSON.stringify(overviewTitles)}`);
+  }
+}
+if (
+  overviewTitles.length !== 7
+  || overviewTitles.includes("older closed")
+  || (await page.$('[data-graph-mode="overview"]')) == null
+) {
+  throw new Error(`dependency overview should contain all and only open Issues: ${JSON.stringify(overviewTitles)}`);
+}
+await page.click(".graph-node:has-text('child blocked') .graph-node-main");
+await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
+await page.waitForSelector("button[data-act='graph-overview']");
+await page.click("button[data-act='graph-overview']");
+await page.waitForSelector('[data-graph-mode="overview"]');
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
 
 await page.click(".issue-card:has-text('child blocked') .issue-card-main");
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
-await page.click("button[data-act='center-view'][data-id='graph']");
+await page.click(".issue-detail button[data-act='view-dependencies']");
 await page.waitForSelector(".dep-graph");
 if (await page.$(".lanes")) {
   throw new Error("graph view should replace the four columns");
@@ -548,13 +569,63 @@ const expandFromWaiting = page.getByRole("button", { name: "从此处展开 #5" 
 if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
   throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
 }
+const waitingViewportBefore = await page.$eval(".graph-node:has-text('waiting on history')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+    scrollTop: canvas.scrollTop,
+  };
+});
 await expandFromWaiting.click();
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
 await page.waitForSelector(".detail-hd:has-text('waiting on history')");
+const waitingViewportAfter = await page.$eval(".graph-node:has-text('waiting on history')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+    scrollTop: canvas.scrollTop,
+  };
+});
+if (
+  Math.abs(waitingViewportAfter.x - waitingViewportBefore.x) > 2
+  || Math.abs(waitingViewportAfter.y - waitingViewportBefore.y) > 2
+) {
+  throw new Error(`expanding from an Issue should preserve its viewport anchor: ${JSON.stringify({ waitingViewportBefore, waitingViewportAfter })}`);
+}
 
+const childViewportBefore = await page.$eval(".graph-node:has-text('child blocked')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+});
 await page.getByRole("button", { name: "从此处展开 #3" }).click();
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
+const childViewportAfter = await page.$eval(".graph-node:has-text('child blocked')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+});
+if (
+  Math.abs(childViewportAfter.x - childViewportBefore.x) > 2
+  || Math.abs(childViewportAfter.y - childViewportBefore.y) > 2
+) {
+  throw new Error(`repeated expansion should preserve the clicked Issue anchor: ${JSON.stringify({ childViewportBefore, childViewportAfter })}`);
+}
 await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await page.waitForSelector(".graph-index");
 const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());

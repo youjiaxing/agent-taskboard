@@ -295,6 +295,8 @@ pub struct DependencyGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     #[serde(default)]
+    pub mode: DependencyGraphMode,
+    #[serde(default)]
     pub center_id: Option<String>,
     #[serde(default)]
     pub total_count: usize,
@@ -302,9 +304,21 @@ pub struct DependencyGraph {
     pub complete: bool,
     #[serde(default)]
     pub max_distance: u32,
+    #[serde(default)]
+    pub truncated: bool,
     /// Legacy protocol field retained for older Clients.
     pub closed_count: usize,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DependencyGraphMode {
+    Overview,
+    #[default]
+    Focused,
+}
+
+const DEPENDENCY_OVERVIEW_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -585,6 +599,10 @@ fn dependency_graph(
         }
     }
 
+    if requested_center_id.is_none() {
+        return dependency_overview(issues, &by_id, &refs, &all_edges);
+    }
+
     let center_id = requested_center_id
         .filter(|id| all_node_ids.contains(*id))
         .map(str::to_string)
@@ -594,10 +612,12 @@ fn dependency_graph(
         return DependencyGraph {
             nodes: Vec::new(),
             edges: Vec::new(),
+            mode: DependencyGraphMode::Focused,
             center_id: None,
             total_count: 0,
             complete,
             max_distance: 0,
+            truncated: false,
             closed_count: 0,
         };
     };
@@ -680,11 +700,74 @@ fn dependency_graph(
     DependencyGraph {
         nodes,
         edges,
+        mode: DependencyGraphMode::Focused,
         center_id: Some(center_id),
         total_count: closure_ids.len(),
         complete,
         max_distance,
+        truncated: false,
         closed_count,
+    }
+}
+
+fn dependency_overview(
+    issues: &[IssueRecord],
+    by_id: &BTreeMap<String, &IssueRecord>,
+    refs: &BTreeMap<String, &IssueRef>,
+    all_edges: &BTreeSet<(String, String)>,
+) -> DependencyGraph {
+    let participants: BTreeSet<&str> = all_edges
+        .iter()
+        .flat_map(|(from, to)| [from.as_str(), to.as_str()])
+        .collect();
+    let mut open_issues: Vec<&IssueRecord> = issues.iter().filter(|issue| issue.open).collect();
+    open_issues.sort_by(|a, b| {
+        participants
+            .contains(b.id().as_str())
+            .cmp(&participants.contains(a.id().as_str()))
+            .then_with(|| b.number.cmp(&a.number))
+            .then_with(|| a.id().cmp(&b.id()))
+    });
+    let total_count = open_issues.len();
+    let node_ids: BTreeSet<String> = open_issues
+        .into_iter()
+        .take(DEPENDENCY_OVERVIEW_LIMIT)
+        .map(IssueRecord::id)
+        .collect();
+    let edge_set: BTreeSet<(String, String)> = all_edges
+        .iter()
+        .filter(|(from, to)| node_ids.contains(from) && node_ids.contains(to))
+        .cloned()
+        .collect();
+    let ranks = graph_ranks(&node_ids, &edge_set);
+    let mut nodes: Vec<GraphNode> = node_ids
+        .iter()
+        .map(|id| {
+            graph_node(
+                id,
+                by_id.get(id).copied(),
+                refs.get(id).copied(),
+                ranks.get(id).copied().unwrap_or(0),
+                0,
+                GraphRelation::Center,
+            )
+        })
+        .collect();
+    nodes.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| b.number.cmp(&a.number)));
+    let edges = edge_set
+        .into_iter()
+        .map(|(from, to)| GraphEdge { from, to })
+        .collect();
+    DependencyGraph {
+        nodes,
+        edges,
+        mode: DependencyGraphMode::Overview,
+        center_id: None,
+        total_count,
+        complete: false,
+        max_distance: 0,
+        truncated: total_count > DEPENDENCY_OVERVIEW_LIMIT,
+        closed_count: 0,
     }
 }
 

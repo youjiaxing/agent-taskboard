@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, FrontierEmptyReason, GraphRelation,
-    HostKernel, IssueRecord, LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance,
-    TrackerRouter, TriageRole, DEFAULT_RECENT_LIMIT,
+    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, DependencyGraphMode,
+    FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, LoopbackAssets, LoopbackServer,
+    MemoryTracker, SystemAppearance, TrackerRouter, TriageRole, DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -341,6 +341,11 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
         "view": "graph",
     }))
     .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
     let before = host.snapshot().board.unwrap().graph.expect("graph");
     assert_eq!(before.center_id.as_deref(), Some("you/garden#3"));
     assert_eq!(node_ids(&before), vec!["you/garden#9", "you/garden#3"]);
@@ -545,6 +550,11 @@ fn dependency_graph_contains_only_dependency_edges() {
         "view": "graph",
     }))
     .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
     let board = host.snapshot().board.unwrap();
     let graph = board.graph.expect("graph");
 
@@ -557,6 +567,117 @@ fn dependency_graph_contains_only_dependency_edges() {
         vec![("you/garden#9".into(), "you/garden#3".into())]
     );
     assert!(node_rank(&graph, "you/garden#9") < node_rank(&graph, "you/garden#3"));
+}
+
+#[test]
+fn dependency_graph_opens_as_a_capped_open_issue_overview() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "old dependency origin").blocking(
+            "you/garden",
+            2,
+            "old dependency target",
+        ),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "old dependency target"));
+    for number in 3..=205 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("open {number}"),
+        ));
+    }
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 999, "closed").closed_at("2026-08-20T10:00:00Z"),
+    );
+    let mut host = boot(tmp.path(), tracker);
+    register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#205",
+    }))
+    .unwrap();
+
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let graph = host
+        .snapshot()
+        .board
+        .unwrap()
+        .graph
+        .expect("overview graph");
+    let ids = node_ids(&graph);
+
+    assert_eq!(graph.mode, DependencyGraphMode::Overview);
+    assert_eq!(graph.center_id, None);
+    assert_eq!(graph.total_count, 205);
+    assert_eq!(graph.nodes.len(), 200);
+    assert!(graph.truncated);
+    assert!(graph.nodes.iter().all(|node| node.open));
+    assert!(ids.contains(&"you/garden#1".into()));
+    assert!(ids.contains(&"you/garden#2".into()));
+    assert!(ids.contains(&"you/garden#205".into()));
+    assert!(!ids.contains(&"you/garden#7".into()));
+    assert!(!ids.contains(&"you/garden#999".into()));
+    assert_eq!(
+        edge_pairs(&graph),
+        vec![("you/garden#1".into(), "you/garden#2".into())]
+    );
+
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
+    let focused = host.snapshot().board.unwrap().graph.expect("focused graph");
+    assert_eq!(focused.mode, DependencyGraphMode::Focused);
+    assert_eq!(focused.center_id.as_deref(), Some("you/garden#1"));
+    assert_eq!(node_ids(&focused), vec!["you/garden#1", "you/garden#2"]);
+
+    host.handle(serde_json::json!({
+        "op": "showDependencyGraphOverview",
+    }))
+    .unwrap();
+    let restored = host
+        .snapshot()
+        .board
+        .unwrap()
+        .graph
+        .expect("overview graph");
+    assert_eq!(restored.mode, DependencyGraphMode::Overview);
+    assert_eq!(restored.center_id, None);
+    assert_eq!(restored.total_count, 205);
+}
+
+#[test]
+fn browser_dependency_graph_overview_renders_more_than_the_focused_canvas_batch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "dependency origin").blocking(
+            "you/garden",
+            2,
+            "dependency target",
+        ),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "dependency target"));
+    for number in 3..=60 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("open {number}"),
+        ));
+    }
+    let mut host = boot(tmp.path(), tracker);
+    register(&mut host, &dir, "you/garden");
+
+    run_browser_e2e(host, "dependency-graph-overview.mjs", &[]);
 }
 
 #[test]
@@ -576,9 +697,11 @@ fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
     .unwrap();
 
     assert_eq!(graph.center_id, None);
+    assert_eq!(graph.mode, DependencyGraphMode::Focused);
     assert_eq!(graph.total_count, 0);
     assert!(!graph.complete);
     assert_eq!(graph.max_distance, 0);
+    assert!(!graph.truncated);
     assert_eq!(graph.nodes[0].distance, 0);
     assert_eq!(graph.nodes[0].relation, GraphRelation::Center);
 }
@@ -623,6 +746,11 @@ fn centered_dependency_graph_expands_the_complete_upstream_and_downstream_closur
     host.handle(serde_json::json!({
         "op": "setCenterView",
         "view": "graph",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#10",
     }))
     .unwrap();
     let before = host.snapshot().board.unwrap();
