@@ -114,6 +114,7 @@ await page.waitForFunction(() => !document.querySelector("form[data-act='issue-e
 await page.waitForSelector(".detail-hd:has-text('Child edited from desktop UI')");
 await waitForIssueText("edited body from desktop UI");
 
+await page.click(".detail-maintenance > summary");
 await page.fill("form[data-act='issue-comment'] textarea[name='body']", "comment from desktop UI");
 await page.click("form[data-act='issue-comment'] button[type='submit']");
 await page.waitForFunction(() => document.querySelector("form[data-act='issue-comment'] textarea[name='body']")?.value === "");

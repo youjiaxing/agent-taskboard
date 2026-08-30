@@ -296,6 +296,7 @@ type ShellCopy = {
   saveRelations: string;
   closeIssue: string;
   reopenIssue: string;
+  issueUpdates: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -914,6 +915,7 @@ let issueEditOpenId: string | null = null;
 const issueEditDrafts = new Map<string, IssueContentDraft>();
 const issueCommentDrafts = new Map<string, string>();
 const issueRelationDrafts = new Map<string, IssueRelationDraft>();
+const issueMaintenanceOpen = new Set<string>();
 const formOperations: FormOperationState = {
   pending: new Set<FormKey>(),
   errors: new Map<FormKey, string>(),
@@ -923,6 +925,16 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let renderedDetailIssueId = "";
+let renderedBoardProjectId = "";
+let renderedMobileWorkspaceKey = "";
+type ScrollPosition = { scrollTop: number; scrollLeft: number };
+type BoardScrollPosition = ScrollPosition & {
+  lanes: Record<string, ScrollPosition>;
+};
+const issueDetailScrollPositions = new Map<string, ScrollPosition>();
+const boardScrollPositions = new Map<string, BoardScrollPosition>();
+const mobileWorkspaceScrollPositions = new Map<string, ScrollPosition>();
 let renderedGraphKey = "";
 let renderedGraphProjectId = "";
 let renderedGraphCenterId = "";
@@ -1595,6 +1607,34 @@ function render(): void {
   const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
   const showSidebar = !isMobile && sidebarVisible && !runLifted;
   const selectedIssue = snap.board?.selected;
+  const previousDetailScrollNode = app.querySelector<HTMLElement>(".detail-scroll");
+  if (previousDetailScrollNode && renderedDetailIssueId) {
+    issueDetailScrollPositions.set(renderedDetailIssueId, {
+      scrollTop: previousDetailScrollNode.scrollTop,
+      scrollLeft: previousDetailScrollNode.scrollLeft,
+    });
+  }
+  const previousLanes = app.querySelector<HTMLElement>(".lanes");
+  if (previousLanes && renderedBoardProjectId) {
+    const laneScrolls: Record<string, ScrollPosition> = {};
+    for (const lane of previousLanes.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
+      const key = lane.dataset.lane;
+      if (!key) continue;
+      laneScrolls[key] = { scrollTop: lane.scrollTop, scrollLeft: lane.scrollLeft };
+    }
+    boardScrollPositions.set(renderedBoardProjectId, {
+      scrollTop: previousLanes.scrollTop,
+      scrollLeft: previousLanes.scrollLeft,
+      lanes: laneScrolls,
+    });
+  }
+  const previousWorkspace = app.querySelector<HTMLElement>(".workspace");
+  if (previousWorkspace && renderedMobileWorkspaceKey) {
+    mobileWorkspaceScrollPositions.set(renderedMobileWorkspaceKey, {
+      scrollTop: previousWorkspace.scrollTop,
+      scrollLeft: previousWorkspace.scrollLeft,
+    });
+  }
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
   const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
@@ -1905,6 +1945,37 @@ function render(): void {
     centerGraphViewport(graphCanvas, nextGraphCenterId);
   }
   restoreActiveField(activeField);
+  const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
+  const savedDetailScroll = selectedIssue
+    ? issueDetailScrollPositions.get(selectedIssue.id)
+    : undefined;
+  if (nextDetailScroll && savedDetailScroll) {
+    nextDetailScroll.scrollTop = savedDetailScroll.scrollTop;
+    nextDetailScroll.scrollLeft = savedDetailScroll.scrollLeft;
+  }
+  const nextLanes = app.querySelector<HTMLElement>(".lanes");
+  const savedBoardScroll = boardScrollPositions.get(snap.focusedProjectId);
+  if (nextLanes && savedBoardScroll) {
+    nextLanes.scrollTop = savedBoardScroll.scrollTop;
+    nextLanes.scrollLeft = savedBoardScroll.scrollLeft;
+    for (const lane of nextLanes.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
+      const key = lane.dataset.lane;
+      const position = key ? savedBoardScroll.lanes[key] : undefined;
+      if (!position) continue;
+      lane.scrollTop = position.scrollTop;
+      lane.scrollLeft = position.scrollLeft;
+    }
+  }
+  const nextWorkspace = app.querySelector<HTMLElement>(".workspace");
+  const nextMobileWorkspaceKey = isMobile ? `${snap.focusedProjectId}:${mobileView}` : "";
+  const savedMobileWorkspaceScroll = mobileWorkspaceScrollPositions.get(nextMobileWorkspaceKey);
+  if (nextWorkspace && savedMobileWorkspaceScroll) {
+    nextWorkspace.scrollTop = savedMobileWorkspaceScroll.scrollTop;
+    nextWorkspace.scrollLeft = savedMobileWorkspaceScroll.scrollLeft;
+  }
+  renderedDetailIssueId = selectedIssue?.id ?? "";
+  renderedBoardProjectId = nextLanes ? snap.focusedProjectId : "";
+  renderedMobileWorkspaceKey = nextWorkspace ? nextMobileWorkspaceKey : "";
   if (isMobile && !mobileLiveTerminal) {
     ptyPumping = false;
     void pumpMobileOutput(snap);
@@ -2866,18 +2937,18 @@ function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): s
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
   const onGraph = snap.centerView === "graph";
-  const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : copy.boardHint;
+  const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : "";
   const inspectorOpen = issueDetailVisible && Boolean(board.selected);
   return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
     <div class="board-main">
-      <div class="board-hint">
-        ${escapeHtml(hint)}
-        ${
-          board.parentFilter
-            ? `<button type="button" data-act="clear-filter">${escapeHtml(copy.clearFilter)}</button>`
-            : ""
-        }
-      </div>
+      ${hint || board.parentFilter
+        ? `<div class="board-hint">
+            ${escapeHtml(hint)}
+            ${board.parentFilter
+              ? `<button type="button" data-act="clear-filter">${escapeHtml(copy.clearFilter)}</button>`
+              : ""}
+          </div>`
+        : ""}
       ${onGraph ? dependencyGraphView(copy, board, reuseGraphCanvas) : boardLanes(copy, board)}
     </div>
     ${inspectorOpen ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
@@ -2909,7 +2980,6 @@ function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
           <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
           ${items.map((issue) => issueCard(copy, issue, board.selected?.id, key)).join("")}
           ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
-          ${key === "recentlyCompleted" ? `<p class="lane-note">${escapeHtml(copy.recentNote)}</p>` : ""}
         </section>`;
       })
       .join("")}
@@ -3084,9 +3154,9 @@ function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activity"]): s
   return "";
 }
 
-function issueMetadataTags(labels: string[] | undefined): string {
+function issueMetadataTags(labels: string[] | undefined, includeStatus = true): string {
   return (labels ?? [])
-    .filter((label) => label.startsWith("type:") || label.startsWith("status:"))
+    .filter((label) => label.startsWith("type:") || (includeStatus && label.startsWith("status:")))
     .map((label) => {
       const [kind, ...rest] = label.split(":");
       return `<span class="tag">${escapeHtml(`${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`)}</span>`;
@@ -3123,7 +3193,7 @@ function issueCard(
         ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
            <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
         : "";
-  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""}" data-issue-id="${escapeHtml(issue.id)}">
+  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
     <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
       <div class="issue-id">#${issue.number}</div>
       <div class="issue-title">${escapeHtml(issue.title)}</div>
@@ -3140,7 +3210,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
   }
   const claim = issue.claimedBy.length
     ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
-    : copy.unclaimed;
+    : "";
   const hasActive = Boolean(issue.activeRunId) || (snapshot?.runs ?? []).some(
     (run) => run.issueId === issue.id && run.status !== "ended",
   );
@@ -3164,8 +3234,8 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
       </div>
       <div class="detail-meta">
         ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-        ${issueMetadataTags(issue.labels)}
-        <span class="tag">${escapeHtml(claim)}</span>
+        ${issueMetadataTags(issue.labels, false)}
+        ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
         ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
         ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
         ${actions}
@@ -3179,7 +3249,6 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
     <div class="detail-scroll">
       ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
       ${editOpen && canEdit ? issueEditForm(copy, issue) : ""}
-      ${canWrite ? issueCommentForm(copy, issue) : ""}
       <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
@@ -3211,7 +3280,13 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
           : `<span class="muted">${escapeHtml(copy.none)}</span>`
       }
       </section>
-      ${canWrite ? issueRelationsForm(copy, board, issue) : ""}
+      ${canWrite
+        ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${issueMaintenanceOpen.has(issue.id) ? "open" : ""}>
+            <summary>${escapeHtml(copy.issueUpdates)}</summary>
+            ${issueCommentForm(copy, issue)}
+            ${issueRelationsForm(copy, board, issue)}
+          </details>`
+        : ""}
     </div>`;
 }
 
@@ -3299,21 +3374,18 @@ function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: str
       ? ` · ${escapeHtml(copy.refreshAsOf)} ${escapeHtml(formatTime(state.fetchedAtMs))}`
       : "";
     return `<section class="issue-document" data-document-state="${state.kind}">
-      <h4>${escapeHtml(copy.issueDocument)}</h4>
       <p class="document-status">${escapeHtml(copy.issueDocumentLoading)}${asOf}</p>
       ${previous}
     </section>`;
   }
   if (state.kind === "failed") {
     return `<section class="issue-document" data-document-state="failed">
-      <h4>${escapeHtml(copy.issueDocument)}</h4>
       <p class="notice bad">${escapeHtml(copy.issueDocumentFailed)} ${escapeHtml(state.failure.message)}</p>
       <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>
     </section>`;
   }
   const stale = state.kind === "stale";
   return `<section class="issue-document" data-document-state="${state.kind}">
-    <h4>${escapeHtml(copy.issueDocument)}</h4>
     ${stale
       ? `<p class="document-status stale">${escapeHtml(copy.issueDocumentStale)} ${escapeHtml(formatTime(state.fetchedAtMs))}. ${escapeHtml(state.failure.message)}</p>
          <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>`
@@ -4793,6 +4865,14 @@ app.addEventListener("input", (event) => {
     if (field === "localPath") target.title = target.value;
   }
 });
+
+app.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement)) return;
+  if (details.dataset.section !== "issue-maintenance" || !details.dataset.id) return;
+  if (details.open) issueMaintenanceOpen.add(details.dataset.id);
+  else issueMaintenanceOpen.delete(details.dataset.id);
+}, true);
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
