@@ -38,6 +38,25 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
     dir
 }
 
+fn start_unbound_grok(host: &mut HostKernel, project_id: &str) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "project integration",
+    }))
+    .unwrap()
+}
+
 #[test]
 fn registering_a_github_project_lists_it_and_makes_it_current() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1123,14 +1142,7 @@ fn removing_a_project_preserves_ended_run_history() {
     let dir = make_dir(tmp.path(), "work/history");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "history", &dir, "you/history");
-    let run_id = host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": id,
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+    let run_id = start_unbound_grok(&mut host, &id).snapshot.focused_run_id;
     host.handle(serde_json::json!({
         "op": "stopRun",
         "runId": run_id,
@@ -1216,11 +1228,7 @@ fn active_run_allows_changing_only_the_project_name() {
     let dir = make_dir(tmp.path(), "work/first");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "first", &dir, "you/first");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let out = host
         .handle(serde_json::json!({
@@ -1244,11 +1252,7 @@ fn active_run_blocks_changing_project_location_or_tracker() {
     let second = make_dir(tmp.path(), "work/second");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "first", &first, "you/first");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let error = host
         .handle(serde_json::json!({
@@ -1269,11 +1273,7 @@ fn an_active_run_blocks_remove() {
     let dir = make_dir(tmp.path(), "work/busy");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "busy", &dir, "you/busy");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let err = host
         .handle(serde_json::json!({

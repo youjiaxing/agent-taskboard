@@ -1,6 +1,30 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use host_kernel::{AgentPort, ClaudeAdapter, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME};
+use host_kernel::{
+    AgentPort, ClaudeAdapter, LaunchEnvironment, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME,
+};
+
+fn make_discoverable_claude(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("claude");
+    std::fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\n' "  --effort <level> Effort level (low, medium, high, xhigh, max)" "  --model <model> aliases (e.g. 'fable', 'opus', or 'sonnet')" '  --permission-mode <mode> (choices: "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")'
+  exit 0
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
 
 #[test]
 fn claude_adapter_declares_interactive_tui_contract() {
@@ -29,6 +53,42 @@ fn claude_adapter_declares_permission_mode_on_first_layer() {
     assert!(fields
         .iter()
         .any(|field| field.id == "additional-args" && field.folded));
+}
+
+#[test]
+fn claude_adapter_discovers_documented_aliases_and_enums_from_help() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_discoverable_claude(tmp.path());
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+    let discovery = ClaudeAdapter
+        .discover_config(&executable, &env)
+        .expect("Claude CLI discovery");
+    let field = |id: &str| {
+        discovery
+            .fields
+            .iter()
+            .find(|field| field.id == id)
+            .unwrap()
+    };
+    assert_eq!(field("model").options, vec!["fable", "opus", "sonnet"]);
+    assert_eq!(
+        field("effort").options,
+        vec!["low", "medium", "high", "xhigh", "max"]
+    );
+    assert_eq!(
+        field("permission-mode").options,
+        vec![
+            "acceptEdits",
+            "auto",
+            "bypassPermissions",
+            "manual",
+            "dontAsk",
+            "plan"
+        ]
+    );
 }
 
 #[test]

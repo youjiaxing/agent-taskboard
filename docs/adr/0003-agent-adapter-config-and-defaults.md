@@ -9,7 +9,8 @@
 - 不写回用户家里的 CLI 配置文件。
 - 允许折叠的附加参数，追加在 Adapter 组装结果之后；禁止整条命令可编辑。附加参数可记入本地 Run，禁止写入 Tracker（与 [决策：Run 生命周期与 Issue 的绑定方式](https://github.com/youjiaxing/agent-taskboard/issues/9) 的写回白名单一致）。
 - 命令预览可以有，但不是一等展示，设置里能关掉。
-- model / effort 尽量问本机 CLI；未知枚举警告但不拦启动。
+- model / effort 及各家枚举优先问本机 CLI；Adapter 负责把真实 CLI 输出适配成字段候选，包含 model 对 effort 的过滤关系。未知枚举警告但不拦启动，探测失败仍保留手动输入。
+- 可用项按「目标目录 × Agent」做短缓存；手动刷新启动环境时同时失效，避免每次打开表单都等待 CLI。
 - 隔离执行目录见 [并行 Run 默认共用主目录，隔离只走 Agent 原生 git worktree](./0004-native-worktree-isolation.md)；不在本合同里再拍板。
 
 ## 明确不做
@@ -36,4 +37,4 @@
 
 - `/to-spec` 按本合同写 Agent Adapter，不必为三家各编一套内核模型。
 - 启动表单按各 Adapter 的字段声明渲染；第一层字段清单见对应决策票，不在内核写死。
-- 默认选中：已安装列表里按 Grok Build → Codex → Claude Code → Antigravity CLI 挑第一个。找不到可执行文件则不能启动；这不是在管登录。探测和 spawn 用哪份环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。
+- 首次进入不默认选中任何 Agent，用户明确选择后才能到下一步。某 Project 成功启动过后，只在上次那家仍安装时直接进入其配置页；若已不存在或未安装，回到未选择的 Agent 列表，不静默回退到列表第一家。找不到可执行文件则不能启动；这不是在管登录。探测和 spawn 用哪份环境见 [按目标目录拍用户默认壳环境，再绝对路径 exec Agent](./0008-run-launch-environment.md)。

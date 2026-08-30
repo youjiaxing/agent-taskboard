@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    additional_args_field, append_additional_args, append_flag, append_isolation_flag, hooks,
-    initial_instruction_field, local_bin, probe_binary, select_field, text_field, AgentField,
-    AgentPort, CompletionHookPlan, ProbeResult,
+    additional_args_field, append_additional_args, append_flag, append_isolation_flag, discovery,
+    hooks, initial_instruction_field, local_bin, probe_binary, select_field, text_field,
+    AgentConfigDiscovery, AgentField, AgentPort, CompletionHookPlan, ProbeResult,
 };
 use crate::LaunchEnvironment;
 
@@ -77,6 +77,34 @@ impl AgentPort for ClaudeAdapter {
             ("initial-instruction".into(), String::new()),
             ("additional-args".into(), String::new()),
         ])
+    }
+
+    fn discover_config(
+        &self,
+        executable: &Path,
+        env: &LaunchEnvironment,
+    ) -> Result<AgentConfigDiscovery, String> {
+        let help = discovery::run_cli(executable, &["--help"], env)?;
+        let mut fields = self.config_fields();
+        discovery::set_options_if_found(
+            &mut fields,
+            "model",
+            discovery::quoted_values_near(&help, "--model"),
+        );
+        discovery::set_options_if_found(
+            &mut fields,
+            "effort",
+            discovery::option_values(&help, "--effort"),
+        );
+        discovery::set_options_if_found(
+            &mut fields,
+            "permission-mode",
+            discovery::option_values(&help, "--permission-mode"),
+        );
+        Ok(AgentConfigDiscovery {
+            fields,
+            seed: self.seed_config(),
+        })
     }
 
     fn assemble_argv_for(

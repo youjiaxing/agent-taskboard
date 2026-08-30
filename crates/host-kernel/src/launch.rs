@@ -148,13 +148,25 @@ pub fn unknown_enum_warnings(
 ) -> Vec<String> {
     let mut warnings = Vec::new();
     for field in fields {
-        if field.kind != AgentFieldKind::Select || field.options.is_empty() {
+        if field.kind != AgentFieldKind::Select {
+            continue;
+        }
+        let options = field
+            .option_filter
+            .as_ref()
+            .and_then(|filter| {
+                values
+                    .get(&filter.field_id)
+                    .and_then(|value| filter.options_by_value.get(value))
+            })
+            .unwrap_or(&field.options);
+        if options.is_empty() {
             continue;
         }
         let Some(value) = values.get(&field.id).map(|value| value.trim()) else {
             continue;
         };
-        if value.is_empty() || field.options.iter().any(|option| option == value) {
+        if value.is_empty() || options.iter().any(|option| option == value) {
             continue;
         }
         warnings.push(match language {
@@ -170,6 +182,65 @@ pub fn unknown_enum_warnings(
         });
     }
     warnings
+}
+
+pub fn option_discovery_failure(error: &str, language: Language) -> String {
+    match language {
+        Language::ZhCn => format!("读取 CLI 可用项失败：{error}。仍可手动输入。"),
+        Language::En => format!(
+            "Could not read available CLI options: {error}. Manual input is still available."
+        ),
+    }
+}
+
+pub fn missing_agent_cli(
+    command: &str,
+    searched_path: &str,
+    known_locations: &[PathBuf],
+    language: Language,
+) -> String {
+    let searched_path = if searched_path.is_empty() {
+        match language {
+            Language::ZhCn => "（空）",
+            Language::En => "(empty)",
+        }
+    } else {
+        searched_path
+    };
+    let known_locations = if known_locations.is_empty() {
+        match language {
+            Language::ZhCn => "无".into(),
+            Language::En => "none".into(),
+        }
+    } else {
+        known_locations
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let remediation = match (language, cfg!(windows)) {
+        (Language::ZhCn, true) => {
+            "请安装该 CLI，并先在 Windows 用户环境变量中更新 PATH；若通过 PowerShell 配置环境，再检查 $PROFILE"
+        }
+        (Language::En, true) => {
+            "Install the CLI and update PATH in the Windows user environment first; if PowerShell configures it, also check $PROFILE"
+        }
+        (Language::ZhCn, false) => {
+            "请安装该 CLI，并把可执行文件目录加入系统用户环境或默认壳的 login 文件（如 ~/.zprofile 或 ~/.profile）"
+        }
+        (Language::En, false) => {
+            "Install the CLI and add its executable directory to the system user environment or the default shell login file (such as ~/.zprofile or ~/.profile)"
+        }
+    };
+    match language {
+        Language::ZhCn => format!(
+            "未找到命令 {command}；探测 PATH：{searched_path}；已知安装目录：{known_locations}。{remediation}"
+        ),
+        Language::En => format!(
+            "Command {command} was not found; searched PATH: {searched_path}; known install locations: {known_locations}. {remediation}"
+        ),
+    }
 }
 
 pub fn missing_required(
@@ -344,18 +415,21 @@ pub fn default_agent_id(
     last_successful: Option<&str>,
     requested: Option<&str>,
 ) -> String {
-    if let Some(id) = requested.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
+    if let Some(id) = requested.filter(|id| {
+        agents
+            .iter()
+            .any(|agent| agent.id == *id && agent.installed)
+    }) {
         return id.to_string();
     }
-    if let Some(id) = last_successful.filter(|id| agents.iter().any(|agent| agent.id == *id)) {
+    if let Some(id) = last_successful.filter(|id| {
+        agents
+            .iter()
+            .any(|agent| agent.id == *id && agent.installed)
+    }) {
         return id.to_string();
     }
-    agents
-        .iter()
-        .find(|agent| agent.installed)
-        .or_else(|| agents.first())
-        .map(|agent| agent.id.clone())
-        .unwrap_or_default()
+    String::new()
 }
 
 pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) {

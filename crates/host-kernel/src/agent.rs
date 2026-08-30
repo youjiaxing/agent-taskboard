@@ -10,16 +10,15 @@ use crate::{Language, LaunchEnvironment};
 mod antigravity;
 mod claude;
 mod codex;
+mod discovery;
+mod grok;
 mod hooks;
 
 pub use antigravity::{AntigravityAdapter, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME};
 pub use claude::{ClaudeAdapter, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME};
 pub use codex::{CodexAdapter, CODEX_BIN, CODEX_ID, CODEX_NAME};
+pub use grok::{GrokAdapter, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME};
 pub use hooks::{CompletionHookPlan, CompletionSignals};
-
-pub const GROK_BUILD_ID: &str = "grok-build";
-pub const GROK_BUILD_NAME: &str = "Grok Build";
-pub const GROK_BIN: &str = "grok";
 
 pub fn builtin_agents() -> Vec<Arc<dyn AgentPort>> {
     vec![
@@ -47,8 +46,23 @@ pub struct AgentField {
     pub kind: AgentFieldKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_filter: Option<AgentFieldOptionFilter>,
     pub required: bool,
     pub folded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFieldOptionFilter {
+    pub field_id: String,
+    pub options_by_value: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentConfigDiscovery {
+    pub fields: Vec<AgentField>,
+    pub seed: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -105,6 +119,8 @@ pub struct RunLaunchForm {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_discovery_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +191,16 @@ pub trait AgentPort: Send + Sync {
     fn seed_config(&self) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
+    fn discover_config(
+        &self,
+        _executable: &Path,
+        _env: &LaunchEnvironment,
+    ) -> Result<AgentConfigDiscovery, String> {
+        Ok(AgentConfigDiscovery {
+            fields: self.config_fields(),
+            seed: self.seed_config(),
+        })
+    }
     fn assemble_argv_for(
         &self,
         executable: &Path,
@@ -243,84 +269,6 @@ pub trait AgentPort: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct GrokAdapter;
-
-impl GrokAdapter {
-    pub fn known_location() -> Option<PathBuf> {
-        home_dir().map(|home| home.join(".grok").join("bin"))
-    }
-}
-
-impl AgentPort for GrokAdapter {
-    fn id(&self) -> &str {
-        GROK_BUILD_ID
-    }
-
-    fn name(&self) -> &str {
-        GROK_BUILD_NAME
-    }
-
-    fn bin(&self) -> &str {
-        GROK_BIN
-    }
-
-    fn known_install_locations(&self) -> Vec<PathBuf> {
-        Self::known_location().into_iter().collect()
-    }
-
-    fn probe(&self, env: &LaunchEnvironment) -> ProbeResult {
-        probe_binary(self.bin(), env, &self.known_install_locations())
-    }
-
-    fn assemble_argv(&self, executable: &Path) -> Vec<String> {
-        vec![executable.to_string_lossy().into_owned()]
-    }
-
-    fn config_fields(&self) -> Vec<AgentField> {
-        grok_fields()
-    }
-
-    fn seed_config(&self) -> BTreeMap<String, String> {
-        grok_seed()
-    }
-
-    fn assemble_argv_for(
-        &self,
-        executable: &Path,
-        values: &BTreeMap<String, String>,
-    ) -> Vec<String> {
-        grok_argv(executable, values, true)
-    }
-
-    fn native_isolation(&self) -> bool {
-        true
-    }
-
-    fn completion_hooks_supported(&self) -> bool {
-        true
-    }
-
-    fn attach_completion_hooks(
-        &self,
-        sink_dir: &Path,
-        _project_dir: &Path,
-    ) -> Result<CompletionHookPlan, String> {
-        let recorder = hooks::write_recorder(sink_dir)?;
-        let overlay = hooks::grok_home_overlay(sink_dir)?;
-        hooks::write_json_hooks(
-            &overlay.join("hooks").join("agent-taskboard.json"),
-            &recorder,
-        )?;
-        let mut extra_env = hooks::sink_env(sink_dir);
-        extra_env.insert("GROK_HOME".into(), overlay.to_string_lossy().into_owned());
-        Ok(CompletionHookPlan {
-            extra_argv: Vec::new(),
-            extra_env,
-        })
-    }
-}
-
 #[derive(Debug)]
 pub struct MemoryAgent {
     id: String,
@@ -338,6 +286,8 @@ pub struct MemoryAgent {
     hooks_supported: Mutex<bool>,
     attach_fail: Mutex<bool>,
     telemetry: Mutex<Vec<TelemetrySample>>,
+    discovery_result: Mutex<Option<Result<AgentConfigDiscovery, String>>>,
+    discovery_count: Mutex<u32>,
 }
 
 impl MemoryAgent {
@@ -355,14 +305,16 @@ impl MemoryAgent {
             known_locations: vec![PathBuf::from("/mem/.grok/bin")],
             installed: Mutex::new(true),
             recent_action: Mutex::new(None),
-            fields: grok_fields(),
-            seed: grok_seed(),
+            fields: grok::grok_fields(),
+            seed: grok::grok_seed(),
             native_isolation: false,
             native_session_id: Mutex::new(None),
             isolation_tree: Mutex::new(None),
             hooks_supported: Mutex::new(true),
             attach_fail: Mutex::new(false),
             telemetry: Mutex::new(Vec::new()),
+            discovery_result: Mutex::new(None),
+            discovery_count: Mutex::new(0),
         }
     }
 
@@ -411,6 +363,18 @@ impl MemoryAgent {
     pub fn push_telemetry(&self, sample: TelemetrySample) {
         self.telemetry.lock().expect("memory agent").push(sample);
     }
+
+    pub fn set_discovery_result(&self, discovery: AgentConfigDiscovery) {
+        *self.discovery_result.lock().expect("memory agent") = Some(Ok(discovery));
+    }
+
+    pub fn set_discovery_error(&self, error: impl Into<String>) {
+        *self.discovery_result.lock().expect("memory agent") = Some(Err(error.into()));
+    }
+
+    pub fn discovery_count(&self) -> u32 {
+        *self.discovery_count.lock().expect("memory agent")
+    }
 }
 
 impl AgentPort for MemoryAgent {
@@ -456,12 +420,30 @@ impl AgentPort for MemoryAgent {
         self.seed.clone()
     }
 
+    fn discover_config(
+        &self,
+        _executable: &Path,
+        _env: &LaunchEnvironment,
+    ) -> Result<AgentConfigDiscovery, String> {
+        *self.discovery_count.lock().expect("memory agent") += 1;
+        self.discovery_result
+            .lock()
+            .expect("memory agent")
+            .clone()
+            .unwrap_or_else(|| {
+                Ok(AgentConfigDiscovery {
+                    fields: self.fields.clone(),
+                    seed: self.seed.clone(),
+                })
+            })
+    }
+
     fn assemble_argv_for(
         &self,
         executable: &Path,
         values: &BTreeMap<String, String>,
     ) -> Vec<String> {
-        grok_argv(executable, values, self.native_isolation)
+        grok::grok_argv(executable, values, self.native_isolation)
     }
 
     fn recent_action(&self) -> Option<String> {
@@ -478,7 +460,7 @@ impl AgentPort for MemoryAgent {
         values: &BTreeMap<String, String>,
         session_id: &str,
     ) -> Vec<String> {
-        let mut argv = grok_argv(executable, values, false);
+        let mut argv = grok::grok_argv(executable, values, false);
         argv.push("--resume".into());
         argv.push(session_id.to_string());
         argv
@@ -518,65 +500,6 @@ impl AgentPort for MemoryAgent {
     fn drain_telemetry(&self) -> Vec<TelemetrySample> {
         std::mem::take(&mut *self.telemetry.lock().expect("memory agent"))
     }
-}
-
-fn grok_fields() -> Vec<AgentField> {
-    vec![
-        text_field("model", "model", true, false),
-        select_field("effort", "effort", &["low", "medium", "high"], true, false),
-        select_field(
-            "permission-mode",
-            "权限模式",
-            &["normal", "plan", "auto", "always-approve"],
-            true,
-            false,
-        ),
-        boolean_field("always-approve", "alwaysApprove", false),
-        select_field(
-            "sandbox",
-            "sandbox",
-            &["off", "workspace", "read-only", "strict"],
-            true,
-            false,
-        ),
-        initial_instruction_field(),
-        additional_args_field(),
-    ]
-}
-
-fn grok_seed() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("model".into(), "grok-4.6".into()),
-        ("effort".into(), "high".into()),
-        ("permission-mode".into(), "normal".into()),
-        ("always-approve".into(), "false".into()),
-        ("sandbox".into(), "off".into()),
-        ("initial-instruction".into(), String::new()),
-        ("additional-args".into(), String::new()),
-    ])
-}
-
-fn grok_argv(
-    executable: &Path,
-    values: &BTreeMap<String, String>,
-    native_isolation: bool,
-) -> Vec<String> {
-    let mut argv = vec![executable.to_string_lossy().into_owned()];
-    append_flag(&mut argv, "--model", values.get("model"));
-    append_flag(&mut argv, "--effort", values.get("effort"));
-    append_flag(&mut argv, "--sandbox", values.get("sandbox"));
-    if values
-        .get("always-approve")
-        .is_some_and(|value| value == "true")
-        || values
-            .get("permission-mode")
-            .is_some_and(|value| value == "always-approve")
-    {
-        argv.push("--always-approve".into());
-    }
-    append_isolation_flag(&mut argv, values, native_isolation);
-    append_additional_args(&mut argv, values);
-    argv
 }
 
 fn isolation_enabled(values: &BTreeMap<String, String>) -> bool {
@@ -622,6 +545,7 @@ fn text_field(id: &str, label: &str, required: bool, folded: bool) -> AgentField
         label: label.into(),
         kind: AgentFieldKind::Text,
         options: Vec::new(),
+        option_filter: None,
         required,
         folded,
     }
@@ -639,6 +563,7 @@ fn select_field(
         label: label.into(),
         kind: AgentFieldKind::Select,
         options: options.iter().map(|option| (*option).to_string()).collect(),
+        option_filter: None,
         required,
         folded,
     }
@@ -650,6 +575,7 @@ fn boolean_field(id: &str, label: &str, folded: bool) -> AgentField {
         label: label.into(),
         kind: AgentFieldKind::Boolean,
         options: Vec::new(),
+        option_filter: None,
         required: false,
         folded,
     }
@@ -661,6 +587,7 @@ fn multiline_field(id: &str, label: &str) -> AgentField {
         label: label.into(),
         kind: AgentFieldKind::Multiline,
         options: Vec::new(),
+        option_filter: None,
         required: false,
         folded: false,
     }

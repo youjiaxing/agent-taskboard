@@ -1,7 +1,37 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use host_kernel::{AgentPort, CodexAdapter, Language, CODEX_BIN, CODEX_ID, CODEX_NAME};
+use host_kernel::{
+    AgentPort, CodexAdapter, Language, LaunchEnvironment, CODEX_BIN, CODEX_ID, CODEX_NAME,
+};
+
+fn make_discoverable_codex(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("codex");
+    std::fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\n' '  -s, --sandbox <SANDBOX_MODE>' '          [possible values: read-only, workspace-write, danger-full-access]' '  -a, --ask-for-approval <APPROVAL_POLICY>' '          Possible values:' '          - untrusted:' '          - on-request:' '          - never:'
+  exit 0
+fi
+if [ "$1" = "app-server" ]; then
+  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read models
+  printf '%s\n' '{"id":1,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"}]},{"id":"gpt-deep","model":"gpt-deep","isDefault":false,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"},{"reasoningEffort":"max"}]}],"nextCursor":null}}'
+  exit 0
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
 
 #[test]
 fn codex_adapter_declares_interactive_tui_contract() {
@@ -39,6 +69,58 @@ fn codex_adapter_declares_own_fields_not_permission_mode() {
     assert!(fields
         .iter()
         .any(|field| field.id == "additional-args" && field.folded));
+}
+
+#[test]
+fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_discoverable_codex(tmp.path());
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+
+    let discovery = CodexAdapter
+        .discover_config(&executable, &env)
+        .expect("Codex CLI discovery");
+    let model = discovery
+        .fields
+        .iter()
+        .find(|field| field.id == "model")
+        .unwrap();
+    assert_eq!(model.options, vec!["gpt-fast", "gpt-deep"]);
+    let effort = discovery
+        .fields
+        .iter()
+        .find(|field| field.id == "effort")
+        .unwrap();
+    let filter = effort.option_filter.as_ref().unwrap();
+    assert_eq!(filter.field_id, "model");
+    assert_eq!(filter.options_by_value["gpt-fast"], vec!["low", "medium"]);
+    assert_eq!(
+        filter.options_by_value["gpt-deep"],
+        vec!["high", "xhigh", "max"]
+    );
+    assert_eq!(discovery.seed["model"], "gpt-fast");
+    assert_eq!(discovery.seed["effort"], "low");
+    assert_eq!(
+        discovery
+            .fields
+            .iter()
+            .find(|field| field.id == "approval")
+            .unwrap()
+            .options,
+        vec!["untrusted", "on-request", "never"]
+    );
+    assert_eq!(
+        discovery
+            .fields
+            .iter()
+            .find(|field| field.id == "sandbox")
+            .unwrap()
+            .options,
+        vec!["read-only", "workspace-write", "danger-full-access"]
+    );
 }
 
 #[test]

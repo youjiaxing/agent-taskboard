@@ -918,9 +918,10 @@ await page.click("form[data-form='project'] button[data-act='close-form']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await page.click("button[data-act='new-run']");
 await page.waitForSelector(".launch-sheet");
-const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
+const pick = page.locator("button[data-act='select-agent']:not([disabled])").first();
 if (await pick.count()) {
   await pick.click();
+  await page.click("button[data-act='next-agent']");
   await page.waitForSelector("textarea[data-field='openingText']");
 }
 await page.click(".launch-sheet button[data-act='intent'][data-id='modify']");

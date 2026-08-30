@@ -16,6 +16,28 @@ fn boot_req(root: &Path) -> BootRequest {
     }
 }
 
+fn start_run(host: &mut HostKernel, client_id: &str, project_id: &str) -> String {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "clientInstanceId": client_id,
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "client state integration",
+    }))
+    .unwrap()
+    .snapshot
+    .focused_run_id
+}
+
 #[test]
 fn each_client_keeps_its_own_focused_run() {
     let tmp = tempfile::tempdir().unwrap();
@@ -35,16 +57,7 @@ fn each_client_keeps_its_own_focused_run() {
         .focused_project_id
         .clone();
 
-    let first_run = host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "clientInstanceId": "tauri-desktop",
-            "projectId": project_id,
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id
-        .clone();
+    let first_run = start_run(&mut host, "tauri-desktop", &project_id);
     host.handle(serde_json::json!({
         "op": "focusRun",
         "clientInstanceId": "tauri-desktop",
@@ -57,16 +70,7 @@ fn each_client_keeps_its_own_focused_run() {
         "projectId": project_id,
     }))
     .unwrap();
-    let second_run = host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "clientInstanceId": "browser-window",
-            "projectId": project_id,
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id
-        .clone();
+    let second_run = start_run(&mut host, "browser-window", &project_id);
     host.handle(serde_json::json!({
         "op": "focusRun",
         "clientInstanceId": "browser-window",

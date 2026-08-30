@@ -748,7 +748,12 @@ html[data-theme="plain-night"] button.danger.primary {
   margin: 4px 0 8px;
 }
 .form-sheet .actions { justify-content: flex-end; }
-.launch-sheet { width: min(560px, calc(100% - 24px)); }
+.launch-sheet {
+  width: min(760px, calc(100% - 24px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  overflow-wrap: normal;
+}
 .launch-agent {
   display: flex;
   align-items: center;
@@ -1098,8 +1103,9 @@ html[data-theme="plain-night"] button.danger.primary {
   margin: 0;
   width: 100%;
   font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
   background: var(--chip);
   border-radius: var(--r);
   padding: 8px 10px;

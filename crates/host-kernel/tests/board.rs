@@ -1,14 +1,16 @@
 mod common;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, DependencyGraphMode,
-    FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, LoopbackAssets, LoopbackServer,
-    MemoryTracker, SystemAppearance, TrackerRouter, TriageRole, DEFAULT_RECENT_LIMIT,
+    AgentField, AgentFieldKind, BoardEmptyReason, BootRequest, CenterView, DependencyGraph,
+    DependencyGraphMode, FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord,
+    LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TrackerRouter, TriageRole,
+    DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -59,6 +61,30 @@ fn register(host: &mut HostKernel, dir: &Path, repository: &str) -> String {
     .unwrap()
     .snapshot
     .focused_project_id
+}
+
+fn start_bound_grok(
+    host: &mut HostKernel,
+    project_id: &str,
+    issue_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board integration",
+    }))
+    .unwrap()
 }
 
 fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) {
@@ -1046,11 +1072,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     );
     tracker.set_read_mode("you/garden", ReadMode::Complete);
     host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/garden#10",
-    }))
-    .unwrap();
+    start_bound_grok(&mut host, &garden_project_id, "you/garden#10");
     sessions
         .last_session()
         .expect("active Run session")
@@ -1078,12 +1100,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "op": "snapshot",
     }))
     .unwrap();
-    let stopped_run_id = host
-        .handle(serde_json::json!({
-            "op": "startBoundRun",
-            "issueId": "you/garden#7",
-        }))
-        .unwrap()
+    let stopped_run_id = start_bound_grok(&mut host, &garden_project_id, "you/garden#7")
         .snapshot
         .focused_run_id;
     sessions
@@ -1116,6 +1133,17 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     host.handle(serde_json::json!({
         "op": "startUnboundRun",
         "projectId": host.snapshot().focused_project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board unbound integration",
     }))
     .unwrap();
     host.handle(serde_json::json!({
@@ -1337,4 +1365,66 @@ fn browser_covers_local_markdown_issue_111_write_forms() {
         "issue-111-ui.mjs",
         &[("LOCAL_PROJECT_DIR", local.as_path())],
     );
+}
+
+#[test]
+fn browser_supplements_issue_115_launch_form_behavior() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = make_dir(tmp.path(), "work/issue-115-ui");
+    let field = |id: &str, kind: AgentFieldKind, options: &[&str], folded: bool| AgentField {
+        id: id.into(),
+        label: id.into(),
+        kind,
+        options: options.iter().map(|value| (*value).to_string()).collect(),
+        option_filter: None,
+        required: id == "model" || id == "effort",
+        folded,
+    };
+    let fields = vec![
+        field("model", AgentFieldKind::Select, &["fast", "deep"], false),
+        field("effort", AgentFieldKind::Select, &["low", "high"], false),
+        field("initial-instruction", AgentFieldKind::Multiline, &[], false),
+        field("profile", AgentFieldKind::Text, &[], false),
+        field(
+            "approval",
+            AgentFieldKind::Select,
+            &["on-request", "never"],
+            false,
+        ),
+        field(
+            "sandbox",
+            AgentFieldKind::Select,
+            &["workspace-write", "read-only"],
+            false,
+        ),
+        field("agent", AgentFieldKind::Text, &[], false),
+        field("add-dir", AgentFieldKind::Text, &[], false),
+        field("additional-args", AgentFieldKind::Text, &[], true),
+    ];
+    let seed = BTreeMap::from([
+        ("model".into(), "fast".into()),
+        ("effort".into(), "low".into()),
+        ("initial-instruction".into(), String::new()),
+        ("profile".into(), String::new()),
+        ("approval".into(), "on-request".into()),
+        ("sandbox".into(), "workspace-write".into()),
+        ("agent".into(), String::new()),
+        ("add-dir".into(), String::new()),
+        ("additional-args".into(), String::new()),
+    ]);
+    let grok = host_kernel::MemoryAgent::installed_grok().with_fields(fields.clone(), seed.clone());
+    let codex =
+        host_kernel::MemoryAgent::installed("codex", "Codex", "codex").with_fields(fields, seed);
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()) as _,
+            agents: vec![Arc::new(grok) as _, Arc::new(codex) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    register(&mut host, &project, "you/issue-115-ui");
+    run_browser_e2e(host, "issue-115-launch.mjs", &[]);
 }
