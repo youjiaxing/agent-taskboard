@@ -4125,7 +4125,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
         </div>
         <p class="hint agent-selection" aria-live="polite">${escapeHtml(selection)}</p>
         <div class="actions">
-          <button type="button" data-act="close-launch" aria-label="取消选择 Agent">${escapeHtml(copy.cancel)}</button>
+          <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
           <button type="button" class="primary" data-act="next-agent" ${selected?.installed ? "" : "disabled"}>${escapeHtml(copy.nextStep)}</button>
         </div>
       </div>
@@ -4189,7 +4189,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
       ${form.optionDiscoveryError ? `<p class="notice">${escapeHtml(form.optionDiscoveryError)}</p>` : ""}
       ${form.error ? `<p class="notice bad">${escapeHtml(form.error)}</p>` : ""}
       <div class="actions">
-        <button type="button" data-act="close-launch" aria-label="取消启动 Run">${escapeHtml(copy.cancel)}</button>
+        <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
         <button type="submit" class="primary">${escapeHtml(copy.startRun)}</button>
       </div>
     </form>
@@ -4292,7 +4292,7 @@ function projectForm(copy: ShellCopy): string {
         : ""}
       ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
       <div class="actions">
-        <button type="button" data-act="close-form" aria-label="${escapeHtml(editing ? "取消编辑 Project" : "取消登记 Project")}" ${saving ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="button" data-act="close-form" ${saving ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
         <button type="submit" class="primary" ${saving ? "disabled" : ""}>${escapeHtml(saving ? copy.operationPending : editing ? copy.saveRegistration : copy.addProject)}</button>
       </div>
     </form>
@@ -5931,39 +5931,6 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
-    event.preventDefault();
-    if (snapshot.launchForm) {
-      void rpc("cancelRunLaunch").catch(() => {});
-      launchDraft = null;
-      launchPickerProjectId = "";
-      launchPickerAgentId = "";
-      render();
-      return;
-    }
-    if (formOpen) {
-      formOpen = null;
-      supersedeProjectInference();
-      formError = "";
-      render();
-      return;
-    }
-    if (pairingOpen) {
-      pairingOpen = false;
-      pairingError = "";
-      render();
-      return;
-    }
-    if (settingsOpen) {
-      settingsOpen = false;
-      render();
-      return;
-    }
-    if (changesOpen) {
-      changesOpen = false;
-      changesView = null;
-      render();
-      return;
-    }
     if (keyboardHelpOpen) {
       keyboardHelpOpen = false;
       render();
