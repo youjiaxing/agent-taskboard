@@ -39,6 +39,28 @@ await browserPage.reload({ waitUntil: "domcontentloaded" });
 if (await browserPage.evaluate(({ staleKey }) => localStorage.getItem(staleKey), { staleKey: staleLayoutKey }) !== null) {
   throw new Error("unused historical panel Client layout instances must be pruned");
 }
+const popupPromise = browserPage.waitForEvent("popup");
+const openerClientId = await browserPage.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id"));
+await browserPage.evaluate(() => window.open("about:blank", "panel-layout-popup"));
+const popupClient = await popupPromise;
+const popupSeedClientId = await popupClient.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")).catch(() => null);
+if (popupSeedClientId !== openerClientId) {
+  throw new Error(`popup should inherit the opener session storage before navigation: ${JSON.stringify({ openerClientId, popupSeedClientId })}`);
+}
+await popupClient.addInitScript(({ protocol }) => {
+  window.__HOST_PROTOCOL__ = protocol;
+}, { protocol: url });
+await popupClient.goto(url, { waitUntil: "domcontentloaded" });
+await popupClient.waitForLoadState("domcontentloaded");
+await popupClient.waitForSelector(".lanes");
+const [browserClientId, popupClientId] = await Promise.all([
+  browserPage.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")),
+  popupClient.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")),
+]);
+if (!browserClientId || !popupClientId || browserClientId === popupClientId) {
+  throw new Error(`Browser windows opened from an opener must use independent Client identities: ${JSON.stringify({ browserClientId, popupClientId })}`);
+}
+await popupClient.close();
 await browserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
 await browserPage.waitForSelector(".lifted-run");
 await browserPage.waitForSelector('[data-workbench-panel="inspector"]');

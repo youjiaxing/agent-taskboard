@@ -1020,13 +1020,22 @@ const GRAPH_RELATION_META: Record<
 
 function sessionClientId(): string {
   const key = "agent-taskboard-client-id";
+  const windowMarkerPrefix = "agent-taskboard-client-window:";
   const existing = sessionStorage.getItem(key);
-  if (existing) return existing;
+  const windowMarker = window.name.startsWith(windowMarkerPrefix)
+    ? window.name.slice(windowMarkerPrefix.length)
+    : "";
+  const clonedFromOpener = Boolean(window.opener) && !windowMarker;
+  if (existing && !clonedFromOpener) {
+    if (!windowMarker) window.name = `${windowMarkerPrefix}${existing}`;
+    return existing;
+  }
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
-      : `client-${Date.now()}`;
+      : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   sessionStorage.setItem(key, id);
+  window.name = `${windowMarkerPrefix}${id}`;
   return id;
 }
 
