@@ -727,6 +727,7 @@ fn local_markdown_relation_writes_reject_an_incomplete_graph() {
     let repository = project_dir.to_string_lossy().to_string();
     let secrets = tmp.path().join("secrets.json");
     let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
         github_host: "local",
         repository: &repository,
         secrets_pat: None,
@@ -877,6 +878,162 @@ fn local_markdown_failure_does_not_mention_github_credentials() {
         }
         other => panic!("expected local tracker failure, got {other:?}"),
     }
+}
+
+#[test]
+fn local_markdown_clears_legacy_parent_header_and_section_forms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-parent-clear");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-header.md"),
+        "# 02 — Header child\n\nStatus: ready-for-agent\nParent: 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("03-section.md"),
+        "# 03 — Section child\n\nStatus: ready-for-agent\n\n## Parent\n\n- #1\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    for number in [2, 3] {
+        LocalMarkdownTracker
+            .set_parent(&ctx, &format!("{repository}#{number}"), None)
+            .unwrap();
+    }
+
+    let outcome = LocalMarkdownTracker.read_all(&ctx).unwrap();
+    let issues = match outcome {
+        host_kernel::TrackerReadOutcome::Complete { issues } => issues,
+        other => panic!("expected complete read, got {other:?}"),
+    };
+    assert!(issues
+        .iter()
+        .filter(|issue| issue.number >= 2)
+        .all(|issue| issue.parent.is_none()));
+}
+
+#[test]
+fn local_markdown_legacy_closed_true_does_not_hide_an_invalid_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-invalid-status");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-invalid.md"),
+        "# 01 — Invalid\n\nStatus: done\nClosed: true\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    match LocalMarkdownTracker.read_all(&ctx).unwrap() {
+        host_kernel::TrackerReadOutcome::Incomplete { detail, .. } => {
+            assert!(detail.contains("invalid Status: done"), "{detail}");
+        }
+        other => panic!("invalid explicit Status must fail closed, got {other:?}"),
+    }
+}
+
+#[test]
+fn local_markdown_can_close_a_legacy_closed_false_issue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-close");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-open.md"),
+        "# 01 — Open\n\nStatus: ready-for-agent\nClosed: false\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    let closed = LocalMarkdownTracker
+        .close_issue(&ctx, &format!("{repository}#1"))
+        .unwrap();
+    assert!(!closed.open);
+    let body = std::fs::read_to_string(issues.join("01-open.md")).unwrap();
+    assert!(body.contains("Status: resolved"), "{body}");
+    assert!(!body.contains("Closed:"), "{body}");
+}
+
+#[test]
+fn local_markdown_file_changes_trigger_a_host_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/file-change-refresh");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n\noriginal body\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "file-change-refresh", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    assert_eq!(out.snapshot.projects[0].issue_counts.total, 1);
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({ "op": "focusIssue", "issueId": issue_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "loadIssueDocument", "issueId": issue_id }))
+        .unwrap();
+    assert!(matches!(
+        host.snapshot().board.unwrap().selected.unwrap().document,
+        host_kernel::IssueDocumentState::Ready { ref body, .. } if body.contains("original body")
+    ));
+
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n\nexternally changed body\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let refreshed = host
+        .handle(serde_json::json!({ "op": "tick", "nowMs": 1_800_000_000_000_u64 }))
+        .unwrap();
+    assert_eq!(refreshed.snapshot.projects[0].issue_counts.total, 2);
+    assert_eq!(
+        refreshed.snapshot.board.unwrap().selected.unwrap().document,
+        host_kernel::IssueDocumentState::Unloaded
+    );
 }
 
 #[test]

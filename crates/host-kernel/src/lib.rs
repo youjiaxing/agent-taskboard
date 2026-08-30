@@ -1047,6 +1047,7 @@ pub struct HostKernel {
     loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
     issue_documents: BTreeMap<String, BTreeMap<String, IssueDocumentState>>,
     refresh: BTreeMap<String, ProjectRefreshState>,
+    local_tracker_revisions: BTreeMap<String, u64>,
     client_views: BTreeMap<String, ClientView>,
     pending_events: Vec<HostEvent>,
     now_ms: u64,
@@ -1261,6 +1262,7 @@ impl HostKernel {
             loaded_issues: BTreeMap::new(),
             issue_documents: BTreeMap::new(),
             refresh: BTreeMap::new(),
+            local_tracker_revisions: BTreeMap::new(),
             client_views: BTreeMap::new(),
             pending_events: Vec::new(),
             now_ms: refresh::wall_ms(),
@@ -1641,6 +1643,7 @@ impl HostKernel {
             Command::Tick { now_ms } => {
                 self.now_ms = now_ms.unwrap_or_else(refresh::wall_ms);
                 self.expire_stale_client_views();
+                self.maybe_refresh_local_markdown();
                 self.maybe_auto_refresh();
                 self.finish_due_pending();
             }
@@ -3378,6 +3381,7 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
         let ctx = tracker::ProbeContext {
+            tracker: project.tracker,
             github_host: &project.github_host,
             repository: &project.repository,
             secrets_pat: pat.as_deref(),
@@ -4643,12 +4647,8 @@ impl HostKernel {
                 "a Project is already registered for this directory".into(),
             ));
         }
-        let tracker_kind = if github_host == "local" {
-            TrackerKind::LocalMarkdown
-        } else {
-            TrackerKind::Github
-        };
-        let connection = self.probe_github(&github_host, &repository);
+        let tracker_kind = tracker_kind_for_host(&github_host);
+        let connection = self.probe_tracker(tracker_kind, &github_host, &repository);
         let record = ProjectRecord {
             id: pairing::random_id(),
             name,
@@ -4723,12 +4723,9 @@ impl HostKernel {
         let registration_changed = current.local_path != local_path
             || current.github_host != github_host
             || current.repository != repository;
-        let tracker_kind = if github_host == "local" {
-            TrackerKind::LocalMarkdown
-        } else {
-            TrackerKind::Github
-        };
-        let connection = registration_changed.then(|| self.probe_github(&github_host, &repository));
+        let tracker_kind = tracker_kind_for_host(&github_host);
+        let connection = registration_changed
+            .then(|| self.probe_tracker(tracker_kind, &github_host, &repository));
         let mut projects = self.projects.clone();
         let project = projects
             .iter_mut()
@@ -4749,6 +4746,7 @@ impl HostKernel {
             self.loaded_issues.remove(project_id);
             self.issue_documents.remove(project_id);
             self.refresh.remove(project_id);
+            self.local_tracker_revisions.remove(project_id);
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
             if self.focused_project_id.as_deref() == Some(project_id) {
                 self.selected_issue_id = None;
@@ -4789,6 +4787,7 @@ impl HostKernel {
         self.projects = projects;
         self.focused_project_id = focused_project_id;
         self.refresh.remove(project_id);
+        self.local_tracker_revisions.remove(project_id);
         self.loaded_issues.remove(project_id);
         self.issue_documents.remove(project_id);
         self.clear_pending(project_id, false);
@@ -4814,7 +4813,8 @@ impl HostKernel {
         };
         let host = self.projects[index].github_host.clone();
         let repository = self.projects[index].repository.clone();
-        let connection = self.probe_github(&host, &repository);
+        let tracker_kind = self.projects[index].tracker;
+        let connection = self.probe_tracker(tracker_kind, &host, &repository);
         self.projects[index].connection = connection;
         self.focused_project_id = Some(project_id.to_string());
         self.selected_issue_id = None;
@@ -4922,6 +4922,7 @@ impl HostKernel {
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
         let result = self.tracker.read_issue_document(
             &tracker::ProbeContext {
+                tracker: project.tracker,
                 github_host: &project.github_host,
                 repository: &project.repository,
                 secrets_pat: pat.as_deref(),
@@ -5034,9 +5035,17 @@ impl HostKernel {
         });
         let github_host = self.projects[index].github_host.clone();
         let repository = self.projects[index].repository.clone();
+        let tracker_kind = self.projects[index].tracker;
+        if tracker_kind == TrackerKind::LocalMarkdown {
+            if let Ok(revision) = LocalMarkdownTracker::content_revision(Path::new(&repository)) {
+                self.local_tracker_revisions
+                    .insert(project_id.to_string(), revision);
+            }
+        }
         let pat = read_github_pat(&self.data.host_secrets_path, &github_host);
         let now = self.now_ms;
         let result = self.tracker.read_all(&tracker::ProbeContext {
+            tracker: tracker_kind,
             github_host: &github_host,
             repository: &repository,
             secrets_pat: pat.as_deref(),
@@ -5229,7 +5238,8 @@ impl HostKernel {
             self.projects[index].connection,
             ProjectConnection::Ready { .. }
         ) {
-            self.projects[index].connection = self.probe_github(github_host, repository);
+            self.projects[index].connection =
+                self.probe_tracker(self.projects[index].tracker, github_host, repository);
         }
         let snapshot = refresh::StoredTrackerSnapshot {
             fetched_at_ms: now,
@@ -5285,6 +5295,24 @@ impl HostKernel {
             .collect();
         for project_id in due {
             self.refresh_project(&project_id, RefreshTrigger::Interval);
+        }
+    }
+
+    fn maybe_refresh_local_markdown(&mut self) {
+        let changed: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|project| project.tracker == TrackerKind::LocalMarkdown)
+            .filter_map(|project| {
+                let revision =
+                    LocalMarkdownTracker::content_revision(Path::new(&project.repository)).ok()?;
+                (self.local_tracker_revisions.get(&project.id).copied() != Some(revision))
+                    .then(|| project.id.clone())
+            })
+            .collect();
+        for project_id in changed {
+            self.issue_documents.remove(&project_id);
+            self.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
     }
 
@@ -5523,9 +5551,15 @@ impl HostKernel {
         }
     }
 
-    fn probe_github(&self, github_host: &str, repository: &str) -> ProjectConnection {
+    fn probe_tracker(
+        &self,
+        tracker_kind: TrackerKind,
+        github_host: &str,
+        repository: &str,
+    ) -> ProjectConnection {
         let pat = read_github_pat(&self.data.host_secrets_path, github_host);
         let outcome = self.tracker.probe(&tracker::ProbeContext {
+            tracker: tracker_kind,
             github_host,
             repository,
             secrets_pat: pat.as_deref(),
@@ -6474,6 +6508,14 @@ fn optional_string(request: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
+fn tracker_kind_for_host(github_host: &str) -> TrackerKind {
+    if github_host == "local" {
+        TrackerKind::LocalMarkdown
+    } else {
+        TrackerKind::Github
+    }
+}
+
 fn parse_issue_ref(id: &str) -> Result<IssueRef, KernelError> {
     let (repository, number) = parse_issue_id(id)
         .ok_or_else(|| KernelError::Protocol(format!("invalid issue id: {id}")))?;
@@ -6508,6 +6550,7 @@ fn probe_record(
 ) -> ProjectRecord {
     let pat = read_github_pat(secrets_path, &stored.github_host);
     let outcome = tracker.probe(&tracker::ProbeContext {
+        tracker: stored.tracker,
         github_host: &stored.github_host,
         repository: &stored.repository,
         secrets_pat: pat.as_deref(),

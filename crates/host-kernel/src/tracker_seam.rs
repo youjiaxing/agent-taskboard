@@ -60,7 +60,7 @@ impl TrackerRouter {
     }
 
     fn local(ctx: &ProbeContext<'_>) -> bool {
-        ctx.github_host == "local"
+        ctx.tracker == crate::tracker::TrackerKind::LocalMarkdown
     }
 }
 

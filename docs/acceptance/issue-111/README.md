@@ -41,6 +41,8 @@ Issue #111：**PASS**。
 
 自动化还覆盖以下 fail-closed 关系错误：缺失/歧义引用、自依赖、Dependency 环、父 Issue 环，以及跨 `.scratch/*/issues/` 的重复 Issue 编号。Dependency 和父子环在写入前被拒绝，不修改原 Markdown 文件。
 
+兼容性回归还覆盖：清除旧 `Parent:` / `## Parent` 父关系格式；`Closed: true` 只兼容缺失 Status，不掩盖显式非法 Status；`Closed: false` 的 legacy Issue 可以正常关闭并迁移到 `Status: resolved`。
+
 ## 写失败与恢复链路（真实 Release Tauri 壳）：PASS
 
 1. 将实际 Issue 目录权限改为 `0555`。
@@ -71,6 +73,8 @@ cargo test --workspace --release
 ```
 
 Issue #111 Browser E2E 及全量 board/project E2E 也已通过。Release Tauri build 已生成 `.app`；`codesign --verify --deep --strict` 通过。构建命令末尾的非零状态仅来自本机未设置 updater 所需的 `TAURI_SIGNING_PRIVATE_KEY`，不影响 `.app` 的生成和本地验收。
+
+Local Markdown Project 的文件内容 revision 会由 Host tick 检测；即使窗口不在前台，外部新增或修改实际 Markdown 文件也会触发该 Project 刷新。对应 HostKernel 回归通过。
 
 ## 运行稳定性备注
 
