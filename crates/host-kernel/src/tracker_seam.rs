@@ -167,12 +167,7 @@ impl<T: TrackerPort> TrackerSeam for T {
                     })
                     .collect();
                 let wanted_ids: Vec<String> = blocked_by.iter().map(IssueRef::id).collect();
-                for blocker in current_ids.iter().filter(|id| !wanted_ids.contains(id)) {
-                    self.remove_blocked_by(ctx, issue_id, blocker)?;
-                }
-                for blocker in wanted_ids.iter().filter(|id| !current_ids.contains(id)) {
-                    self.add_blocked_by(ctx, issue_id, blocker)?;
-                }
+                self.set_blocked_by(ctx, issue_id, &current_ids, &wanted_ids)?;
                 read_issue(self, ctx, issue_id)
             }
         }

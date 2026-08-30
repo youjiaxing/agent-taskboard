@@ -1524,6 +1524,39 @@ fn browser_registers_local_markdown_and_self_hosted_git_projects_through_the_for
 }
 
 #[test]
+fn browser_covers_local_markdown_issue_111_write_forms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let local = make_dir(tmp.path(), "work/issue-111-ui");
+    let issue_dir = local.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issue_dir).unwrap();
+    std::fs::write(
+        issue_dir.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\nType: task\n\nparent body\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issue_dir.join("02-child.md"),
+        "# 02 — Child\n\nStatus: ready-for-agent\nType: task\n\nchild body\n",
+    )
+    .unwrap();
+    let host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(TrackerRouter::new(Arc::new(MemoryTracker::new()))) as _,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    run_browser_e2e(
+        host,
+        "issue-111-ui.mjs",
+        &[("LOCAL_PROJECT_DIR", local.as_path())],
+    );
+}
+
+#[test]
 fn browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retry() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

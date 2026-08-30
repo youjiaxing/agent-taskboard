@@ -939,6 +939,19 @@ pub struct ShellCopy {
     pub mobile_run: String,
     pub mobile_recent_output: String,
     pub mobile_live_terminal: String,
+    pub create_issue: String,
+    pub edit_issue: String,
+    pub save_issue: String,
+    pub issue_title: String,
+    pub issue_body: String,
+    pub add_comment: String,
+    pub comment_placeholder: String,
+    pub parent_issue: String,
+    pub dependency_blockers: String,
+    pub clear_dependency: String,
+    pub save_relations: String,
+    pub close_issue: String,
+    pub reopen_issue: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4529,6 +4542,7 @@ impl HostKernel {
                 tracker_seam::TrackerWriteOp::SetOpen { .. } => {
                     existing.open = updated.open;
                     existing.closed_at = updated.closed_at;
+                    existing.labels = updated.labels;
                 }
                 tracker_seam::TrackerWriteOp::AddComment { .. } => {}
                 tracker_seam::TrackerWriteOp::Claim | tracker_seam::TrackerWriteOp::Release => {
@@ -4537,6 +4551,7 @@ impl HostKernel {
                     existing.title = updated.title;
                     existing.url = updated.url;
                     existing.closed_at = updated.closed_at;
+                    existing.labels = updated.labels;
                 }
                 tracker_seam::TrackerWriteOp::SetParent { .. } => {
                     existing.parent = updated.parent;
@@ -7306,6 +7321,19 @@ impl ShellCopy {
                 mobile_run: "Run".into(),
                 mobile_recent_output: "最近输出".into(),
                 mobile_live_terminal: "打开活终端".into(),
+                create_issue: "创建 Issue".into(),
+                edit_issue: "编辑 Issue".into(),
+                save_issue: "保存 Issue".into(),
+                issue_title: "标题".into(),
+                issue_body: "正文".into(),
+                add_comment: "添加评论".into(),
+                comment_placeholder: "写下评论".into(),
+                parent_issue: "父 Issue".into(),
+                dependency_blockers: "Blocked by（阻塞方）".into(),
+                clear_dependency: "清除 Dependency".into(),
+                save_relations: "保存关系".into(),
+                close_issue: "关闭 Issue".into(),
+                reopen_issue: "重新打开 Issue".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -7591,6 +7619,19 @@ impl ShellCopy {
                 mobile_run: "Run".into(),
                 mobile_recent_output: "Recent output".into(),
                 mobile_live_terminal: "Open live terminal".into(),
+                create_issue: "Create Issue".into(),
+                edit_issue: "Edit Issue".into(),
+                save_issue: "Save Issue".into(),
+                issue_title: "Title".into(),
+                issue_body: "Body".into(),
+                add_comment: "Add comment".into(),
+                comment_placeholder: "Write a comment".into(),
+                parent_issue: "Parent Issue".into(),
+                dependency_blockers: "Blocked by".into(),
+                clear_dependency: "Clear Dependency".into(),
+                save_relations: "Save relationship".into(),
+                close_issue: "Close Issue".into(),
+                reopen_issue: "Reopen Issue".into(),
             },
         }
     }
