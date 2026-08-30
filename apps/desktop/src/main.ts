@@ -902,6 +902,7 @@ let refreshing = false;
 let tickTimer: number | undefined;
 const activePointers = new Set<number>();
 let tickRenderPending = false;
+let tickFullRenderPending = false;
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let termHost: HTMLDivElement | null = null;
@@ -1388,49 +1389,57 @@ async function protocolBase(): Promise<string> {
 }
 
 let rpcQueue: Promise<void> = Promise.resolve();
+let pendingCenterView: CenterView | null = null;
+
+async function executeRpc(op: string, extra: Record<string, unknown>): Promise<RpcResult> {
+  const response = await fetch(`${await protocolBase()}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op, clientInstanceId: clientId, ...extra }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `Host protocol ${response.status}`;
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      message = parsed.message || parsed.error || message;
+    } catch {
+      // keep raw body
+    }
+    throw new Error(message);
+  }
+  const result = (await response.json()) as RpcResult;
+  result.snapshot.runs = result.snapshot.runs ?? [];
+  result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
+  result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
+  if (result.snapshot.board) {
+    result.snapshot.board.issueOptions = result.snapshot.board.issueOptions ?? [];
+  }
+  if (pendingCenterView) result.snapshot.centerView = pendingCenterView;
+  result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
+  result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
+  result.snapshot.notifySound = result.snapshot.notifySound ?? true;
+  result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
+  result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
+  result.events = result.events ?? [];
+  syncLaunchDraft(result.snapshot);
+  deliverHostEvents(result.events, result.snapshot);
+  snapshot = result.snapshot;
+  if (result.viewChanges) {
+    changesView = result.viewChanges;
+    changesOpen = true;
+  }
+  return result;
+}
 
 async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  const request = rpcQueue.then(async () => {
-    const response = await fetch(`${await protocolBase()}/rpc`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op, ...extra }),
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      let message = text || `Host protocol ${response.status}`;
-      try {
-        const parsed = JSON.parse(text) as { error?: string; message?: string };
-        message = parsed.message || parsed.error || message;
-      } catch {
-        // keep raw body
-      }
-      throw new Error(message);
-    }
-    const result = (await response.json()) as RpcResult;
-    result.snapshot.runs = result.snapshot.runs ?? [];
-    result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
-    result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
-    if (result.snapshot.board) {
-      result.snapshot.board.issueOptions = result.snapshot.board.issueOptions ?? [];
-    }
-    result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
-    result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
-    result.snapshot.notifySound = result.snapshot.notifySound ?? true;
-    result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-    result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
-    result.events = result.events ?? [];
-    syncLaunchDraft(result.snapshot);
-    deliverHostEvents(result.events, result.snapshot);
-    snapshot = result.snapshot;
-    if (result.viewChanges) {
-      changesView = result.viewChanges;
-      changesOpen = true;
-    }
-    return result;
-  });
+  const request = rpcQueue.then(() => executeRpc(op, extra));
   rpcQueue = request.then(() => undefined, () => undefined);
   return request;
+}
+
+function rpcDetached(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
+  return executeRpc(op, extra);
 }
 
 async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
@@ -1544,17 +1553,30 @@ function languageLabel(copy: ShellCopy, language: Language): string {
 }
 
 function captureActiveField(): {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
 } | null {
   const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  if (!active || !app?.contains(active) || active.id === "") return null;
+  if (!active || !app?.contains(active)) return null;
   if (!("value" in active)) return null;
+  let selector = active.id ? `#${CSS.escape(active.id)}` : "";
+  if (!selector) {
+    const form = active.closest<HTMLFormElement>("form[data-form]");
+    const formKind = form?.dataset.form;
+    const name = active.getAttribute("name");
+    if (form && formKind && name) {
+      const identity = form.dataset.id
+        ? `[data-id="${CSS.escape(form.dataset.id)}"]`
+        : "";
+      selector = `form[data-form="${CSS.escape(formKind)}"]${identity} [name="${CSS.escape(name)}"]`;
+    }
+  }
+  if (!selector) return null;
   return {
-    id: active.id,
+    selector,
     start: active.selectionStart,
     end: active.selectionEnd,
     direction: active.selectionDirection,
@@ -1563,14 +1585,14 @@ function captureActiveField(): {
 }
 
 function restoreActiveField(field: {
-  id: string;
+  selector: string;
   start: number | null;
   end: number | null;
   direction: "forward" | "backward" | "none" | null;
   scrollLeft: number;
 } | null): void {
   if (!field) return;
-  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`#${CSS.escape(field.id)}`);
+  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(field.selector);
   if (!next) return;
   next.focus();
   if (field.start != null && field.end != null) {
@@ -1819,7 +1841,7 @@ function render(): void {
               ${updateSettings(copy)}
               <div class="field">
                 <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" max="600" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
+                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 300_000) / 1000)}" />
                 <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
               </div>
               <div class="field">
@@ -3610,6 +3632,27 @@ function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
   </div>`;
 }
 
+function renderStatusBarsOnly(): void {
+  if (!snapshot) return;
+  const appearance = mobileClient()
+    ? { ...snapshot.appearance, ...ensureMobileAppearance() }
+    : snapshot.appearance;
+  const copy = mobileClient() && appearance.language !== snapshot.appearance.language
+    ? clientCopy(appearance.language, snapshot.copy)
+    : snapshot.copy;
+  const current = app?.querySelector<HTMLElement>(".project-board > .refresh-bar");
+  if (current) current.outerHTML = refreshBar(copy, snapshot.board);
+  const pending = app?.querySelector<HTMLElement>('.project-board > .refresh-bar[data-kind="pending"]');
+  if (pending) pending.outerHTML = pendingBar(copy, snapshot);
+}
+
+function eventsNeedFullRender(events: HostEvent[]): boolean {
+  return events.some((event) => {
+    if (event.type !== "refresh-status-changed") return true;
+    return event.status.kind !== "refreshing" && event.status.kind !== "ready";
+  });
+}
+
 function pendingBar(copy: ShellCopy, snap: Snapshot): string {
   const pending = snap.pendingConfirmation;
   if (!pending) return "";
@@ -4502,13 +4545,15 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "refresh") {
     refreshing = true;
-    render();
+    renderStatusBarsOnly();
+    let result: RpcResult | null = null;
     try {
-      await rpc("refresh");
+      result = await rpcDetached("refresh", { projectId: snapshot.focusedProjectId });
     } finally {
       refreshing = false;
     }
-    render();
+    if (eventsNeedFullRender(result?.events ?? [])) render();
+    else renderStatusBarsOnly();
     return;
   }
   if (act === "edit-project" && target.dataset.id) {
@@ -4693,9 +4738,17 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-view" && target.dataset.id) {
-    await rpc("setCenterView", { view: target.dataset.id });
-    if (target.dataset.id === "graph") {
+    const view = target.dataset.id as CenterView;
+    pendingCenterView = view;
+    snapshot.centerView = view;
+    if (view === "graph") {
       resetGraphUiState();
+    }
+    render();
+    try {
+      await rpc("setCenterView", { view });
+    } finally {
+      pendingCenterView = null;
     }
     render();
     return;
@@ -5214,7 +5267,7 @@ function parsePairingPayload(raw: string): { address: string; code: string } | n
 }
 
 function shouldReportClientView(): boolean {
-  return !desktopShellAvailable() || !focusedHostIsLocal();
+  return true;
 }
 
 let hostWindowVisible = true;
@@ -5224,13 +5277,15 @@ function clientIsVisible(): boolean {
   return hostWindowVisible && document.visibilityState === "visible";
 }
 
-async function reportClientView(visible = clientIsVisible()): Promise<boolean> {
-  if (!shouldReportClientView()) return false;
+async function reportClientView(
+  visible = clientIsVisible(),
+): Promise<{ changed: boolean; result: RpcResult | null }> {
+  if (!shouldReportClientView()) return { changed: false, result: null };
   const projectId = visible ? snapshot?.focusedProjectId ?? "" : "";
   const changed = visible !== lastReportedView.visible || projectId !== lastReportedView.projectId;
   lastReportedView = { projectId, visible };
-  await rpc("setClientView", { clientId, projectId, visible });
-  return changed;
+  const result = await rpc("setClientView", { clientId, projectId, visible });
+  return { changed, result };
 }
 
 let foregroundRefresh: Promise<void> | null = null;
@@ -5244,13 +5299,16 @@ function onClientForegroundOrHidden(): void {
   if (foregroundRefresh) return;
   foregroundRefresh = (async () => {
     try {
-      const changed = await reportClientView(true);
+      const reported = await reportClientView(true);
       if (!clientIsVisible()) {
         await reportClientView(false);
         return;
       }
-      if (!changed) await rpc("refresh");
-      render();
+      const result = reported.changed
+        ? reported.result
+        : await rpcDetached("refresh", { projectId: snapshot?.focusedProjectId ?? "" });
+      if (eventsNeedFullRender(result?.events ?? [])) render();
+      else renderStatusBarsOnly();
     } finally {
       foregroundRefresh = null;
     }
@@ -5268,19 +5326,24 @@ function ensureTick(): void {
           visible: clientIsVisible(),
         }
       : {};
-    rpc("tick", extra).then(renderAfterTick).catch(() => {});
+    rpc("tick", extra)
+      .then((result) => renderAfterTick(eventsNeedFullRender(result.events ?? [])))
+      .catch(() => {});
   }, 1000);
 }
 
-async function renderAfterTick(): Promise<void> {
+async function renderAfterTick(fullRender: boolean): Promise<void> {
   if (activePointers.size > 0) {
     tickRenderPending = true;
+    tickFullRenderPending ||= fullRender;
     return;
   }
   if (snapshot?.board?.selected?.document.kind === "unloaded") {
     await loadSelectedIssueDocument();
+    fullRender = true;
   }
-  render();
+  if (fullRender) render();
+  else renderStatusBarsOnly();
 }
 
 function finishPointerInteraction(pointerId: number): void {
@@ -5289,7 +5352,9 @@ function finishPointerInteraction(pointerId: number): void {
   window.setTimeout(() => {
     if (activePointers.size > 0 || !tickRenderPending) return;
     tickRenderPending = false;
-    void renderAfterTick().catch(() => {});
+    const fullRender = tickFullRenderPending;
+    tickFullRenderPending = false;
+    void renderAfterTick(fullRender).catch(() => {});
   }, 0);
 }
 

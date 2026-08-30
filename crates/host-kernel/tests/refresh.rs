@@ -1,7 +1,10 @@
 mod common;
 
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
@@ -68,6 +71,27 @@ fn snapshot_path(host: &HostKernel, project_id: &str) -> std::path::PathBuf {
         .join("projects")
         .join(project_id)
         .join("tracker-snapshot")
+}
+
+fn post_rpc(protocol_url: &str, body: serde_json::Value) -> serde_json::Value {
+    let address: SocketAddr = protocol_url
+        .strip_prefix("http://")
+        .expect("loopback protocol")
+        .parse()
+        .expect("loopback address");
+    let body = body.to_string();
+    let mut stream = TcpStream::connect(address).unwrap();
+    let request = format!(
+        "POST /rpc HTTP/1.1\r\nHost: {address}\r\nOrigin: tauri://localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}\n{body}");
+    serde_json::from_str(body).unwrap()
 }
 
 #[test]
@@ -218,7 +242,7 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
 }
 
 #[test]
-fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
+fn visible_project_polls_every_five_minutes_and_hidden_does_not() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -246,7 +270,10 @@ fn visible_project_polls_every_sixty_seconds_and_hidden_does_not() {
     match refresh_status(&host) {
         RefreshStatus::Ready {
             next_refresh_in_ms, ..
-        } => assert_eq!(next_refresh_in_ms, Some(30_000)),
+        } => assert_eq!(
+            next_refresh_in_ms,
+            Some(DEFAULT_REFRESH_INTERVAL_MS - 30_000)
+        ),
         other => panic!("expected countdown, got {other:?}"),
     }
 
@@ -491,7 +518,7 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/garden"), after_limit);
@@ -636,6 +663,28 @@ fn refresh_interval_is_configurable_and_survives_reboot() {
 }
 
 #[test]
+fn refresh_interval_has_a_five_minute_default_and_no_artificial_maximum() {
+    assert_eq!(DEFAULT_REFRESH_INTERVAL_MS, 300_000);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut host = boot(tmp.path(), tracker);
+    register(&mut host, &dir, "garden", "you/garden");
+
+    let one_day = 24 * 60 * 60 * 1_000;
+    let outcome = host
+        .handle(serde_json::json!({
+            "op": "setRefreshInterval",
+            "intervalMs": one_day,
+        }))
+        .unwrap();
+
+    assert_eq!(outcome.snapshot.refresh_interval_ms, one_day);
+}
+
+#[test]
 fn incomplete_read_persists_snapshot_and_board_across_reboot() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
@@ -740,7 +789,7 @@ fn run_end_refreshes_even_when_rate_limited() {
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
-        "nowMs": fetched + DEFAULT_REFRESH_INTERVAL_MS,
+        "nowMs": fetched + 60_000,
     }))
     .unwrap();
     assert_eq!(
@@ -982,4 +1031,140 @@ fn claim_without_last_data_still_live_reads_the_focused_project() {
         }))
         .unwrap_err();
     assert!(matches!(err, KernelError::Denied(message) if message.contains("never-fetched")));
+}
+
+#[test]
+fn slow_refresh_does_not_hold_the_kernel_lock_against_other_client_rpc() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut kernel, &dir, "garden", "you/garden");
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+    let protocol_url = server.protocol_url().to_string();
+    let baseline = tracker.read_start_count("you/garden");
+    tracker.set_read_delay_ms(1_000);
+
+    let refresh_url = protocol_url.clone();
+    let refresh_project_id = project_id.clone();
+    let refresh = std::thread::spawn(move || {
+        post_rpc(
+            &refresh_url,
+            serde_json::json!({
+                "op": "refresh",
+                "clientInstanceId": "desktop",
+                "projectId": refresh_project_id,
+            }),
+        )
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while tracker.read_start_count("you/garden") == baseline && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(tracker.read_start_count("you/garden") > baseline);
+
+    let started = Instant::now();
+    let snapshot = post_rpc(
+        &protocol_url,
+        serde_json::json!({
+            "op": "focusIssue",
+            "clientInstanceId": "browser",
+            "issueId": "you/garden#1",
+        }),
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
+        "navigation RPC waited behind the slow Tracker read: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(snapshot["snapshot"]["focusedProjectId"], project_id);
+    assert_eq!(
+        snapshot["snapshot"]["board"]["selected"]["id"],
+        "you/garden#1"
+    );
+    assert_eq!(
+        snapshot["snapshot"]["board"]["refresh"]["kind"],
+        "refreshing"
+    );
+
+    let refreshed = refresh.join().unwrap();
+    assert_eq!(refreshed["snapshot"]["board"]["refresh"]["kind"], "ready");
+}
+
+#[test]
+fn refresh_response_keeps_its_board_update_when_another_client_is_waiting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut kernel, &dir, "garden", "you/garden");
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+    let protocol_url = server.protocol_url().to_string();
+
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 1, "ready"),
+            IssueRecord::open("you/garden", 2, "new from refresh"),
+        ],
+    );
+    let baseline = tracker.read_start_count("you/garden");
+    tracker.set_read_delay_ms(150);
+
+    let refresh_url = protocol_url.clone();
+    let refresh_project_id = project_id.clone();
+    let refresh = std::thread::spawn(move || {
+        post_rpc(
+            &refresh_url,
+            serde_json::json!({
+                "op": "refresh",
+                "clientInstanceId": "desktop",
+                "projectId": refresh_project_id,
+            }),
+        )
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while tracker.read_start_count("you/garden") == baseline && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(tracker.read_start_count("you/garden") > baseline);
+
+    let guard = host.lock().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let competing_url = protocol_url.clone();
+    let competing = std::thread::spawn(move || {
+        post_rpc(
+            &competing_url,
+            serde_json::json!({
+                "op": "snapshot",
+                "clientInstanceId": "browser",
+            }),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(20));
+    drop(guard);
+
+    let refreshed = refresh.join().unwrap();
+    let competing = competing.join().unwrap();
+    assert!(
+        refreshed["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "board-updated"),
+        "refresh requester lost board-updated to the competing Client: refreshed={refreshed}, competing={competing}"
+    );
+    assert_eq!(
+        refreshed["snapshot"]["board"]["columns"]["frontier"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }

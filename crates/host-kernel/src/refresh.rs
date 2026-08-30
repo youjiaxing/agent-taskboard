@@ -9,15 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::issue::IssueRecord;
 use crate::owner;
 
-pub const DEFAULT_REFRESH_INTERVAL_MS: u64 = 60_000;
+pub const DEFAULT_REFRESH_INTERVAL_MS: u64 = 300_000;
 pub const MIN_REFRESH_INTERVAL_MS: u64 = 15_000;
-pub const MAX_REFRESH_INTERVAL_MS: u64 = 600_000;
 
 pub fn clamp_refresh_interval_ms(interval_ms: u64) -> u64 {
     if interval_ms == 0 {
         DEFAULT_REFRESH_INTERVAL_MS
     } else {
-        interval_ms.clamp(MIN_REFRESH_INTERVAL_MS, MAX_REFRESH_INTERVAL_MS)
+        interval_ms.max(MIN_REFRESH_INTERVAL_MS)
     }
 }
 

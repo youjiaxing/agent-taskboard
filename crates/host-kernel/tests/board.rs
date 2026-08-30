@@ -1161,6 +1161,45 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     run_browser_e2e(host, "board.mjs", &[]);
 }
 
+#[test]
+fn browser_clients_keep_navigation_and_forms_responsive_during_a_slow_tracker_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden_dir = make_dir(tmp.path(), "work/garden");
+    let notes_dir = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    for number in 1..=18 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("garden issue {number}"),
+        ));
+    }
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut host, &garden_dir, "you/garden");
+    let notes_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "notes",
+            "localPath": notes_dir,
+            "repository": "you/notes",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id
+        .clone();
+    tracker.set_read_delay_ms(1_200);
+
+    run_browser_e2e(
+        host,
+        "client-isolation-refresh.mjs",
+        &[
+            ("GARDEN_PROJECT_ID", Path::new(&garden_id)),
+            ("NOTES_PROJECT_ID", Path::new(&notes_id)),
+        ],
+    );
+}
+
 fn run_degraded_shell_edge_state(
     state: &str,
     repository: &str,
