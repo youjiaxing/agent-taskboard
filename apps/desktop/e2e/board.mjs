@@ -87,18 +87,66 @@ if (!keyboardFocusedCard) {
 await page.keyboard.press("Enter");
 await page.waitForSelector(".issue-detail .detail-hd");
 await page.waitForSelector("button[data-act='toggle-issue']");
+await page.waitForSelector('.issue-document[data-document-state="ready"]');
+const scrollRegressionStyle = await page.addStyleTag({
+  content: '[data-lane="frontier"] { max-height: 120px; } .issue-detail .detail-scroll { max-height: 180px; }',
+});
+const frontierScrollBeforeInspectorActions = await page.$eval('[data-lane="frontier"]', (node) => {
+  node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
+});
+if (frontierScrollBeforeInspectorActions <= 0) {
+  throw new Error("Issue Inspector regression needs a scrollable board lane");
+}
 const lanesWithInspector = await page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
+const detailScrollBeforeCollapse = await page.$eval(".detail-scroll", (node) => {
+  node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
+});
+if (detailScrollBeforeCollapse <= 0) {
+  throw new Error("Issue Inspector regression needs a scrollable Issue document");
+}
 await page.click("button[data-act='toggle-issue']");
 await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
 const lanesWithoutInspector = await page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
-if (lanesWithoutInspector <= lanesWithInspector) {
-  throw new Error("hiding the inspector should give the lanes more width");
+if (Math.abs(lanesWithoutInspector - lanesWithInspector) > 1) {
+  throw new Error(`floating Inspector must not change lane width: ${lanesWithInspector} -> ${lanesWithoutInspector}`);
+}
+const frontierScrollAfterCollapse = await page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (Math.abs(frontierScrollAfterCollapse - frontierScrollBeforeInspectorActions) > 1) {
+  throw new Error(`collapsing the Inspector must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterCollapse}`);
 }
 if (!(await page.$("button[data-act='toggle-issue']"))) {
   throw new Error("hiding the inspector should keep the restore control in the chrome");
 }
 await page.click("button[data-act='toggle-issue']");
 await page.waitForSelector(".issue-detail .detail-hd");
+const detailScrollAfterRestore = await page.$eval(".detail-scroll", (node) => node.scrollTop);
+if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
+  throw new Error(`restoring the same Issue must preserve Inspector scroll: ${detailScrollBeforeCollapse} -> ${detailScrollAfterRestore}`);
+}
+await page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
+await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+const frontierScrollAfterSwitch = await page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeInspectorActions) > 1) {
+  throw new Error(`switching Issues must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterSwitch}`);
+}
+const inspectorHierarchy = await page.$eval(".issue-detail", (node) => ({
+  text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
+  commentVisible: Boolean(node.querySelector('form[data-act="issue-comment"]')?.getClientRects().length),
+}));
+if (!inspectorHierarchy.text.includes("父子关系") || !inspectorHierarchy.text.includes("依赖关系")) {
+  throw new Error(`Inspector should use clear relationship headings: ${inspectorHierarchy.text}`);
+}
+for (const internalPhrase of ["属于 / 子票", "挡住它的 / 它挡住的", "无，可进 Frontier"]) {
+  if (inspectorHierarchy.text.includes(internalPhrase)) {
+    throw new Error(`Inspector should remove internal or explanatory copy: ${internalPhrase}`);
+  }
+}
+if (inspectorHierarchy.commentVisible) {
+  throw new Error("secondary Issue update forms should stay collapsed until requested");
+}
+await scrollRegressionStyle.evaluate((node) => node.remove());
 
 const beforeTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) => nodes.map((node) => node.textContent));
 await page.fill("#issue-title-search", "child ready");
@@ -106,18 +154,38 @@ const whileTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) 
 if (whileTypingSearch.join(",") !== beforeTypingSearch.join(",")) {
   throw new Error("title search should not run before Enter");
 }
-await page.press("#issue-title-search", "Enter");
+async function submitIssueSearch() {
+  const responsePromise = page.waitForResponse((response) => {
+    const request = response.request();
+    if (request.method() !== "POST" || !request.url().includes("/rpc")) return false;
+    try {
+      return request.postDataJSON()?.op === "searchIssues";
+    } catch {
+      return false;
+    }
+  });
+  await page.press("#issue-title-search", "Enter");
+  const response = await responsePromise;
+  return response.json();
+}
+const titleSearchResponse = await submitIssueSearch();
+if (titleSearchResponse.snapshot?.board?.search?.title !== "child ready") {
+  throw new Error(`search RPC should receive the entered title: ${JSON.stringify(titleSearchResponse.snapshot?.board?.search)}`);
+}
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 1);
 const searchResult = await page.$eval(".issue-card .issue-title", (node) => node.textContent);
 if (searchResult !== "child ready") {
   throw new Error(`unexpected title search result: ${searchResult}`);
 }
 await page.selectOption(".issue-search select[name='state']", "closed");
-await page.press("#issue-title-search", "Enter");
+const closedSearchResponse = await submitIssueSearch();
+if (closedSearchResponse.snapshot?.board?.search?.state !== "closed") {
+  throw new Error(`search RPC should receive the selected state: ${JSON.stringify(closedSearchResponse.snapshot?.board?.search)}`);
+}
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 0);
 await page.fill("#issue-title-search", "");
 await page.selectOption(".issue-search select[name='state']", "all");
-await page.press("#issue-title-search", "Enter");
+await submitIssueSearch();
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
 
 const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
@@ -176,6 +244,20 @@ if (headers.length !== 4) {
 }
 if (!headers[0].startsWith("阻塞中") || !headers[1].startsWith("Frontier") || !headers[2].startsWith("进行中") || !headers[3].startsWith("最近完成")) {
   throw new Error(`unexpected column order: ${JSON.stringify(headers)}`);
+}
+if (await page.$(".board-hint") || await page.$('[data-lane="recentlyCompleted"] .lane-note')) {
+  throw new Error("the default board should not repeat lane order or recently-completed rules");
+}
+const recentHierarchy = await page.$eval('[data-lane="recentlyCompleted"] .issue-card', (node) => {
+  const title = node.querySelector(".issue-title");
+  return {
+    opacity: Number.parseFloat(getComputedStyle(node).opacity),
+    decoration: title ? getComputedStyle(title).textDecorationLine : "",
+    actionable: Boolean(node.querySelector("button:not([disabled])")),
+  };
+});
+if (recentHierarchy.opacity > 0.65 || !recentHierarchy.decoration.includes("line-through") || !recentHierarchy.actionable) {
+  throw new Error(`recently completed Issues should be visibly subdued but actionable: ${JSON.stringify(recentHierarchy)}`);
 }
 
 const dailyShellGeometry = await page.evaluate(() => {
@@ -720,6 +802,10 @@ for (const action of ["focus-run", "stop-run", "view-changes"]) {
   }
 }
 
+if (await page.$(".board-shell > .issue-detail")) {
+  await page.click('.issue-detail button[data-act="toggle-issue"]');
+  await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+}
 const recentOpen = page.locator('[data-lane="recentlyCompleted"] button[data-act="open-issue"]').first();
 await recentOpen.click();
 const openedRecentUrl = await page.evaluate(() => window.__OPENED_URLS__.at(-1));
@@ -925,6 +1011,13 @@ await page.click(".mobile-scope-sheet button[data-act='remove-project']");
 await page.waitForSelector(".overlay[data-act='close-remove']");
 await page.click("button[data-act='close-remove']");
 
+const mobileBoardScrollBeforeIssue = await page.$eval(".workspace", (node) => {
+  node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
+});
+if (mobileBoardScrollBeforeIssue <= 0) {
+  throw new Error("mobile Issue navigation regression needs a scrollable board page");
+}
 await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".mobile-issue-view .issue-detail");
 await page.waitForSelector('.mobile-issue-view [data-document-state="ready"]');
@@ -938,11 +1031,33 @@ if (await page.$('.mobile-issue-view button[data-act="view-changes"]')) {
 if (await page.$('.mobile-issue-view button[data-act="toggle-issue"]')) {
   throw new Error("mobile Issue view should not expose a desktop panel-collapse control");
 }
+const mobileIssueGeometry = await page.evaluate(() => {
+  const detail = document.querySelector(".mobile-issue-view .issue-detail")?.getBoundingClientRect();
+  const actions = [...document.querySelectorAll(".mobile-issue-view .detail-meta button")]
+    .filter((node) => getComputedStyle(node).display !== "none")
+    .map((node) => node.getBoundingClientRect());
+  return {
+    pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    detailLeft: detail?.left ?? -1,
+    detailRight: detail?.right ?? 9999,
+    actionBounds: actions.map((rect) => [rect.left, rect.right]),
+  };
+});
+if (mobileIssueGeometry.pageOverflow > 0 || mobileIssueGeometry.detailLeft < 0 || mobileIssueGeometry.detailRight > 390) {
+  throw new Error(`390px Issue Inspector should stay inside the viewport: ${JSON.stringify(mobileIssueGeometry)}`);
+}
+if (mobileIssueGeometry.actionBounds.some(([left, right]) => left < 0 || right > 390)) {
+  throw new Error(`390px primary Issue actions should not clip: ${JSON.stringify(mobileIssueGeometry.actionBounds)}`);
+}
 await capture("issue-98-mobile-390x844.png");
 await assertVisual("issue-99-mobile-390x844.png");
 await assertShellRegionsDoNotOverlap(page);
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
+const mobileBoardScrollAfterIssue = await page.$eval(".workspace", (node) => node.scrollTop);
+if (Math.abs(mobileBoardScrollAfterIssue - mobileBoardScrollBeforeIssue) > 1) {
+  throw new Error(`returning from a mobile Issue must preserve board scroll: ${mobileBoardScrollBeforeIssue} -> ${mobileBoardScrollAfterIssue}`);
+}
 
 await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") button[data-act="focus-run"]');
 await page.waitForSelector(".mobile-run-view");
