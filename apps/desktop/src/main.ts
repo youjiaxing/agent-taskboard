@@ -118,6 +118,11 @@ type ShellCopy = {
   graphHint: string;
   viewBoard: string;
   viewGraph: string;
+  viewDependencies: string;
+  graphOverview: string;
+  graphReturnOverview: string;
+  graphTruncated: string;
+  graphNoDependencies: string;
   showClosedContext: string;
   graphCenter: string;
   graphCenterHere: string;
@@ -494,10 +499,12 @@ type GraphEdge = {
 type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  mode?: "overview" | "focused";
   centerId?: string | null;
   totalCount?: number;
   complete?: boolean;
   maxDistance?: number;
+  truncated?: boolean;
   closedCount?: number;
 };
 
@@ -938,6 +945,8 @@ const mobileWorkspaceScrollPositions = new Map<string, ScrollPosition>();
 let renderedGraphKey = "";
 let renderedGraphProjectId = "";
 let renderedGraphCenterId = "";
+type GraphViewportAnchor = { issueId: string; viewportX: number; viewportY: number };
+let pendingGraphAnchor: GraphViewportAnchor | null = null;
 let graphCanvasLimit = 48;
 let graphListLimit = 50;
 let graphListQuery = "";
@@ -1941,9 +1950,14 @@ function render(): void {
     paintGraphEdges();
   }
   syncGraphSelection(graphCanvas, snap.board?.selected?.id);
-  if (graphCanvas && (!sameGraphCenter || graphContentChanged)) {
+  const restoredGraphAnchor = Boolean(
+    graphCanvas && pendingGraphAnchor && restoreGraphAnchor(graphCanvas, pendingGraphAnchor),
+  );
+  if (graphCanvas && pendingGraphAnchor) pendingGraphAnchor = null;
+  if (graphCanvas && (!sameGraphCenter || graphContentChanged) && !restoredGraphAnchor) {
     centerGraphViewport(graphCanvas, nextGraphCenterId);
   }
+  if (restoredGraphAnchor) paintGraphEdges();
   restoreActiveField(activeField);
   const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
   const savedDetailScroll = selectedIssue
@@ -2034,6 +2048,60 @@ function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
   const centerY = centerRect.top - canvasRect.top + canvas.scrollTop + centerRect.height / 2;
   canvas.scrollLeft = Math.max(0, centerX - canvas.clientWidth / 2);
   canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
+}
+
+function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
+  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+  const node = canvas
+    ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+      .find((item) => item.dataset.id === issueId)
+    : null;
+  if (!canvas || !node) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    issueId,
+    viewportX: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    viewportY: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+}
+
+function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
+  const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((item) => item.dataset.id === anchor.issueId);
+  if (!node) return false;
+  const flow = canvas.querySelector<HTMLElement>(".graph-flow");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const currentX = nodeRect.left - canvasRect.left + nodeRect.width / 2;
+  const currentY = nodeRect.top - canvasRect.top + nodeRect.height / 2;
+  let nextLeft = canvas.scrollLeft + currentX - anchor.viewportX;
+  let nextTop = canvas.scrollTop + currentY - anchor.viewportY;
+  if (flow && nextLeft < 0) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingLeft) || 0;
+    flow.style.paddingLeft = `${padding - nextLeft}px`;
+    nextLeft = 0;
+  }
+  if (flow && nextTop < 0) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingTop) || 0;
+    flow.style.paddingTop = `${padding - nextTop}px`;
+    nextTop = 0;
+  }
+  let maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
+  let maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
+  if (flow && nextLeft > maxLeft) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingRight) || 0;
+    flow.style.paddingRight = `${padding + nextLeft - maxLeft}px`;
+    maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
+  }
+  if (flow && nextTop > maxTop) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingBottom) || 0;
+    flow.style.paddingBottom = `${padding + nextTop - maxTop}px`;
+    maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
+  }
+  canvas.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+  canvas.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
+  return true;
 }
 
 function currentProject(snap: Snapshot): Project | undefined {
@@ -2991,14 +3059,16 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   if (!graph) {
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
-  const legacyGraph = graph.centerId == null;
+  const overview = graph.mode === "overview";
+  const legacyGraph = graph.mode == null && graph.centerId == null;
+  const canvasNodeLimit = overview ? graph.nodes.length : graphCanvasLimit;
   const projectedNodes = [...graph.nodes]
     .sort((a, b) =>
       (a.distance ?? 0) - (b.distance ?? 0) ||
       a.rank - b.rank ||
-      a.number - b.number,
+      (overview ? b.number - a.number : a.number - b.number),
     )
-    .slice(0, graphCanvasLimit);
+    .slice(0, canvasNodeLimit);
   const columns = new Map<number, GraphNode[]>();
   for (const node of projectedNodes) {
     const list = columns.get(node.rank) ?? [];
@@ -3016,25 +3086,33 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
   const canvasLimit = copy.graphCanvasLimit
     .replace("{shown}", String(projectedNodes.length))
     .replace("{total}", String(graph.nodes.length));
+  const truncated = copy.graphTruncated
+    .replace("{shown}", String(graph.nodes.length))
+    .replace("{total}", String(totalCount));
   return `<div class="dep-graph">
     ${legacyGraph
       ? `<label class="graph-opt">
           <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
           ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
         </label>`
-      : `<div class="graph-toolbar">
-          <span class="graph-center-label">${escapeHtml(centerLabel)}</span>
+      : `<div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
+          <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
           <div class="actions">
-            ${graph.complete
-              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
-              : totalCount > graph.nodes.length
-                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
-                : ""}
+            ${overview
+              ? ""
+              : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
+                ${graph.complete
+                  ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+                  : totalCount > graph.nodes.length
+                    ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                    : ""}`}
           </div>
         </div>
+        ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
         ${projectedNodes.length < graph.nodes.length
           ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
-          : ""}`}
+          : ""}
+        ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}`}
     ${reuseCanvas
       ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
       : `<div class="graph-canvas">
@@ -3050,6 +3128,7 @@ function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas:
                     node,
                     board.selected?.id,
                     legacyGraph ? null : graph.centerId ?? null,
+                    overview,
                   ),
                 )
                 .join("")}</div>`,
@@ -3108,12 +3187,13 @@ function graphNode(
   node: GraphNode,
   selectedId: string | undefined,
   centerId: string | null,
+  overview = false,
 ): string {
   const selected = node.id === selectedId ? "sel" : "";
   const closed = node.open ? "" : "closed";
   const center = node.id === centerId ? "root" : "";
   return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
-    <button type="button" class="graph-node-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
+    <button type="button" class="graph-node-main" data-act="${overview ? "center-graph" : "focus-issue"}" data-id="${escapeHtml(node.id)}">
       <div class="issue-id">#${node.number}</div>
       <div class="issue-title">${escapeHtml(node.title)}</div>
     </button>
@@ -3267,6 +3347,7 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
       </section>
       <section class="detail-block">
       <h4>${escapeHtml(copy.deps)}</h4>
+      ${mobileClient() ? "" : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`}
       <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
       ${
         issue.blockedBy.length
@@ -4615,15 +4696,30 @@ app.addEventListener("click", async (event) => {
     await rpc("setCenterView", { view: target.dataset.id });
     if (target.dataset.id === "graph") {
       resetGraphUiState();
-      const selectedId = snapshot.board?.selected?.id;
-      if (selectedId && snapshot.board?.graph?.centerId != null) {
-        await rpc("centerDependencyGraph", { issueId: selectedId });
-      }
     }
     render();
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
+    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
+    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
+    render();
+    await loadSelectedIssueDocument();
+    render();
+    return;
+  }
+  if (act === "graph-overview") {
+    pendingGraphAnchor = null;
+    resetGraphUiState();
+    await rpc("showDependencyGraphOverview");
+    render();
+    return;
+  }
+  if (act === "view-dependencies" && target.dataset.id) {
+    pendingGraphAnchor = null;
+    resetGraphUiState();
+    issueDetailVisible = true;
+    await rpc("setCenterView", { view: "graph" });
     await rpc("centerDependencyGraph", { issueId: target.dataset.id });
     render();
     await loadSelectedIssueDocument();

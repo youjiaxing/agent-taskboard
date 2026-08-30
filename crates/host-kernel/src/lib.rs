@@ -38,9 +38,10 @@ pub use agent::{
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
-    FrontierEmptyReason, GraphEdge, GraphNode, GraphRelation, IssueActivity, IssueCard,
-    IssueDetail, IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState, IssueLink,
-    IssueSearch, IssueStateFilter, ProjectIssueCounts, RefreshStatus, DEFAULT_RECENT_LIMIT,
+    DependencyGraphMode, FrontierEmptyReason, GraphEdge, GraphNode, GraphRelation, IssueActivity,
+    IssueCard, IssueDetail, IssueDocumentFailure, IssueDocumentFailureKind, IssueDocumentState,
+    IssueLink, IssueSearch, IssueStateFilter, ProjectIssueCounts, RefreshStatus,
+    DEFAULT_RECENT_LIMIT,
 };
 pub use changes::{
     ChangeFile, ChangeHunk, ChangeLine, ChangeLineKind, ChangeNote, ChangeRepo, ChangeScope,
@@ -174,6 +175,7 @@ pub enum Command {
     CenterDependencyGraph {
         issue_id: String,
     },
+    ShowDependencyGraphOverview,
     SetDependencyGraphComplete {
         complete: bool,
     },
@@ -751,6 +753,11 @@ pub struct ShellCopy {
     pub graph_hint: String,
     pub view_board: String,
     pub view_graph: String,
+    pub view_dependencies: String,
+    pub graph_overview: String,
+    pub graph_return_overview: String,
+    pub graph_truncated: String,
+    pub graph_no_dependencies: String,
     pub show_closed_context: String,
     pub graph_center: String,
     pub graph_center_here: String,
@@ -1592,18 +1599,7 @@ impl HostKernel {
                     && self.center_view != CenterView::Graph
                     && self.focused_host_id == LOCAL_HOST_ID
                 {
-                    self.graph_center_issue_id = self.selected_issue_id.clone().or_else(|| {
-                        self.focused_project_id
-                            .as_ref()
-                            .and_then(|project_id| self.loaded_issues.get(project_id))
-                            .and_then(|issues| {
-                                issues
-                                    .iter()
-                                    .find(|issue| issue.open)
-                                    .or_else(|| issues.first())
-                            })
-                            .map(IssueRecord::id)
-                    });
+                    self.graph_center_issue_id = None;
                     self.complete_dependency_graph = false;
                 }
                 self.center_view = view;
@@ -1612,6 +1608,10 @@ impl HostKernel {
             Command::CenterDependencyGraph { issue_id } => {
                 self.focus_issue(&issue_id);
                 self.graph_center_issue_id = Some(issue_id);
+            }
+            Command::ShowDependencyGraphOverview => {
+                self.graph_center_issue_id = None;
+                self.complete_dependency_graph = false;
             }
             Command::SetDependencyGraphComplete { complete } => {
                 self.complete_dependency_graph = complete;
@@ -2048,6 +2048,14 @@ impl HostKernel {
                         .cloned()
                         .ok_or_else(|| KernelError::Protocol("missing view".into()))?,
                 )?;
+                if view == CenterView::Graph
+                    && self.center_view != CenterView::Graph
+                    && self.focused_host_id != LOCAL_HOST_ID
+                {
+                    self.forward_if_remote(&serde_json::json!({
+                        "op": "showDependencyGraphOverview",
+                    }))?;
+                }
                 self.dispatch(Command::SetCenterView { view })
             }
             "centerDependencyGraph" => {
@@ -2057,6 +2065,12 @@ impl HostKernel {
                 self.dispatch(Command::CenterDependencyGraph {
                     issue_id: required_string(&request, "issueId")?,
                 })
+            }
+            "showDependencyGraphOverview" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ShowDependencyGraphOverview)
             }
             "setDependencyGraphComplete" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
@@ -5699,9 +5713,14 @@ impl ShellCopy {
                 project_menu: "管理".into(),
                 board_hint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。".into(),
                 child_hint: "只看这些直接子票。仍是看板视图，不是第二种 Frontier。".into(),
-                graph_hint: "只画 Dependency，不画父子。点节点只换详情。".into(),
+                graph_hint: "概览点击 Issue 设为中心；中心模式点节点只换详情。只画 Dependency，不画父子。".into(),
                 view_board: "看板".into(),
                 view_graph: "依赖图".into(),
+                view_dependencies: "查看依赖图".into(),
+                graph_overview: "依赖图概览".into(),
+                graph_return_overview: "返回依赖图概览".into(),
+                graph_truncated: "仅显示 {shown}/{total} 个未关闭 Issue；已按稳定规则优先保留 Dependency 参与者。".into(),
+                graph_no_dependencies: "这些未关闭 Issue 之间没有 Dependency。".into(),
                 show_closed_context: "也显示已关闭上下文".into(),
                 graph_center: "中心 Issue：{issue}".into(),
                 graph_center_here: "从此处展开".into(),
@@ -5984,9 +6003,14 @@ impl ShellCopy {
                 project_menu: "Manage".into(),
                 board_hint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.".into(),
                 child_hint: "Direct children only. Still a board, not a second Frontier.".into(),
-                graph_hint: "Dependencies only — not parent/child. Click a node to change details.".into(),
+                graph_hint: "In overview, click an Issue to make it the center. In focused mode, clicking a node only changes details. Dependencies only — not parent/child.".into(),
                 view_board: "Board".into(),
                 view_graph: "Dependency graph".into(),
+                view_dependencies: "View dependency graph".into(),
+                graph_overview: "Dependency graph overview".into(),
+                graph_return_overview: "Return to dependency graph overview".into(),
+                graph_truncated: "Showing {shown}/{total} open Issues; Dependency participants are retained first by a stable rule.".into(),
+                graph_no_dependencies: "These open Issues have no Dependencies between them.".into(),
                 show_closed_context: "Also show closed context".into(),
                 graph_center: "Center Issue: {issue}".into(),
                 graph_center_here: "Expand from here".into(),
