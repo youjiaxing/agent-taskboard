@@ -275,6 +275,32 @@ html[data-theme="plain-night"] button.danger.primary {
   justify-content: space-between;
   gap: 16px;
 }
+.board-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.board-head-actions button { white-space: nowrap; }
+.issue-editor {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.issue-editor form { display: grid; gap: 4px; }
+.issue-editor h2 { margin: 0 0 8px; font-size: 14px; }
+.issue-editor h4 { margin: 0 0 8px; font-size: 12px; }
+.issue-editor .label { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.issue-editor input, .issue-editor textarea, .issue-editor select {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 7px 9px;
+}
+.issue-editor textarea { min-height: 72px; resize: vertical; }
+.issue-editor select[multiple] { min-height: 72px; }
+.issue-editor .actions { margin-top: 6px; }
+.detail-block.issue-editor { border-top: 1px solid var(--line); border-bottom: 0; padding: 10px 0 0; margin-top: 12px; }
+.detail-block.issue-editor + .detail-block { margin-top: 12px; }
+.issue-relations-editor form + form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
 .refresh-bar {
   display: flex;
   align-items: center;

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use host_kernel::{
     bind_local_rpc, spawn_local_rpc, AuthFailureKind, BootRequest, CredentialSource, GitHubTracker,
-    HostKernel, KernelError, MemoryTracker, ProjectConnection, ScriptedGitHub, SystemAppearance,
-    TrackerKind,
+    HostKernel, KernelError, LocalMarkdownTracker, MemoryTracker, ProbeContext, ProjectConnection,
+    ScriptedGitHub, SystemAppearance, TrackerKind, TrackerPort, TrackerRouter,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -22,6 +22,14 @@ fn boot_req(root: &Path) -> BootRequest {
 
 fn boot_memory(root: &Path) -> HostKernel {
     HostKernel::boot_with(boot_req(root), Arc::new(MemoryTracker::new())).unwrap()
+}
+
+fn boot_memory_with_local(root: &Path) -> HostKernel {
+    HostKernel::boot_with(
+        boot_req(root),
+        Arc::new(TrackerRouter::new(Arc::new(MemoryTracker::new()))),
+    )
+    .unwrap()
 }
 
 fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
@@ -467,6 +475,7 @@ fn local_markdown_supports_create_edit_comment_and_relationship_writes() {
     host.handle(serde_json::json!({ "op": "setIssueBlockedBy", "issueId": format!("{}#2", project_dir.display()), "blockedBy": [format!("{}#1", project_dir.display())] })).unwrap();
     host.handle(serde_json::json!({ "op": "createIssue", "projectId": project_id, "title": "Created", "body": "created body" })).unwrap();
     let body = std::fs::read_to_string(issues.join("02-child.md")).unwrap();
+    assert!(body.starts_with("# 02 — Child renamed\n"));
     assert!(body.contains("Child renamed"));
     assert!(body.contains("new body"));
     assert!(body.contains("## Comments"));
@@ -474,6 +483,279 @@ fn local_markdown_supports_create_edit_comment_and_relationship_writes() {
     assert!(body.contains("Part of: 1"));
     assert!(body.contains("Blocked by: 1"));
     assert!(issues.join("03-created.md").exists());
+}
+
+#[test]
+fn local_markdown_edit_does_not_duplicate_colon_bearing_body_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/colon-body");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-work.md"),
+        "# 01 — Work\n\nStatus: ready-for-agent\nType: task\n\nNote: keep this\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({
+        "op": "registerProject", "name": "colon-body", "localPath": project_dir,
+        "githubHost": "local", "repository": project_dir,
+    }))
+    .unwrap();
+
+    host.handle(serde_json::json!({
+        "op": "updateIssue",
+        "issueId": issue_id,
+        "title": "Work",
+        "body": "Note: keep this\n\nMore body",
+    }))
+    .unwrap();
+
+    let body = std::fs::read_to_string(issues.join("01-work.md")).unwrap();
+    assert_eq!(body.matches("Note: keep this").count(), 1, "{body}");
+    assert!(body.contains("Status: ready-for-agent"), "{body}");
+    assert!(body.contains("Type: task"), "{body}");
+}
+
+#[test]
+fn local_markdown_replaces_blocked_by_atomically() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/atomic-dependencies");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("03-child.md"),
+        "# 03 — Child\n\nStatus: ready-for-agent\nBlocked by: 1\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let issue_id = format!("{}#3", project_dir.display());
+    host.handle(serde_json::json!({
+        "op": "registerProject", "name": "atomic-dependencies", "localPath": project_dir,
+        "githubHost": "local", "repository": project_dir,
+    }))
+    .unwrap();
+
+    let result = host.handle(serde_json::json!({
+        "op": "setIssueBlockedBy",
+        "issueId": issue_id,
+        "blockedBy": [
+            format!("{}#2", project_dir.display()),
+            format!("{}#99", project_dir.display()),
+        ],
+    }));
+    assert!(result.is_err());
+
+    let body = std::fs::read_to_string(issues.join("03-child.md")).unwrap();
+    assert!(body.contains("Blocked by: 1"), "{body}");
+    assert!(!body.contains("Blocked by: 2"), "{body}");
+}
+
+#[test]
+fn local_markdown_rejects_dependency_cycles_before_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/dependency-cycle-write");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\nBlocked by: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\nBlocked by: None\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    host.handle(serde_json::json!({
+        "op": "registerProject", "name": "dependency-cycle-write", "localPath": project_dir,
+        "githubHost": "local", "repository": project_dir,
+    }))
+    .unwrap();
+
+    let result = host.handle(serde_json::json!({
+        "op": "setIssueBlockedBy",
+        "issueId": format!("{}#2", project_dir.display()),
+        "blockedBy": [format!("{}#1", project_dir.display())],
+    }));
+    assert!(result.is_err(), "a dependency cycle must be rejected");
+
+    let body = std::fs::read_to_string(issues.join("02-second.md")).unwrap();
+    assert!(body.contains("Blocked by: None"), "{body}");
+    assert!(!body.contains("Blocked by: 1"), "{body}");
+}
+
+#[test]
+fn local_markdown_rejects_parent_cycles_before_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/parent-cycle-write");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\nPart of: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    host.handle(serde_json::json!({
+        "op": "registerProject", "name": "parent-cycle-write", "localPath": project_dir,
+        "githubHost": "local", "repository": project_dir,
+    }))
+    .unwrap();
+
+    let result = host.handle(serde_json::json!({
+        "op": "setIssueParent",
+        "issueId": format!("{}#2", project_dir.display()),
+        "parent": format!("{}#1", project_dir.display()),
+    }));
+    assert!(result.is_err(), "a parent cycle must be rejected");
+
+    let body = std::fs::read_to_string(issues.join("02-second.md")).unwrap();
+    assert!(!body.contains("Part of:"), "{body}");
+}
+
+#[test]
+fn local_markdown_parent_cycles_are_fail_closed_on_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/parent-cycle-read");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\nPart of: 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\nPart of: 1\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "parent-cycle-read", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    let board = out.snapshot.board.unwrap();
+    assert!(board.columns.is_none());
+    match board.refresh {
+        host_kernel::RefreshStatus::Incomplete {
+            detail: Some(detail),
+            ..
+        } => assert!(detail.contains("parent cycle"), "{detail}"),
+        other => panic!("expected parent cycle warning, got {other:?}"),
+    }
+}
+
+#[test]
+fn local_markdown_duplicate_issue_numbers_are_fail_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/duplicate-numbers");
+    let first = project_dir.join(".scratch/first/issues");
+    let second = project_dir.join(".scratch/second/issues");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(
+        first.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        second.join("01-second.md"),
+        "# 01 — Second\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "duplicate-numbers", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    let board = out.snapshot.board.unwrap();
+    assert!(board.columns.is_none());
+    match board.refresh {
+        host_kernel::RefreshStatus::Incomplete {
+            detail: Some(detail),
+            ..
+        } => assert!(detail.contains("duplicate issue number #1"), "{detail}"),
+        other => panic!("expected duplicate number warning, got {other:?}"),
+    }
+}
+
+#[test]
+fn local_markdown_relation_writes_reject_an_incomplete_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/incomplete-parent-write");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-child.md"),
+        "# 02 — Child\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("03-unclear.md"),
+        "# 03 — Unclear\n\nStatus: ready-for-agent\nBlocked by: missing\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    let result = LocalMarkdownTracker.set_parent(
+        &ctx,
+        &format!("{repository}#2"),
+        Some(&format!("{repository}#1")),
+    );
+    assert!(
+        result.is_err(),
+        "incomplete relation data must block parent writes"
+    );
+
+    let body = std::fs::read_to_string(issues.join("02-child.md")).unwrap();
+    assert!(!body.contains("Part of:"), "{body}");
+
+    let blocker = format!("{repository}#1");
+    let result =
+        LocalMarkdownTracker.set_blocked_by(&ctx, &format!("{repository}#2"), &[], &[blocker]);
+    assert!(
+        result.is_err(),
+        "incomplete relation data must block dependency writes"
+    );
+
+    let body = std::fs::read_to_string(issues.join("02-child.md")).unwrap();
+    assert!(!body.contains("Blocked by:"), "{body}");
 }
 
 #[test]

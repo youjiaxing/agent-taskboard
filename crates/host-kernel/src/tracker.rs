@@ -15,6 +15,7 @@ use crate::launch_env::{LaunchEnvPort, LaunchEnvironment};
 #[serde(rename_all = "kebab-case")]
 pub enum TrackerKind {
     Github,
+    LocalMarkdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,7 @@ pub enum CredentialSource {
     SecretsFile,
     Cli,
     GenericEnv,
+    LocalFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +225,29 @@ pub trait TrackerPort: Send + Sync {
         issue_id: &str,
         blocking_issue_id: &str,
     ) -> Result<(), TrackerWriteError>;
+    /// Replace the complete blocked_by set. Trackers with a transactional or
+    /// single-document representation should override this to avoid partial writes.
+    fn set_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        current_issue_ids: &[String],
+        blocking_issue_ids: &[String],
+    ) -> Result<(), TrackerWriteError> {
+        for blocker in current_issue_ids
+            .iter()
+            .filter(|id| !blocking_issue_ids.contains(id))
+        {
+            self.remove_blocked_by(ctx, issue_id, blocker)?;
+        }
+        for blocker in blocking_issue_ids
+            .iter()
+            .filter(|id| !current_issue_ids.contains(id))
+        {
+            self.add_blocked_by(ctx, issue_id, blocker)?;
+        }
+        Ok(())
+    }
 }
 
 pub const GITHUB_APP_ENV: &str = "AGENT_TASKBOARD_GITHUB_TOKEN";
@@ -369,6 +394,45 @@ impl LocalMarkdownTracker {
         }
         files.sort();
         files
+    }
+
+    fn validate_relation_update<F>(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        replacement: Vec<String>,
+        relation: &str,
+        edges: F,
+    ) -> Result<(), TrackerWriteError>
+    where
+        F: Fn(&IssueRecord) -> Vec<String>,
+    {
+        let outcome = self
+            .read_all(ctx)
+            .map_err(|error| TrackerWriteError::Failed {
+                message: format!("cannot validate {relation} graph: {error:?}"),
+            })?;
+        let issues = match outcome {
+            crate::tracker_seam::TrackerReadOutcome::Complete { issues } => issues,
+            crate::tracker_seam::TrackerReadOutcome::Incomplete { detail, .. } => {
+                return Err(TrackerWriteError::Failed {
+                    message: format!(
+                        "cannot update {relation}: tracker data is incomplete: {detail}"
+                    ),
+                });
+            }
+        };
+        let mut adjacency = issues
+            .iter()
+            .map(|issue| (issue.id(), edges(issue)))
+            .collect::<BTreeMap<_, _>>();
+        adjacency.insert(issue_id.to_string(), replacement);
+        if graph_cycle_node(&adjacency).is_some() {
+            return Err(TrackerWriteError::Failed {
+                message: format!("{relation} update would create a cycle"),
+            });
+        }
+        Ok(())
     }
 
     fn parse_file(
@@ -749,6 +813,43 @@ impl LocalMarkdownTracker {
         if add {
             references.push(blocker_number.to_string());
         }
+        Self::write_blocked_by_references(&path, &body, &references)
+    }
+
+    fn rewrite_blocked_by_set(
+        root: &Path,
+        issue_id: &str,
+        blocking_issue_ids: &[String],
+    ) -> Result<(), TrackerWriteError> {
+        let path = Self::locate_issue(root, issue_id)?;
+        let mut references = Vec::new();
+        for blocking_issue_id in blocking_issue_ids {
+            let (_, blocker_number) =
+                parse_issue_id(blocking_issue_id).ok_or_else(|| TrackerWriteError::Failed {
+                    message: "unknown blocker".into(),
+                })?;
+            let blocker_path = Self::locate_issue(root, blocking_issue_id)?;
+            if blocker_path == path {
+                return Err(TrackerWriteError::Failed {
+                    message: "issue cannot block itself".into(),
+                });
+            }
+            let number = blocker_number.to_string();
+            if !references.contains(&number) {
+                references.push(number);
+            }
+        }
+        let body = std::fs::read_to_string(&path).map_err(|err| TrackerWriteError::Failed {
+            message: err.to_string(),
+        })?;
+        Self::write_blocked_by_references(&path, &body, &references)
+    }
+
+    fn write_blocked_by_references(
+        path: &Path,
+        body: &str,
+        references: &[String],
+    ) -> Result<(), TrackerWriteError> {
         let replacement = if references.is_empty() {
             "Blocked by: None".to_string()
         } else {
@@ -813,6 +914,20 @@ fn parse_field_line(line: &str) -> Option<(String, String)> {
         normalize_metadata(name),
         value.trim().trim_matches('*').trim().to_string(),
     ))
+}
+
+fn is_local_metadata_field(name: &str) -> bool {
+    matches!(
+        name,
+        "status"
+            | "type"
+            | "assignee"
+            | "assignees"
+            | "part of"
+            | "parent"
+            | "blocked by"
+            | "closed"
+    )
 }
 
 fn header_fields(text: &str) -> BTreeMap<String, Vec<String>> {
@@ -965,6 +1080,37 @@ fn local_slug(title: &str) -> String {
     }
 }
 
+fn graph_cycle_node(adjacency: &BTreeMap<String, Vec<String>>) -> Option<String> {
+    fn visit(
+        node: &str,
+        adjacency: &BTreeMap<String, Vec<String>>,
+        visiting: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<String>,
+    ) -> bool {
+        if visiting.contains(node) {
+            return true;
+        }
+        if !visited.insert(node.to_string()) {
+            return false;
+        }
+        visiting.insert(node.to_string());
+        let cycle = adjacency
+            .get(node)
+            .into_iter()
+            .flatten()
+            .any(|neighbor| visit(neighbor, adjacency, visiting, visited));
+        visiting.remove(node);
+        cycle
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    adjacency
+        .keys()
+        .find(|node| visit(node, adjacency, &mut visiting, &mut visited))
+        .cloned()
+}
+
 impl TrackerPort for LocalMarkdownTracker {
     fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome {
         let root = Self::root(ctx);
@@ -1022,6 +1168,16 @@ impl TrackerPort for LocalMarkdownTracker {
                 .entry(issue.number)
                 .or_default()
                 .push(issue.clone());
+        }
+        for (number, candidates) in &by_number {
+            if candidates.len() > 1 {
+                let locations = candidates
+                    .iter()
+                    .map(|issue| issue.url.trim_start_matches("file://"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                problems.push(format!("duplicate issue number #{number}: {locations}"));
+            }
         }
         let mut issues = parsed
             .iter()
@@ -1109,6 +1265,23 @@ impl TrackerPort for LocalMarkdownTracker {
                 }
             }
         }
+        let parent_adjacency = issues
+            .iter()
+            .map(|issue| {
+                (
+                    issue.id(),
+                    issue
+                        .parent
+                        .as_ref()
+                        .map(IssueRef::id)
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if let Some(issue_id) = graph_cycle_node(&parent_adjacency) {
+            problems.push(format!("parent cycle includes {issue_id}"));
+        }
         let mut index_by_id = BTreeMap::new();
         for (index, issue) in issues.iter().enumerate() {
             index_by_id.insert(issue.id(), index);
@@ -1186,34 +1359,8 @@ impl TrackerPort for LocalMarkdownTracker {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        fn visit_cycle(
-            node: &str,
-            adjacency: &BTreeMap<String, Vec<String>>,
-            visiting: &mut BTreeSet<String>,
-            visited: &mut BTreeSet<String>,
-        ) -> bool {
-            if visiting.contains(node) {
-                return true;
-            }
-            if !visited.insert(node.to_string()) {
-                return false;
-            }
-            visiting.insert(node.to_string());
-            let cycle = adjacency
-                .get(node)
-                .into_iter()
-                .flatten()
-                .any(|neighbor| visit_cycle(neighbor, adjacency, visiting, visited));
-            visiting.remove(node);
-            cycle
-        }
-        let mut visiting = BTreeSet::new();
-        let mut visited = BTreeSet::new();
-        for issue in &issues {
-            if visit_cycle(&issue.id(), &adjacency, &mut visiting, &mut visited) {
-                problems.push(format!("dependency cycle includes {}", issue.id()));
-                break;
-            }
+        if let Some(issue_id) = graph_cycle_node(&adjacency) {
+            problems.push(format!("dependency cycle includes {issue_id}"));
         }
         issues.sort_by_key(|issue| issue.number);
         if problems.is_empty() {
@@ -1320,23 +1467,34 @@ impl TrackerPort for LocalMarkdownTracker {
                 message: "title cannot be empty".into(),
             });
         }
+        let issue_number_text = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.split_once('-'))
+            .map(|(number, _)| number.to_string())
+            .unwrap_or_else(|| current.number.to_string());
         let mut lines = original.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
         if let Some(index) = lines
             .iter()
             .position(|line| line.trim_start().starts_with('#'))
         {
-            lines[index] = format!("# {} — {}", current.number, title);
+            lines[index] = format!("# {} — {}", issue_number_text, title);
         }
         if let Some(new_body) = edit.body {
             let metadata = lines
                 .iter()
                 .skip(1)
                 .take_while(|line| !line.trim_start().starts_with("## "))
-                .filter(|line| parse_field_line(line).is_some())
+                .filter(|line| {
+                    parse_field_line(line).is_some_and(|(name, _)| is_local_metadata_field(&name))
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             let comments = section_lines(&original, "Comments");
-            let mut rebuilt = vec![format!("# {} — {}", current.number, title), String::new()];
+            let mut rebuilt = vec![
+                format!("# {} — {}", issue_number_text, title),
+                String::new(),
+            ];
             rebuilt.extend(metadata);
             rebuilt.push(String::new());
             rebuilt.extend(new_body.lines().map(ToOwned::to_owned));
@@ -1437,6 +1595,7 @@ impl TrackerPort for LocalMarkdownTracker {
         parent: Option<&str>,
     ) -> Result<(), TrackerWriteError> {
         let root = Self::root(ctx);
+        Self::locate_issue(&root, issue_id)?;
         if let Some(parent) = parent {
             let parent_path = Self::locate_issue(&root, parent)?;
             if parent_path == Self::locate_issue(&root, issue_id)? {
@@ -1445,6 +1604,20 @@ impl TrackerPort for LocalMarkdownTracker {
                 });
             }
         }
+        self.validate_relation_update(
+            ctx,
+            issue_id,
+            parent.into_iter().map(ToOwned::to_owned).collect(),
+            "parent",
+            |issue| {
+                issue
+                    .parent
+                    .as_ref()
+                    .map(IssueRef::id)
+                    .into_iter()
+                    .collect()
+            },
+        )?;
         Self::rewrite_metadata(
             &root,
             issue_id,
@@ -1467,6 +1640,39 @@ impl TrackerPort for LocalMarkdownTracker {
         blocking_issue_id: &str,
     ) -> Result<(), TrackerWriteError> {
         Self::rewrite_blocked_by(&Self::root(ctx), issue_id, blocking_issue_id, false)
+    }
+    fn set_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        _current_issue_ids: &[String],
+        blocking_issue_ids: &[String],
+    ) -> Result<(), TrackerWriteError> {
+        let root = Self::root(ctx);
+        Self::locate_issue(&root, issue_id)?;
+        let mut wanted = Vec::new();
+        for blocking_issue_id in blocking_issue_ids {
+            Self::locate_issue(&root, blocking_issue_id)?;
+            if blocking_issue_id == issue_id {
+                return Err(TrackerWriteError::Failed {
+                    message: "issue cannot block itself".into(),
+                });
+            }
+            if !wanted.contains(blocking_issue_id) {
+                wanted.push(blocking_issue_id.clone());
+            }
+        }
+        self.validate_relation_update(ctx, issue_id, wanted, "dependency", |issue| {
+            issue
+                .blocked_by
+                .iter()
+                .filter_map(|dependency| match dependency {
+                    DependencyRef::Known(blocker) => Some(blocker.id()),
+                    DependencyRef::Unclear { .. } => None,
+                })
+                .collect()
+        })?;
+        Self::rewrite_blocked_by_set(&root, issue_id, blocking_issue_ids)
     }
 }
 

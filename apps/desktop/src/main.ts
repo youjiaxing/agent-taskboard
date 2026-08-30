@@ -283,6 +283,19 @@ type ShellCopy = {
   mobileRun: string;
   mobileRecentOutput: string;
   mobileLiveTerminal: string;
+  createIssue: string;
+  editIssue: string;
+  saveIssue: string;
+  issueTitle: string;
+  issueBody: string;
+  addComment: string;
+  commentPlaceholder: string;
+  parentIssue: string;
+  dependencyBlockers: string;
+  clearDependency: string;
+  saveRelations: string;
+  closeIssue: string;
+  reopenIssue: string;
 };
 
 type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -315,7 +328,7 @@ type Project = {
   id: string;
   name: string;
   localPath: string;
-  tracker: "github";
+  tracker: "github" | "local-markdown";
   githubHost: string;
   repository: string;
   connection: ProjectConnection;
@@ -343,6 +356,31 @@ type ProjectDraft = {
   localPath: string;
   githubHost: string;
   repository: string;
+  tracker?: "github" | "local-markdown";
+  ambiguous?: boolean;
+};
+
+type IssueContentDraft = {
+  title: string;
+  body: string;
+};
+
+type IssueRelationDraft = {
+  parent: string;
+  blockedBy: string[];
+};
+
+type FormKey =
+  | `issue-create:${string}`
+  | `issue-edit:${string}`
+  | `issue-comment:${string}`
+  | `issue-parent:${string}`
+  | `issue-blockers:${string}`
+  | `issue-open:${string}`;
+
+type FormOperationState = {
+  pending: Set<FormKey>;
+  errors: Map<FormKey, string>;
 };
 
 type ProjectInferenceState =
@@ -472,6 +510,7 @@ type BoardSnapshot = {
   frontierEmpty: "all-blocked" | "all-claimed" | "no-open" | null;
   parentFilter: IssueCard | null;
   selected: IssueDetail | null;
+  issueOptions: IssueLink[];
   labelMappingActive: boolean;
   recentLimit: number;
   refresh: RefreshStatus;
@@ -868,6 +907,17 @@ let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
 let noteDraft = "";
 let noteTarget: { repo: string; path: string; line: number } | null = null;
+let createIssueOpen = false;
+let createIssueProjectId = "";
+let createIssueDraft: IssueContentDraft = { title: "", body: "" };
+let issueEditOpenId: string | null = null;
+const issueEditDrafts = new Map<string, IssueContentDraft>();
+const issueCommentDrafts = new Map<string, string>();
+const issueRelationDrafts = new Map<string, IssueRelationDraft>();
+const formOperations: FormOperationState = {
+  pending: new Set<FormKey>(),
+  errors: new Map<FormKey, string>(),
+};
 let telemetryExpanded = false;
 let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
@@ -1340,6 +1390,9 @@ async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<Rpc
     result.snapshot.runs = result.snapshot.runs ?? [];
     result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
     result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
+    if (result.snapshot.board) {
+      result.snapshot.board.issueOptions = result.snapshot.board.issueOptions ?? [];
+    }
     result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
     result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
     result.snapshot.notifySound = result.snapshot.notifySound ?? true;
@@ -1990,6 +2043,114 @@ function focusedRun(snap: Snapshot): RunSummary | undefined {
   return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
 }
 
+function issueCreateFormKey(projectId: string): FormKey {
+  return `issue-create:${projectId}`;
+}
+
+function issueEditFormKey(issueId: string): FormKey {
+  return `issue-edit:${issueId}`;
+}
+
+function issueCommentFormKey(issueId: string): FormKey {
+  return `issue-comment:${issueId}`;
+}
+
+function issueParentFormKey(issueId: string): FormKey {
+  return `issue-parent:${issueId}`;
+}
+
+function issueBlockersFormKey(issueId: string): FormKey {
+  return `issue-blockers:${issueId}`;
+}
+
+function issueOpenFormKey(issueId: string): FormKey {
+  return `issue-open:${issueId}`;
+}
+
+function issueDocumentBody(issue: IssueDetail): string {
+  const document = issue.document;
+  return document.kind === "ready" || document.kind === "stale"
+    ? document.body ?? ""
+    : "";
+}
+
+function editableIssueBody(issue: IssueDetail): string {
+  const raw = issueDocumentBody(issue);
+  const project = snapshot?.projects.find((item) => item.id === snapshot?.board?.projectId);
+  if (project?.tracker !== "local-markdown") return raw;
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+  let start = 0;
+  while (start < lines.length && !/^\s*#\s+/.test(lines[start])) start += 1;
+  if (start < lines.length) start += 1;
+  const metadata = /^\s*\**(?:status|type|assignees?|part of|parent|blocked by|closed)\s*:/i;
+  while (start < lines.length && (lines[start].trim() === "" || metadata.test(lines[start]))) start += 1;
+  const body = lines.slice(start);
+  const comments = body.findIndex((line) => /^\s*##\s+comments\s*$/i.test(line));
+  return (comments >= 0 ? body.slice(0, comments) : body).join("\n").trim();
+}
+
+function editableIssueDraft(issue: IssueDetail): IssueContentDraft {
+  const existing = issueEditDrafts.get(issue.id);
+  if (existing) return existing;
+  const draft = { title: issue.title, body: editableIssueBody(issue) };
+  issueEditDrafts.set(issue.id, draft);
+  return draft;
+}
+
+function editableIssueRelations(issue: IssueDetail): IssueRelationDraft {
+  const existing = issueRelationDrafts.get(issue.id);
+  if (existing) return existing;
+  const draft = {
+    parent: issue.parent?.id ?? "",
+    blockedBy: issue.blockedBy.map((link) => link.id),
+  };
+  issueRelationDrafts.set(issue.id, draft);
+  return draft;
+}
+
+function issueOptionLabel(link: IssueLink): string {
+  const number = link.number == null ? "" : `#${link.number} `;
+  return `${number}${link.title || link.id}`.trim();
+}
+
+function issueOptionList(board: BoardSnapshot, issue: IssueDetail): IssueLink[] {
+  const options = [...(board.issueOptions ?? [])];
+  const known = new Set(options.map((option) => option.id));
+  for (const relation of [issue.parent, ...issue.blockedBy]) {
+    if (relation && !known.has(relation.id)) {
+      options.push(relation);
+      known.add(relation.id);
+    }
+  }
+  return options.filter((option) => option.id !== issue.id);
+}
+
+function formFeedback(key: FormKey): string {
+  const error = formOperations.errors.get(key);
+  return error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : "";
+}
+
+function clearFormOperation(key: FormKey): void {
+  formOperations.errors.delete(key);
+}
+
+async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
+  if (formOperations.pending.has(key)) return false;
+  formOperations.pending.add(key);
+  formOperations.errors.delete(key);
+  render();
+  try {
+    await operation();
+    return true;
+  } catch (error) {
+    formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
+    return false;
+  } finally {
+    formOperations.pending.delete(key);
+    render();
+  }
+}
+
 function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
   return `<div class="project-block">
@@ -2629,10 +2790,14 @@ function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false):
           <h1>${escapeHtml(project.name)}</h1>
           <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
         </div>
+        <div class="board-head-actions">
+          <button type="button" class="primary" data-act="new-issue" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.createIssue)}</button>
+        </div>
       </div>
     </div>
     ${refreshBar(copy, snap.board)}
     ${issueSearch(copy, snap)}
+    ${createIssueForm(copy, snap)}
     ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
     ${boardView(copy, snap, reuseGraphCanvas)}
@@ -2663,6 +2828,26 @@ function issueSearch(copy: ShellCopy, snap: Snapshot): string {
     <button type="submit">${escapeHtml(copy.searchSubmit)}</button>
     <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
   </form>`;
+}
+
+function createIssueForm(copy: ShellCopy, snap: Snapshot): string {
+  if (!createIssueOpen || createIssueProjectId !== snap.focusedProjectId) return "";
+  const key = issueCreateFormKey(createIssueProjectId);
+  const pending = formOperations.pending.has(key);
+  return `<section class="issue-editor issue-create-editor">
+    <form data-act="issue-create" data-form="issue-create" aria-busy="${pending ? "true" : "false"}">
+      <div class="issue-editor-title"><h2>${escapeHtml(copy.createIssue)}</h2></div>
+      <label class="label" for="issue-create-title">${escapeHtml(copy.issueTitle)}</label>
+      <input id="issue-create-title" name="title" required maxlength="240" value="${escapeHtml(createIssueDraft.title)}" ${pending ? "disabled" : ""} />
+      <label class="label" for="issue-create-body">${escapeHtml(copy.issueBody)}</label>
+      <textarea id="issue-create-body" name="body" rows="5" ${pending ? "disabled" : ""}>${escapeHtml(createIssueDraft.body)}</textarea>
+      ${formFeedback(key)}
+      <div class="actions">
+        <button type="button" data-act="cancel-new-issue" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.createIssue)}</button>
+      </div>
+    </form>
+  </section>`;
 }
 
 function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
@@ -2965,6 +3150,12 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
       ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
          <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
       : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
+  const canWrite = board.refresh.kind === "ready"
+    && (!board.issueOptions.length || board.issueOptions.some((option) => option.id === issue.id));
+  const canEdit = canWrite && issue.document.kind === "ready";
+  const openKey = issueOpenFormKey(issue.id);
+  const openPending = formOperations.pending.has(openKey);
+  const editOpen = issueEditOpenId === issue.id;
   return `
     <header class="detail-sticky">
       <div class="detail-title-row">
@@ -2978,11 +3169,17 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
         ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
         ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
         ${actions}
+        ${canEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
+        ${canWrite ? `
+          <button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
         <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
       </div>
+      ${canWrite ? formFeedback(openKey) : ""}
     </header>
     <div class="detail-scroll">
       ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
+      ${editOpen && canEdit ? issueEditForm(copy, issue) : ""}
+      ${canWrite ? issueCommentForm(copy, issue) : ""}
       <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
@@ -3014,7 +3211,83 @@ function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = tr
           : `<span class="muted">${escapeHtml(copy.none)}</span>`
       }
       </section>
+      ${canWrite ? issueRelationsForm(copy, board, issue) : ""}
     </div>`;
+}
+
+function issueEditForm(copy: ShellCopy, issue: IssueDetail): string {
+  const key = issueEditFormKey(issue.id);
+  const draft = editableIssueDraft(issue);
+  const pending = formOperations.pending.has(key);
+  return `<section class="detail-block issue-editor issue-edit-editor">
+    <form data-act="issue-edit" data-form="issue-edit" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
+      <h4>${escapeHtml(copy.editIssue)}</h4>
+      <label class="label" for="issue-edit-title">${escapeHtml(copy.issueTitle)}</label>
+      <input id="issue-edit-title" name="title" required maxlength="240" value="${escapeHtml(draft.title)}" ${pending ? "disabled" : ""} />
+      <label class="label" for="issue-edit-body">${escapeHtml(copy.issueBody)}</label>
+      <textarea id="issue-edit-body" name="body" rows="8" ${pending ? "disabled" : ""}>${escapeHtml(draft.body)}</textarea>
+      ${formFeedback(key)}
+      <div class="actions">
+        <button type="button" data-act="cancel-edit-issue" data-id="${escapeHtml(issue.id)}" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
+        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.saveIssue)}</button>
+      </div>
+    </form>
+  </section>`;
+}
+
+function issueCommentForm(copy: ShellCopy, issue: IssueDetail): string {
+  const key = issueCommentFormKey(issue.id);
+  const pending = formOperations.pending.has(key);
+  return `<section class="detail-block issue-editor issue-comment-editor">
+    <form data-act="issue-comment" data-form="issue-comment" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
+      <h4>${escapeHtml(copy.addComment)}</h4>
+      <textarea name="body" rows="4" required maxlength="10000" placeholder="${escapeHtml(copy.commentPlaceholder)}" ${pending ? "disabled" : ""}>${escapeHtml(issueCommentDrafts.get(issue.id) ?? "")}</textarea>
+      ${formFeedback(key)}
+      <div class="actions">
+        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.addComment)}</button>
+      </div>
+    </form>
+  </section>`;
+}
+
+function issueRelationsForm(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
+  const parentKey = issueParentFormKey(issue.id);
+  const blockersKey = issueBlockersFormKey(issue.id);
+  const draft = editableIssueRelations(issue);
+  const parentPending = formOperations.pending.has(parentKey);
+  const blockersPending = formOperations.pending.has(blockersKey);
+  const options = issueOptionList(board, issue);
+  const parentOptions = options
+    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.parent === option.id ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
+    .join("");
+  const blockerOptions = options
+    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.blockedBy.includes(option.id) ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
+    .join("");
+  return `<section class="detail-block issue-editor issue-relations-editor">
+    <h4>${escapeHtml(copy.family)} / ${escapeHtml(copy.deps)}</h4>
+    <form data-act="issue-parent" data-form="issue-parent" data-id="${escapeHtml(issue.id)}" aria-busy="${parentPending ? "true" : "false"}">
+      <label class="label" for="issue-parent">${escapeHtml(copy.parentIssue)}</label>
+      <select id="issue-parent" name="parent" ${parentPending ? "disabled" : ""}>
+        <option value="">${escapeHtml(copy.none)}</option>
+        ${parentOptions}
+      </select>
+      ${formFeedback(parentKey)}
+      <div class="actions">
+        <button type="submit" class="primary" ${parentPending ? "disabled" : ""}>${escapeHtml(parentPending ? copy.operationPending : copy.saveRelations)}</button>
+      </div>
+    </form>
+    <form data-act="issue-blockers" data-form="issue-blockers" data-id="${escapeHtml(issue.id)}" aria-busy="${blockersPending ? "true" : "false"}">
+      <label class="label" for="issue-blocked-by">${escapeHtml(copy.dependencyBlockers)}</label>
+      <select id="issue-blocked-by" name="blockedBy" multiple size="${Math.min(6, Math.max(3, options.length))}" ${blockersPending ? "disabled" : ""}>
+        ${blockerOptions}
+      </select>
+      ${formFeedback(blockersKey)}
+      <div class="actions">
+        <button type="button" data-act="clear-issue-blockers" data-id="${escapeHtml(issue.id)}" ${blockersPending ? "disabled" : ""}>${escapeHtml(copy.clearDependency)}</button>
+        <button type="submit" class="primary" ${blockersPending ? "disabled" : ""}>${escapeHtml(blockersPending ? copy.operationPending : copy.saveRelations)}</button>
+      </div>
+    </form>
+  </section>`;
 }
 
 function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: string): string {
@@ -3776,6 +4049,24 @@ app.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "new-issue" && target.dataset.id) {
+    createIssueProjectId = target.dataset.id;
+    createIssueDraft = { title: "", body: "" };
+    createIssueOpen = true;
+    clearFormOperation(issueCreateFormKey(createIssueProjectId));
+    issueEditOpenId = null;
+    render();
+    app.querySelector<HTMLInputElement>("#issue-create-title")?.focus();
+    return;
+  }
+  if (act === "cancel-new-issue") {
+    if (createIssueProjectId && formOperations.pending.has(issueCreateFormKey(createIssueProjectId))) return;
+    createIssueOpen = false;
+    createIssueProjectId = "";
+    createIssueDraft = { title: "", body: "" };
+    render();
+    return;
+  }
   if (act === "form-noop") {
     return;
   }
@@ -3802,6 +4093,46 @@ app.addEventListener("click", async (event) => {
   if (act === "retry-issue-document") {
     await loadSelectedIssueDocument(true);
     render();
+    return;
+  }
+  if (act === "edit-issue" && target.dataset.id) {
+    const issue = snapshot.board?.selected?.id === target.dataset.id
+      ? snapshot.board.selected
+      : null;
+    if (!issue) return;
+    if (issue.document.kind === "unloaded") {
+      await loadSelectedIssueDocument();
+    }
+    const current = snapshot.board?.selected?.id === issue.id ? snapshot.board.selected : issue;
+    if (current.document.kind !== "ready") return;
+    issueEditDrafts.set(issue.id, { title: current.title, body: editableIssueBody(current) });
+    issueEditOpenId = issue.id;
+    clearFormOperation(issueEditFormKey(issue.id));
+    render();
+    app.querySelector<HTMLInputElement>("#issue-edit-title")?.focus();
+    return;
+  }
+  if (act === "cancel-edit-issue" && target.dataset.id) {
+    if (formOperations.pending.has(issueEditFormKey(target.dataset.id))) return;
+    issueEditOpenId = null;
+    render();
+    return;
+  }
+  if (act === "clear-issue-blockers" && target.dataset.id) {
+    const issue = snapshot.board?.selected?.id === target.dataset.id ? snapshot.board.selected : null;
+    if (!issue || formOperations.pending.has(issueBlockersFormKey(issue.id))) return;
+    const current = editableIssueRelations(issue);
+    issueRelationDrafts.set(issue.id, { ...current, blockedBy: [] });
+    render();
+    return;
+  }
+  if (act === "toggle-issue-open" && target.dataset.id) {
+    const issue = snapshot.board?.selected?.id === target.dataset.id ? snapshot.board.selected : null;
+    if (!issue) return;
+    const key = issueOpenFormKey(issue.id);
+    await runFormOperation(key, async () => {
+      await rpc("setIssueOpen", { issueId: issue.id, open: !issue.open });
+    });
     return;
   }
   if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
@@ -4277,6 +4608,113 @@ app.addEventListener("click", async (event) => {
 });
 
 app.addEventListener("submit", async (event) => {
+  const create = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-create']");
+  if (create && snapshot) {
+    event.preventDefault();
+    const projectId = createIssueProjectId || snapshot.focusedProjectId;
+    if (!projectId) return;
+    const data = new FormData(create);
+    const draft = {
+      title: String(data.get("title") ?? ""),
+      body: String(data.get("body") ?? ""),
+    };
+    createIssueDraft = draft;
+    if (!draft.title.trim()) return;
+    const success = await runFormOperation(issueCreateFormKey(projectId), async () => {
+      await rpc("createIssue", {
+        projectId,
+        title: draft.title,
+        body: draft.body,
+      });
+    });
+    if (success) {
+      createIssueOpen = false;
+      createIssueProjectId = "";
+      createIssueDraft = { title: "", body: "" };
+      render();
+    }
+    return;
+  }
+  const edit = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-edit']");
+  if (edit && snapshot) {
+    event.preventDefault();
+    const issueId = edit.dataset.id;
+    if (!issueId) return;
+    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
+    if (issue?.document.kind !== "ready") return;
+    const data = new FormData(edit);
+    const draft = {
+      title: String(data.get("title") ?? ""),
+      body: String(data.get("body") ?? ""),
+    };
+    issueEditDrafts.set(issueId, draft);
+    if (!draft.title.trim()) return;
+    const success = await runFormOperation(issueEditFormKey(issueId), async () => {
+      await rpc("updateIssue", { issueId, title: draft.title, body: draft.body });
+      await loadSelectedIssueDocument(true);
+    });
+    if (success) {
+      issueEditDrafts.delete(issueId);
+      issueEditOpenId = null;
+      render();
+    }
+    return;
+  }
+  const comment = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-comment']");
+  if (comment && snapshot) {
+    event.preventDefault();
+    const issueId = comment.dataset.id;
+    if (!issueId) return;
+    const body = String(new FormData(comment).get("body") ?? "");
+    issueCommentDrafts.set(issueId, body);
+    if (!body.trim()) return;
+    const success = await runFormOperation(issueCommentFormKey(issueId), async () => {
+      await rpc("addIssueComment", { issueId, body });
+      await loadSelectedIssueDocument(true);
+    });
+    if (success) {
+      issueCommentDrafts.delete(issueId);
+      render();
+    }
+    return;
+  }
+  const parentForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-parent']");
+  if (parentForm && snapshot) {
+    event.preventDefault();
+    const issueId = parentForm.dataset.id;
+    if (!issueId) return;
+    const parent = String(new FormData(parentForm).get("parent") ?? "");
+    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
+    if (!issue) return;
+    const current = editableIssueRelations(issue);
+    issueRelationDrafts.set(issueId, { ...current, parent });
+    const success = await runFormOperation(issueParentFormKey(issueId), async () => {
+      await rpc("setIssueParent", { issueId, parent });
+    });
+    if (success) {
+      render();
+    }
+    return;
+  }
+  const blockersForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-blockers']");
+  if (blockersForm && snapshot) {
+    event.preventDefault();
+    const issueId = blockersForm.dataset.id;
+    if (!issueId) return;
+    const data = new FormData(blockersForm);
+    const blockedBy = data.getAll("blockedBy").map((value) => String(value));
+    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
+    if (!issue) return;
+    const current = editableIssueRelations(issue);
+    issueRelationDrafts.set(issueId, { ...current, blockedBy });
+    const success = await runFormOperation(issueBlockersFormKey(issueId), async () => {
+      await rpc("setIssueBlockedBy", { issueId, blockedBy });
+    });
+    if (success) {
+      render();
+    }
+    return;
+  }
   const search = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-search']");
   if (search && snapshot) {
     event.preventDefault();
@@ -4325,6 +4763,22 @@ app.addEventListener("submit", async (event) => {
 app.addEventListener("input", (event) => {
   const target = event.target as HTMLInputElement | null;
   if (!target) return;
+  const createForm = target.closest<HTMLFormElement>("form[data-form='issue-create']");
+  if (createForm && (target.name === "title" || target.name === "body")) {
+    createIssueDraft = { ...createIssueDraft, [target.name]: target.value };
+    return;
+  }
+  const editForm = target.closest<HTMLFormElement>("form[data-form='issue-edit']");
+  if (editForm && editForm.dataset.id && (target.name === "title" || target.name === "body")) {
+    const current = issueEditDrafts.get(editForm.dataset.id) ?? { title: "", body: "" };
+    issueEditDrafts.set(editForm.dataset.id, { ...current, [target.name]: target.value });
+    return;
+  }
+  const commentForm = target.closest<HTMLFormElement>("form[data-form='issue-comment']");
+  if (commentForm?.dataset.id && target.name === "body") {
+    issueCommentDrafts.set(commentForm.dataset.id, target.value);
+    return;
+  }
   if (target.getAttribute("data-field") === "graphSearch") {
     graphListQuery = target.value;
     graphListLimit = 50;
@@ -4343,6 +4797,24 @@ app.addEventListener("input", (event) => {
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
   if (!target || !snapshot) return;
+  const issueParent = target.closest<HTMLFormElement>("form[data-form='issue-parent']");
+  if (issueParent?.dataset.id && target instanceof HTMLSelectElement && target.name === "parent") {
+    const issue = snapshot.board?.selected?.id === issueParent.dataset.id ? snapshot.board.selected : null;
+    if (issue) {
+      const current = editableIssueRelations(issue);
+      issueRelationDrafts.set(issue.id, { ...current, parent: target.value });
+    }
+    return;
+  }
+  const issueBlockers = target.closest<HTMLFormElement>("form[data-form='issue-blockers']");
+  if (issueBlockers?.dataset.id && target instanceof HTMLSelectElement && target.name === "blockedBy") {
+    const issue = snapshot.board?.selected?.id === issueBlockers.dataset.id ? snapshot.board.selected : null;
+    if (issue) {
+      const current = editableIssueRelations(issue);
+      issueRelationDrafts.set(issue.id, { ...current, blockedBy: [...target.selectedOptions].map((option) => option.value) });
+    }
+    return;
+  }
   if (target.getAttribute("data-field") === "localPath" && "value" in target) {
     applyLocalPath((target as HTMLInputElement).value, true);
     return;

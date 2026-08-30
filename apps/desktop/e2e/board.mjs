@@ -261,9 +261,10 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
     const response = await route.fetch();
     const result = await response.json();
     result.snapshot.board.selected.document = {
-      kind: "loading",
+      kind: "stale",
       body: "# Cached issue body\n\nVisible while Tracker refreshes.",
       fetchedAtMs: Date.now() - 60_000,
+      failure: { kind: "offline", message: "simulated offline Tracker" },
     };
     await route.fulfill({ response, json: result });
     return;
@@ -276,13 +277,22 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
 await page.route("**/*", preserveCachedDocumentDuringRefresh);
 await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".detail-hd:has-text('child ready')");
+await page.waitForSelector('[data-document-state="stale"] .issue-markdown:has-text("Cached issue body")');
+if (await page.$('button[data-act="edit-issue"]')) {
+  throw new Error("Issue editing must stay unavailable for a stale read-only document");
+}
+await page.click('button[data-act="retry-issue-document"]');
 await page.waitForSelector('[data-document-state="loading"] .issue-markdown:has-text("Cached issue body")');
+if (await page.$('button[data-act="edit-issue"]')) {
+  throw new Error("Issue editing must stay unavailable while the complete document is loading");
+}
 const loadingStatus = await page.$eval('[data-document-state="loading"] .document-status', (node) => node.textContent);
 if (!loadingStatus?.includes("数据截至") && !loadingStatus?.includes("Data as of")) {
   throw new Error(`cached Issue document should keep its as-of time while refreshing, got ${loadingStatus}`);
 }
 releaseDocumentRefresh();
 await page.waitForSelector('[data-document-state="ready"]');
+await page.waitForSelector('button[data-act="edit-issue"]');
 await page.unroute("**/*", preserveCachedDocumentDuringRefresh);
 const documentText = await page.$eval(".issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());
 if (!documentText?.includes("Can the operator read every constraint") || !documentText.includes("Paragraph six")) {

@@ -62,11 +62,11 @@ pub use session::{
 };
 pub use tracker::{
     gh_known_install_locations, map_github_issue_node, resolve_gh, AuthFailureKind,
-    CredentialSource, GitHubTracker, IssueComment, IssueDocument, IssueEdit, MemoryTracker,
-    ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub, TrackerKind,
-    TrackerPort, TrackerReadError, TrackerWriteError,
+    CredentialSource, GitHubTracker, IssueComment, IssueDocument, IssueEdit, LocalMarkdownTracker,
+    MemoryTracker, ProbeContext, ProbeOutcome, ProjectConnection, RepairHint, ScriptedGitHub,
+    TrackerKind, TrackerPort, TrackerReadError, TrackerWriteError,
 };
-pub use tracker_seam::{TrackerReadOutcome, TrackerSeam, TrackerWriteOp};
+pub use tracker_seam::{TrackerReadOutcome, TrackerRouter, TrackerSeam, TrackerWriteOp};
 pub use usage::{
     BucketKind, RunTelemetryLane, TelemetryLane, TelemetryPoint, TelemetrySample, TokenCounts,
     UsageFilter, UsagePage, UsageRange, RING_LEN,
@@ -916,6 +916,19 @@ pub struct ShellCopy {
     pub mobile_run: String,
     pub mobile_recent_output: String,
     pub mobile_live_terminal: String,
+    pub create_issue: String,
+    pub edit_issue: String,
+    pub save_issue: String,
+    pub issue_title: String,
+    pub issue_body: String,
+    pub add_comment: String,
+    pub comment_placeholder: String,
+    pub parent_issue: String,
+    pub dependency_blockers: String,
+    pub clear_dependency: String,
+    pub save_relations: String,
+    pub close_issue: String,
+    pub reopen_issue: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -986,7 +999,9 @@ impl KernelPorts {
     pub fn live() -> Self {
         let launch_env: Arc<dyn LaunchEnvPort> = Arc::new(ShellLaunchEnv::live());
         Self {
-            tracker: Arc::new(GitHubTracker::live(launch_env.clone())),
+            tracker: Arc::new(TrackerRouter::new(Arc::new(GitHubTracker::live(
+                launch_env.clone(),
+            )))),
             agents: builtin_agents(),
             launch_env,
             sessions: Arc::new(PtySessionFactory),
@@ -3397,6 +3412,7 @@ impl HostKernel {
                 tracker_seam::TrackerWriteOp::SetOpen { .. } => {
                     existing.open = updated.open;
                     existing.closed_at = updated.closed_at;
+                    existing.labels = updated.labels;
                 }
                 tracker_seam::TrackerWriteOp::AddComment { .. } => {}
                 tracker_seam::TrackerWriteOp::Claim | tracker_seam::TrackerWriteOp::Release => {
@@ -3405,6 +3421,7 @@ impl HostKernel {
                     existing.title = updated.title;
                     existing.url = updated.url;
                     existing.closed_at = updated.closed_at;
+                    existing.labels = updated.labels;
                 }
                 tracker_seam::TrackerWriteOp::SetParent { .. } => {
                     existing.parent = updated.parent;
@@ -4626,12 +4643,17 @@ impl HostKernel {
                 "a Project is already registered for this directory".into(),
             ));
         }
+        let tracker_kind = if github_host == "local" {
+            TrackerKind::LocalMarkdown
+        } else {
+            TrackerKind::Github
+        };
         let connection = self.probe_github(&github_host, &repository);
         let record = ProjectRecord {
             id: pairing::random_id(),
             name,
             local_path,
-            tracker: TrackerKind::Github,
+            tracker: tracker_kind,
             github_host,
             repository,
             connection,
@@ -4701,6 +4723,11 @@ impl HostKernel {
         let registration_changed = current.local_path != local_path
             || current.github_host != github_host
             || current.repository != repository;
+        let tracker_kind = if github_host == "local" {
+            TrackerKind::LocalMarkdown
+        } else {
+            TrackerKind::Github
+        };
         let connection = registration_changed.then(|| self.probe_github(&github_host, &repository));
         let mut projects = self.projects.clone();
         let project = projects
@@ -4710,6 +4737,7 @@ impl HostKernel {
         project.name = name;
         if registration_changed {
             project.local_path = local_path;
+            project.tracker = tracker_kind;
             project.github_host = github_host;
             project.repository = repository;
             project.connection = connection.expect("changed registration connection");
@@ -5091,6 +5119,7 @@ impl HostKernel {
                         self.appearance.language,
                         AuthFailureKind::Unreachable,
                         detail.as_deref(),
+                        &github_host,
                     ),
                 };
                 let has_data = self.loaded_issues.contains_key(project_id);
@@ -5133,6 +5162,7 @@ impl HostKernel {
                         self.appearance.language,
                         kind,
                         detail.as_deref(),
+                        &github_host,
                     ),
                 };
                 self.refresh.insert(
@@ -5505,6 +5535,7 @@ impl HostKernel {
             outcome,
             &self.data.host_secrets_path,
             self.appearance.language,
+            github_host,
         )
     }
 }
@@ -5801,6 +5832,19 @@ impl ShellCopy {
                 mobile_run: "Run".into(),
                 mobile_recent_output: "最近输出".into(),
                 mobile_live_terminal: "打开活终端".into(),
+                create_issue: "创建 Issue".into(),
+                edit_issue: "编辑 Issue".into(),
+                save_issue: "保存 Issue".into(),
+                issue_title: "标题".into(),
+                issue_body: "正文".into(),
+                add_comment: "添加评论".into(),
+                comment_placeholder: "写下评论".into(),
+                parent_issue: "父 Issue".into(),
+                dependency_blockers: "Blocked by（阻塞方）".into(),
+                clear_dependency: "清除 Dependency".into(),
+                save_relations: "保存关系".into(),
+                close_issue: "关闭 Issue".into(),
+                reopen_issue: "重新打开 Issue".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -6072,6 +6116,19 @@ impl ShellCopy {
                 mobile_run: "Run".into(),
                 mobile_recent_output: "Recent output".into(),
                 mobile_live_terminal: "Open live terminal".into(),
+                create_issue: "Create Issue".into(),
+                edit_issue: "Edit Issue".into(),
+                save_issue: "Save Issue".into(),
+                issue_title: "Title".into(),
+                issue_body: "Body".into(),
+                add_comment: "Add comment".into(),
+                comment_placeholder: "Write a comment".into(),
+                parent_issue: "Parent Issue".into(),
+                dependency_blockers: "Blocked by".into(),
+                clear_dependency: "Clear Dependency".into(),
+                save_relations: "Save relationship".into(),
+                close_issue: "Close Issue".into(),
+                reopen_issue: "Reopen Issue".into(),
             },
         }
     }
@@ -6456,6 +6513,7 @@ fn probe_record(
         secrets_pat: pat.as_deref(),
         secrets_path,
     });
+    let connection = connection_from_probe(outcome, secrets_path, language, &stored.github_host);
     ProjectRecord {
         id: stored.id,
         name: stored.name,
@@ -6463,7 +6521,7 @@ fn probe_record(
         tracker: stored.tracker,
         github_host: stored.github_host,
         repository: stored.repository,
-        connection: connection_from_probe(outcome, secrets_path, language),
+        connection,
         tracker_synced: false,
         auto_advance: stored.auto_advance,
         restore_auto_advance: stored.restore_auto_advance,
@@ -6476,6 +6534,7 @@ fn connection_from_probe(
     outcome: tracker::ProbeOutcome,
     secrets_path: &Path,
     language: Language,
+    github_host: &str,
 ) -> ProjectConnection {
     match outcome {
         tracker::ProbeOutcome::Ready { source } => ProjectConnection::Ready { source },
@@ -6491,6 +6550,7 @@ fn connection_from_probe(
                 language,
                 AuthFailureKind::Unreachable,
                 detail.as_deref(),
+                github_host,
             ),
         },
         tracker::ProbeOutcome::Failed {
@@ -6502,12 +6562,27 @@ fn connection_from_probe(
             source,
             kind,
             repair: tracker::repair_hint(cli_detected, secrets_path),
-            message: auth_failure_message(language, kind, detail.as_deref()),
+            message: auth_failure_message(language, kind, detail.as_deref(), github_host),
         },
     }
 }
 
-fn auth_failure_message(language: Language, kind: AuthFailureKind, detail: Option<&str>) -> String {
+fn auth_failure_message(
+    language: Language,
+    kind: AuthFailureKind,
+    detail: Option<&str>,
+    github_host: &str,
+) -> String {
+    if github_host == "local" {
+        let base = match language {
+            Language::ZhCn => "本地 Markdown tracker 不可用。".to_string(),
+            Language::En => "Local Markdown tracker is unavailable.".to_string(),
+        };
+        return match detail {
+            Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
+            _ => base,
+        };
+    }
     let base = match (language, kind) {
         (Language::ZhCn, AuthFailureKind::MissingCredentials) => {
             "没有可用的 GitHub 凭据。".to_string()
