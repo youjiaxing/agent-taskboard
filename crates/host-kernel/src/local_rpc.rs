@@ -216,14 +216,26 @@ fn spawn_local_rpc_inner(
                     if tick_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let should_exit = {
+                    let (outcome, refreshes) = {
                         let Ok(mut host) = tick_kernel.lock() else {
                             break;
                         };
-                        host.dispatch(crate::Command::Tick { now_ms: None })
-                            .ok()
-                            .is_some_and(|outcome| outcome.process == ProcessIntent::Exit)
+                        host.begin_deferred_refreshes();
+                        let outcome = host.dispatch_background_tick(None);
+                        let refreshes = host.take_deferred_refreshes();
+                        (outcome, refreshes)
                     };
+                    for refresh in refreshes {
+                        let completed = HostKernel::execute_prepared_refresh(refresh);
+                        let Ok(mut host) = tick_kernel.lock() else {
+                            break;
+                        };
+                        host.finish_prepared_refresh(completed);
+                    }
+                    let should_exit = outcome
+                        .ok()
+                        .is_some_and(|process| process == ProcessIntent::Exit)
+                        || !kernel_process_alive(&tick_kernel);
                     if should_exit {
                         tick_stop.store(true, Ordering::Relaxed);
                     }
@@ -419,11 +431,53 @@ fn serve_connection(
                 return Ok(None);
             }
         };
-        let mut kernel = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?;
-        match kernel.handle(value) {
-            Ok(outcome) => {
+        let defer_refreshes = request_defers_refreshes(&value);
+        let (initial, refreshes) = {
+            let mut host = kernel
+                .lock()
+                .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+            if defer_refreshes {
+                host.begin_deferred_refreshes();
+            }
+            let result = host.handle(value.clone());
+            let refreshes = if defer_refreshes {
+                host.take_deferred_refreshes()
+            } else {
+                Vec::new()
+            };
+            if result.is_err() {
+                host.cancel_prepared_refreshes(&refreshes);
+            }
+            (result, refreshes)
+        };
+        match initial {
+            Ok(mut outcome) => {
+                if !refreshes.is_empty() {
+                    let mut events = std::mem::take(&mut outcome.events);
+                    let completed: Vec<_> = refreshes
+                        .into_iter()
+                        .map(HostKernel::execute_prepared_refresh)
+                        .collect();
+                    let snapshot_request = serde_json::json!({
+                        "op": "snapshot",
+                        "clientInstanceId": value
+                            .get("clientInstanceId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default(),
+                    });
+                    let mut host = kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                    for refresh in completed {
+                        host.finish_prepared_refresh(refresh);
+                    }
+                    let mut refreshed = host
+                        .handle(snapshot_request)
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    events.append(&mut refreshed.events);
+                    refreshed.events = events;
+                    outcome = refreshed;
+                }
                 let body = serde_json::to_string(&outcome.to_json())?;
                 write_json(&mut stream, 200, response_origin, &body)?;
                 return Ok(Some(outcome));
@@ -864,6 +918,13 @@ fn write_empty(stream: &mut TcpStream, status: u16, origin: Option<&str>) -> io:
     stream.write_all(response.as_bytes())
 }
 
+fn request_defers_refreshes(request: &serde_json::Value) -> bool {
+    matches!(
+        request.get("op").and_then(|value| value.as_str()),
+        Some("refresh" | "tick" | "setClientView" | "showWindow" | "focusProject" | "noteRunEnded")
+    )
+}
+
 fn write_bytes(
     stream: &mut TcpStream,
     status: u16,
@@ -979,5 +1040,103 @@ fn reason_phrase(status: u16) -> &'static str {
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         _ => "OK",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        BootRequest, HostEvent, IssueRecord, MemoryTracker, RefreshStatus, SystemAppearance,
+        DEFAULT_REFRESH_INTERVAL_MS,
+    };
+
+    #[test]
+    fn background_ticks_keep_board_updates_until_a_client_receives_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("work/garden");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let tracker = Arc::new(MemoryTracker::new());
+        tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+        let tracker_seam: Arc<dyn crate::TrackerSeam> = tracker.clone();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "zh-Hans-CN".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Studio".into(),
+            },
+            tracker_seam,
+        )
+        .unwrap();
+        let project_id = host
+            .handle(serde_json::json!({
+                "op": "registerProject",
+                "name": "garden",
+                "localPath": project_dir,
+                "repository": "you/garden",
+            }))
+            .unwrap()
+            .snapshot
+            .focused_project_id;
+        host.handle(serde_json::json!({
+            "op": "setClientView",
+            "clientId": "desktop",
+            "projectId": project_id,
+            "visible": true,
+        }))
+        .unwrap();
+        let fetched_at_ms = match host.snapshot().board.unwrap().refresh {
+            RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+            other => panic!("expected ready, got {other:?}"),
+        };
+
+        tracker.set_issues(
+            "you/garden",
+            vec![
+                IssueRecord::open("you/garden", 1, "ready"),
+                IssueRecord::open("you/garden", 2, "new from background refresh"),
+            ],
+        );
+        host.begin_deferred_refreshes();
+        assert_eq!(
+            host.dispatch_background_tick(Some(fetched_at_ms + DEFAULT_REFRESH_INTERVAL_MS))
+                .unwrap(),
+            ProcessIntent::KeepRunning
+        );
+        let refreshes = host.take_deferred_refreshes();
+        assert_eq!(refreshes.len(), 1);
+        for refresh in refreshes {
+            let completed = HostKernel::execute_prepared_refresh(refresh);
+            host.finish_prepared_refresh(completed);
+        }
+
+        host.begin_deferred_refreshes();
+        host.dispatch_background_tick(Some(fetched_at_ms + DEFAULT_REFRESH_INTERVAL_MS + 1_000))
+            .unwrap();
+        assert!(host.take_deferred_refreshes().is_empty());
+
+        let outcome = host
+            .handle(serde_json::json!({
+                "op": "snapshot",
+                "clientInstanceId": "desktop",
+            }))
+            .unwrap();
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            HostEvent::BoardUpdated { project_id: updated } if updated == &project_id
+        )));
+        assert_eq!(
+            outcome
+                .snapshot
+                .board
+                .unwrap()
+                .columns
+                .unwrap()
+                .frontier
+                .len(),
+            2
+        );
     }
 }
