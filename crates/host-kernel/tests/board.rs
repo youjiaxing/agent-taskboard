@@ -1428,3 +1428,37 @@ fn browser_supplements_issue_115_launch_form_behavior() {
     register(&mut host, &project, "you/issue-115-ui");
     run_browser_e2e(host, "issue-115-launch.mjs", &[]);
 }
+
+#[test]
+fn browser_clients_resize_move_and_restore_workbench_panels_independently() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = make_dir(tmp.path(), "work/issue-116-ui");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(
+        "you/issue-116-ui",
+        1,
+        "panel layout issue",
+    ));
+    for number in 2..=24 {
+        tracker.add_issue(IssueRecord::open(
+            "you/issue-116-ui",
+            number,
+            format!("scrollable panel issue {number}"),
+        ));
+    }
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    let project_id = register(&mut host, &project, "you/issue-116-ui");
+    start_bound_grok(&mut host, &project_id, "you/issue-116-ui#1");
+
+    run_browser_e2e(host, "panel-layout.mjs", &[]);
+}

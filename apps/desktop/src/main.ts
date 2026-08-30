@@ -872,6 +872,29 @@ type RpcResult = {
   viewChanges?: ViewChanges;
 };
 
+type WorkbenchPanelId = "inspector" | "terminal" | "usage";
+
+type WorkbenchPanelGeometry = {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  floating: boolean;
+  runFloating?: boolean;
+  dockedWidth?: number;
+};
+
+type WorkbenchLayout = Record<WorkbenchPanelId, WorkbenchPanelGeometry>;
+
+type PanelPointerInteraction = {
+  pointerId: number;
+  panelId: WorkbenchPanelId;
+  kind: "drag" | "resize";
+  startClientX: number;
+  startClientY: number;
+  start: WorkbenchPanelGeometry;
+};
+
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
   throw new Error("missing #app");
@@ -933,6 +956,7 @@ let createIssueDraft: IssueContentDraft = { title: "", body: "" };
 let issueEditOpenId: string | null = null;
 const issueEditDrafts = new Map<string, IssueContentDraft>();
 const issueCommentDrafts = new Map<string, string>();
+const terminalInputDrafts = new Map<string, string>();
 const issueRelationDrafts = new Map<string, IssueRelationDraft>();
 const issueMaintenanceOpen = new Set<string>();
 const formOperations: FormOperationState = {
@@ -944,6 +968,7 @@ let keyboardHelpOpen = false;
 let keyboardCursorIssueId = "";
 let sidebarVisible = true;
 let issueDetailVisible = true;
+let terminalPanelVisible = true;
 let renderedDetailIssueId = "";
 let renderedBoardProjectId = "";
 let renderedMobileWorkspaceKey = "";
@@ -976,6 +1001,9 @@ let mobilePtyPumping = false;
 const mobilePtyText = new Map<string, string>();
 let mobileAppearance = loadMobileAppearance();
 const clientId = sessionClientId();
+let workbenchLayout: WorkbenchLayout;
+let panelPointerInteraction: PanelPointerInteraction | null = null;
+let frontWorkbenchPanel: WorkbenchPanelId = "inspector";
 
 const GRAPH_RELATION_META: Record<
   NonNullable<GraphNode["relation"]>,
@@ -992,13 +1020,22 @@ const GRAPH_RELATION_META: Record<
 
 function sessionClientId(): string {
   const key = "agent-taskboard-client-id";
+  const windowMarkerPrefix = "agent-taskboard-client-window:";
   const existing = sessionStorage.getItem(key);
-  if (existing) return existing;
+  const windowMarker = window.name.startsWith(windowMarkerPrefix)
+    ? window.name.slice(windowMarkerPrefix.length)
+    : "";
+  const clonedFromOpener = Boolean(window.opener) && !windowMarker;
+  if (existing && !clonedFromOpener) {
+    if (!windowMarker) window.name = `${windowMarkerPrefix}${existing}`;
+    return existing;
+  }
   const id =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
-      : `client-${Date.now()}`;
+      : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   sessionStorage.setItem(key, id);
+  window.name = `${windowMarkerPrefix}${id}`;
   return id;
 }
 
@@ -1010,6 +1047,317 @@ function resetGraphUiState(): void {
   graphCanvasLimit = 48;
   graphListLimit = 50;
   graphListQuery = "";
+}
+
+const WORKBENCH_LAYOUT_VERSION = 1;
+const WORKBENCH_LAYOUT_STORAGE_PREFIX = `agent-taskboard-panel-layout:v${WORKBENCH_LAYOUT_VERSION}:`;
+const WORKBENCH_LAYOUT_REGISTRY_KEY = `agent-taskboard-panel-layout-registry:v${WORKBENCH_LAYOUT_VERSION}`;
+const WORKBENCH_LAYOUT_INSTANCE_TTL_MS = 7 * 86_400_000;
+const WORKBENCH_LAYOUT_HEARTBEAT_MS = 5 * 60_000;
+const WORKBENCH_PANEL_DEFAULTS: WorkbenchLayout = {
+  inspector: { width: 400, height: 600, x: 2_400, y: 12, floating: true, runFloating: false },
+  terminal: { width: 760, height: 280, x: 80, y: 360, floating: false },
+  usage: { width: 920, height: 680, x: 48, y: 28, floating: false },
+};
+
+function clonePanelGeometry(geometry: WorkbenchPanelGeometry): WorkbenchPanelGeometry {
+  return { ...geometry };
+}
+
+function workbenchLayoutStorageKey(): string {
+  const clientKind = desktopShellAvailable() ? "tauri" : "browser";
+  let identity = clientId;
+  if (clientKind === "tauri") {
+    try {
+      const tauriInternals = (window as typeof window & {
+        __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
+      }).__TAURI_INTERNALS__;
+      identity = tauriInternals?.metadata?.currentWindow?.label ?? "";
+    } catch {
+      identity = "";
+    }
+    if (!identity) {
+      const key = "agent-taskboard-tauri-layout-client-id";
+      identity = localStorage.getItem(key) ?? "";
+      if (!identity) {
+        identity = `tauri-${crypto.randomUUID?.() ?? Date.now()}`;
+        localStorage.setItem(key, identity);
+      }
+    }
+  }
+  return `${WORKBENCH_LAYOUT_STORAGE_PREFIX}${clientKind}:${identity}`;
+}
+
+function readWorkbenchLayoutRegistry(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(WORKBENCH_LAYOUT_REGISTRY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([key, value]) =>
+          key.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)
+          && typeof value === "number"
+          && Number.isFinite(value),
+      ),
+    ) as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+function writeWorkbenchLayoutRegistry(registry: Record<string, number>): void {
+  try {
+    localStorage.setItem(WORKBENCH_LAYOUT_REGISTRY_KEY, JSON.stringify(registry));
+  } catch {
+    // A restricted Client can still use the layout without the cleanup registry.
+  }
+}
+
+function workbenchLayoutStorageKeys(): string[] {
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)) keys.push(key);
+  }
+  return keys;
+}
+
+function touchWorkbenchLayoutInstance(currentKey = workbenchLayoutStorageKey()): void {
+  try {
+    const now = Date.now();
+    const registry = readWorkbenchLayoutRegistry();
+    let changed = false;
+    for (const key of workbenchLayoutStorageKeys()) {
+      const lastSeen = registry[key];
+    if (
+      key !== currentKey
+      && (lastSeen == null || now - lastSeen > WORKBENCH_LAYOUT_INSTANCE_TTL_MS)
+    ) {
+        localStorage.removeItem(key);
+        delete registry[key];
+        changed = true;
+      }
+    }
+    for (const key of Object.keys(registry)) {
+      if (!localStorage.getItem(key) && key !== currentKey) {
+        delete registry[key];
+        changed = true;
+      }
+    }
+    if (registry[currentKey] !== now) {
+      registry[currentKey] = now;
+      changed = true;
+    }
+    if (changed) writeWorkbenchLayoutRegistry(registry);
+  } catch {
+    // A restricted Client can still use the layout for this window.
+  }
+}
+
+function startWorkbenchLayoutHeartbeat(): void {
+  window.setInterval(() => touchWorkbenchLayoutInstance(), WORKBENCH_LAYOUT_HEARTBEAT_MS);
+}
+
+function normalizePanelGeometry(
+  panelId: WorkbenchPanelId,
+  candidate: Partial<WorkbenchPanelGeometry> | undefined,
+): WorkbenchPanelGeometry {
+  const fallback = WORKBENCH_PANEL_DEFAULTS[panelId];
+  const number = (value: unknown, defaultValue: number, minimum: number, maximum: number) =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.min(maximum, Math.max(minimum, value))
+      : defaultValue;
+  return {
+    width: number(candidate?.width, fallback.width, 280, 1_200),
+    height: number(candidate?.height, fallback.height, 180, 900),
+    x: number(candidate?.x, fallback.x, 0, 2_400),
+    y: number(candidate?.y, fallback.y, 0, 1_600),
+    floating: typeof candidate?.floating === "boolean" ? candidate.floating : fallback.floating,
+    ...(panelId === "inspector"
+      ? {
+          runFloating: typeof candidate?.runFloating === "boolean" ? candidate.runFloating : false,
+          dockedWidth: number(
+            candidate?.dockedWidth,
+            candidate?.floating === false ? candidate?.width ?? 480 : 480,
+            280,
+            1_200,
+          ),
+        }
+      : {}),
+  };
+}
+
+function loadWorkbenchLayout(): WorkbenchLayout {
+  try {
+    const key = workbenchLayoutStorageKey();
+    touchWorkbenchLayoutInstance(key);
+    const raw = localStorage.getItem(key);
+    const candidate = raw ? JSON.parse(raw) as Partial<WorkbenchLayout> : {};
+    return {
+      inspector: normalizePanelGeometry("inspector", candidate.inspector),
+      terminal: normalizePanelGeometry("terminal", candidate.terminal),
+      usage: normalizePanelGeometry("usage", candidate.usage),
+    };
+  } catch {
+    return {
+      inspector: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.inspector),
+      terminal: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.terminal),
+      usage: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.usage),
+    };
+  }
+}
+
+function saveWorkbenchLayout(): void {
+  try {
+    const key = workbenchLayoutStorageKey();
+    touchWorkbenchLayoutInstance(key);
+    localStorage.setItem(key, JSON.stringify(workbenchLayout));
+  } catch {
+    // A restricted Client can still use the layout for this window.
+  }
+}
+
+function panelCssVariables(panelId: WorkbenchPanelId): string {
+  const panel = workbenchLayout[panelId];
+  const width = panelWidth(panelId);
+  const dimensions = panelIsFloating(panelId)
+    ? `width:${Math.round(width)}px;height:${Math.round(panel.height)}px;`
+    : "";
+  return `--panel-width:${Math.round(width)}px;--panel-height:${Math.round(panel.height)}px;--panel-x:${Math.round(panel.x)}px;--panel-y:${Math.round(panel.y)}px;${dimensions}`;
+}
+
+function panelUiText() {
+  const chinese = effectiveClientLanguage() === "zh-CN";
+  return chinese
+    ? { move: "拖动面板", resize: "调整面板大小", float: "浮窗", dock: "停靠", hide: "收起面板", showTerminal: "显示 Terminal" }
+    : { move: "Move panel", resize: "Resize panel", float: "Float", dock: "Dock", hide: "Hide panel", showTerminal: "Show Terminal" };
+}
+
+function panelControls(panelId: WorkbenchPanelId): string {
+  if (mobileClient()) return "";
+  const panel = workbenchLayout[panelId];
+  const floating = panelIsFloating(panelId);
+  const text = panelUiText();
+  return `<div class="panel-layout-bar">
+    <button type="button" class="panel-drag-handle" data-panel-drag="${panelId}" aria-label="${escapeHtml(text.move)}" title="${escapeHtml(text.move)}">⋮⋮</button>
+    <output class="panel-size" data-panel-size="${panelId}">${Math.round(panelWidth(panelId))} × ${Math.round(panel.height)}</output>
+    <button type="button" class="panel-mode" data-act="panel-mode" data-id="${panelId}" data-panel-mode="${panelId}">${escapeHtml(floating ? text.dock : text.float)}</button>
+    ${panelId === "terminal" ? `<button type="button" data-act="hide-terminal" aria-label="${escapeHtml(text.hide)}" title="${escapeHtml(text.hide)}">×</button>` : ""}
+  </div>`;
+}
+
+function panelResizeHandle(panelId: WorkbenchPanelId): string {
+  const text = panelUiText();
+  return `<div class="panel-resize-handle" data-panel-resize="${panelId}" role="separator" aria-label="${escapeHtml(text.resize)}" title="${escapeHtml(text.resize)}"></div>`;
+}
+
+function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
+  return `<aside class="issue-detail workbench-panel" data-workbench-panel="inspector" data-floating="${panelIsFloating("inspector")}" data-front="${frontWorkbenchPanel === "inspector"}" style="${panelCssVariables("inspector")}">
+    ${panelControls("inspector")}
+    ${issueDetail(copy, board)}
+    ${panelResizeHandle("inspector")}
+  </aside>`;
+}
+
+function panelContainer(panel: HTMLElement): HTMLElement {
+  return panel.closest<HTMLElement>(".board-shell, .lifted-run, .workspace") ?? document.documentElement;
+}
+
+function floatingOrigin(panelId: WorkbenchPanelId, panel: HTMLElement): WorkbenchPanelGeometry {
+  const current = workbenchLayout[panelId];
+  const container = panelContainer(panel).getBoundingClientRect();
+  const width = Math.min(panelWidth(panelId), Math.max(280, container.width - 16));
+  const height = Math.min(current.height, Math.max(180, container.height - 16));
+  return {
+    ...current,
+    width,
+    height,
+    x: Math.max(8, Math.min(current.x, container.width - width - 8)),
+    y: Math.max(8, Math.min(current.y, container.height - height - 8)),
+  };
+}
+
+function panelIsFloating(panelId: WorkbenchPanelId): boolean {
+  const panel = workbenchLayout[panelId];
+  return panelId === "inspector" && snapshot?.workspaceView === "run"
+    ? panel.runFloating ?? false
+    : panel.floating;
+}
+
+function panelWidth(panelId: WorkbenchPanelId): number {
+  const panel = workbenchLayout[panelId];
+  return panelId === "inspector" && !panelIsFloating(panelId)
+    ? panel.dockedWidth ?? 480
+    : panel.width;
+}
+
+function withPanelFloating(
+  panelId: WorkbenchPanelId,
+  geometry: WorkbenchPanelGeometry,
+  floating: boolean,
+): WorkbenchPanelGeometry {
+  return panelId === "inspector" && snapshot?.workspaceView === "run"
+    ? { ...geometry, runFloating: floating }
+    : { ...geometry, floating };
+}
+
+function updatePanelNode(panelId: WorkbenchPanelId): void {
+  const panel = app?.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
+  if (!panel) return;
+  panel.dataset.floating = String(panelIsFloating(panelId));
+  panel.style.cssText = panelCssVariables(panelId);
+  if (panelId === "inspector") {
+    const parent = panel.closest<HTMLElement>(".board-shell, .lifted-run");
+    const width = `${Math.round(panelWidth(panelId))}px`;
+    parent?.style.setProperty("--inspector-panel-width", width);
+    parent?.style.setProperty("--issue-detail-width", width);
+  }
+  const size = panel.querySelector<HTMLOutputElement>(`[data-panel-size="${panelId}"]`);
+  const rect = panel.getBoundingClientRect();
+  if (size) size.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+}
+
+function refreshPanelSizeFeedback(): void {
+  for (const panelId of ["inspector", "terminal", "usage"] as const) updatePanelNode(panelId);
+}
+
+workbenchLayout = loadWorkbenchLayout();
+startWorkbenchLayoutHeartbeat();
+
+function workbenchPanelId(value: string | undefined): WorkbenchPanelId | null {
+  return value === "inspector" || value === "terminal" || value === "usage" ? value : null;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+}
+
+function setPanelFloating(panelId: WorkbenchPanelId, floating: boolean): void {
+  const node = app?.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
+  if (!node) return;
+  const geometry = floating ? floatingOrigin(panelId, node) : workbenchLayout[panelId];
+  workbenchLayout[panelId] = withPanelFloating(panelId, geometry, floating);
+  frontWorkbenchPanel = panelId;
+  saveWorkbenchLayout();
+  render();
+  fitAddon?.fit();
+}
+
+function bringPanelToFront(panelId: WorkbenchPanelId): void {
+  frontWorkbenchPanel = panelId;
+  for (const panel of app?.querySelectorAll<HTMLElement>("[data-workbench-panel]") ?? []) {
+    panel.dataset.front = String(panel.dataset.workbenchPanel === panelId);
+  }
+}
+
+function finishPanelPointer(pointerId: number): void {
+  if (panelPointerInteraction?.pointerId !== pointerId) return;
+  panelPointerInteraction = null;
+  saveWorkbenchLayout();
+  fitAddon?.fit();
+  const runId = snapshot?.focusedRunId;
+  if (runId && !mobileClient()) void sendPtyResize(runId);
 }
 
 const MOBILE_BREAKPOINT = 640;
@@ -1773,6 +2121,9 @@ function render(): void {
           </div>
           ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
           <div class="chrome-trail">
+            ${!isMobile && focusedRun(snap) && !terminalPanelVisible
+              ? `<button type="button" class="chrome-button" data-act="show-terminal">${escapeHtml(panelUiText().showTerminal)}</button>`
+              : ""}
             ${showIssueToggle
               ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
               : ""}
@@ -1989,6 +2340,7 @@ function render(): void {
     ${changesOpen ? viewChangesPanel(copy) : ""}
     ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
+  refreshPanelSizeFeedback();
   const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
   if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
     graphPlaceholder.replaceWith(previousGraph.canvas);
@@ -2243,7 +2595,7 @@ function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
         : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
     </section>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" value="${escapeHtml(terminalInputDrafts.get(run.id) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
     ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
   </section>`;
 }
@@ -2517,7 +2869,9 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
   const trend = `${usageTrend(copy.ttft, usage.buckets, "ttftMs")}${usageTrend(copy.genRate, usage.buckets, "tokensPerSec")}`;
   const hit =
     usage.cacheHitRate == null ? "—" : `${Math.round(usage.cacheHitRate * 1000) / 10}%`;
-  return `<div class="usage-page">
+  const panel = workbenchLayout.usage;
+  return `<div class="usage-page workbench-panel" data-workbench-panel="usage" data-floating="${panel.floating}" data-front="${frontWorkbenchPanel === "usage"}" style="${panelCssVariables("usage")}">
+    ${panelControls("usage")}
     <div class="board-head">
       <div class="board-head-row">
         <div>
@@ -2558,6 +2912,7 @@ function usagePage(copy: ShellCopy, snap: Snapshot): string {
     <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
     <div class="usage-list usage-full">${rows}</div>
     <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
+    ${panelResizeHandle("usage")}
   </div>`;
 }
 
@@ -2745,7 +3100,9 @@ function runControls(copy: ShellCopy, run: RunSummary): string {
 
 function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
   const identity = runIdentity(copy, run);
-  return `<div class="${className}">
+  const panel = workbenchLayout.terminal;
+  return `<div class="${className} workbench-panel" data-workbench-panel="terminal" data-floating="${panel.floating}" data-front="${frontWorkbenchPanel === "terminal"}" style="${panelCssVariables("terminal")}">
+    ${panelControls("terminal")}
     <header class="run-dock-hd">
       <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
       ${runControls(copy, run)}
@@ -2755,13 +3112,14 @@ function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): str
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${run.status === "ended" ? "" : `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}"><input name="text" maxlength="4000" value="${escapeHtml(terminalInputDrafts.get(run.id) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" /><button type="submit">${escapeHtml(copy.injectLine)}</button></form>`}
+    ${panelResizeHandle("terminal")}
   </div>`;
 }
 
 function runDock(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
-  if (!run || run.status === "ended") return "";
+  if (!terminalPanelVisible || !run || run.status === "ended") return "";
   const selectedIssueId = snap.board?.selected?.id;
   if (!run.unbound && run.issueId !== selectedIssueId) return "";
   return terminalPanel(copy, run, "run-dock");
@@ -2771,9 +3129,11 @@ function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
   const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}">
-    ${terminalPanel(copy, run, "lifted-terminal")}
-    ${inspectorOpen && snap.board ? `<aside class="issue-detail">${issueDetail(copy, snap.board)}</aside>` : ""}
+  const inspectorFloating = panelIsFloating("inspector");
+  const inspectorWidth = panelWidth("inspector");
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
+    ${terminalPanelVisible ? terminalPanel(copy, run, "lifted-terminal") : projectMain(copy, snap)}
+    ${inspectorOpen && snap.board ? workbenchIssuePanel(copy, snap.board) : ""}
   </section>`;
 }
 
@@ -3077,7 +3437,9 @@ function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): s
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : "";
   const inspectorOpen = issueDetailVisible && Boolean(board.selected);
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}">
+  const inspectorFloating = panelIsFloating("inspector");
+  const inspectorWidth = panelWidth("inspector");
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" data-center-view="${onGraph ? "graph" : "board"}" style="--issue-detail-width:${Math.round(inspectorWidth)}px;--inspector-panel-width:${Math.round(inspectorWidth)}px">
     <div class="board-main">
       ${hint || board.parentFilter
         ? `<div class="board-hint">
@@ -3089,7 +3451,7 @@ function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): s
         : ""}
       ${onGraph ? dependencyGraphView(copy, board, reuseGraphCanvas) : boardLanes(copy, board)}
     </div>
-    ${inspectorOpen ? `<aside class="issue-detail">${issueDetail(copy, board)}</aside>` : ""}
+    ${inspectorOpen ? workbenchIssuePanel(copy, board) : ""}
   </div>`;
 }
 
@@ -4159,6 +4521,79 @@ async function pumpPty(): Promise<void> {
   ptyPumping = false;
 }
 
+app.addEventListener("pointerdown", (event) => {
+  if (mobileClient()) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-panel-drag], [data-panel-resize]");
+  if (!target) return;
+  const panelId = workbenchPanelId(target.dataset.panelDrag ?? target.dataset.panelResize);
+  if (!panelId) return;
+  let panel = target.closest<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
+  if (!panel) return;
+  bringPanelToFront(panelId);
+  event.preventDefault();
+  const kind = target.dataset.panelDrag ? "drag" : "resize";
+  let rerendered = false;
+  if (kind === "drag" && !panelIsFloating(panelId)) {
+    workbenchLayout[panelId] = withPanelFloating(panelId, floatingOrigin(panelId, panel), true);
+    saveWorkbenchLayout();
+    render();
+    rerendered = true;
+    panel = app.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
+    if (!panel) return;
+  }
+  const rect = panel.getBoundingClientRect();
+  const container = panelContainer(panel).getBoundingClientRect();
+  workbenchLayout[panelId] = {
+    ...workbenchLayout[panelId],
+    width: rect.width,
+    height: rect.height,
+    x: rect.left - container.left,
+    y: rect.top - container.top,
+    ...(panelId === "inspector" && !panelIsFloating(panelId)
+      ? { dockedWidth: rect.width }
+      : {}),
+  };
+  panelPointerInteraction = {
+    pointerId: event.pointerId,
+    panelId,
+    kind,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    start: { ...clonePanelGeometry(workbenchLayout[panelId]), floating: panelIsFloating(panelId) },
+  };
+  if (!rerendered) target.setPointerCapture?.(event.pointerId);
+});
+
+document.addEventListener("pointermove", (event) => {
+  const interaction = panelPointerInteraction;
+  if (!interaction || interaction.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const panel = app?.querySelector<HTMLElement>(`[data-workbench-panel="${interaction.panelId}"]`);
+  if (!panel) return;
+  const container = panelContainer(panel).getBoundingClientRect();
+  const dx = event.clientX - interaction.startClientX;
+  const dy = event.clientY - interaction.startClientY;
+  const next = clonePanelGeometry(interaction.start);
+  if (interaction.kind === "drag") {
+    next.x = clamp(interaction.start.x + dx, 8, container.width - next.width - 8);
+    next.y = clamp(interaction.start.y + dy, 8, container.height - next.height - 8);
+  } else if (!interaction.start.floating && interaction.panelId === "terminal") {
+    const bottomEdgeHandle = window.matchMedia("(min-width: 641px) and (max-width: 900px)").matches;
+    next.height = clamp(interaction.start.height + (bottomEdgeHandle ? dy : -dy), 180, container.height * 0.72);
+  } else if (!interaction.start.floating && interaction.panelId === "inspector") {
+    next.width = clamp(interaction.start.width - dx, 280, container.width * 0.72);
+    next.dockedWidth = next.width;
+  } else {
+    next.width = clamp(interaction.start.width + dx, 280, container.width - interaction.start.x - 8);
+    next.height = clamp(interaction.start.height + dy, 180, container.height - interaction.start.y - 8);
+  }
+  workbenchLayout[interaction.panelId] = next;
+  updatePanelNode(interaction.panelId);
+}, true);
+
+window.addEventListener("pointerup", (event) => finishPanelPointer(event.pointerId));
+window.addEventListener("pointercancel", (event) => finishPanelPointer(event.pointerId));
+
 app.addEventListener("click", async (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target || !snapshot) return;
@@ -4208,6 +4643,31 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "toggle-issue") {
     issueDetailVisible = !issueDetailVisible;
+    if (issueDetailVisible) {
+      frontWorkbenchPanel = "inspector";
+    } else if (snapshot.workspaceView === "run") {
+      frontWorkbenchPanel = "terminal";
+    }
+    render();
+    return;
+  }
+  if (act === "panel-mode") {
+    const panelId = workbenchPanelId(target.dataset.id);
+    if (panelId) setPanelFloating(panelId, !panelIsFloating(panelId));
+    return;
+  }
+  if (act === "hide-terminal") {
+    terminalPanelVisible = false;
+    if (snapshot.workspaceView === "run") {
+      sidebarVisible = sidebarBeforeLift;
+      await rpc("returnToBoard");
+    }
+    render();
+    return;
+  }
+  if (act === "show-terminal") {
+    terminalPanelVisible = true;
+    frontWorkbenchPanel = "terminal";
     render();
     return;
   }
@@ -4219,6 +4679,7 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "return-board") {
     sidebarVisible = sidebarBeforeLift;
+    terminalPanelVisible = true;
     await rpc("returnToBoard");
     render();
     return;
@@ -4513,6 +4974,8 @@ app.addEventListener("click", async (event) => {
   if (act === "focus-run" && target.dataset.id) {
     sidebarBeforeLift = sidebarVisible;
     issueDetailVisible = true;
+    terminalPanelVisible = true;
+    frontWorkbenchPanel = "terminal";
     await rpc("focusRun", { runId: target.dataset.id });
     if (mobileClient()) {
       mobileView = "run";
@@ -4528,6 +4991,7 @@ app.addEventListener("click", async (event) => {
     settingsOpen = false;
     pairingOpen = false;
     formOpen = null;
+    frontWorkbenchPanel = "usage";
     await rpc("openUsage");
     render();
     return;
@@ -4548,6 +5012,8 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "open-run-usage" && target.dataset.id) {
+    terminalPanelVisible = true;
+    frontWorkbenchPanel = "terminal";
     await rpc("openRunFromUsage", { runId: target.dataset.id });
     render();
     return;
@@ -5035,6 +5501,7 @@ app.addEventListener("submit", async (event) => {
     const text = input?.value ?? "";
     if (!runId || !text.trim()) return;
     await rpc("injectRunInput", { runId, text });
+    terminalInputDrafts.delete(runId);
     if (input) input.value = "";
     render();
     return;
@@ -5075,6 +5542,11 @@ app.addEventListener("input", (event) => {
   const commentForm = target.closest<HTMLFormElement>("form[data-form='issue-comment']");
   if (commentForm?.dataset.id && target.name === "body") {
     issueCommentDrafts.set(commentForm.dataset.id, target.value);
+    return;
+  }
+  const injectForm = target.closest<HTMLFormElement>("form[data-act='inject-run']");
+  if (injectForm?.dataset.id && target.name === "text") {
+    terminalInputDrafts.set(injectForm.dataset.id, target.value);
     return;
   }
   if (target.getAttribute("data-field") === "graphSearch") {
@@ -5308,6 +5780,7 @@ app.addEventListener("submit", async (event) => {
       values: launchDraft.values,
       openingText: launchDraft.openingText,
     });
+    terminalPanelVisible = true;
     render();
     return;
   }
