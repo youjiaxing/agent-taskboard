@@ -36,6 +36,8 @@ pub struct IssueCard {
     pub title: String,
     pub url: String,
     pub claimed_by: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
     pub triage_role: Option<TriageRole>,
     pub open: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,6 +357,11 @@ pub struct BoardSnapshot {
     pub frontier_empty: Option<FrontierEmptyReason>,
     pub parent_filter: Option<IssueCard>,
     pub selected: Option<IssueDetail>,
+    /// All Issues loaded for this Project, independent of the current board
+    /// search/filter. The Client uses these stable links for relationship
+    /// editing without having to infer options from the projected columns.
+    #[serde(default)]
+    pub issue_options: Vec<IssueLink>,
     pub label_mapping_active: bool,
     pub recent_limit: u32,
     pub refresh: RefreshStatus,
@@ -433,6 +440,7 @@ pub fn project_board(
             frontier_empty: None,
             parent_filter: None,
             selected: None,
+            issue_options: Vec::new(),
             label_mapping_active: false,
             recent_limit,
             refresh,
@@ -460,6 +468,7 @@ pub fn project_board(
                 .and_then(|id| issues.iter().find(|issue| issue.id() == id))
                 .map(|issue| card(issue, mapping_active)),
             selected: selected_id.and_then(|id| select_issue(issues, id, mapping_active)),
+            issue_options: issue_options(issues),
             label_mapping_active: mapping_active,
             recent_limit,
             refresh,
@@ -529,6 +538,7 @@ pub fn project_board(
         frontier_empty,
         parent_filter: filter.map(|issue| card(issue, mapping_active)),
         selected: selected_id.and_then(|id| select_issue(issues, id, mapping_active)),
+        issue_options: issue_options(issues),
         label_mapping_active: mapping_active,
         recent_limit,
         refresh,
@@ -821,6 +831,7 @@ fn card(issue: &IssueRecord, mapping_active: bool) -> IssueCard {
         title: issue.title.clone(),
         url: issue.url.clone(),
         claimed_by: issue.assignees.clone(),
+        labels: issue.labels.clone(),
         triage_role: if mapping_active {
             issue.triage_role()
         } else {
@@ -829,6 +840,28 @@ fn card(issue: &IssueRecord, mapping_active: bool) -> IssueCard {
         open: issue.open,
         activity: None,
         run_id: None,
+    }
+}
+
+fn issue_options(issues: &[IssueRecord]) -> Vec<IssueLink> {
+    let mut options: Vec<IssueLink> = issues.iter().map(known_link_from_record).collect();
+    options.sort_by(|a, b| {
+        a.number
+            .cmp(&b.number)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    options
+}
+
+fn known_link_from_record(issue: &IssueRecord) -> IssueLink {
+    IssueLink {
+        id: issue.id(),
+        repository: issue.repository.clone(),
+        number: Some(issue.number),
+        title: issue.title.clone(),
+        open: Some(issue.open),
+        visible: true,
     }
 }
 

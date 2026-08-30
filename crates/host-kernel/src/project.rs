@@ -3,11 +3,14 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::tracker::TrackerKind;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectInference {
     pub name: String,
     pub local_path: PathBuf,
+    pub tracker: TrackerKind,
     pub github_host: String,
     pub repository: String,
 }
@@ -36,6 +39,9 @@ pub(crate) fn normalize_github_host(raw: &str) -> Result<String, String> {
 
 pub(crate) fn normalize_repository(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim().trim_end_matches('/').trim_end_matches(".git");
+    if Path::new(trimmed).is_absolute() {
+        return Ok(trimmed.to_string());
+    }
     if let Some((owner, repo)) = owner_repo(trimmed) {
         return Ok(format!("{owner}/{repo}"));
     }
@@ -78,14 +84,47 @@ pub(crate) fn infer_github_project(local_path: &Path) -> Option<ProjectInference
     if name.is_empty() {
         return None;
     }
+    if has_local_markdown_tracker(local_path) {
+        return Some(ProjectInference {
+            name,
+            local_path: local_path.to_path_buf(),
+            tracker: TrackerKind::LocalMarkdown,
+            github_host: "local".into(),
+            repository: local_path.to_string_lossy().to_string(),
+        });
+    }
     let config = git_config_path(local_path)?;
     let text = fs::read_to_string(config).ok()?;
     let (github_host, repository) = github_remote_from_config(&text)?;
     Some(ProjectInference {
         name,
         local_path: local_path.to_path_buf(),
+        tracker: TrackerKind::Github,
         github_host,
         repository,
+    })
+}
+
+fn has_local_markdown_tracker(local_path: &Path) -> bool {
+    let scratch = local_path.join(".scratch");
+    let Ok(features) = fs::read_dir(scratch) else {
+        return false;
+    };
+    features.flatten().any(|feature| {
+        fs::read_dir(feature.path().join("issues"))
+            .ok()
+            .is_some_and(|entries| {
+                entries.flatten().any(|entry| {
+                    entry.path().extension().is_some_and(|ext| ext == "md")
+                        && entry
+                            .path()
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .and_then(|stem| stem.split_once('-'))
+                            .and_then(|(number, _)| number.parse::<u64>().ok())
+                            .is_some()
+                })
+            })
     })
 }
 

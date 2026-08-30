@@ -9,7 +9,7 @@ Issue Tracker 是 Issue 状态与认领的唯一真源。Host 为每个 Project 
 - 没有可见 Client 正显示 Project 时，不为展示而轮询。
 - 绑定该 Project 的 Run 结束时立即刷新，不受 Client 是否可见影响。
 - 认领、判断 Issue 是否关闭、自动推进认领下一张，以及冷启动恢复自动推进时，只刷新涉及的 Project；其它已登记 Project 不跟着刷新。
-- local markdown 可用文件变化通知触发刷新。v1 不依赖 webhook 作为远端 Tracker 的主路径。
+- local markdown 文件内容变化触发刷新；Host 在自己的 tick 上检测已登记 Project 的内容 revision，不要求窗口位于前台。v1 不依赖 webhook 作为远端 Tracker 的主路径。
 
 ## 上次数据
 
@@ -29,9 +29,11 @@ Host 按 Project 持久保存最近一次成功刷新得到的数据：所有未
 
 离线或限流未恢复时，人可以查看上次数据、查看或停止已有 Run、向已有 Run 输入，以及启动游离 Run。Host 不认领、不放领，自动推进不领下一张；需要先认领才能启动的绑定 Issue Run 不启动。写操作不排队，也不先修改上次数据。
 
-## 认领的写入边界
+## Tracker 写入边界
 
-v1 看板自身只向 Issue Tracker 写认领和放领：人手动操作、执行已停后释放、自动推进认领下一张，以及启动绑定 Issue 的 Run 时先认领。认领失败则不启动对应 Run。Agent 在 Embedded Terminal 中通过 `gh`、`glab` 或其它方式写 Tracker，是 Agent 自己的行为；看板不拦截，也不代替 Agent 关票、评论或改正文。
+从 #111 起，桌面与电脑浏览器 Client 可通过 Host 使用 [Tracker Adapter 统一能力面](./0002-tracker-adapter-capability-surface.md) 的必选写操作：创建、改标题正文、开关票、认领/放领、评论、父 Issue 与 Dependency。每次写入前仍须成功读取涉及的 Project；写入直接落到 Tracker 真源，失败则保留表单输入并显示错误，不先改上次数据、不离线排队。认领失败仍不得启动对应绑定 Run。
+
+Agent 在 Embedded Terminal 中通过 `gh`、`glab` 或其它方式写 Tracker，仍是 Agent 自己的行为；看板不拦截，也不把 Run 结束、拖列或本地投影当成 Tracker 写入。
 
 ## Considered options
 

@@ -113,6 +113,7 @@ fn issue_ref(number: u64, title: &str) -> serde_json::Value {
 
 fn probe_ctx<'a>(github_host: &'a str, repository: &'a str) -> ProbeContext<'a> {
     ProbeContext {
+        tracker: host_kernel::TrackerKind::Github,
         github_host,
         repository,
         secrets_pat: None,
