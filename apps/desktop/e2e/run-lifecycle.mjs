@@ -4,6 +4,12 @@ const { browser, capture, page, url } = await openIssue100Browser();
 await page.waitForSelector(".lanes");
 
 const card = (title) => page.locator(".issue-card", { hasText: title }).first();
+const closeInspectorIfOpen = async () => {
+  const close = page.locator('.board-shell > .issue-detail button[data-act="toggle-issue"]');
+  if (!(await close.count())) return;
+  await close.click();
+  await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+};
 
 let rpcFailure = null;
 await page.route("**/rpc", async (route) => {
@@ -176,6 +182,7 @@ try {
   throw new Error(`returning from a stopped Run did not restore the board: ${JSON.stringify(diagnostic)}`);
 }
 
+await closeInspectorIfOpen();
 await card("continue lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".detail-hd:has-text('continue lifecycle issue')");
 await page.click(".issue-detail button[data-act='continue-run']");
@@ -191,6 +198,7 @@ if (!continueText.includes("隔离执行目录已经不在") || !continueText.in
 }
 await page.click(".run-dock button[data-act='stop-run']");
 
+await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".detail-hd:has-text('release lifecycle issue')");
 await page.click(".issue-detail button[data-act='release-claim']");

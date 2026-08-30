@@ -952,6 +952,7 @@ pub struct ShellCopy {
     pub save_relations: String,
     pub close_issue: String,
     pub reopen_issue: String,
+    pub issue_updates: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -7184,16 +7185,16 @@ impl ShellCopy {
                 issue_document_retry: "重试读取".into(),
                 issue_document_stale: "正文读取失败；以下为只读的上次内容，数据截至".into(),
                 issue_document_failed: "正文尚未成功读取。".into(),
-                family: "属于 / 子票".into(),
-                deps: "挡住它的 / 它挡住的".into(),
-                parent: "属于".into(),
-                children: "子票".into(),
-                no_parent: "没有父，仍是一等 Issue。".into(),
-                no_kids: "没有子票".into(),
+                family: "父子关系".into(),
+                deps: "依赖关系".into(),
+                parent: "父 Issue".into(),
+                children: "子 Issue".into(),
+                no_parent: "无".into(),
+                no_kids: "无".into(),
                 only_kids: "只看这些子票".into(),
-                blocked_by: "挡住它的".into(),
-                blocking: "它挡住的".into(),
-                none_block: "无，可进 Frontier".into(),
+                blocked_by: "被这些 Issue 阻塞".into(),
+                blocking: "会阻塞这些 Issue".into(),
+                none_block: "无".into(),
                 none: "无".into(),
                 claimed: "已认领".into(),
                 unclaimed: "未认领".into(),
@@ -7334,6 +7335,7 @@ impl ShellCopy {
                 save_relations: "保存关系".into(),
                 close_issue: "关闭 Issue".into(),
                 reopen_issue: "重新打开 Issue".into(),
+                issue_updates: "评论与关系".into(),
             },
             Language::En => Self {
                 app_name: "Agent Taskboard".into(),
@@ -7632,6 +7634,7 @@ impl ShellCopy {
                 save_relations: "Save relationship".into(),
                 close_issue: "Close Issue".into(),
                 reopen_issue: "Reopen Issue".into(),
+                issue_updates: "Comments and relationships".into(),
             },
         }
     }

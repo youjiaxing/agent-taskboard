@@ -69,14 +69,16 @@ export async function assertShellRegionsDoNotOverlap(page) {
     const side = rect(".side");
     const workspace = rect(".workspace");
     const boardMain = rect(".board-main");
-    const detail = rect(".board-shell > .issue-detail, .lifted-run > .issue-detail");
+    const detailNode = document.querySelector(".board-shell > .issue-detail, .lifted-run > .issue-detail");
+    const detail = detailNode?.getBoundingClientRect() ?? null;
+    const floatingDetail = detailNode ? getComputedStyle(detailNode).position === "absolute" : false;
     const mobileNav = rect(".mobile-nav");
     const lanes = [...document.querySelectorAll(".lane")].map((node) => node.getBoundingClientRect());
     const laneOverlap = lanes.some((lane, index) => lanes.slice(index + 1).some((other) => overlaps(lane, other)));
     return {
       chromeOverBody: overlaps(chrome, body),
       sideOverWorkspace: overlaps(side, workspace),
-      boardOverDetail: overlaps(boardMain, detail),
+      unexpectedBoardDetailOverlap: overlaps(boardMain, detail) && !floatingDetail,
       bodyOverMobileNav: overlaps(body, mobileNav),
       laneOverlap,
       horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
