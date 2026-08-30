@@ -68,6 +68,32 @@ fn register(host: &mut HostKernel, dir: &Path) -> String {
         .clone()
 }
 
+fn start_unbound(
+    host: &mut HostKernel,
+    project_id: &str,
+) -> Result<host_kernel::CommandOutcome, host_kernel::KernelError> {
+    host.handle(serde_json::json!({
+        "op": "prepareRunLaunch",
+        "projectId": project_id,
+        "agentId": "grok-build",
+    }))?;
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "run lifecycle integration",
+    }))
+}
+
 #[test]
 fn missing_grok_lists_command_path_and_known_locations() {
     let tmp = tempfile::tempdir().unwrap();
@@ -79,13 +105,7 @@ fn missing_grok_lists_command_path_and_known_locations() {
     );
     let project_id = register(&mut h.host, &dir);
 
-    let out = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    let out = start_unbound(&mut h.host, &project_id).unwrap();
 
     assert_eq!(out.snapshot.runs.len(), 1);
     let run = &out.snapshot.runs[0];
@@ -112,13 +132,7 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
 
-    let out = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    let out = start_unbound(&mut h.host, &project_id).unwrap();
 
     assert_eq!(out.snapshot.runs.len(), 1);
     let run = &out.snapshot.runs[0];
@@ -132,8 +146,11 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     assert_eq!(out.snapshot.copy.unbound_issue, "未绑定 Issue");
     assert!(out.snapshot.projects[0].has_active_run);
     assert_eq!(out.snapshot.focused_run_id, run.id);
-    assert_eq!(h.launch_env.capture_count(), 2);
-    assert_eq!(h.launch_env.captured_dirs(), vec![dir.clone(), dir.clone()]);
+    assert_eq!(h.launch_env.capture_count(), 3);
+    assert_eq!(
+        h.launch_env.captured_dirs(),
+        vec![dir.clone(), dir.clone(), dir.clone()]
+    );
 }
 
 #[test]
@@ -169,12 +186,7 @@ fn manual_environment_refresh_updates_later_agent_probes_and_run_spawns() {
         .launch_form
         .unwrap();
     assert!(form.agents[0].installed);
-    h.host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    start_unbound(&mut h.host, &project_id).unwrap();
     assert!(h.sessions.last_spawn().unwrap().env["PATH"].contains("/after/bin"));
 }
 
@@ -187,13 +199,7 @@ fn client_only_switch_reserves_the_process_against_new_runs() {
 
     let gate = h.host.begin_client_only_switch();
     assert!(gate.allowed);
-    let err = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap_err();
+    let err = start_unbound(&mut h.host, &project_id).unwrap_err();
     assert!(err.to_string().contains("update install is starting"));
     assert_eq!(h.sessions.spawn_count(), 0);
 }
@@ -204,14 +210,9 @@ fn probe_and_start_share_one_launch_env_and_exec_absolute_path() {
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
-    h.host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    start_unbound(&mut h.host, &project_id).unwrap();
 
-    assert_eq!(h.launch_env.capture_count(), 2);
+    assert_eq!(h.launch_env.capture_count(), 3);
     let spawn = h.sessions.last_spawn().unwrap();
     assert_eq!(spawn.argv[0], "/mem/grok");
     assert!(spawn
@@ -251,13 +252,7 @@ fn launch_failure_leaves_a_record_and_does_not_retry() {
     let project_id = register(&mut h.host, &dir);
     h.sessions.fail_next("could not spawn grok");
 
-    let out = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    let out = start_unbound(&mut h.host, &project_id).unwrap();
 
     assert_eq!(out.snapshot.runs.len(), 1);
     let run = &out.snapshot.runs[0];
@@ -273,12 +268,7 @@ fn stopping_a_run_ends_it() {
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
-    let run_id = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
+    let run_id = start_unbound(&mut h.host, &project_id)
         .unwrap()
         .snapshot
         .runs[0]
@@ -303,19 +293,8 @@ fn unbound_runs_can_run_in_parallel() {
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
-    h.host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
-    let out = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    start_unbound(&mut h.host, &project_id).unwrap();
+    let out = start_unbound(&mut h.host, &project_id).unwrap();
     assert_eq!(out.snapshot.runs.len(), 2);
     assert!(out
         .snapshot
@@ -331,12 +310,7 @@ fn quitting_host_with_active_runs_requires_a_choice() {
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
-    h.host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    start_unbound(&mut h.host, &project_id).unwrap();
 
     let out = h.host.dispatch(Command::QuitHost).unwrap();
     assert_eq!(out.process, ProcessIntent::KeepRunning);
@@ -376,12 +350,7 @@ fn update_install_requires_every_run_to_end() {
     assert!(idle.allowed);
     assert_eq!(idle.active_run_count, 0);
 
-    let run_id = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
+    let run_id = start_unbound(&mut h.host, &project_id)
         .unwrap()
         .snapshot
         .runs[0]
@@ -412,25 +381,13 @@ fn update_install_requires_every_run_to_end() {
             .allowed
     );
 
-    let err = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap_err();
+    let err = start_unbound(&mut h.host, &project_id).unwrap_err();
     assert!(err.to_string().contains("update install"));
 
     h.host
         .handle(serde_json::json!({ "op": "cancelUpdateInstall" }))
         .unwrap();
-    let started = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
-        .unwrap();
+    let started = start_unbound(&mut h.host, &project_id).unwrap();
     assert_eq!(
         started.snapshot.runs.last().unwrap().status,
         RunStatus::Running
@@ -444,12 +401,7 @@ fn recent_action_stays_empty_when_adapter_has_none() {
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     h.agent.set_recent_action(None);
     let project_id = register(&mut h.host, &dir);
-    let run = &h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
+    let run = &start_unbound(&mut h.host, &project_id)
         .unwrap()
         .snapshot
         .runs[0];
@@ -465,12 +417,7 @@ fn recent_action_uses_only_the_adapter_observation() {
         .set_recent_action(Some("正在运行 cargo test".into()));
     let project_id = register(&mut h.host, &dir);
 
-    let run = &h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
+    let run = &start_unbound(&mut h.host, &project_id)
         .unwrap()
         .snapshot
         .runs[0];
@@ -484,12 +431,7 @@ fn pty_bytes_round_trip_through_host() {
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
-    let run_id = h
-        .host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": project_id,
-        }))
+    let run_id = start_unbound(&mut h.host, &project_id)
         .unwrap()
         .snapshot
         .runs[0]
@@ -500,7 +442,7 @@ fn pty_bytes_round_trip_through_host() {
         .host
         .pty_output(&run_id, 0, Duration::from_millis(50))
         .unwrap();
-    assert_eq!(chunk.data, b"hi");
+    assert!(chunk.data.ends_with(b"hi"), "{:?}", chunk.data);
 }
 
 #[test]

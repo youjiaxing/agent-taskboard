@@ -71,7 +71,7 @@ fn grok_values() -> serde_json::Value {
     serde_json::json!({
         "model": "grok-4.6",
         "effort": "high",
-        "permission-mode": "normal",
+        "permission-mode": "default",
         "always-approve": "false",
         "sandbox": "off",
         "initial-instruction": "",
@@ -166,26 +166,28 @@ fn starting_a_bound_run_claims_and_leaves_frontier() {
 }
 
 #[test]
-fn start_bound_run_command_claims_and_starts() {
+fn start_bound_run_command_does_not_choose_an_agent_implicitly() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path());
     register(&mut h.host, &dir);
-    let out = h
+    let err = h
         .host
         .handle(serde_json::json!({
             "op": "startBoundRun",
             "issueId": "you/garden#1",
         }))
-        .unwrap();
-    assert_eq!(out.snapshot.runs.len(), 1);
-    assert_eq!(out.snapshot.runs[0].status, RunStatus::Running);
-    assert_eq!(
-        out.snapshot.runs[0].issue_id.as_deref(),
-        Some("you/garden#1")
+        .unwrap_err();
+    assert!(
+        matches!(&err, KernelError::Denied(message) if message.contains("choose an Agent")),
+        "{err}"
     );
-    assert_eq!(claimed_by(&mut h.host, "you/garden#1"), vec!["me"]);
-    assert_eq!(h.sessions.spawn_count(), 1);
+    assert!(h.host.snapshot().runs.is_empty());
+    assert_eq!(
+        claimed_by(&mut h.host, "you/garden#1"),
+        Vec::<String>::new()
+    );
+    assert_eq!(h.sessions.spawn_count(), 0);
 }
 
 #[test]
@@ -200,6 +202,7 @@ fn bound_opening_is_title_and_stable_url() {
             "op": "prepareRunLaunch",
             "projectId": project_id,
             "issueId": "you/garden#1",
+            "agentId": "grok-build",
         }))
         .unwrap()
         .snapshot

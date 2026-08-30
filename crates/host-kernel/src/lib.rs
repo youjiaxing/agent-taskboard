@@ -29,12 +29,12 @@ use serde::{Deserialize, Serialize};
 
 pub use advance::{PendingConfirmation, DEFAULT_RESTORE_DELAY_MS, PENDING_CONFIRM_MS};
 pub use agent::{
-    builtin_agents, intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort,
-    AgentSummary, AntigravityAdapter, ClaudeAdapter, CodexAdapter, CompletionHookPlan,
-    CompletionSignals, GrokAdapter, IntentOption, MemoryAgent, PrefillSource, ProbeResult,
-    RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
-    CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN,
-    GROK_BUILD_ID, GROK_BUILD_NAME,
+    builtin_agents, intent_prefix, probe_binary, AgentConfigDiscovery, AgentField, AgentFieldKind,
+    AgentFieldOptionFilter, AgentPort, AgentSummary, AntigravityAdapter, ClaudeAdapter,
+    CodexAdapter, CompletionHookPlan, CompletionSignals, GrokAdapter, IntentOption, MemoryAgent,
+    PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN,
+    ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN,
+    CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -253,6 +253,12 @@ pub enum Command {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        language: Language,
+    },
+    UpdateRunLaunch {
+        project_id: String,
+        config: RunLaunchConfig,
+        language: Language,
     },
     CancelRunLaunch,
     StopRun {
@@ -825,6 +831,8 @@ pub struct ShellCopy {
     pub start_run: String,
     pub switch_agent: String,
     pub pick_agent: String,
+    pub no_agent_selected: String,
+    pub next_step: String,
     pub launch_title: String,
     pub prefill_current: String,
     pub prefill_other: String,
@@ -1076,6 +1084,7 @@ pub struct HostKernel {
     complete_dependency_graph: bool,
     launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     last_successful_agent: BTreeMap<String, String>,
+    agent_config_cache: BTreeMap<(PathBuf, String), CachedAgentConfig>,
     launch_form: Option<RunLaunchForm>,
     show_command_preview: bool,
     notify_desktop: bool,
@@ -1112,6 +1121,40 @@ enum StoredRefreshKind {
     Incomplete,
     TrackerError,
 }
+
+#[derive(Debug, Clone)]
+struct CachedAgentConfig {
+    at_ms: u64,
+    discovery: AgentConfigDiscovery,
+    error: Option<AgentConfigFailure>,
+}
+
+#[derive(Debug, Clone)]
+enum AgentConfigFailure {
+    LaunchEnvironment(String),
+    Missing {
+        command: String,
+        searched_path: String,
+        known_locations: Vec<PathBuf>,
+    },
+    Cli(String),
+}
+
+impl AgentConfigFailure {
+    fn message(&self, language: Language) -> String {
+        let detail = match self {
+            Self::LaunchEnvironment(error) | Self::Cli(error) => error.clone(),
+            Self::Missing {
+                command,
+                searched_path,
+                known_locations,
+            } => launch::missing_agent_cli(command, searched_path, known_locations, language),
+        };
+        launch::option_discovery_failure(&detail, language)
+    }
+}
+
+const AGENT_CONFIG_CACHE_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Debug, Clone)]
 struct ClientView {
@@ -1350,6 +1393,7 @@ impl HostKernel {
             complete_dependency_graph: false,
             launch_defaults: settings.agent_launch_defaults,
             last_successful_agent: settings.last_successful_agent,
+            agent_config_cache: BTreeMap::new(),
             launch_form: None,
             show_command_preview,
             notify_desktop,
@@ -1776,8 +1820,16 @@ impl HostKernel {
                 issue_id,
                 agent_id,
                 pick_agent,
+                language,
             } => {
-                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent)?;
+                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent, language)?;
+            }
+            Command::UpdateRunLaunch {
+                project_id,
+                config,
+                language,
+            } => {
+                self.update_run_launch(&project_id, config, language)?;
             }
             Command::CancelRunLaunch => {
                 self.launch_form = None;
@@ -2460,6 +2512,7 @@ impl HostKernel {
                         .get("pickAgent")
                         .and_then(|value| value.as_bool())
                         .unwrap_or(false),
+                    language: request_language(&request).unwrap_or(self.appearance.language),
                 })
             }
             "cancelRunLaunch" => {
@@ -2467,6 +2520,16 @@ impl HostKernel {
                     return Ok(outcome);
                 }
                 self.dispatch(Command::CancelRunLaunch)
+            }
+            "updateRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::UpdateRunLaunch {
+                    project_id: required_string(&request, "projectId")?,
+                    config: parse_launch_config(&request)?,
+                    language: request_language(&request).unwrap_or(self.appearance.language),
+                })
             }
             "startUnboundRun" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
@@ -3091,7 +3154,7 @@ impl HostKernel {
             .iter()
             .find(|agent| agent.id() == selected)
             .cloned()
-            .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))
+            .ok_or_else(|| KernelError::Denied("choose an Agent before starting".into()))
     }
 
     fn refresh_launch_environment(&mut self) -> Result<LaunchEnvironmentStatus, KernelError> {
@@ -3123,6 +3186,7 @@ impl HostKernel {
                 Err(err) => failures.push(format!("{}: {err}", directory.display())),
             }
         }
+        self.agent_config_cache.clear();
         if failures.is_empty() {
             Ok(LaunchEnvironmentStatus {
                 status: "ready",
@@ -3140,6 +3204,7 @@ impl HostKernel {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        language: Language,
     ) -> Result<(), KernelError> {
         let project = self
             .projects
@@ -3147,7 +3212,6 @@ impl HostKernel {
             .find(|project| project.id == project_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        let language = self.appearance.language;
         let agents = launch::summarize_agents(
             &self.agents,
             self.launch_env.as_ref(),
@@ -3156,19 +3220,43 @@ impl HostKernel {
         );
         let last = self.last_successful_agent.get(project_id).cloned();
         let selected = launch::default_agent_id(&agents, last.as_deref(), agent_id.as_deref());
+        if selected.is_empty() {
+            self.launch_form = Some(RunLaunchForm {
+                project_id: project_id.to_string(),
+                issue_id,
+                agents,
+                selected_agent_id: String::new(),
+                skip_agent_picker: false,
+                fields: Vec::new(),
+                values: BTreeMap::new(),
+                prefill_source: PrefillSource::CliSeed,
+                working_directory: project.local_path.display().to_string(),
+                isolation_supported: false,
+                isolation_reason: String::new(),
+                opening_text: String::new(),
+                change_notes_text: String::new(),
+                command_preview: String::new(),
+                intents: launch::intent_options(language),
+                warnings: Vec::new(),
+                error: None,
+                option_discovery_error: None,
+            });
+            return Ok(());
+        }
         let agent = self
             .agents
             .iter()
             .find(|agent| agent.id() == selected)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let (discovery, option_discovery_error) =
+            self.agent_config_for(&project.local_path, agent.as_ref(), language);
         let current = self
             .launch_defaults
             .get(project_id)
             .and_then(|agents| agents.get(&selected));
         let other = launch::other_project_memory(&self.launch_defaults, project_id, &selected);
-        let (mut values, prefill_source) =
-            launch::merge_prefill(&agent.seed_config(), current, other);
+        let (mut values, prefill_source) = launch::merge_prefill(&discovery.seed, current, other);
         let mut opening_text = String::new();
         if let Some(issue_id) = issue_id.as_deref() {
             if let Some(issue) = self.issue_by_id(issue_id) {
@@ -3180,7 +3268,7 @@ impl HostKernel {
         let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
         let change_notes_text = changes::format_notes(&pending);
         opening_text = changes::append_notes(&opening_text, &pending);
-        let fields = launch::localize_fields(agent.config_fields(), language);
+        let fields = launch::localize_fields(discovery.fields, language);
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
         let (isolation_supported, isolation_reason) =
             launch::isolation_availability(agent.as_ref(), &project.local_path, language);
@@ -3212,8 +3300,71 @@ impl HostKernel {
             intents: launch::intent_options(language),
             warnings,
             error: None,
+            option_discovery_error,
         });
         Ok(())
+    }
+
+    fn agent_config_for(
+        &mut self,
+        cwd: &Path,
+        agent: &dyn AgentPort,
+        language: Language,
+    ) -> (AgentConfigDiscovery, Option<String>) {
+        let key = (cwd.to_path_buf(), agent.id().to_string());
+        if let Some(cached) = self
+            .agent_config_cache
+            .get(&key)
+            .filter(|cached| self.now_ms.saturating_sub(cached.at_ms) < AGENT_CONFIG_CACHE_MS)
+        {
+            return (
+                cached.discovery.clone(),
+                cached.error.as_ref().map(|error| error.message(language)),
+            );
+        }
+        let fallback = || AgentConfigDiscovery {
+            fields: agent.config_fields(),
+            seed: agent.seed_config(),
+        };
+        let result = self
+            .launch_env
+            .capture(cwd)
+            .map_err(AgentConfigFailure::LaunchEnvironment)
+            .and_then(|env| {
+                let prepared =
+                    agent::prepare_launch_env(env, &[], &agent.known_install_locations());
+                Ok((prepared.clone(), agent.probe(&prepared)))
+            })
+            .and_then(|(env, probe)| match probe {
+                ProbeResult::Found { executable } => agent
+                    .discover_config(&executable, &env)
+                    .map_err(AgentConfigFailure::Cli),
+                ProbeResult::Missing {
+                    command,
+                    searched_path,
+                    known_locations,
+                } => Err(AgentConfigFailure::Missing {
+                    command,
+                    searched_path,
+                    known_locations,
+                }),
+            });
+        let (discovery, error) = match result {
+            Ok(discovery) => (discovery, None),
+            Err(error) => (fallback(), Some(error)),
+        };
+        self.agent_config_cache.insert(
+            key,
+            CachedAgentConfig {
+                at_ms: self.now_ms,
+                discovery: discovery.clone(),
+                error: error.clone(),
+            },
+        );
+        (
+            discovery,
+            error.as_ref().map(|error| error.message(language)),
+        )
     }
 
     fn issue_by_id(&self, issue_id: &str) -> Option<IssueRecord> {
@@ -3222,6 +3373,50 @@ impl HostKernel {
             .flat_map(|issues| issues.iter())
             .find(|issue| issue.id() == issue_id)
             .cloned()
+    }
+
+    fn update_run_launch(
+        &mut self,
+        project_id: &str,
+        config: RunLaunchConfig,
+        language: Language,
+    ) -> Result<(), KernelError> {
+        let form = self
+            .launch_form
+            .as_ref()
+            .filter(|form| form.project_id == project_id)
+            .ok_or_else(|| KernelError::Protocol("no launch form".into()))?;
+        if form.selected_agent_id != config.agent_id {
+            return Err(KernelError::Protocol("launch form Agent changed".into()));
+        }
+        let fields = form.fields.clone();
+        let project_dir = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.local_path.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == config.agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+        warnings.extend(launch::side_effect_warnings(
+            &project_dir,
+            self.runs
+                .iter()
+                .any(|run| run.project_id == project_id && run.is_active()),
+            language,
+        ));
+        let preview =
+            launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
+        let form = self.launch_form.as_mut().expect("checked launch form");
+        launch::apply_submitted_form(form, &config);
+        form.warnings = warnings;
+        form.command_preview = preview;
+        Ok(())
     }
 
     fn start_unbound_run(
@@ -3270,7 +3465,12 @@ impl HostKernel {
                     .insert(launch::ISOLATION_FIELD.into(), "false".into());
             }
         }
-        let fields = launch::localize_fields(agent.config_fields(), language);
+        let fields = self
+            .launch_form
+            .as_ref()
+            .filter(|form| form.selected_agent_id == config.agent_id)
+            .map(|form| form.fields.clone())
+            .unwrap_or_else(|| launch::localize_fields(agent.config_fields(), language));
         if let Some(form) = &mut self.launch_form {
             launch::apply_submitted_form(form, &config);
             let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
@@ -6108,6 +6308,8 @@ impl ShellCopy {
                 start_run: "启动".into(),
                 switch_agent: "换一家".into(),
                 pick_agent: "选择 Agent".into(),
+                no_agent_selected: "尚未选择 Agent".into(),
+                next_step: "下一步".into(),
                 launch_title: "启动配置".into(),
                 prefill_current: "预填来自这个 Project 上次成功启动，本次可改。".into(),
                 prefill_other: "预填来自其它 Project 上这家 Agent 的记忆，本次可改。".into(),
@@ -6398,6 +6600,8 @@ impl ShellCopy {
                 start_run: "Start".into(),
                 switch_agent: "Switch Agent".into(),
                 pick_agent: "Choose Agent".into(),
+                no_agent_selected: "No Agent selected".into(),
+                next_step: "Next".into(),
                 launch_title: "Launch".into(),
                 prefill_current: "Prefill is this Project's last successful launch. You can change it this time.".into(),
                 prefill_other: "Prefill is this Agent's memory from another Project. You can change it this time.".into(),
@@ -6845,6 +7049,13 @@ fn required_string(request: &serde_json::Value, key: &str) -> Result<String, Ker
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| KernelError::Protocol(format!("missing {key}")))
+}
+
+fn request_language(request: &serde_json::Value) -> Option<Language> {
+    request
+        .get("language")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 fn optional_string(request: &serde_json::Value, key: &str) -> String {

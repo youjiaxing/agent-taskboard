@@ -1,9 +1,35 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use host_kernel::{
-    builtin_agents, AgentPort, AntigravityAdapter, Language, ANTIGRAVITY_BIN, ANTIGRAVITY_ID,
-    ANTIGRAVITY_NAME,
+    builtin_agents, AgentPort, AntigravityAdapter, Language, LaunchEnvironment, ANTIGRAVITY_BIN,
+    ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
 };
+
+fn make_discoverable_agy(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("agy");
+    std::fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "$1" = "models" ]; then
+  printf '%s\n' 'gemini-fast-low\tGemini Fast Low' 'gemini-fast-high\tGemini Fast High' 'claude-thinking\tClaude Thinking'
+  exit 0
+fi
+if [ "$1" = "--help" ]; then
+  printf '%s\n' '  --effort Reasoning effort (low|medium|high)' '  --mode execution mode (accept-edits, plan)'
+  exit 0
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
 
 #[test]
 fn antigravity_adapter_only_uses_agy() {
@@ -70,6 +96,42 @@ fn antigravity_adapter_declares_execution_mode_not_permission_axis() {
     assert!(folded.contains(&"additional-args"));
     assert!(!fields.iter().any(|field| field.id == "permission-mode"));
     assert!(!fields.iter().any(|field| field.id == "approval"));
+}
+
+#[test]
+fn antigravity_adapter_discovers_models_and_filters_encoded_efforts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_discoverable_agy(tmp.path());
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+    let discovery = AntigravityAdapter
+        .discover_config(&executable, &env)
+        .expect("Antigravity CLI discovery");
+    let field = |id: &str| {
+        discovery
+            .fields
+            .iter()
+            .find(|field| field.id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        field("model").options,
+        vec!["gemini-fast-low", "gemini-fast-high", "claude-thinking"]
+    );
+    assert_eq!(field("effort").options, vec!["low", "medium", "high"]);
+    assert_eq!(
+        field("execution-mode").options,
+        vec!["accept-edits", "plan"]
+    );
+    let filter = field("effort").option_filter.as_ref().unwrap();
+    assert_eq!(filter.options_by_value["gemini-fast-low"], vec!["low"]);
+    assert_eq!(filter.options_by_value["gemini-fast-high"], vec!["high"]);
+    assert_eq!(
+        filter.options_by_value["claude-thinking"],
+        vec!["low", "medium", "high"]
+    );
 }
 
 #[test]

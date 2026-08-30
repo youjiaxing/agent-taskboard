@@ -1,10 +1,12 @@
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use host_kernel::{
-    intent_prefix, AgentField, AgentFieldKind, AgentSession, BootRequest, HostKernel, KernelPorts,
-    Language, MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource,
+    intent_prefix, AgentConfigDiscovery, AgentField, AgentFieldKind, AgentFieldOptionFilter,
+    AgentPort, AgentSession, BootRequest, HostKernel, KernelPorts, Language, LaunchEnvironment,
+    MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource, ProbeResult,
     RunIntent, RunStatus, SystemAppearance, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
     CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
@@ -31,19 +33,88 @@ struct Harness {
 }
 
 fn harness_with(root: &Path, agents: Vec<Arc<MemoryAgent>>) -> Harness {
+    harness_with_ports(
+        root,
+        agents
+            .into_iter()
+            .map(|agent| agent as Arc<dyn AgentPort>)
+            .collect(),
+    )
+}
+
+fn harness_with_ports(root: &Path, agents: Vec<Arc<dyn AgentPort>>) -> Harness {
     let launch_env = Arc::new(MemoryLaunchEnv::with_path("/mem/bin"));
     let sessions = MemorySessionFactory::new();
     let host = HostKernel::boot_with_ports(
         boot_req(root),
         KernelPorts {
             tracker: Arc::new(MemoryTracker::new()),
-            agents: agents.into_iter().map(|agent| agent as _).collect(),
+            agents,
             launch_env: launch_env as _,
             sessions: Arc::clone(&sessions) as _,
         },
     )
     .unwrap();
     Harness { host, sessions }
+}
+
+#[derive(Debug)]
+struct MissingOnDiscoveryAgent {
+    probes: Mutex<u32>,
+}
+
+impl MissingOnDiscoveryAgent {
+    fn new() -> Self {
+        Self {
+            probes: Mutex::new(0),
+        }
+    }
+}
+
+impl AgentPort for MissingOnDiscoveryAgent {
+    fn id(&self) -> &str {
+        "grok-build"
+    }
+
+    fn name(&self) -> &str {
+        "Grok Build"
+    }
+
+    fn bin(&self) -> &str {
+        "grok"
+    }
+
+    fn known_install_locations(&self) -> Vec<PathBuf> {
+        vec![PathBuf::from("/known/grok/bin")]
+    }
+
+    fn probe(&self, env: &LaunchEnvironment) -> ProbeResult {
+        let mut probes = self.probes.lock().unwrap();
+        *probes += 1;
+        if *probes == 1 {
+            ProbeResult::Found {
+                executable: PathBuf::from("/mem/grok"),
+            }
+        } else {
+            ProbeResult::Missing {
+                command: "grok".into(),
+                searched_path: env.path_raw(),
+                known_locations: self.known_install_locations(),
+            }
+        }
+    }
+
+    fn assemble_argv(&self, executable: &Path) -> Vec<String> {
+        vec![executable.display().to_string()]
+    }
+
+    fn config_fields(&self) -> Vec<AgentField> {
+        vec![field("model", false)]
+    }
+
+    fn seed_config(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([("model".into(), "manual-model".into())])
+    }
 }
 
 fn harness(root: &Path) -> Harness {
@@ -73,6 +144,7 @@ fn field(id: &str, folded: bool) -> AgentField {
         label: id.into(),
         kind: AgentFieldKind::Text,
         options: Vec::new(),
+        option_filter: None,
         required: false,
         folded,
     }
@@ -108,7 +180,7 @@ fn grok_values() -> serde_json::Value {
     serde_json::json!({
         "model": "grok-4.6",
         "effort": "high",
-        "permission-mode": "normal",
+        "permission-mode": "default",
         "always-approve": "false",
         "sandbox": "off",
         "initial-instruction": "",
@@ -133,6 +205,8 @@ fn prepare_form_uses_cli_seed_concrete_values() {
     let form = out.snapshot.launch_form.as_ref().unwrap();
     assert_eq!(form.prefill_source, PrefillSource::CliSeed);
     assert!(!form.skip_agent_picker);
+    assert!(form.selected_agent_id.is_empty());
+    assert!(form.fields.is_empty());
     let form = h
         .host
         .handle(serde_json::json!({
@@ -169,7 +243,7 @@ fn prepare_form_uses_cli_seed_concrete_values() {
     assert!(!form.isolation_supported);
     assert_eq!(
         form.command_preview,
-        "grok --model grok-4.6 --effort high --sandbox off"
+        "grok --model grok-4.6 --effort high --permission-mode default --sandbox off"
     );
     assert!(out.snapshot.show_command_preview);
     h.host
@@ -233,6 +307,8 @@ fn start_uses_form_values_not_memory() {
             "grok-4.6",
             "--effort",
             "low",
+            "--permission-mode",
+            "default",
             "--sandbox",
             "off"
         ]
@@ -272,6 +348,7 @@ fn memory_prefers_current_project_then_other_project() {
         .handle(serde_json::json!({
             "op": "prepareRunLaunch",
             "projectId": garden_id,
+            "agentId": "grok-build",
         }))
         .unwrap()
         .snapshot
@@ -637,7 +714,213 @@ fn switching_agent_replaces_fields_and_isolation_reason() {
 }
 
 #[test]
-fn default_agent_is_first_installed_in_builtin_order() {
+fn discovered_config_is_cached_until_launch_environment_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let mut model = field("model", false);
+    model.kind = AgentFieldKind::Select;
+    model.options = vec!["live-a".into(), "live-b".into()];
+    grok.set_discovery_result(AgentConfigDiscovery {
+        fields: vec![model],
+        seed: BTreeMap::from([("model".into(), "live-a".into())]),
+    });
+    let mut h = harness_with(tmp.path(), vec![Arc::clone(&grok)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    for _ in 0..2 {
+        let form = h
+            .host
+            .handle(serde_json::json!({
+                "op": "prepareRunLaunch",
+                "projectId": project_id,
+                "agentId": "grok-build",
+            }))
+            .unwrap()
+            .snapshot
+            .launch_form
+            .unwrap();
+        assert_eq!(form.fields[0].options, vec!["live-a", "live-b"]);
+        assert_eq!(form.values["model"], "live-a");
+    }
+    assert_eq!(grok.discovery_count(), 1);
+
+    h.host
+        .handle(serde_json::json!({ "op": "refreshLaunchEnvironment" }))
+        .unwrap();
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap();
+    assert_eq!(grok.discovery_count(), 2);
+}
+
+#[test]
+fn discovery_failure_keeps_manual_fields_and_reports_a_readable_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    grok.set_discovery_error("models endpoint unavailable");
+    let mut h = harness_with(tmp.path(), vec![Arc::clone(&grok)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+
+    assert!(form.fields.iter().any(|field| field.id == "model"));
+    assert_eq!(form.values["model"], "grok-4.6");
+    assert!(form
+        .option_discovery_error
+        .as_deref()
+        .is_some_and(|error| error.contains("models endpoint unavailable")));
+    assert!(form
+        .option_discovery_error
+        .as_deref()
+        .is_some_and(|error| error.contains("仍可手动输入")));
+
+    let english = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "language": "en",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap()
+        .option_discovery_error
+        .unwrap();
+    assert!(english.contains("Could not read available CLI options"));
+    assert!(english.contains("models endpoint unavailable"));
+    assert!(english.contains("Manual input is still available"));
+    assert_eq!(
+        grok.discovery_count(),
+        1,
+        "cached failure should be localized on read"
+    );
+}
+
+#[test]
+fn missing_cli_discovery_reports_command_path_locations_and_remediation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness_with_ports(tmp.path(), vec![Arc::new(MissingOnDiscoveryAgent::new())]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    let error = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap()
+        .option_discovery_error
+        .unwrap();
+
+    assert!(error.contains("grok"), "{error}");
+    assert!(error.contains("/mem/bin"), "{error}");
+    assert!(error.contains("/known/grok/bin"), "{error}");
+    assert!(error.contains("PATH"), "{error}");
+    assert!(error.contains("安装"), "{error}");
+    assert!(error.contains("login"), "{error}");
+}
+
+#[test]
+fn draft_update_keeps_preview_warnings_and_final_argv_in_sync() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let mut model = field("model", false);
+    model.kind = AgentFieldKind::Select;
+    model.options = vec!["fast".into(), "deep".into()];
+    model.required = true;
+    let mut effort = field("effort", false);
+    effort.kind = AgentFieldKind::Select;
+    effort.options = vec!["low".into(), "high".into()];
+    effort.required = true;
+    effort.option_filter = Some(AgentFieldOptionFilter {
+        field_id: "model".into(),
+        options_by_value: BTreeMap::from([
+            ("fast".into(), vec!["low".into()]),
+            ("deep".into(), vec!["high".into()]),
+        ]),
+    });
+    grok.set_discovery_result(AgentConfigDiscovery {
+        fields: vec![model, effort, field("initial-instruction", false)],
+        seed: BTreeMap::from([
+            ("model".into(), "fast".into()),
+            ("effort".into(), "low".into()),
+            ("initial-instruction".into(), String::new()),
+        ]),
+    });
+    let mut h = harness_with(tmp.path(), vec![grok]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap();
+
+    let values = serde_json::json!({
+        "model": "deep",
+        "effort": "low",
+        "initial-instruction": "",
+        "isolation": "false"
+    });
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "updateRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": values,
+            "openingText": "verify sync",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert_eq!(form.command_preview, "grok --model deep --effort low");
+    assert!(form.warnings.iter().any(|warning| warning.contains("low")));
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": values,
+            "openingText": "verify sync",
+        }))
+        .unwrap();
+    let spawn = h.sessions.last_spawn().unwrap();
+    assert_eq!(
+        spawn.argv,
+        vec!["/mem/grok", "--model", "deep", "--effort", "low"]
+    );
+}
+
+#[test]
+fn first_open_keeps_builtin_order_without_selecting_an_agent() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let grok = MemoryAgent::missing_grok();
@@ -664,7 +947,8 @@ fn default_agent_is_first_installed_in_builtin_order() {
         .snapshot
         .launch_form
         .unwrap();
-    assert_eq!(form.selected_agent_id, CODEX_ID);
+    assert!(form.selected_agent_id.is_empty());
+    assert!(!form.skip_agent_picker);
     assert_eq!(
         form.agents
             .iter()
@@ -679,25 +963,82 @@ fn default_agent_is_first_installed_in_builtin_order() {
 }
 
 #[test]
-fn start_without_form_uses_first_installed_agent() {
+fn start_without_form_does_not_silently_choose_the_first_installed_agent() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let grok = MemoryAgent::missing_grok();
     let codex = MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN);
     let mut h = harness_with(tmp.path(), vec![Arc::new(grok), Arc::new(codex)]);
     let project_id = register(&mut h.host, &dir, "garden", "you/garden");
-    let out = h
+    let error = h
         .host
         .handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": project_id,
         }))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("choose an Agent"), "{error}");
+    assert_eq!(h.sessions.spawn_count(), 0);
+}
+
+#[test]
+fn missing_last_successful_agent_returns_to_an_unselected_picker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let codex = Arc::new(memory_codex());
+    let mut h = harness_with(tmp.path(), vec![Arc::clone(&grok), Arc::clone(&codex)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "codex",
+        }))
         .unwrap();
-    let run = out.snapshot.runs.last().unwrap();
-    assert_eq!(run.agent_id, CODEX_ID);
-    assert_eq!(run.agent_name, CODEX_NAME);
-    assert_eq!(run.status, RunStatus::Running);
-    assert_eq!(h.sessions.spawn_count(), 1);
+    h.host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "codex",
+            "values": {
+                "model": "gpt-5.1",
+                "effort": "medium",
+                "approval": "on-request",
+                "sandbox": "workspace-write",
+                "initial-instruction": "",
+                "profile": "",
+                "additional-args": ""
+            },
+            "openingText": "remember Codex",
+        }))
+        .unwrap();
+    codex.set_installed(false);
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+
+    assert!(!form.skip_agent_picker);
+    assert!(form.selected_agent_id.is_empty());
+    assert!(form.fields.is_empty());
+    assert!(form
+        .agents
+        .iter()
+        .any(|agent| agent.id == "grok-build" && agent.installed));
+    assert!(form
+        .agents
+        .iter()
+        .any(|agent| agent.id == "codex" && !agent.installed));
 }
 
 #[test]

@@ -190,6 +190,8 @@ type ShellCopy = {
   startRun: string;
   switchAgent: string;
   pickAgent: string;
+  noAgentSelected: string;
+  nextStep: string;
   launchTitle: string;
   prefillCurrent: string;
   prefillOther: string;
@@ -601,6 +603,10 @@ type AgentField = {
   label: string;
   kind: AgentFieldKind;
   options?: string[];
+  optionFilter?: {
+    fieldId: string;
+    optionsByValue: Record<string, string[]>;
+  } | null;
   required: boolean;
   folded: boolean;
 };
@@ -636,6 +642,7 @@ type RunLaunchForm = {
   intents: IntentOption[];
   warnings?: string[];
   error?: string | null;
+  optionDiscoveryError?: string | null;
 };
 
 type ChangeScope = "this-round" | "uncommitted";
@@ -911,6 +918,10 @@ let ptyRunId = "";
 let ptyPumping = false;
 let launchDraft: LaunchDraft | null = null;
 let launchFolded = false;
+let launchPickerProjectId = "";
+let launchPickerAgentId = "";
+let launchPreviewTimer: number | undefined;
+let launchPreviewSequence = 0;
 let changesOpen = false;
 let changesScope: ChangeScope = "this-round";
 let changesView: ViewChanges | null = null;
@@ -1053,8 +1064,23 @@ function syncLaunchDraft(snap: Snapshot): void {
   const form = snap.launchForm;
   if (!form) {
     launchDraft = null;
+    launchPickerProjectId = "";
+    launchPickerAgentId = "";
     return;
   }
+  if (!form.skipAgentPicker) {
+    launchDraft = null;
+    if (
+      launchPickerProjectId !== form.projectId
+      || (form.selectedAgentId && form.selectedAgentId !== launchPickerAgentId)
+    ) {
+      launchPickerProjectId = form.projectId;
+      launchPickerAgentId = form.selectedAgentId;
+    }
+    return;
+  }
+  launchPickerProjectId = form.projectId;
+  launchPickerAgentId = form.selectedAgentId;
   if (
     !launchDraft
     || launchDraft.projectId !== form.projectId
@@ -1078,33 +1104,47 @@ function prefillHint(copy: ShellCopy, source: RunLaunchForm["prefillSource"]): s
   return copy.prefillSeed;
 }
 
-function liveEnumWarnings(form: RunLaunchForm, draft: LaunchDraft, language: Language): string[] {
-  const warnings: string[] = [];
-  for (const field of form.fields) {
-    if (field.kind !== "select" || !field.options?.length) continue;
-    const value = (draft.values[field.id] ?? "").trim();
-    if (!value || field.options.includes(value)) continue;
-    warnings.push(
-      language === "zh-CN"
-        ? `${value} 不是已知的 ${field.label}，仍可启动。`
-        : `${value} is not a known ${field.label}; launch is still allowed.`,
-    );
+function refreshLaunchFieldOptions(): void {
+  if (!snapshot?.launchForm || !launchDraft) return;
+  for (const field of snapshot.launchForm.fields) {
+    if (field.kind !== "select") continue;
+    const input = app?.querySelector<HTMLInputElement>(`[data-launch="${CSS.escape(field.id)}"]`);
+    const listId = input?.getAttribute("list");
+    const list = listId ? document.getElementById(listId) : null;
+    if (!list) continue;
+    list.innerHTML = launchFieldOptions(field, launchDraft.values)
+      .map((option) => `<option value="${escapeHtml(option)}"></option>`)
+      .join("");
   }
-  return warnings;
+}
+
+function scheduleLaunchPreview(): void {
+  if (!snapshot?.launchForm || !launchDraft) return;
+  const sequence = ++launchPreviewSequence;
+  if (launchPreviewTimer != null) window.clearTimeout(launchPreviewTimer);
+  launchPreviewTimer = window.setTimeout(() => {
+    launchPreviewTimer = undefined;
+    const draft = launchDraft;
+    if (!draft) return;
+    void rpc("updateRunLaunch", {
+      projectId: draft.projectId,
+      agentId: draft.agentId,
+      values: { ...draft.values },
+      openingText: draft.openingText,
+      language: effectiveClientLanguage(),
+    }).then(() => {
+      if (sequence !== launchPreviewSequence) return;
+      const preview = app?.querySelector<HTMLElement>(".launch-command-preview");
+      if (preview && snapshot?.launchForm) preview.textContent = snapshot.launchForm.commandPreview;
+      refreshLaunchWarnings();
+    }).catch(() => {});
+  }, 120);
 }
 
 function refreshLaunchWarnings(): void {
   const node = app?.querySelector<HTMLElement>(".launch-warnings");
-  if (!node || !snapshot?.launchForm || !launchDraft) return;
-  const live = liveEnumWarnings(
-    snapshot.launchForm,
-    launchDraft,
-    snapshot.appearance.language,
-  );
-  const preserved = (snapshot.launchForm.warnings ?? []).filter(
-    (warning) => !warning.includes("不是已知的") && !warning.includes("is not a known"),
-  );
-  const warnings = [...preserved, ...live];
+  if (!node || !snapshot?.launchForm) return;
+  const warnings = snapshot.launchForm.warnings ?? [];
   node.textContent = warnings.join(" ");
   node.hidden = warnings.length === 0;
 }
@@ -1548,6 +1588,11 @@ function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
   return snapshot?.copyCatalog?.[language] ?? fallback;
 }
 
+function effectiveClientLanguage(): Language {
+  if (mobileClient()) return ensureMobileAppearance().language;
+  return snapshot?.appearance.language ?? "en";
+}
+
 function languageLabel(copy: ShellCopy, language: Language): string {
   return language === "zh-CN" ? copy.languageZh : copy.languageEn;
 }
@@ -1669,6 +1714,7 @@ function render(): void {
   const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
   const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
   const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
+  const previousLaunchScrollTop = app.querySelector<HTMLElement>(".launch-sheet")?.scrollTop ?? 0;
   const previousGraph = previousGraphCanvas
     ? {
         canvas: previousGraphCanvas,
@@ -1981,6 +2027,8 @@ function render(): void {
   }
   if (restoredGraphAnchor) paintGraphEdges();
   restoreActiveField(activeField);
+  const nextLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
+  if (nextLaunchSheet) nextLaunchSheet.scrollTop = previousLaunchScrollTop;
   const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
   const savedDetailScroll = selectedIssue
     ? issueDetailScrollPositions.get(selectedIssue.id)
@@ -3705,9 +3753,12 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
 
 function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const form = snap.launchForm;
-  if (!form || !launchDraft) return "";
-  const draft = launchDraft;
+  if (!form) return "";
   if (!form.skipAgentPicker) {
+    const selected = form.agents.find((agent) => agent.id === launchPickerAgentId);
+    const selection = selected
+      ? `${copy.pickAgent}：${selected.name}`
+      : copy.noAgentSelected;
     return `<div class="overlay modal" data-act="close-launch">
       <div class="sheet form-sheet launch-sheet" data-act="form-noop">
         <h2>${escapeHtml(copy.pickAgent)}</h2>
@@ -3715,16 +3766,20 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
           ${form.agents
             .map(
               (agent) =>
-                `<button type="button" class="${agent.id === form.selectedAgentId ? "active" : ""}" data-act="pick-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>`,
+                `<button type="button" class="${agent.id === launchPickerAgentId ? "active" : ""}" aria-pressed="${agent.id === launchPickerAgentId ? "true" : "false"}" data-act="select-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>`,
             )
             .join("")}
         </div>
+        <p class="hint agent-selection" aria-live="polite">${escapeHtml(selection)}</p>
         <div class="actions">
           <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
+          <button type="button" class="primary" data-act="next-agent" ${selected?.installed ? "" : "disabled"}>${escapeHtml(copy.nextStep)}</button>
         </div>
       </div>
     </div>`;
   }
+  if (!launchDraft) return "";
+  const draft = launchDraft;
   const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
   const folded = form.fields.filter((field) => field.folded);
   const intentActive = draft.custom ? "" : draft.intentId;
@@ -3753,7 +3808,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
         <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
         <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
       </div>
-      ${first.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+      ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
       <div class="field">
         <div class="label">${escapeHtml(copy.workingDirectory)}</div>
         <input value="${escapeHtml(form.workingDirectory)}" readonly />
@@ -3770,14 +3825,15 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
       }
       <details class="folded" ${launchFolded ? "open" : ""}>
         <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "")).join("")}
+        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
         ${
           snap.showCommandPreview
-            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload">${escapeHtml(form.commandPreview)}</pre></div>`
+            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload launch-command-preview">${escapeHtml(form.commandPreview)}</pre></div>`
             : ""
         }
       </details>
       <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
+      ${form.optionDiscoveryError ? `<p class="notice">${escapeHtml(form.optionDiscoveryError)}</p>` : ""}
       ${form.error ? `<p class="notice bad">${escapeHtml(form.error)}</p>` : ""}
       <div class="actions">
         <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
@@ -3787,7 +3843,7 @@ function launchForm(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
-function launchField(field: AgentField, value: string): string {
+function launchField(field: AgentField, value: string, values: Record<string, string>): string {
   const id = `launch-${field.id}`;
   if (field.kind === "boolean") {
     return `<label class="graph-opt">
@@ -3796,7 +3852,7 @@ function launchField(field: AgentField, value: string): string {
     </label>`;
   }
   if (field.kind === "select") {
-    const options = field.options ?? [];
+    const options = launchFieldOptions(field, values);
     const listId = `${id}-list`;
     return `<div class="field">
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
@@ -3814,6 +3870,12 @@ function launchField(field: AgentField, value: string): string {
     <label class="label" for="${id}">${escapeHtml(field.label)}</label>
     <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
   </div>`;
+}
+
+function launchFieldOptions(field: AgentField, values: Record<string, string>): string[] {
+  const filter = field.optionFilter;
+  if (!filter) return field.options ?? [];
+  return filter.optionsByValue[values[filter.fieldId] ?? ""] ?? field.options ?? [];
 }
 
 function projectForm(copy: ShellCopy): string {
@@ -4361,7 +4423,10 @@ app.addEventListener("click", async (event) => {
     pairingOpen = false;
     formOpen = null;
     launchDraft = null;
-    await rpc("prepareRunLaunch", { projectId: target.dataset.id });
+    await rpc("prepareRunLaunch", {
+      projectId: target.dataset.id,
+      language: effectiveClientLanguage(),
+    });
     render();
     return;
   }
@@ -4373,6 +4438,7 @@ app.addEventListener("click", async (event) => {
     await rpc("prepareRunLaunch", {
       projectId: snapshot.focusedProjectId,
       issueId: target.dataset.id,
+      language: effectiveClientLanguage(),
     });
     render();
     return;
@@ -4390,6 +4456,10 @@ app.addEventListener("click", async (event) => {
   if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
     await rpc("cancelRunLaunch");
     launchDraft = null;
+    launchPickerProjectId = "";
+    launchPickerAgentId = "";
+    launchPreviewSequence += 1;
+    if (launchPreviewTimer != null) window.clearTimeout(launchPreviewTimer);
     render();
     return;
   }
@@ -4401,18 +4471,25 @@ app.addEventListener("click", async (event) => {
       projectId: form.projectId,
       issueId: form.issueId,
       pickAgent: true,
+      language: effectiveClientLanguage(),
     });
     render();
     return;
   }
-  if (act === "pick-agent" && target.dataset.id) {
+  if (act === "select-agent" && target.dataset.id) {
+    launchPickerAgentId = target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "next-agent" && launchPickerAgentId) {
     const form = snapshot.launchForm;
     if (!form) return;
     launchDraft = null;
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
       issueId: form.issueId,
-      agentId: target.dataset.id,
+      agentId: launchPickerAgentId,
+      language: effectiveClientLanguage(),
     });
     render();
     return;
@@ -5144,6 +5221,8 @@ app.addEventListener("change", async (event) => {
       launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
     }
     refreshLaunchWarnings();
+    refreshLaunchFieldOptions();
+    scheduleLaunchPreview();
   }
 });
 
@@ -5181,6 +5260,8 @@ app.addEventListener("input", (event) => {
   if (launchId && launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
     launchDraft.values[launchId] = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
     refreshLaunchWarnings();
+    refreshLaunchFieldOptions();
+    scheduleLaunchPreview();
   }
 });
 

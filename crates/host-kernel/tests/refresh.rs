@@ -458,6 +458,17 @@ fn last_data_is_not_used_to_claim_or_advance_when_read_fails() {
         .handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "offline unbound integration",
         }))
         .unwrap();
     let run = started.snapshot.runs.first().expect("offline unbound Run");
