@@ -18,7 +18,7 @@ mod tracker;
 mod tracker_seam;
 mod usage;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -29,12 +29,12 @@ use serde::{Deserialize, Serialize};
 
 pub use advance::{PendingConfirmation, DEFAULT_RESTORE_DELAY_MS, PENDING_CONFIRM_MS};
 pub use agent::{
-    builtin_agents, intent_prefix, probe_binary, AgentField, AgentFieldKind, AgentPort,
-    AgentSummary, AntigravityAdapter, ClaudeAdapter, CodexAdapter, CompletionHookPlan,
-    CompletionSignals, GrokAdapter, IntentOption, MemoryAgent, PrefillSource, ProbeResult,
-    RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
-    CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN,
-    GROK_BUILD_ID, GROK_BUILD_NAME,
+    builtin_agents, intent_prefix, probe_binary, AgentConfigDiscovery, AgentField, AgentFieldKind,
+    AgentFieldOptionFilter, AgentPort, AgentSummary, AntigravityAdapter, ClaudeAdapter,
+    CodexAdapter, CompletionHookPlan, CompletionSignals, GrokAdapter, IntentOption, MemoryAgent,
+    PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN,
+    ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN,
+    CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -134,9 +134,6 @@ pub enum Command {
         address: String,
         code: String,
     },
-    ForgetRemoteHost {
-        host_id: String,
-    },
     FocusHost {
         host_id: String,
     },
@@ -178,6 +175,7 @@ pub enum Command {
     CenterDependencyGraph {
         issue_id: String,
     },
+    ShowDependencyGraphOverview,
     SetDependencyGraphComplete {
         complete: bool,
     },
@@ -255,10 +253,12 @@ pub enum Command {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        language: Language,
     },
-    PreviewRunLaunch {
+    UpdateRunLaunch {
         project_id: String,
         config: RunLaunchConfig,
+        language: Language,
     },
     CancelRunLaunch,
     StopRun {
@@ -352,10 +352,9 @@ pub enum EmptyAction {
     PairAnotherHost,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceView {
-    #[default]
     Project,
     HostOverview,
     Run,
@@ -687,10 +686,6 @@ pub struct ShellCopy {
     pub hosts: String,
     pub projects: String,
     pub this_machine: String,
-    pub next_step: String,
-    pub forget_host: String,
-    pub forget_host_confirm_title: String,
-    pub forget_host_confirm_body: String,
     pub shade_light: String,
     pub shade_dark: String,
     pub edit_menu: String,
@@ -753,13 +748,11 @@ pub struct ShellCopy {
     pub got_it: String,
     pub auth_failed: String,
     pub connection_unavailable: String,
-    pub local_tracker_unavailable: String,
     pub repair_cli: String,
     pub repair_secrets: String,
     pub repair_env: String,
     pub no_gh_detected: String,
     pub connection_ready: String,
-    pub local_tracker_ready: String,
     pub project_menu: String,
     pub board_hint: String,
     pub child_hint: String,
@@ -826,21 +819,20 @@ pub struct ShellCopy {
     pub refresh_as_of: String,
     pub refresh_next: String,
     pub refresh_offline: String,
-    pub refresh_offline_recovery: String,
     pub refresh_never: String,
     pub refresh_rate_limited: String,
     pub refresh_retry: String,
     pub refresh_paused: String,
     pub refresh_auth: String,
-    pub refresh_auth_recovery: String,
     pub refresh_incomplete: String,
     pub refresh_tracker_error: String,
     pub new_run: String,
     pub execute_run: String,
     pub start_run: String,
-    pub start_run_pending: String,
     pub switch_agent: String,
     pub pick_agent: String,
+    pub no_agent_selected: String,
+    pub next_step: String,
     pub launch_title: String,
     pub prefill_current: String,
     pub prefill_other: String,
@@ -1068,18 +1060,17 @@ pub struct HostKernel {
     focused_host_id: String,
     remote_hosts: Vec<pairing::RemoteHost>,
     remote_view: Option<RemoteView>,
-    remote_client_views: BTreeMap<String, BTreeMap<String, RemoteView>>,
     loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
     issue_documents: BTreeMap<String, BTreeMap<String, IssueDocumentState>>,
-    issue_documents_in_flight: BTreeSet<(String, String)>,
     refresh: BTreeMap<String, ProjectRefreshState>,
-    refresh_in_flight: BTreeSet<String>,
+    refresh_in_flight: BTreeMap<String, u64>,
+    next_refresh_generation: u64,
+    defer_refreshes: bool,
+    deferred_refreshes: Vec<PreparedRefresh>,
+    local_tracker_revisions: BTreeMap<String, u64>,
     client_views: BTreeMap<String, ClientView>,
-    client_launch_forms: BTreeMap<String, RunLaunchForm>,
-    precomputed_project_connection: Option<(String, String, ProjectConnection)>,
-    defer_tracker_refreshes: bool,
-    deferred_refresh_tasks: Vec<BackgroundRefreshTask>,
-    preclaimed_issue_id: Option<String>,
+    client_navigation: BTreeMap<String, ClientNavigationState>,
+    client_navigation_seed: ClientNavigationState,
     pending_events: Vec<HostEvent>,
     now_ms: u64,
     refresh_interval_ms: u64,
@@ -1093,6 +1084,7 @@ pub struct HostKernel {
     complete_dependency_graph: bool,
     launch_defaults: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     last_successful_agent: BTreeMap<String, String>,
+    agent_config_cache: BTreeMap<(PathBuf, String), CachedAgentConfig>,
     launch_form: Option<RunLaunchForm>,
     show_command_preview: bool,
     notify_desktop: bool,
@@ -1131,49 +1123,44 @@ enum StoredRefreshKind {
 }
 
 #[derive(Debug, Clone)]
+struct CachedAgentConfig {
+    at_ms: u64,
+    discovery: AgentConfigDiscovery,
+    error: Option<AgentConfigFailure>,
+}
+
+#[derive(Debug, Clone)]
+enum AgentConfigFailure {
+    LaunchEnvironment(String),
+    Missing {
+        command: String,
+        searched_path: String,
+        known_locations: Vec<PathBuf>,
+    },
+    Cli(String),
+}
+
+impl AgentConfigFailure {
+    fn message(&self, language: Language) -> String {
+        let detail = match self {
+            Self::LaunchEnvironment(error) | Self::Cli(error) => error.clone(),
+            Self::Missing {
+                command,
+                searched_path,
+                known_locations,
+            } => launch::missing_agent_cli(command, searched_path, known_locations, language),
+        };
+        launch::option_discovery_failure(&detail, language)
+    }
+}
+
+const AGENT_CONFIG_CACHE_MS: u64 = 5 * 60 * 1000;
+
+#[derive(Debug, Clone)]
 struct ClientView {
     project_id: String,
     visible: bool,
     last_seen_ms: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientSnapshotView {
-    #[serde(default)]
-    focused_host_id: String,
-    #[serde(default)]
-    focused_project_id: String,
-    #[serde(default)]
-    selected_issue_id: Option<String>,
-    #[serde(default)]
-    focused_run_id: String,
-    #[serde(default)]
-    center_view: CenterView,
-    #[serde(default)]
-    workspace_view: WorkspaceView,
-    #[serde(default)]
-    parent_filter_id: Option<String>,
-    #[serde(default)]
-    search: IssueSearch,
-    #[serde(default)]
-    graph_mode: ClientGraphMode,
-    #[serde(default)]
-    graph_center_issue_id: Option<String>,
-    #[serde(default)]
-    complete_dependency_graph: bool,
-    #[serde(default)]
-    usage_open: bool,
-    #[serde(default)]
-    usage_query: usage::UsageQuery,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum ClientGraphMode {
-    #[default]
-    Overview,
-    Focused,
 }
 
 struct PreviousRun {
@@ -1191,319 +1178,22 @@ enum RefreshTrigger {
     RunEnded,
 }
 
-#[derive(Debug, Clone)]
-enum RefreshContinuation {
-    RunEnded(String),
-    PendingAdvance(String),
-    SelfCheck(String),
-}
-
-pub(crate) struct BackgroundRefreshTask {
+pub(crate) struct PreparedRefresh {
+    tracker: Arc<dyn TrackerSeam>,
     project_id: String,
     github_host: String,
     repository: String,
-    host_secrets_path: PathBuf,
-    tracker: Arc<dyn TrackerSeam>,
-    now_ms: u64,
+    tracker_kind: TrackerKind,
+    secrets_pat: Option<String>,
+    secrets_path: PathBuf,
     previous: Option<ProjectRefreshState>,
-    probe_connection: bool,
-    language: Language,
-    continuation: Option<RefreshContinuation>,
-}
-
-pub(crate) struct BackgroundRefreshCompletion {
-    task: BackgroundRefreshTask,
-    result: Result<TrackerReadOutcome, TrackerReadError>,
-    connection: Option<ProjectConnection>,
-}
-
-pub(crate) struct BackgroundIssueDocumentTask {
-    project_id: String,
-    issue_id: String,
-    github_host: String,
-    repository: String,
-    host_secrets_path: PathBuf,
-    tracker: Arc<dyn TrackerSeam>,
     now_ms: u64,
-    previous_body: Option<(String, u64)>,
+    generation: u64,
 }
 
-pub(crate) struct BackgroundIssueDocumentCompletion {
-    task: BackgroundIssueDocumentTask,
-    result: Result<IssueDocument, TrackerReadError>,
-}
-
-pub(crate) struct BackgroundRemoteRequestTask {
-    host_id: String,
-    address: String,
-    token: String,
-    request: serde_json::Value,
-    client_id: Option<String>,
-    client_view: Option<ClientSnapshotView>,
-    focus_host: bool,
-}
-
-pub(crate) struct BackgroundRemoteRequestCompletion {
-    task: BackgroundRemoteRequestTask,
-    result: Result<serde_json::Value, KernelError>,
-}
-
-pub(crate) struct BackgroundPairRemoteHostTask {
-    address: String,
-    code: String,
-    client_name: String,
-}
-
-pub(crate) struct BackgroundPairRemoteHostCompletion {
-    task: BackgroundPairRemoteHostTask,
-    result: Result<IssuedPairing, KernelError>,
-}
-
-pub(crate) struct BackgroundTrackerWriteTask {
-    refresh: BackgroundRefreshTask,
-    issue_id: Option<String>,
-    op: tracker_seam::TrackerWriteOp,
-    after_request: Option<serde_json::Value>,
-}
-
-pub(crate) struct BackgroundTrackerWriteCompletion {
-    refresh: BackgroundRefreshCompletion,
-    issue_id: Option<String>,
-    op: tracker_seam::TrackerWriteOp,
-    write_result: Option<Result<IssueRecord, TrackerWriteError>>,
-    after_request: Option<serde_json::Value>,
-}
-
-pub(crate) struct BackgroundClaimRollbackTask {
-    project_id: String,
-    issue_id: String,
-    github_host: String,
-    repository: String,
-    host_secrets_path: PathBuf,
-    tracker: Arc<dyn TrackerSeam>,
-}
-
-pub(crate) struct BackgroundClaimRollbackCompletion {
-    task: BackgroundClaimRollbackTask,
-    result: Result<IssueRecord, TrackerWriteError>,
-}
-
-pub(crate) struct BackgroundAutoAdvanceTask {
-    pending: advance::PendingAdvance,
-    issue_id: String,
-    github_host: String,
-    repository: String,
-    host_secrets_path: PathBuf,
-    tracker: Arc<dyn TrackerSeam>,
-}
-
-pub(crate) struct BackgroundAutoAdvanceCompletion {
-    task: BackgroundAutoAdvanceTask,
-    result: Result<IssueRecord, TrackerWriteError>,
-}
-
-pub(crate) struct BackgroundTrackerWriteFinish {
-    pub(crate) result: Result<CommandOutcome, KernelError>,
-    pub(crate) rollback: Option<BackgroundClaimRollbackTask>,
-}
-
-pub(crate) struct BackgroundProjectProbeTask {
-    request: serde_json::Value,
-    github_host: String,
-    repository: String,
-    host_secrets_path: PathBuf,
-    tracker: Arc<dyn TrackerSeam>,
-    language: Language,
-}
-
-pub(crate) struct BackgroundProjectProbeCompletion {
-    task: BackgroundProjectProbeTask,
-    connection: ProjectConnection,
-}
-
-impl BackgroundRefreshTask {
-    pub(crate) fn execute(self) -> BackgroundRefreshCompletion {
-        let pat = read_github_pat(&self.host_secrets_path, &self.github_host);
-        let ctx = tracker::ProbeContext {
-            github_host: &self.github_host,
-            repository: &self.repository,
-            secrets_pat: pat.as_deref(),
-            secrets_path: &self.host_secrets_path,
-        };
-        let connection = self.probe_connection.then(|| {
-            connection_from_probe(
-                self.tracker.probe(&ctx),
-                &self.host_secrets_path,
-                self.language,
-                &self.github_host,
-            )
-        });
-        let result = self.tracker.read_all(&ctx);
-        BackgroundRefreshCompletion {
-            task: self,
-            result,
-            connection,
-        }
-    }
-}
-
-impl BackgroundIssueDocumentTask {
-    pub(crate) fn execute(self) -> BackgroundIssueDocumentCompletion {
-        let pat = read_github_pat(&self.host_secrets_path, &self.github_host);
-        let result = self.tracker.read_issue_document(
-            &tracker::ProbeContext {
-                github_host: &self.github_host,
-                repository: &self.repository,
-                secrets_pat: pat.as_deref(),
-                secrets_path: &self.host_secrets_path,
-            },
-            &self.issue_id,
-        );
-        BackgroundIssueDocumentCompletion { task: self, result }
-    }
-}
-
-impl BackgroundRemoteRequestTask {
-    pub(crate) fn execute(self) -> BackgroundRemoteRequestCompletion {
-        let result =
-            pairing::post_rpc(&self.address, Some(&self.token), &self.request).map_err(|error| {
-                match error {
-                    KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
-                    other => other,
-                }
-            });
-        BackgroundRemoteRequestCompletion { task: self, result }
-    }
-}
-
-impl BackgroundPairRemoteHostTask {
-    pub(crate) fn execute(self) -> BackgroundPairRemoteHostCompletion {
-        let response = pairing::post_rpc(
-            &self.address,
-            None,
-            &serde_json::json!({
-                "op": "redeemPairing",
-                "code": self.code,
-                "clientName": self.client_name,
-            }),
-        )
-        .map_err(|error| match error {
-            KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
-            other => other,
-        });
-        let result = response.and_then(|response| {
-            let pairing = response
-                .get("pairing")
-                .cloned()
-                .ok_or_else(|| KernelError::Denied("invalid pairing code".into()))?;
-            serde_json::from_value(pairing).map_err(KernelError::from)
-        });
-        BackgroundPairRemoteHostCompletion { task: self, result }
-    }
-}
-
-impl BackgroundTrackerWriteTask {
-    pub(crate) fn execute(self) -> BackgroundTrackerWriteCompletion {
-        let pat = read_github_pat(&self.refresh.host_secrets_path, &self.refresh.github_host);
-        let ctx = tracker::ProbeContext {
-            github_host: &self.refresh.github_host,
-            repository: &self.refresh.repository,
-            secrets_pat: pat.as_deref(),
-            secrets_path: &self.refresh.host_secrets_path,
-        };
-        let read_result = self.refresh.tracker.read_all(&ctx);
-        let connection = self.refresh.probe_connection.then(|| {
-            connection_from_probe(
-                self.refresh.tracker.probe(&ctx),
-                &self.refresh.host_secrets_path,
-                self.refresh.language,
-                &self.refresh.github_host,
-            )
-        });
-        let write_result = read_result.as_ref().ok().map(|_| {
-            self.refresh
-                .tracker
-                .write_issue(&ctx, self.issue_id.as_deref(), &self.op)
-        });
-        BackgroundTrackerWriteCompletion {
-            refresh: BackgroundRefreshCompletion {
-                task: self.refresh,
-                result: read_result,
-                connection,
-            },
-            issue_id: self.issue_id,
-            op: self.op,
-            write_result,
-            after_request: self.after_request,
-        }
-    }
-}
-
-impl BackgroundClaimRollbackTask {
-    pub(crate) fn execute(self) -> BackgroundClaimRollbackCompletion {
-        let pat = read_github_pat(&self.host_secrets_path, &self.github_host);
-        let result = self.tracker.write_issue(
-            &tracker::ProbeContext {
-                github_host: &self.github_host,
-                repository: &self.repository,
-                secrets_pat: pat.as_deref(),
-                secrets_path: &self.host_secrets_path,
-            },
-            Some(&self.issue_id),
-            &tracker_seam::TrackerWriteOp::Release,
-        );
-        BackgroundClaimRollbackCompletion { task: self, result }
-    }
-}
-
-impl BackgroundAutoAdvanceTask {
-    pub(crate) fn execute(self) -> BackgroundAutoAdvanceCompletion {
-        let pat = read_github_pat(&self.host_secrets_path, &self.github_host);
-        let result = self.tracker.write_issue(
-            &tracker::ProbeContext {
-                github_host: &self.github_host,
-                repository: &self.repository,
-                secrets_pat: pat.as_deref(),
-                secrets_path: &self.host_secrets_path,
-            },
-            Some(&self.issue_id),
-            &tracker_seam::TrackerWriteOp::Claim,
-        );
-        BackgroundAutoAdvanceCompletion { task: self, result }
-    }
-
-    fn rollback_task(&self) -> BackgroundClaimRollbackTask {
-        BackgroundClaimRollbackTask {
-            project_id: self.pending.project_id.clone(),
-            issue_id: self.issue_id.clone(),
-            github_host: self.github_host.clone(),
-            repository: self.repository.clone(),
-            host_secrets_path: self.host_secrets_path.clone(),
-            tracker: Arc::clone(&self.tracker),
-        }
-    }
-}
-
-impl BackgroundProjectProbeTask {
-    pub(crate) fn execute(self) -> BackgroundProjectProbeCompletion {
-        let pat = read_github_pat(&self.host_secrets_path, &self.github_host);
-        let outcome = self.tracker.probe(&tracker::ProbeContext {
-            github_host: &self.github_host,
-            repository: &self.repository,
-            secrets_pat: pat.as_deref(),
-            secrets_path: &self.host_secrets_path,
-        });
-        let connection = connection_from_probe(
-            outcome,
-            &self.host_secrets_path,
-            self.language,
-            &self.github_host,
-        );
-        BackgroundProjectProbeCompletion {
-            task: self,
-            connection,
-        }
-    }
+pub(crate) struct CompletedRefresh {
+    prepared: PreparedRefresh,
+    result: Result<tracker_seam::TrackerReadOutcome, tracker::TrackerReadError>,
 }
 
 #[derive(Debug, Clone)]
@@ -1521,8 +1211,24 @@ struct RemoteView {
     usage_open: bool,
     usage: UsagePage,
     refresh_interval_ms: u64,
-    auto_advance: bool,
-    pending_confirmation: Option<PendingConfirmation>,
+}
+
+#[derive(Debug, Clone)]
+struct ClientNavigationState {
+    focused_host_id: String,
+    remote_view: Option<RemoteView>,
+    focused_project_id: Option<String>,
+    selected_issue_id: Option<String>,
+    parent_filter: Option<String>,
+    issue_search: BTreeMap<String, IssueSearch>,
+    center_view: CenterView,
+    workspace_view: WorkspaceView,
+    graph_center_issue_id: Option<String>,
+    complete_dependency_graph: bool,
+    focused_run_id: Option<String>,
+    launch_form: Option<RunLaunchForm>,
+    usage_open: bool,
+    usage_query: usage::UsageQuery,
 }
 
 impl HostKernel {
@@ -1620,6 +1326,23 @@ impl HostKernel {
                 focused_host_id
             };
 
+        let client_navigation_seed = ClientNavigationState {
+            focused_host_id: focused_host_id.clone(),
+            remote_view: None,
+            focused_project_id: focused_project_id.clone(),
+            selected_issue_id: None,
+            parent_filter: None,
+            issue_search: BTreeMap::new(),
+            center_view,
+            workspace_view: WorkspaceView::Project,
+            graph_center_issue_id: None,
+            complete_dependency_graph: false,
+            focused_run_id: None,
+            launch_form: None,
+            usage_open: false,
+            usage_query: usage::UsageQuery::default(),
+        };
+
         let mut host = Self {
             running: host_mode == HostMode::HostAndClient,
             window_visible: true,
@@ -1646,18 +1369,17 @@ impl HostKernel {
             focused_host_id,
             remote_hosts,
             remote_view: None,
-            remote_client_views: BTreeMap::new(),
             loaded_issues: BTreeMap::new(),
             issue_documents: BTreeMap::new(),
-            issue_documents_in_flight: BTreeSet::new(),
             refresh: BTreeMap::new(),
-            refresh_in_flight: BTreeSet::new(),
+            refresh_in_flight: BTreeMap::new(),
+            next_refresh_generation: 0,
+            defer_refreshes: false,
+            deferred_refreshes: Vec::new(),
+            local_tracker_revisions: BTreeMap::new(),
             client_views: BTreeMap::new(),
-            client_launch_forms: BTreeMap::new(),
-            precomputed_project_connection: None,
-            defer_tracker_refreshes: false,
-            deferred_refresh_tasks: Vec::new(),
-            preclaimed_issue_id: None,
+            client_navigation: BTreeMap::new(),
+            client_navigation_seed,
             pending_events: Vec::new(),
             now_ms: refresh::wall_ms(),
             refresh_interval_ms: refresh::clamp_refresh_interval_ms(settings.refresh_interval_ms),
@@ -1671,6 +1393,7 @@ impl HostKernel {
             complete_dependency_graph: false,
             launch_defaults: settings.agent_launch_defaults,
             last_successful_agent: settings.last_successful_agent,
+            agent_config_cache: BTreeMap::new(),
             launch_form: None,
             show_command_preview,
             notify_desktop,
@@ -1766,125 +1489,6 @@ impl HostKernel {
         }
     }
 
-    fn snapshot_for_client(
-        &self,
-        client_id: Option<&str>,
-        view: &ClientSnapshotView,
-    ) -> HostSnapshot {
-        let mut snapshot = self.snapshot();
-        let requested_host = if view.focused_host_id.is_empty() {
-            LOCAL_HOST_ID
-        } else {
-            view.focused_host_id.as_str()
-        };
-        if requested_host != LOCAL_HOST_ID {
-            snapshot.focused_host_id = requested_host.to_string();
-            snapshot.center_view = view.center_view;
-            snapshot.workspace_view = view.workspace_view;
-            if let Some(remote) = client_id
-                .and_then(|client_id| self.remote_client_views.get(client_id))
-                .and_then(|views| views.get(requested_host))
-                .or_else(|| {
-                    self.remote_view
-                        .as_ref()
-                        .filter(|remote| remote.host_id == requested_host)
-                })
-            {
-                snapshot.focused_project_id = remote.focused_project_id.clone();
-                snapshot.projects = remote.projects.clone();
-                snapshot.empty_actions = remote.empty_actions.clone();
-                snapshot.board = remote.board.clone();
-                snapshot.runs = remote.runs.clone();
-                snapshot.focused_run_id = remote.focused_run_id.clone();
-                snapshot.workspace_view = remote.workspace_view;
-                snapshot.quit_offer = remote.quit_offer.clone();
-                snapshot.launch_form = remote.launch_form.clone();
-                snapshot.usage_open = remote.usage_open;
-                snapshot.usage = remote.usage.clone();
-                snapshot.refresh_interval_ms = remote.refresh_interval_ms;
-                snapshot.auto_advance = remote.auto_advance;
-                snapshot.pending_confirmation = remote.pending_confirmation.clone();
-            } else {
-                snapshot.focused_project_id.clear();
-                snapshot.projects.clear();
-                snapshot.empty_actions.clear();
-                snapshot.board = None;
-                snapshot.runs.clear();
-                snapshot.focused_run_id.clear();
-                snapshot.quit_offer = None;
-                snapshot.launch_form = None;
-                snapshot.usage_open = false;
-                snapshot.pending_confirmation = None;
-            }
-            return snapshot;
-        }
-
-        let project_id = self
-            .projects
-            .iter()
-            .find(|project| project.id == view.focused_project_id)
-            .map(|project| project.id.clone())
-            .or_else(|| {
-                self.focused_project_id.as_ref().and_then(|focused| {
-                    self.projects
-                        .iter()
-                        .find(|project| &project.id == focused)
-                        .map(|project| project.id.clone())
-                })
-            })
-            .or_else(|| self.projects.first().map(|project| project.id.clone()))
-            .unwrap_or_default();
-        let selected_issue_id = view.selected_issue_id.as_deref().filter(|issue_id| {
-            self.loaded_issues
-                .get(&project_id)
-                .is_some_and(|issues| issues.iter().any(|issue| issue.id() == *issue_id))
-        });
-        let graph_center_issue_id = match view.graph_mode {
-            ClientGraphMode::Overview => None,
-            ClientGraphMode::Focused => view.graph_center_issue_id.as_deref(),
-        };
-        let board = self.current_local_board(
-            &project_id,
-            view.parent_filter_id.as_deref(),
-            selected_issue_id,
-            graph_center_issue_id,
-            view.complete_dependency_graph,
-            view.search.clone(),
-        );
-        let focused_run_id = self
-            .runs
-            .iter()
-            .find(|run| run.id == view.focused_run_id)
-            .map(|run| run.id.clone())
-            .or_else(|| {
-                selected_issue_id.and_then(|issue_id| self.active_run_id_for_issue(issue_id))
-            })
-            .unwrap_or_default();
-
-        snapshot.focused_host_id = LOCAL_HOST_ID.to_string();
-        snapshot.focused_project_id = project_id.clone();
-        snapshot.board = board;
-        snapshot.center_view = view.center_view;
-        snapshot.workspace_view = view.workspace_view;
-        snapshot.runs = self.decorate_runs(&self.runs);
-        snapshot.focused_run_id = focused_run_id;
-        snapshot.launch_form = client_id
-            .and_then(|client_id| self.client_launch_forms.get(client_id).cloned())
-            .or_else(|| {
-                client_id
-                    .is_none()
-                    .then(|| self.launch_form.clone())
-                    .flatten()
-            });
-        snapshot.usage_open = view.usage_open;
-        snapshot.usage = self.build_usage_for(&view.usage_query);
-        snapshot.pending_confirmation = self
-            .pending_advance
-            .get(&project_id)
-            .map(|pending| pending.to_snapshot(self.now_ms));
-        snapshot
-    }
-
     fn outcome(&mut self) -> CommandOutcome {
         self.outcome_with(None, None)
     }
@@ -1940,19 +1544,6 @@ impl HostKernel {
             .get(run_id)
             .is_some_and(|session| session.was_stopped());
         self.mark_run_ended(run_id, RunEndedReason::from_exit(code, stopped));
-    }
-
-    pub(crate) fn note_run_exit_with_deferred_refreshes(
-        &mut self,
-        run_id: &str,
-        code: i32,
-    ) -> Vec<BackgroundRefreshTask> {
-        let deferred_at_start = self.deferred_refresh_tasks.len();
-        let previous = self.defer_tracker_refreshes;
-        self.defer_tracker_refreshes = true;
-        self.note_run_exit(run_id, code);
-        self.defer_tracker_refreshes = previous;
-        self.deferred_refresh_tasks.split_off(deferred_at_start)
     }
 
     pub fn update_install_gate(&mut self) -> UpdateInstallGate {
@@ -2023,6 +1614,9 @@ impl HostKernel {
                         if let Some(project_id) = self.focused_project_id.clone() {
                             self.refresh_project(&project_id, RefreshTrigger::Immediate);
                         }
+                    } else if !self.focused_host_id.is_empty() {
+                        let focused = self.focused_host_id.clone();
+                        let _ = self.refresh_remote_view(&focused);
                     }
                 }
             }
@@ -2063,9 +1657,6 @@ impl HostKernel {
             Command::PairRemoteHost { address, code } => {
                 self.pair_remote_host(&address, &code)?;
             }
-            Command::ForgetRemoteHost { host_id } => {
-                self.forget_remote_host(&host_id)?;
-            }
             Command::FocusHost { host_id } => {
                 self.focus_host(&host_id)?;
             }
@@ -2104,14 +1695,7 @@ impl HostKernel {
                 self.focus_issue(&issue_id);
             }
             Command::LoadIssueDocument { issue_id } => {
-                let project_id = self
-                    .focused_project_id
-                    .as_deref()
-                    .filter(|project_id| self.project_contains_issue(project_id, &issue_id))
-                    .map(ToOwned::to_owned)
-                    .or_else(|| self.project_id_for_issue(&issue_id).ok())
-                    .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
-                self.load_issue_document(&project_id, &issue_id)?;
+                self.load_issue_document(&issue_id)?;
             }
             Command::FilterParent { issue_id } => {
                 self.parent_filter = Some(issue_id);
@@ -2124,18 +1708,7 @@ impl HostKernel {
                     && self.center_view != CenterView::Graph
                     && self.focused_host_id == LOCAL_HOST_ID
                 {
-                    self.graph_center_issue_id = self.selected_issue_id.clone().or_else(|| {
-                        self.focused_project_id
-                            .as_ref()
-                            .and_then(|project_id| self.loaded_issues.get(project_id))
-                            .and_then(|issues| {
-                                issues
-                                    .iter()
-                                    .find(|issue| issue.open)
-                                    .or_else(|| issues.first())
-                            })
-                            .map(IssueRecord::id)
-                    });
+                    self.graph_center_issue_id = None;
                     self.complete_dependency_graph = false;
                 }
                 self.center_view = view;
@@ -2144,6 +1717,10 @@ impl HostKernel {
             Command::CenterDependencyGraph { issue_id } => {
                 self.focus_issue(&issue_id);
                 self.graph_center_issue_id = Some(issue_id);
+            }
+            Command::ShowDependencyGraphOverview => {
+                self.graph_center_issue_id = None;
+                self.complete_dependency_graph = false;
             }
             Command::SetDependencyGraphComplete { complete } => {
                 self.complete_dependency_graph = complete;
@@ -2176,6 +1753,7 @@ impl HostKernel {
             Command::Tick { now_ms } => {
                 self.now_ms = now_ms.unwrap_or_else(refresh::wall_ms);
                 self.expire_stale_client_views();
+                self.maybe_refresh_local_markdown();
                 self.maybe_auto_refresh();
                 self.finish_due_pending();
             }
@@ -2184,9 +1762,7 @@ impl HostKernel {
                 project_id,
                 visible,
             } => {
-                if self.set_client_view(&client_id, &project_id, visible) {
-                    self.refresh_project(&project_id, RefreshTrigger::Immediate);
-                }
+                self.set_client_view(&client_id, &project_id, visible);
             }
             Command::NoteRunEnded { project_id } => {
                 self.refresh_project(&project_id, RefreshTrigger::RunEnded);
@@ -2244,11 +1820,16 @@ impl HostKernel {
                 issue_id,
                 agent_id,
                 pick_agent,
+                language,
             } => {
-                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent)?;
+                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent, language)?;
             }
-            Command::PreviewRunLaunch { project_id, config } => {
-                self.preview_run_launch(&project_id, config)?;
+            Command::UpdateRunLaunch {
+                project_id,
+                config,
+                language,
+            } => {
+                self.update_run_launch(&project_id, config, language)?;
             }
             Command::CancelRunLaunch => {
                 self.launch_form = None;
@@ -2400,738 +1981,46 @@ impl HostKernel {
         Ok(self.outcome())
     }
 
+    pub(crate) fn dispatch_background_tick(
+        &mut self,
+        now_ms: Option<u64>,
+    ) -> Result<ProcessIntent, KernelError> {
+        let mut outcome = self.dispatch(Command::Tick { now_ms })?;
+        self.pending_events = std::mem::take(&mut outcome.events);
+        Ok(outcome.process)
+    }
+
     pub fn handle(&mut self, request: serde_json::Value) -> Result<CommandOutcome, KernelError> {
-        if let Some(task) = self.begin_background_remote_request(&request)? {
-            return self.finish_background_remote_request(task.execute());
-        }
-        let client_id = request
-            .get("clientId")
+        let client_instance_id = request
+            .get("clientInstanceId")
             .and_then(|value| value.as_str())
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        let op = request
-            .get("op")
-            .and_then(|value| value.as_str())
-            .unwrap_or("snapshot");
-        let mut outcome = if let Some(client_id) = client_id.as_deref() {
-            match op {
-                "prepareRunLaunch" | "previewRunLaunch" | "cancelRunLaunch" | "startUnboundRun" => {
-                    self.handle_client_launch_request(request, client_id)?
-                }
-                _ => self.handle_inner(request)?,
-            }
-        } else {
-            self.handle_inner(request)?
+        let Some(client_instance_id) = client_instance_id else {
+            return self.handle_active_request(request);
         };
-        if let Some(view) = client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(client_id.as_deref(), view));
-        }
-        Ok(outcome)
-    }
 
-    pub(crate) fn handle_with_deferred_refreshes(
-        &mut self,
-        request: serde_json::Value,
-    ) -> (
-        Result<CommandOutcome, KernelError>,
-        Vec<BackgroundRefreshTask>,
-    ) {
-        let deferred_at_start = self.deferred_refresh_tasks.len();
-        let previous = self.defer_tracker_refreshes;
-        self.defer_tracker_refreshes = true;
-        let result = self.handle(request);
-        self.defer_tracker_refreshes = previous;
-        let tasks = self.deferred_refresh_tasks.split_off(deferred_at_start);
-        (result, tasks)
-    }
+        let previous = self.capture_client_navigation();
+        let wanted = self
+            .client_navigation
+            .get(&client_instance_id)
+            .cloned()
+            .unwrap_or_else(|| self.client_navigation_seed.clone());
+        let wanted = self.normalize_client_navigation(wanted);
+        self.apply_client_navigation(wanted);
 
-    fn handle_client_launch_request(
-        &mut self,
-        request: serde_json::Value,
-        client_id: &str,
-    ) -> Result<CommandOutcome, KernelError> {
-        let host_form = self.launch_form.take();
-        self.launch_form = self.client_launch_forms.remove(client_id);
-        let result = self.handle_inner(request);
-        let client_form = self.launch_form.take();
-        self.launch_form = host_form;
-        if let Some(form) = client_form {
-            self.client_launch_forms.insert(client_id.to_string(), form);
-        } else {
-            self.client_launch_forms.remove(client_id);
-        }
+        let result = self.handle_active_request(request);
+        let current = self.normalize_client_navigation(self.capture_client_navigation());
+        self.client_navigation.insert(client_instance_id, current);
+        let previous = self.normalize_client_navigation(previous);
+        self.apply_client_navigation(previous);
         result
     }
 
-    pub(crate) fn begin_background_remote_request(
-        &self,
-        request: &serde_json::Value,
-    ) -> Result<Option<BackgroundRemoteRequestTask>, KernelError> {
-        let op = request
-            .get("op")
-            .and_then(|value| value.as_str())
-            .unwrap_or("snapshot");
-        let client_id = request
-            .get("clientId")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-
-        let (host_id, remote_request, focus_host) = if op == "focusHost" {
-            let host_id = required_string(request, "hostId")?;
-            if host_id == LOCAL_HOST_ID {
-                return Ok(None);
-            }
-            (host_id, serde_json::json!({ "op": "snapshot" }), true)
-        } else {
-            if client_local_operation(op) {
-                return Ok(None);
-            }
-            let host_id = client_view
-                .as_ref()
-                .map(|view| view.focused_host_id.as_str())
-                .filter(|host_id| !host_id.is_empty())
-                .unwrap_or(self.focused_host_id.as_str())
-                .to_string();
-            if host_id.is_empty() || host_id == LOCAL_HOST_ID {
-                return Ok(None);
-            }
-            let mut remote_request = request.clone();
-            if let Some(view) = remote_request
-                .get_mut("clientView")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                view.insert(
-                    "focusedHostId".into(),
-                    serde_json::Value::String(LOCAL_HOST_ID.into()),
-                );
-            }
-            (host_id, remote_request, false)
-        };
-        let remote = self
-            .remote_hosts
-            .iter()
-            .find(|host| host.id == host_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
-        Ok(Some(BackgroundRemoteRequestTask {
-            host_id,
-            address: remote.address,
-            token: remote.token,
-            request: remote_request,
-            client_id,
-            client_view,
-            focus_host,
-        }))
-    }
-
-    pub(crate) fn finish_background_remote_request(
+    fn handle_active_request(
         &mut self,
-        completion: BackgroundRemoteRequestCompletion,
+        request: serde_json::Value,
     ) -> Result<CommandOutcome, KernelError> {
-        let BackgroundRemoteRequestCompletion { task, result } = completion;
-        let response = result?;
-        if task.focus_host {
-            self.focused_host_id = task.host_id.clone();
-            self.persist_client_settings(&self.appearance.clone())?;
-        }
-        self.store_remote_view_response(&task.host_id, task.client_id.as_deref(), &response)?;
-        let mut outcome = self.outcome();
-        if let Some(view) = task.client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(task.client_id.as_deref(), view));
-        }
-        if let Some(inference) = response.get("inference").cloned() {
-            outcome.inference = serde_json::from_value(inference).ok();
-        }
-        if let Some(changes) = response.get("viewChanges").cloned() {
-            outcome.view_changes = serde_json::from_value(changes).ok();
-        }
-        Ok(outcome)
-    }
-
-    pub(crate) fn begin_background_pair_remote_host_request(
-        &self,
-        request: &serde_json::Value,
-    ) -> Result<Option<BackgroundPairRemoteHostTask>, KernelError> {
-        if request.get("op").and_then(|value| value.as_str()) != Some("pairRemoteHost") {
-            return Ok(None);
-        }
-        let address = pairing::parse_http_url(&required_string(request, "address")?)
-            .map_err(KernelError::Protocol)?;
-        if self.is_own_loopback(&address) {
-            return Err(KernelError::Protocol(
-                "cannot pair this window to its own Host".into(),
-            ));
-        }
-        Ok(Some(BackgroundPairRemoteHostTask {
-            address,
-            code: required_string(request, "code")?,
-            client_name: self.host_display_name.clone(),
-        }))
-    }
-
-    pub(crate) fn finish_background_pair_remote_host_request(
-        &mut self,
-        request: &serde_json::Value,
-        completion: BackgroundPairRemoteHostCompletion,
-    ) -> Result<CommandOutcome, KernelError> {
-        self.apply_pair_remote_host_completion(completion)?;
-        self.outcome_for_request(request)
-    }
-
-    pub(crate) fn begin_background_refresh_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<(CommandOutcome, Option<BackgroundRefreshTask>), KernelError> {
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        let requested_host = client_view
-            .as_ref()
-            .map(|view| view.focused_host_id.as_str())
-            .filter(|host_id| !host_id.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
-        if requested_host != LOCAL_HOST_ID {
-            return self.handle(request.clone()).map(|outcome| (outcome, None));
-        }
-        self.observe_live_runs();
-        let project_id = request
-            .get("projectId")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                client_view
-                    .as_ref()
-                    .map(|view| view.focused_project_id.clone())
-                    .filter(|value| !value.is_empty())
-            })
-            .or_else(|| self.focused_project_id.clone())
-            .ok_or_else(|| KernelError::Protocol("missing projectId".into()))?;
-        let task = self.begin_refresh_task(&project_id, RefreshTrigger::Immediate);
-        let mut outcome = self.outcome();
-        if let Some(view) = client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(
-                request.get("clientId").and_then(|value| value.as_str()),
-                view,
-            ));
-        }
-        Ok((outcome, task))
-    }
-
-    pub(crate) fn begin_background_issue_document_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<(CommandOutcome, Option<BackgroundIssueDocumentTask>), KernelError> {
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        let requested_host = client_view
-            .as_ref()
-            .map(|view| view.focused_host_id.as_str())
-            .filter(|host_id| !host_id.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
-        if requested_host != LOCAL_HOST_ID {
-            return self.handle(request.clone()).map(|outcome| (outcome, None));
-        }
-        self.observe_live_runs();
-        let issue_id = required_string(request, "issueId")?;
-        let project_id = self.project_id_for_issue_request(request, &issue_id)?;
-        let task = self.begin_issue_document_task(&project_id, &issue_id)?;
-        let mut outcome = self.outcome();
-        if let Some(view) = client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(
-                request.get("clientId").and_then(|value| value.as_str()),
-                view,
-            ));
-        }
-        Ok((outcome, task))
-    }
-
-    pub(crate) fn begin_background_client_view_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<(CommandOutcome, Option<BackgroundRefreshTask>), KernelError> {
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        let requested_host = client_view
-            .as_ref()
-            .map(|view| view.focused_host_id.as_str())
-            .filter(|host_id| !host_id.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
-        if requested_host != LOCAL_HOST_ID {
-            return self.handle(request.clone()).map(|outcome| (outcome, None));
-        }
-        let client_id = required_string(request, "clientId")?;
-        let project_id = request
-            .get("projectId")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let visible = request
-            .get("visible")
-            .and_then(|value| value.as_bool())
-            .ok_or_else(|| KernelError::Protocol("missing visible".into()))?;
-        self.observe_live_runs();
-        let changed = self.set_client_view(&client_id, &project_id, visible);
-        let task = (changed && visible)
-            .then(|| self.begin_refresh_task(&project_id, RefreshTrigger::Immediate))
-            .flatten();
-        let mut outcome = self.outcome();
-        if let Some(view) = client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(
-                request.get("clientId").and_then(|value| value.as_str()),
-                view,
-            ));
-        }
-        Ok((outcome, task))
-    }
-
-    pub(crate) fn begin_background_tick_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<(CommandOutcome, Vec<BackgroundRefreshTask>), KernelError> {
-        let client_view: Option<ClientSnapshotView> = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        let requested_host = client_view
-            .as_ref()
-            .map(|view| view.focused_host_id.as_str())
-            .filter(|host_id| !host_id.is_empty())
-            .unwrap_or(LOCAL_HOST_ID);
-        if requested_host != LOCAL_HOST_ID {
-            return self
-                .handle(request.clone())
-                .map(|outcome| (outcome, Vec::new()));
-        }
-        let deferred_at_start = self.deferred_refresh_tasks.len();
-        let previous = self.defer_tracker_refreshes;
-        self.defer_tracker_refreshes = true;
-        self.observe_live_runs();
-        self.now_ms = request
-            .get("nowMs")
-            .and_then(|value| value.as_u64())
-            .unwrap_or_else(refresh::wall_ms);
-        self.expire_stale_client_views();
-        self.finish_due_pending();
-        let due: Vec<String> = self
-            .projects
-            .iter()
-            .map(|project| project.id.clone())
-            .filter(|project_id| self.should_auto_refresh(project_id))
-            .collect();
-        let tasks = due
-            .into_iter()
-            .filter_map(|project_id| self.begin_refresh_task(&project_id, RefreshTrigger::Interval))
-            .collect::<Vec<_>>();
-        self.defer_tracker_refreshes = previous;
-        let mut deferred = self.deferred_refresh_tasks.split_off(deferred_at_start);
-        deferred.extend(tasks);
-        let mut outcome = self.outcome();
-        if let Some(view) = client_view.as_ref() {
-            outcome.snapshot = Box::new(self.snapshot_for_client(
-                request.get("clientId").and_then(|value| value.as_str()),
-                view,
-            ));
-        }
-        Ok((outcome, deferred))
-    }
-
-    pub(crate) fn begin_background_tracker_write_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<Option<BackgroundTrackerWriteTask>, KernelError> {
-        let requested_host = request
-            .get("clientView")
-            .and_then(|view| view.get("focusedHostId"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
-        if requested_host != LOCAL_HOST_ID {
-            return Ok(None);
-        }
-        let op_name = request
-            .get("op")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let (project_id, issue_id, op, after_request) = match op_name {
-            "claimIssue" | "releaseIssue" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let op = if op_name == "claimIssue" {
-                    tracker_seam::TrackerWriteOp::Claim
-                } else {
-                    tracker_seam::TrackerWriteOp::Release
-                };
-                (project_id, Some(issue_id), op, None)
-            }
-            "createIssue" => {
-                let project_id = required_string(request, "projectId")?;
-                if !self.projects.iter().any(|project| project.id == project_id) {
-                    return Err(KernelError::Protocol("unknown project".into()));
-                }
-                let title = required_string(request, "title")?.trim().to_string();
-                (
-                    project_id,
-                    None,
-                    tracker_seam::TrackerWriteOp::CreateIssue {
-                        title,
-                        body: optional_string(request, "body"),
-                    },
-                    None,
-                )
-            }
-            "updateIssue" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let title = required_string(request, "title")?.trim().to_string();
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::UpdateIssue {
-                        title,
-                        body: optional_string(request, "body"),
-                    },
-                    None,
-                )
-            }
-            "setIssueOpen" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let open = request
-                    .get("open")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| KernelError::Protocol("missing open".into()))?;
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::SetOpen { open },
-                    None,
-                )
-            }
-            "addIssueComment" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let body = required_string(request, "body")?.trim().to_string();
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::AddComment { body },
-                    None,
-                )
-            }
-            "setIssueParent" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let parent = request
-                    .get("parent")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(parse_issue_ref)
-                    .transpose()?;
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::SetParent { parent },
-                    None,
-                )
-            }
-            "setIssueBlockedBy" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                let blocked_by = request
-                    .get("blockedBy")
-                    .and_then(|value| value.as_array())
-                    .ok_or_else(|| KernelError::Protocol("missing blockedBy".into()))?
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .ok_or_else(|| KernelError::Protocol("invalid blockedBy".into()))
-                            .and_then(parse_issue_ref)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::SetBlockedBy { blocked_by },
-                    None,
-                )
-            }
-            "startBoundRun" => {
-                let issue_id = required_string(request, "issueId")?;
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::Claim,
-                    Some(request.clone()),
-                )
-            }
-            "startUnboundRun" => {
-                let Some(issue_id) = request
-                    .get("issueId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                else {
-                    return Ok(None);
-                };
-                let project_id = self.project_id_for_issue(&issue_id)?;
-                (
-                    project_id,
-                    Some(issue_id),
-                    tracker_seam::TrackerWriteOp::Claim,
-                    Some(request.clone()),
-                )
-            }
-            _ => return Ok(None),
-        };
-        let refresh = self
-            .begin_refresh_task(&project_id, RefreshTrigger::Action)
-            .ok_or_else(|| KernelError::Denied(self.write_block_reason(&project_id)))?;
-        Ok(Some(BackgroundTrackerWriteTask {
-            refresh,
-            issue_id,
-            op,
-            after_request,
-        }))
-    }
-
-    pub(crate) fn begin_background_project_probe_request(
-        &self,
-        request: &serde_json::Value,
-    ) -> Result<Option<BackgroundProjectProbeTask>, KernelError> {
-        let requested_host = request
-            .get("clientView")
-            .and_then(|view| view.get("focusedHostId"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(self.focused_host_id.as_str());
-        if requested_host != LOCAL_HOST_ID {
-            return Ok(None);
-        }
-        let op = request
-            .get("op")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let (github_host, repository) = match op {
-            "registerProject" => (
-                project::normalize_github_host(&optional_string(request, "githubHost"))
-                    .map_err(KernelError::Protocol)?,
-                project::normalize_repository(&required_string(request, "repository")?)
-                    .map_err(KernelError::Protocol)?,
-            ),
-            "editProject" => {
-                let project_id = required_string(request, "projectId")?;
-                let github_host =
-                    project::normalize_github_host(&optional_string(request, "githubHost"))
-                        .map_err(KernelError::Protocol)?;
-                let repository =
-                    project::normalize_repository(&required_string(request, "repository")?)
-                        .map_err(KernelError::Protocol)?;
-                let current = self
-                    .projects
-                    .iter()
-                    .find(|project| project.id == project_id)
-                    .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-                let local_path =
-                    project::require_local_directory(&required_string(request, "localPath")?)
-                        .map_err(KernelError::Protocol)?;
-                if current.local_path == local_path
-                    && current.github_host == github_host
-                    && current.repository == repository
-                {
-                    return Ok(None);
-                }
-                (github_host, repository)
-            }
-            "focusProject" => {
-                let project_id = required_string(request, "projectId")?;
-                let project = self
-                    .projects
-                    .iter()
-                    .find(|project| project.id == project_id)
-                    .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-                (project.github_host.clone(), project.repository.clone())
-            }
-            _ => return Ok(None),
-        };
-        Ok(Some(BackgroundProjectProbeTask {
-            request: request.clone(),
-            github_host,
-            repository,
-            host_secrets_path: self.data.host_secrets_path.clone(),
-            tracker: Arc::clone(&self.tracker),
-            language: self.appearance.language,
-        }))
-    }
-
-    pub(crate) fn finish_background_project_probe_request(
-        &mut self,
-        completion: BackgroundProjectProbeCompletion,
-    ) -> Result<(CommandOutcome, Vec<BackgroundRefreshTask>), KernelError> {
-        let BackgroundProjectProbeCompletion { task, connection } = completion;
-        self.precomputed_project_connection = Some((task.github_host, task.repository, connection));
-        self.defer_tracker_refreshes = true;
-        let result = self.handle(task.request);
-        self.defer_tracker_refreshes = false;
-        self.precomputed_project_connection = None;
-        let tasks = std::mem::take(&mut self.deferred_refresh_tasks);
-        result.map(|outcome| (outcome, tasks))
-    }
-
-    pub(crate) fn finish_background_tracker_write_request(
-        &mut self,
-        request: &serde_json::Value,
-        completion: BackgroundTrackerWriteCompletion,
-    ) -> BackgroundTrackerWriteFinish {
-        let project_id = completion.refresh.task.project_id.clone();
-        let rollback_seed = (
-            completion.refresh.task.github_host.clone(),
-            completion.refresh.task.repository.clone(),
-            completion.refresh.task.host_secrets_path.clone(),
-            Arc::clone(&completion.refresh.task.tracker),
-        );
-        let issue_id = completion.issue_id;
-        let op = completion.op;
-        let write_result = completion.write_result;
-        let after_request = completion.after_request;
-        if !self.finish_refresh_task(completion.refresh) {
-            return BackgroundTrackerWriteFinish {
-                result: Err(KernelError::Denied(self.write_block_reason(&project_id))),
-                rollback: None,
-            };
-        }
-        let updated = match write_result {
-            Some(Ok(updated)) => updated,
-            Some(Err(error)) => {
-                return BackgroundTrackerWriteFinish {
-                    result: Err(write_tracker_error(error)),
-                    rollback: None,
-                };
-            }
-            None => {
-                return BackgroundTrackerWriteFinish {
-                    result: Err(KernelError::Denied(self.write_block_reason(&project_id))),
-                    rollback: None,
-                };
-            }
-        };
-        if let Some(expected_issue_id) = issue_id.as_deref() {
-            if updated.id() != expected_issue_id {
-                return BackgroundTrackerWriteFinish {
-                    result: Err(KernelError::Protocol(
-                        "tracker returned a different Issue".into(),
-                    )),
-                    rollback: None,
-                };
-            }
-        }
-        self.merge_issue(&project_id, updated, &op);
-        if let Some(after_request) = after_request {
-            self.preclaimed_issue_id = issue_id.clone();
-            let result = self.handle(after_request);
-            self.preclaimed_issue_id = None;
-            let launched = issue_id
-                .as_deref()
-                .is_some_and(|issue_id| self.active_run_id_for_issue(issue_id).is_some());
-            let rollback = (!launched).then(|| {
-                let (github_host, repository, host_secrets_path, tracker) = rollback_seed;
-                BackgroundClaimRollbackTask {
-                    project_id,
-                    issue_id: issue_id.expect("launch write always has an Issue"),
-                    github_host,
-                    repository,
-                    host_secrets_path,
-                    tracker,
-                }
-            });
-            BackgroundTrackerWriteFinish { result, rollback }
-        } else {
-            BackgroundTrackerWriteFinish {
-                result: self.outcome_for_request(request),
-                rollback: None,
-            }
-        }
-    }
-
-    pub(crate) fn finish_background_claim_rollback(
-        &mut self,
-        request: &serde_json::Value,
-        completion: BackgroundClaimRollbackCompletion,
-    ) -> Result<CommandOutcome, KernelError> {
-        self.apply_background_claim_rollback(completion)?;
-        self.outcome_for_request(request)
-    }
-
-    fn apply_background_claim_rollback(
-        &mut self,
-        completion: BackgroundClaimRollbackCompletion,
-    ) -> Result<(), KernelError> {
-        let BackgroundClaimRollbackCompletion { task, result } = completion;
-        let project_is_current = self.projects.iter().any(|project| {
-            project.id == task.project_id
-                && project.github_host == task.github_host
-                && project.repository == task.repository
-        });
-        if !project_is_current {
-            return Ok(());
-        }
-        let updated = result.map_err(write_tracker_error)?;
-        if updated.id() != task.issue_id {
-            return Err(KernelError::Protocol(
-                "tracker returned a different Issue".into(),
-            ));
-        }
-        self.merge_issue(
-            &task.project_id,
-            updated,
-            &tracker_seam::TrackerWriteOp::Release,
-        );
-        Ok(())
-    }
-
-    fn outcome_for_request(
-        &mut self,
-        request: &serde_json::Value,
-    ) -> Result<CommandOutcome, KernelError> {
-        let mut outcome = self.outcome();
-        if let Some(view) = request
-            .get("clientView")
-            .cloned()
-            .map(serde_json::from_value::<ClientSnapshotView>)
-            .transpose()?
-            .as_ref()
-        {
-            outcome.snapshot = Box::new(self.snapshot_for_client(
-                request.get("clientId").and_then(|value| value.as_str()),
-                view,
-            ));
-        }
-        Ok(outcome)
-    }
-
-    fn handle_inner(&mut self, request: serde_json::Value) -> Result<CommandOutcome, KernelError> {
         let op = request
             .get("op")
             .and_then(|value| value.as_str())
@@ -3223,53 +2112,102 @@ impl HostKernel {
                     .to_string();
                 self.dispatch(Command::PairRemoteHost { address, code })
             }
-            "forgetRemoteHost" => self.dispatch(Command::ForgetRemoteHost {
-                host_id: required_string(&request, "hostId")?,
-            }),
             "focusHost" => {
                 let host_id = request
                     .get("hostId")
                     .and_then(|value| value.as_str())
                     .ok_or_else(|| KernelError::Protocol("missing hostId".into()))?
                     .to_string();
-                self.dispatch(Command::FocusHost { host_id })
+                if let Some(client_instance_id) = request
+                    .get("clientInstanceId")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                {
+                    self.focused_host_id = host_id.clone();
+                    self.refresh_remote_view_for_client(&host_id, Some(client_instance_id))?;
+                    self.persist_client_settings(&self.appearance.clone())?;
+                    Ok(self.outcome())
+                } else {
+                    self.dispatch(Command::FocusHost { host_id })
+                }
             }
-            "registerProject" => self.dispatch(Command::RegisterProject {
-                name: required_string(&request, "name")?,
-                local_path: required_string(&request, "localPath")?,
-                github_host: optional_string(&request, "githubHost"),
-                repository: required_string(&request, "repository")?,
-            }),
-            "editProject" => self.dispatch(Command::EditProject {
-                project_id: required_string(&request, "projectId")?,
-                name: required_string(&request, "name")?,
-                local_path: required_string(&request, "localPath")?,
-                github_host: optional_string(&request, "githubHost"),
-                repository: required_string(&request, "repository")?,
-            }),
-            "removeProject" => self.dispatch(Command::RemoveProject {
-                project_id: required_string(&request, "projectId")?,
-            }),
-            "focusProject" => self.dispatch(Command::FocusProject {
-                project_id: required_string(&request, "projectId")?,
-            }),
-            "inferProject" => self.dispatch(Command::InferProject {
-                local_path: required_string(&request, "localPath")?,
-            }),
-            "focusIssue" => self.dispatch(Command::FocusIssue {
-                issue_id: required_string(&request, "issueId")?,
-            }),
+            "registerProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RegisterProject {
+                    name: required_string(&request, "name")?,
+                    local_path: required_string(&request, "localPath")?,
+                    github_host: optional_string(&request, "githubHost"),
+                    repository: required_string(&request, "repository")?,
+                })
+            }
+            "editProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::EditProject {
+                    project_id: required_string(&request, "projectId")?,
+                    name: required_string(&request, "name")?,
+                    local_path: required_string(&request, "localPath")?,
+                    github_host: optional_string(&request, "githubHost"),
+                    repository: required_string(&request, "repository")?,
+                })
+            }
+            "removeProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RemoveProject {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "focusProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusProject {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "inferProject" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::InferProject {
+                    local_path: required_string(&request, "localPath")?,
+                })
+            }
+            "focusIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
             "loadIssueDocument" => {
-                self.observe_live_runs();
-                let issue_id = required_string(&request, "issueId")?;
-                let project_id = self.project_id_for_issue_request(&request, &issue_id)?;
-                self.load_issue_document(&project_id, &issue_id)?;
-                Ok(self.outcome())
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::LoadIssueDocument {
+                    issue_id: required_string(&request, "issueId")?,
+                })
             }
-            "filterParent" => self.dispatch(Command::FilterParent {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "clearParentFilter" => self.dispatch(Command::ClearParentFilter),
+            "filterParent" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FilterParent {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "clearParentFilter" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ClearParentFilter)
+            }
             "setCenterView" => {
                 let view = serde_json::from_value(
                     request
@@ -3277,23 +2215,52 @@ impl HostKernel {
                         .cloned()
                         .ok_or_else(|| KernelError::Protocol("missing view".into()))?,
                 )?;
+                if view == CenterView::Graph
+                    && self.center_view != CenterView::Graph
+                    && self.focused_host_id != LOCAL_HOST_ID
+                {
+                    self.forward_if_remote(&serde_json::json!({
+                        "op": "showDependencyGraphOverview",
+                    }))?;
+                }
                 self.dispatch(Command::SetCenterView { view })
             }
-            "centerDependencyGraph" => self.dispatch(Command::CenterDependencyGraph {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "setDependencyGraphComplete" => self.dispatch(Command::SetDependencyGraphComplete {
-                complete: request
-                    .get("complete")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| KernelError::Protocol("missing complete".into()))?,
-            }),
-            "setShowClosedGraphContext" => self.dispatch(Command::SetDependencyGraphComplete {
-                complete: request
-                    .get("show")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
-            }),
+            "centerDependencyGraph" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CenterDependencyGraph {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "showDependencyGraphOverview" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ShowDependencyGraphOverview)
+            }
+            "setDependencyGraphComplete" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetDependencyGraphComplete {
+                    complete: request
+                        .get("complete")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing complete".into()))?,
+                })
+            }
+            "setShowClosedGraphContext" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetDependencyGraphComplete {
+                    complete: request
+                        .get("show")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing show".into()))?,
+                })
+            }
             "setRecentCompletedLimit" => self.dispatch(Command::SetRecentCompletedLimit {
                 limit: request
                     .get("limit")
@@ -3310,6 +2277,9 @@ impl HostKernel {
                 self.dispatch(Command::RefreshLaunchEnvironment)
             }
             "searchIssues" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let triage_role = request
                     .get("triageRole")
                     .and_then(|value| value.as_str())
@@ -3333,14 +2303,22 @@ impl HostKernel {
                     },
                 })
             }
-            "refresh" => self.dispatch(Command::Refresh {
-                project_id: request
-                    .get("projectId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-            }),
+            "refresh" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::Refresh {
+                    project_id: request
+                        .get("projectId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                })
+            }
             "tick" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let now_ms = request
                     .get("nowMs")
                     .and_then(|value| value.as_u64())
@@ -3364,45 +2342,88 @@ impl HostKernel {
                     now_ms: Some(now_ms),
                 })
             }
-            "setClientView" => self.dispatch(Command::SetClientView {
-                client_id: required_string(&request, "clientId")?,
-                project_id: optional_string(&request, "projectId"),
-                visible: request
-                    .get("visible")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            }),
-            "noteRunEnded" => self.dispatch(Command::NoteRunEnded {
-                project_id: required_string(&request, "projectId")?,
-            }),
-            "claimIssue" => self.dispatch(Command::ClaimIssue {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "releaseIssue" => self.dispatch(Command::ReleaseIssue {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "createIssue" => self.dispatch(Command::CreateIssue {
-                project_id: required_string(&request, "projectId")?,
-                title: required_string(&request, "title")?,
-                body: optional_string(&request, "body"),
-            }),
-            "updateIssue" => self.dispatch(Command::UpdateIssue {
-                issue_id: required_string(&request, "issueId")?,
-                title: required_string(&request, "title")?,
-                body: optional_string(&request, "body"),
-            }),
-            "setIssueOpen" => self.dispatch(Command::SetIssueOpen {
-                issue_id: required_string(&request, "issueId")?,
-                open: request
-                    .get("open")
-                    .and_then(|value| value.as_bool())
-                    .ok_or_else(|| KernelError::Protocol("missing open".into()))?,
-            }),
-            "addIssueComment" => self.dispatch(Command::AddIssueComment {
-                issue_id: required_string(&request, "issueId")?,
-                body: required_string(&request, "body")?,
-            }),
+            "setClientView" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetClientView {
+                    client_id: required_string(&request, "clientId")?,
+                    project_id: optional_string(&request, "projectId"),
+                    visible: request
+                        .get("visible")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "noteRunEnded" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::NoteRunEnded {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "claimIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ClaimIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "releaseIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ReleaseIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "createIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CreateIssue {
+                    project_id: required_string(&request, "projectId")?,
+                    title: required_string(&request, "title")?,
+                    body: optional_string(&request, "body"),
+                })
+            }
+            "updateIssue" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::UpdateIssue {
+                    issue_id: required_string(&request, "issueId")?,
+                    title: required_string(&request, "title")?,
+                    body: optional_string(&request, "body"),
+                })
+            }
+            "setIssueOpen" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetIssueOpen {
+                    issue_id: required_string(&request, "issueId")?,
+                    open: request
+                        .get("open")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing open".into()))?,
+                })
+            }
+            "addIssueComment" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::AddIssueComment {
+                    issue_id: required_string(&request, "issueId")?,
+                    body: required_string(&request, "body")?,
+                })
+            }
             "setIssueParent" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let parent = request
                     .get("parent")
                     .and_then(|value| value.as_str())
@@ -3417,6 +2438,9 @@ impl HostKernel {
                 })
             }
             "setIssueBlockedBy" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let blocked_by = request
                     .get("blockedBy")
                     .and_then(|value| value.as_array())
@@ -3436,41 +2460,81 @@ impl HostKernel {
                     blocked_by,
                 })
             }
-            "autoAdvance" => self.dispatch(Command::AutoAdvance {
-                project_id: required_string(&request, "projectId")?,
-            }),
-            "checkIssueClosed" => self.dispatch(Command::CheckIssueClosed {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "startBoundRun" => self.dispatch(Command::StartBoundRun {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "continueRun" => self.dispatch(Command::ContinueRun {
-                issue_id: required_string(&request, "issueId")?,
-            }),
-            "prepareRunLaunch" => self.dispatch(Command::PrepareRunLaunch {
-                project_id: required_string(&request, "projectId")?,
-                issue_id: request
-                    .get("issueId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                agent_id: request
-                    .get("agentId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                pick_agent: request
-                    .get("pickAgent")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            }),
-            "previewRunLaunch" => self.dispatch(Command::PreviewRunLaunch {
-                project_id: required_string(&request, "projectId")?,
-                config: parse_launch_config(&request)?,
-            }),
-            "cancelRunLaunch" => self.dispatch(Command::CancelRunLaunch),
+            "autoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::AutoAdvance {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "checkIssueClosed" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CheckIssueClosed {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "startBoundRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::StartBoundRun {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "continueRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ContinueRun {
+                    issue_id: required_string(&request, "issueId")?,
+                })
+            }
+            "prepareRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::PrepareRunLaunch {
+                    project_id: required_string(&request, "projectId")?,
+                    issue_id: request
+                        .get("issueId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    agent_id: request
+                        .get("agentId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    pick_agent: request
+                        .get("pickAgent")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    language: request_language(&request).unwrap_or(self.appearance.language),
+                })
+            }
+            "cancelRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CancelRunLaunch)
+            }
+            "updateRunLaunch" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::UpdateRunLaunch {
+                    project_id: required_string(&request, "projectId")?,
+                    config: parse_launch_config(&request)?,
+                    language: request_language(&request).unwrap_or(self.appearance.language),
+                })
+            }
             "startUnboundRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let project_id = required_string(&request, "projectId")?;
                 if request.get("agentId").is_some()
                     || request.get("values").is_some()
@@ -3505,31 +2569,64 @@ impl HostKernel {
                     .and_then(|value| value.as_bool())
                     .ok_or_else(|| KernelError::Protocol("missing sound".into()))?,
             }),
-            "stopRun" => self.dispatch(Command::StopRun {
-                run_id: required_string(&request, "runId")?,
-            }),
-            "focusRun" => self.dispatch(Command::FocusRun {
-                run_id: required_string(&request, "runId")?,
-            }),
-            "openHostOverview" => self.dispatch(Command::OpenHostOverview),
-            "returnToBoard" => self.dispatch(Command::ReturnToBoard),
-            "injectRunInput" => self.dispatch(Command::InjectRunInput {
-                run_id: required_string(&request, "runId")?,
-                text: request
-                    .get("text")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            }),
+            "stopRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::StopRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "focusRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::FocusRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "openHostOverview" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenHostOverview)
+            }
+            "returnToBoard" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ReturnToBoard)
+            }
+            "injectRunInput" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::InjectRunInput {
+                    run_id: required_string(&request, "runId")?,
+                    text: request
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            }
             "cancelQuit" => self.dispatch(Command::CancelQuit),
             "confirmQuitStopAll" => self.dispatch(Command::ConfirmQuitStopAll),
-            "setRefreshInterval" => self.dispatch(Command::SetRefreshInterval {
-                interval_ms: request
-                    .get("intervalMs")
-                    .and_then(|value| value.as_u64())
-                    .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
-            }),
+            "setRefreshInterval" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetRefreshInterval {
+                    interval_ms: request
+                        .get("intervalMs")
+                        .and_then(|value| value.as_u64())
+                        .ok_or_else(|| KernelError::Protocol("missing intervalMs".into()))?,
+                })
+            }
             "viewChanges" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let scope =
                     ChangeScope::parse(request.get("scope").and_then(|value| value.as_str()))
                         .map_err(KernelError::Protocol)?;
@@ -3548,34 +2645,57 @@ impl HostKernel {
                 outcome.view_changes = Some(view);
                 Ok(outcome)
             }
-            "writeChangeNote" => self.dispatch(Command::WriteChangeNote {
-                run_id: required_string(&request, "runId")?,
-                repo: optional_string(&request, "repo"),
-                path: required_string(&request, "path")?,
-                line: request
-                    .get("line")
-                    .and_then(|value| value.as_u64())
-                    .ok_or_else(|| KernelError::Protocol("missing line".into()))?
-                    as u32,
-                text: required_string(&request, "text")?,
-            }),
-            "deleteChangeNote" => self.dispatch(Command::DeleteChangeNote {
-                note_id: required_string(&request, "noteId")?,
-            }),
-            "setHostAutoAdvance" => self.dispatch(Command::SetHostAutoAdvance {
-                enabled: request
-                    .get("enabled")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            }),
-            "setProjectAutoAdvance" => self.dispatch(Command::SetProjectAutoAdvance {
-                project_id: required_string(&request, "projectId")?,
-                enabled: request
-                    .get("enabled")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false),
-            }),
+            "writeChangeNote" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::WriteChangeNote {
+                    run_id: required_string(&request, "runId")?,
+                    repo: optional_string(&request, "repo"),
+                    path: required_string(&request, "path")?,
+                    line: request
+                        .get("line")
+                        .and_then(|value| value.as_u64())
+                        .ok_or_else(|| KernelError::Protocol("missing line".into()))?
+                        as u32,
+                    text: required_string(&request, "text")?,
+                })
+            }
+            "deleteChangeNote" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::DeleteChangeNote {
+                    note_id: required_string(&request, "noteId")?,
+                })
+            }
+            "setHostAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetHostAutoAdvance {
+                    enabled: request
+                        .get("enabled")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
+            "setProjectAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetProjectAutoAdvance {
+                    project_id: required_string(&request, "projectId")?,
+                    enabled: request
+                        .get("enabled")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                })
+            }
             "setProjectRestoreAutoAdvance" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 self.dispatch(Command::SetProjectRestoreAutoAdvance {
                     project_id: required_string(&request, "projectId")?,
                     enabled: request
@@ -3584,19 +2704,42 @@ impl HostKernel {
                         .unwrap_or(false),
                 })
             }
-            "setProjectRestoreDelay" => self.dispatch(Command::SetProjectRestoreDelay {
-                project_id: required_string(&request, "projectId")?,
-                delay_ms: request
-                    .get("delayMs")
-                    .and_then(|value| value.as_u64())
-                    .unwrap_or(advance::DEFAULT_RESTORE_DELAY_MS),
-            }),
-            "vetoPendingConfirmation" => self.dispatch(Command::VetoPendingConfirmation {
-                project_id: required_string(&request, "projectId")?,
-            }),
-            "openUsage" => self.dispatch(Command::OpenUsage),
-            "closeUsage" => self.dispatch(Command::CloseUsage),
+            "setProjectRestoreDelay" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetProjectRestoreDelay {
+                    project_id: required_string(&request, "projectId")?,
+                    delay_ms: request
+                        .get("delayMs")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(advance::DEFAULT_RESTORE_DELAY_MS),
+                })
+            }
+            "vetoPendingConfirmation" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::VetoPendingConfirmation {
+                    project_id: required_string(&request, "projectId")?,
+                })
+            }
+            "openUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenUsage)
+            }
+            "closeUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::CloseUsage)
+            }
             "setUsageRange" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
                 let range = serde_json::from_value(
                     request
                         .get("range")
@@ -3609,31 +2752,129 @@ impl HostKernel {
                     custom_to_ms: request.get("toMs").and_then(|value| value.as_u64()),
                 })
             }
-            "setUsageFilter" => self.dispatch(Command::SetUsageFilter {
-                project_id: request
-                    .get("projectId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                agent_id: request
-                    .get("agentId")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                model: request
-                    .get("model")
-                    .and_then(|value| value.as_str())
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-            }),
-            "openUsageForRun" => self.dispatch(Command::OpenUsageForRun {
-                run_id: required_string(&request, "runId")?,
-            }),
-            "openRunFromUsage" => self.dispatch(Command::OpenRunFromUsage {
-                run_id: required_string(&request, "runId")?,
-            }),
+            "setUsageFilter" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetUsageFilter {
+                    project_id: request
+                        .get("projectId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    agent_id: request
+                        .get("agentId")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                    model: request
+                        .get("model")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
+                })
+            }
+            "openUsageForRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenUsageForRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "openRunFromUsage" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::OpenRunFromUsage {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),
         }
+    }
+
+    fn capture_client_navigation(&self) -> ClientNavigationState {
+        ClientNavigationState {
+            focused_host_id: self.focused_host_id.clone(),
+            remote_view: self.remote_view.clone(),
+            focused_project_id: self.focused_project_id.clone(),
+            selected_issue_id: self.selected_issue_id.clone(),
+            parent_filter: self.parent_filter.clone(),
+            issue_search: self.issue_search.clone(),
+            center_view: self.center_view,
+            workspace_view: self.workspace_view,
+            graph_center_issue_id: self.graph_center_issue_id.clone(),
+            complete_dependency_graph: self.complete_dependency_graph,
+            focused_run_id: self.focused_run_id.clone(),
+            launch_form: self.launch_form.clone(),
+            usage_open: self.usage_open,
+            usage_query: self.usage_query.clone(),
+        }
+    }
+
+    fn normalize_client_navigation(
+        &self,
+        mut state: ClientNavigationState,
+    ) -> ClientNavigationState {
+        let host_known = state.focused_host_id == LOCAL_HOST_ID
+            || self
+                .remote_hosts
+                .iter()
+                .any(|host| host.id == state.focused_host_id);
+        if !host_known {
+            state.focused_host_id = if self.host_mode == HostMode::HostAndClient {
+                LOCAL_HOST_ID.to_string()
+            } else {
+                self.remote_hosts
+                    .first()
+                    .map(|host| host.id.clone())
+                    .unwrap_or_default()
+            };
+            state.remote_view = None;
+        }
+
+        if state.focused_host_id == LOCAL_HOST_ID {
+            if state
+                .focused_project_id
+                .as_ref()
+                .is_none_or(|project_id| !self.projects.iter().any(|p| p.id == *project_id))
+            {
+                state.focused_project_id = self.projects.first().map(|project| project.id.clone());
+                state.selected_issue_id = None;
+                state.parent_filter = None;
+                state.graph_center_issue_id = None;
+                state.complete_dependency_graph = false;
+            }
+            if state
+                .focused_run_id
+                .as_ref()
+                .is_some_and(|run_id| !self.runs.iter().any(|run| run.id == *run_id))
+            {
+                state.focused_run_id = None;
+                if state.workspace_view == WorkspaceView::Run {
+                    state.workspace_view = WorkspaceView::Project;
+                }
+            }
+        }
+        state
+    }
+
+    fn apply_client_navigation(&mut self, state: ClientNavigationState) {
+        self.focused_host_id = state.focused_host_id;
+        self.remote_view = state.remote_view;
+        self.focused_project_id = state.focused_project_id;
+        self.selected_issue_id = state.selected_issue_id;
+        self.parent_filter = state.parent_filter;
+        self.issue_search = state.issue_search;
+        self.center_view = state.center_view;
+        self.workspace_view = state.workspace_view;
+        self.graph_center_issue_id = state.graph_center_issue_id;
+        self.complete_dependency_graph = state.complete_dependency_graph;
+        self.focused_run_id = state.focused_run_id;
+        self.launch_form = state.launch_form;
+        self.usage_open = state.usage_open;
+        self.usage_query = state.usage_query;
     }
 
     pub fn pairing_token_valid(&self, token: &str) -> bool {
@@ -3735,6 +2976,14 @@ impl HostKernel {
     }
 
     fn refresh_remote_view(&mut self, host_id: &str) -> Result<(), KernelError> {
+        self.refresh_remote_view_for_client(host_id, None)
+    }
+
+    fn refresh_remote_view_for_client(
+        &mut self,
+        host_id: &str,
+        client_instance_id: Option<&str>,
+    ) -> Result<(), KernelError> {
         if host_id == LOCAL_HOST_ID {
             self.remote_view = None;
             return Ok(());
@@ -3745,22 +2994,23 @@ impl HostKernel {
             .find(|host| host.id == host_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
-        let response = pairing::post_rpc(
-            &remote.address,
-            Some(&remote.token),
-            &serde_json::json!({ "op": "snapshot" }),
-        )
-        .map_err(|err| match err {
-            KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
-            other => other,
-        })?;
-        self.store_remote_view_response(host_id, None, &response)
+        let mut request = serde_json::json!({ "op": "snapshot" });
+        if let Some(client_instance_id) = client_instance_id {
+            request["clientInstanceId"] = serde_json::Value::String(client_instance_id.into());
+        }
+        let response =
+            pairing::post_rpc(&remote.address, Some(&remote.token), &request).map_err(|err| {
+                match err {
+                    KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
+                    other => other,
+                }
+            })?;
+        self.apply_remote_view(host_id, &response)
     }
 
-    fn store_remote_view_response(
+    fn apply_remote_view(
         &mut self,
         host_id: &str,
-        client_id: Option<&str>,
         response: &serde_json::Value,
     ) -> Result<(), KernelError> {
         let snapshot = response
@@ -3809,7 +3059,7 @@ impl HostKernel {
             Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
             _ => None,
         };
-        let remote_view = RemoteView {
+        self.remote_view = Some(RemoteView {
             host_id: host_id.to_string(),
             projects,
             focused_project_id,
@@ -3836,22 +3086,7 @@ impl HostKernel {
                 .and_then(|value| value.as_u64())
                 .map(refresh::clamp_refresh_interval_ms)
                 .unwrap_or(refresh::DEFAULT_REFRESH_INTERVAL_MS),
-            auto_advance: snapshot
-                .get("autoAdvance")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
-            pending_confirmation: match snapshot.get("pendingConfirmation") {
-                Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
-                _ => None,
-            },
-        };
-        if let Some(client_id) = client_id.filter(|client_id| !client_id.is_empty()) {
-            self.remote_client_views
-                .entry(client_id.to_string())
-                .or_default()
-                .insert(host_id.to_string(), remote_view.clone());
-        }
-        self.remote_view = Some(remote_view);
+        });
         Ok(())
     }
 
@@ -3919,7 +3154,7 @@ impl HostKernel {
             .iter()
             .find(|agent| agent.id() == selected)
             .cloned()
-            .ok_or_else(|| KernelError::Protocol("no Agent Adapter".into()))
+            .ok_or_else(|| KernelError::Denied("choose an Agent before starting".into()))
     }
 
     fn refresh_launch_environment(&mut self) -> Result<LaunchEnvironmentStatus, KernelError> {
@@ -3951,6 +3186,7 @@ impl HostKernel {
                 Err(err) => failures.push(format!("{}: {err}", directory.display())),
             }
         }
+        self.agent_config_cache.clear();
         if failures.is_empty() {
             Ok(LaunchEnvironmentStatus {
                 status: "ready",
@@ -3968,6 +3204,7 @@ impl HostKernel {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        language: Language,
     ) -> Result<(), KernelError> {
         let project = self
             .projects
@@ -3975,7 +3212,6 @@ impl HostKernel {
             .find(|project| project.id == project_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        let language = self.appearance.language;
         let agents = launch::summarize_agents(
             &self.agents,
             self.launch_env.as_ref(),
@@ -3984,19 +3220,43 @@ impl HostKernel {
         );
         let last = self.last_successful_agent.get(project_id).cloned();
         let selected = launch::default_agent_id(&agents, last.as_deref(), agent_id.as_deref());
+        if selected.is_empty() {
+            self.launch_form = Some(RunLaunchForm {
+                project_id: project_id.to_string(),
+                issue_id,
+                agents,
+                selected_agent_id: String::new(),
+                skip_agent_picker: false,
+                fields: Vec::new(),
+                values: BTreeMap::new(),
+                prefill_source: PrefillSource::CliSeed,
+                working_directory: project.local_path.display().to_string(),
+                isolation_supported: false,
+                isolation_reason: String::new(),
+                opening_text: String::new(),
+                change_notes_text: String::new(),
+                command_preview: String::new(),
+                intents: launch::intent_options(language),
+                warnings: Vec::new(),
+                error: None,
+                option_discovery_error: None,
+            });
+            return Ok(());
+        }
         let agent = self
             .agents
             .iter()
             .find(|agent| agent.id() == selected)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let (discovery, option_discovery_error) =
+            self.agent_config_for(&project.local_path, agent.as_ref(), language);
         let current = self
             .launch_defaults
             .get(project_id)
             .and_then(|agents| agents.get(&selected));
         let other = launch::other_project_memory(&self.launch_defaults, project_id, &selected);
-        let (mut values, prefill_source) =
-            launch::merge_prefill(&agent.seed_config(), current, other);
+        let (mut values, prefill_source) = launch::merge_prefill(&discovery.seed, current, other);
         let mut opening_text = String::new();
         if let Some(issue_id) = issue_id.as_deref() {
             if let Some(issue) = self.issue_by_id(issue_id) {
@@ -4008,25 +3268,12 @@ impl HostKernel {
         let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
         let change_notes_text = changes::format_notes(&pending);
         opening_text = changes::append_notes(&opening_text, &pending);
-        let fields = launch::localize_fields(
-            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
-            language,
-        );
+        let fields = launch::localize_fields(discovery.fields, language);
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
         let (isolation_supported, isolation_reason) =
             launch::isolation_availability(agent.as_ref(), &project.local_path, language);
         let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
-        let remembered_available = last.as_deref().is_some_and(|id| {
-            agents
-                .iter()
-                .any(|candidate| candidate.id == id && candidate.installed)
-        });
-        let explicit_available = agent_id.as_deref().is_some_and(|id| {
-            agents
-                .iter()
-                .any(|candidate| candidate.id == id && candidate.installed)
-        });
-        let skip_agent_picker = !pick_agent && (remembered_available || explicit_available);
+        let skip_agent_picker = !pick_agent && (last.is_some() || agent_id.is_some());
         let mut warnings = launch::unknown_enum_warnings(&fields, &values, language);
         warnings.extend(launch::side_effect_warnings(
             &project.local_path,
@@ -4053,54 +3300,71 @@ impl HostKernel {
             intents: launch::intent_options(language),
             warnings,
             error: None,
+            option_discovery_error,
         });
         Ok(())
     }
 
-    fn preview_run_launch(
+    fn agent_config_for(
         &mut self,
-        project_id: &str,
-        config: RunLaunchConfig,
-    ) -> Result<(), KernelError> {
-        let project = self
-            .projects
-            .iter()
-            .find(|project| project.id == project_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        let agent = self
-            .agents
-            .iter()
-            .find(|agent| agent.id() == config.agent_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
-        let language = self.appearance.language;
-        let fields = launch::localize_fields(
-            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
-            language,
+        cwd: &Path,
+        agent: &dyn AgentPort,
+        language: Language,
+    ) -> (AgentConfigDiscovery, Option<String>) {
+        let key = (cwd.to_path_buf(), agent.id().to_string());
+        if let Some(cached) = self
+            .agent_config_cache
+            .get(&key)
+            .filter(|cached| self.now_ms.saturating_sub(cached.at_ms) < AGENT_CONFIG_CACHE_MS)
+        {
+            return (
+                cached.discovery.clone(),
+                cached.error.as_ref().map(|error| error.message(language)),
+            );
+        }
+        let fallback = || AgentConfigDiscovery {
+            fields: agent.config_fields(),
+            seed: agent.seed_config(),
+        };
+        let result = self
+            .launch_env
+            .capture(cwd)
+            .map_err(AgentConfigFailure::LaunchEnvironment)
+            .and_then(|env| {
+                let prepared =
+                    agent::prepare_launch_env(env, &[], &agent.known_install_locations());
+                Ok((prepared.clone(), agent.probe(&prepared)))
+            })
+            .and_then(|(env, probe)| match probe {
+                ProbeResult::Found { executable } => agent
+                    .discover_config(&executable, &env)
+                    .map_err(AgentConfigFailure::Cli),
+                ProbeResult::Missing {
+                    command,
+                    searched_path,
+                    known_locations,
+                } => Err(AgentConfigFailure::Missing {
+                    command,
+                    searched_path,
+                    known_locations,
+                }),
+            });
+        let (discovery, error) = match result {
+            Ok(discovery) => (discovery, None),
+            Err(error) => (fallback(), Some(error)),
+        };
+        self.agent_config_cache.insert(
+            key,
+            CachedAgentConfig {
+                at_ms: self.now_ms,
+                discovery: discovery.clone(),
+                error: error.clone(),
+            },
         );
-        let preview =
-            launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
-        let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
-        warnings.extend(launch::side_effect_warnings(
-            &project.local_path,
-            self.runs
-                .iter()
-                .any(|run| run.project_id == project_id && run.is_active()),
-            language,
-        ));
-        let form = self
-            .launch_form
-            .as_mut()
-            .filter(|form| form.project_id == project_id)
-            .ok_or_else(|| KernelError::Protocol("launch form is no longer open".into()))?;
-        form.selected_agent_id = config.agent_id;
-        form.values = config.values;
-        form.opening_text = config.opening_text;
-        form.command_preview = preview;
-        form.warnings = warnings;
-        form.error = None;
-        Ok(())
+        (
+            discovery,
+            error.as_ref().map(|error| error.message(language)),
+        )
     }
 
     fn issue_by_id(&self, issue_id: &str) -> Option<IssueRecord> {
@@ -4109,6 +3373,50 @@ impl HostKernel {
             .flat_map(|issues| issues.iter())
             .find(|issue| issue.id() == issue_id)
             .cloned()
+    }
+
+    fn update_run_launch(
+        &mut self,
+        project_id: &str,
+        config: RunLaunchConfig,
+        language: Language,
+    ) -> Result<(), KernelError> {
+        let form = self
+            .launch_form
+            .as_ref()
+            .filter(|form| form.project_id == project_id)
+            .ok_or_else(|| KernelError::Protocol("no launch form".into()))?;
+        if form.selected_agent_id != config.agent_id {
+            return Err(KernelError::Protocol("launch form Agent changed".into()));
+        }
+        let fields = form.fields.clone();
+        let project_dir = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.local_path.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.id() == config.agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
+        warnings.extend(launch::side_effect_warnings(
+            &project_dir,
+            self.runs
+                .iter()
+                .any(|run| run.project_id == project_id && run.is_active()),
+            language,
+        ));
+        let preview =
+            launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
+        let form = self.launch_form.as_mut().expect("checked launch form");
+        launch::apply_submitted_form(form, &config);
+        form.warnings = warnings;
+        form.command_preview = preview;
+        Ok(())
     }
 
     fn start_unbound_run(
@@ -4157,10 +3465,12 @@ impl HostKernel {
                     .insert(launch::ISOLATION_FIELD.into(), "false".into());
             }
         }
-        let fields = launch::localize_fields(
-            launch::enrich_agent_fields(agent.id(), agent.config_fields()),
-            language,
-        );
+        let fields = self
+            .launch_form
+            .as_ref()
+            .filter(|form| form.selected_agent_id == config.agent_id)
+            .map(|form| form.fields.clone())
+            .unwrap_or_else(|| launch::localize_fields(agent.config_fields(), language));
         if let Some(form) = &mut self.launch_form {
             launch::apply_submitted_form(form, &config);
             let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
@@ -4290,9 +3600,6 @@ impl HostKernel {
         });
         if let Some(session) = result.session {
             self.live.insert(result.record.id.clone(), session);
-            if let Some(issue_id) = issue_id.as_deref() {
-                self.selected_issue_id = Some(issue_id.to_string());
-            }
             self.remember_launch(project_id, &config)?;
             self.launch_form = None;
             self.clear_pending_notes(project_id, issue_id.as_deref())?;
@@ -4370,10 +3677,6 @@ impl HostKernel {
     }
 
     fn claim_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
-        if self.preclaimed_issue_id.as_deref() == Some(issue_id) {
-            self.preclaimed_issue_id = None;
-            return Ok(());
-        }
         self.require_live_tracker_for_issue(issue_id)?;
         self.write_claim(issue_id, true)
     }
@@ -4509,6 +3812,7 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
         let ctx = tracker::ProbeContext {
+            tracker: project.tracker,
             github_host: &project.github_host,
             repository: &project.repository,
             secrets_pat: pat.as_deref(),
@@ -4669,10 +3973,6 @@ impl HostKernel {
     }
 
     fn build_usage(&self) -> UsagePage {
-        self.build_usage_for(&self.usage_query)
-    }
-
-    fn build_usage_for(&self, query: &usage::UsageQuery) -> UsagePage {
         let runs = self
             .runs
             .iter()
@@ -4692,7 +3992,7 @@ impl HostKernel {
             })
             .collect::<Vec<_>>();
         usage::build_usage_page(
-            query,
+            &self.usage_query,
             self.now_ms,
             usage::local_offset_secs(),
             &runs,
@@ -5131,11 +4431,10 @@ impl HostKernel {
         let _ = self.persist_runs();
         if newly_ended {
             if let Some(project_id) = project_id {
-                self.refresh_project_with_continuation(
-                    &project_id,
-                    RefreshTrigger::RunEnded,
-                    RefreshContinuation::RunEnded(run_id.to_string()),
-                );
+                let live = self.refresh_project(&project_id, RefreshTrigger::RunEnded);
+                if live {
+                    self.consider_auto_advance(run_id);
+                }
             }
         }
     }
@@ -5218,22 +4517,20 @@ impl HostKernel {
                 "cannot pair this window to its own Host".into(),
             ));
         }
-        self.apply_pair_remote_host_completion(
-            BackgroundPairRemoteHostTask {
-                address,
-                code: code.to_string(),
-                client_name: self.host_display_name.clone(),
-            }
-            .execute(),
-        )
-    }
-
-    fn apply_pair_remote_host_completion(
-        &mut self,
-        completion: BackgroundPairRemoteHostCompletion,
-    ) -> Result<(), KernelError> {
-        let BackgroundPairRemoteHostCompletion { task, result } = completion;
-        let issued = result?;
+        let body = serde_json::json!({
+            "op": "redeemPairing",
+            "code": code,
+            "clientName": self.host_display_name,
+        });
+        let response = pairing::post_rpc(&address, None, &body).map_err(|err| match err {
+            KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
+            other => other,
+        })?;
+        let pairing = response
+            .get("pairing")
+            .cloned()
+            .ok_or_else(|| KernelError::Denied("invalid pairing code".into()))?;
+        let issued: IssuedPairing = serde_json::from_value(pairing)?;
         if issued.token.is_empty() || issued.host_id.is_empty() {
             return Err(KernelError::Denied("invalid pairing code".into()));
         }
@@ -5244,7 +4541,7 @@ impl HostKernel {
         self.remote_hosts.push(pairing::RemoteHost {
             id: issued.host_id,
             display_name: issued.display_name,
-            address: task.address,
+            address,
             token: issued.token,
         });
         self.persist_client_settings(&self.appearance.clone())
@@ -5274,37 +4571,7 @@ impl HostKernel {
             return Err(KernelError::Protocol("unknown host".into()));
         }
         self.focused_host_id = host_id.to_string();
-        if host_id == LOCAL_HOST_ID {
-            self.remote_view = None;
-        }
-        self.persist_client_settings(&self.appearance.clone())
-    }
-
-    fn forget_remote_host(&mut self, host_id: &str) -> Result<(), KernelError> {
-        if host_id == LOCAL_HOST_ID {
-            return Err(KernelError::Protocol(
-                "local host cannot be forgotten".into(),
-            ));
-        }
-        let before = self.remote_hosts.len();
-        self.remote_hosts.retain(|host| host.id != host_id);
-        if self.remote_hosts.len() == before {
-            return Err(KernelError::Protocol("unknown host".into()));
-        }
-        self.remote_client_views.values_mut().for_each(|views| {
-            views.remove(host_id);
-        });
-        if self.focused_host_id == host_id {
-            self.remote_view = None;
-            self.focused_host_id = if self.host_mode == HostMode::HostAndClient {
-                LOCAL_HOST_ID.to_string()
-            } else {
-                self.remote_hosts
-                    .first()
-                    .map(|host| host.id.clone())
-                    .unwrap_or_default()
-            };
-        }
+        self.refresh_remote_view(host_id)?;
         self.persist_client_settings(&self.appearance.clone())
     }
 
@@ -5525,40 +4792,19 @@ impl HostKernel {
         if pending.deadline_ms > self.now_ms {
             return;
         }
-        self.refresh_project_with_continuation(
-            project_id,
-            RefreshTrigger::Action,
-            RefreshContinuation::PendingAdvance(project_id.to_string()),
-        );
-    }
-
-    fn finish_pending_after_refresh(
-        &mut self,
-        project_id: &str,
-    ) -> Option<BackgroundAutoAdvanceTask> {
-        let Some(pending) = self.pending_advance.get(project_id).cloned() else {
-            return None;
-        };
-        let Some(issue_id) = self.next_auto_pool(project_id) else {
+        if !self.refresh_project(project_id, RefreshTrigger::Action) {
             self.clear_pending(project_id, false);
-            return None;
-        };
-        let Some(project) = self
-            .projects
-            .iter()
-            .find(|project| project.id == project_id)
-        else {
+            return;
+        }
+        let next = self.next_auto_pool(project_id);
+        if let Some(issue_id) = next {
+            match self.start_bound_run_with_agent(&issue_id, &pending.agent_id) {
+                Ok(()) => self.clear_pending(project_id, true),
+                Err(_) => self.clear_pending(project_id, false),
+            }
+        } else {
             self.clear_pending(project_id, false);
-            return None;
-        };
-        Some(BackgroundAutoAdvanceTask {
-            pending,
-            issue_id,
-            github_host: project.github_host.clone(),
-            repository: project.repository.clone(),
-            host_secrets_path: self.data.host_secrets_path.clone(),
-            tracker: Arc::clone(&self.tracker),
-        })
+        }
     }
 
     fn next_auto_pool(&self, project_id: &str) -> Option<String> {
@@ -5710,18 +4956,7 @@ impl HostKernel {
         if !self.auto_advance_allowed(&run.project_id) || !run.hooks_attached {
             return;
         }
-        self.refresh_project_with_continuation(
-            &run.project_id,
-            RefreshTrigger::Action,
-            RefreshContinuation::SelfCheck(run_id.to_string()),
-        );
-    }
-
-    fn finish_self_check_after_refresh(&mut self, run_id: &str) {
-        let Some(run) = self.runs.iter().find(|run| run.id == run_id).cloned() else {
-            return;
-        };
-        if !run.is_active() || !run.stop_failure || run.self_check_attempted {
+        if !self.refresh_project(&run.project_id, RefreshTrigger::Action) {
             return;
         }
         if run
@@ -5788,6 +5023,38 @@ impl HostKernel {
         )
     }
 
+    fn forward_if_remote(
+        &mut self,
+        request: &serde_json::Value,
+    ) -> Result<Option<CommandOutcome>, KernelError> {
+        if self.focused_host_id == LOCAL_HOST_ID {
+            return Ok(None);
+        }
+        let remote = self
+            .remote_hosts
+            .iter()
+            .find(|host| host.id == self.focused_host_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
+        let response =
+            pairing::post_rpc(&remote.address, Some(&remote.token), request).map_err(|err| {
+                match err {
+                    KernelError::Io(_) => KernelError::Protocol("address is not reachable".into()),
+                    other => other,
+                }
+            })?;
+        let host_id = self.focused_host_id.clone();
+        self.apply_remote_view(&host_id, &response)?;
+        let mut outcome = self.outcome();
+        if let Some(inference) = response.get("inference").cloned() {
+            outcome.inference = serde_json::from_value(inference).ok();
+        }
+        if let Some(view) = response.get("viewChanges").cloned() {
+            outcome.view_changes = serde_json::from_value(view).ok();
+        }
+        Ok(Some(outcome))
+    }
+
     fn register_project(
         &mut self,
         name: &str,
@@ -5811,12 +5078,8 @@ impl HostKernel {
                 "a Project is already registered for this directory".into(),
             ));
         }
-        let tracker_kind = if github_host == "local" {
-            TrackerKind::LocalMarkdown
-        } else {
-            TrackerKind::Github
-        };
-        let connection = self.probe_github(&github_host, &repository);
+        let tracker_kind = tracker_kind_for_host(&github_host);
+        let connection = self.probe_tracker(tracker_kind, &github_host, &repository);
         let record = ProjectRecord {
             id: pairing::random_id(),
             name,
@@ -5888,21 +5151,12 @@ impl HostKernel {
             .iter()
             .find(|project| project.id == project_id)
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        let tracker_kind = if github_host == "local" {
-            TrackerKind::LocalMarkdown
-        } else {
-            TrackerKind::Github
-        };
         let registration_changed = current.local_path != local_path
-            || current.tracker != tracker_kind
             || current.github_host != github_host
             || current.repository != repository;
-        if registration_changed && self.refresh_in_flight.contains(project_id) {
-            return Err(KernelError::Denied(
-                "cannot change a Project registration while Tracker I/O is in progress".into(),
-            ));
-        }
-        let connection = registration_changed.then(|| self.probe_github(&github_host, &repository));
+        let tracker_kind = tracker_kind_for_host(&github_host);
+        let connection = registration_changed
+            .then(|| self.probe_tracker(tracker_kind, &github_host, &repository));
         let mut projects = self.projects.clone();
         let project = projects
             .iter_mut()
@@ -5923,6 +5177,7 @@ impl HostKernel {
             self.loaded_issues.remove(project_id);
             self.issue_documents.remove(project_id);
             self.refresh.remove(project_id);
+            self.local_tracker_revisions.remove(project_id);
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
             if self.focused_project_id.as_deref() == Some(project_id) {
                 self.selected_issue_id = None;
@@ -5946,11 +5201,6 @@ impl HostKernel {
                 "cannot remove a Project with an active Run".into(),
             ));
         }
-        if self.refresh_in_flight.contains(project_id) {
-            return Err(KernelError::Denied(
-                "cannot remove a Project while Tracker I/O is in progress".into(),
-            ));
-        }
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let mut projects = self.projects.clone();
         projects.remove(index);
@@ -5968,6 +5218,7 @@ impl HostKernel {
         self.projects = projects;
         self.focused_project_id = focused_project_id;
         self.refresh.remove(project_id);
+        self.local_tracker_revisions.remove(project_id);
         self.loaded_issues.remove(project_id);
         self.issue_documents.remove(project_id);
         self.clear_pending(project_id, false);
@@ -5993,7 +5244,8 @@ impl HostKernel {
         };
         let host = self.projects[index].github_host.clone();
         let repository = self.projects[index].repository.clone();
-        let connection = self.probe_github(&host, &repository);
+        let tracker_kind = self.projects[index].tracker;
+        let connection = self.probe_tracker(tracker_kind, &host, &repository);
         self.projects[index].connection = connection;
         self.focused_project_id = Some(project_id.to_string());
         self.selected_issue_id = None;
@@ -6023,42 +5275,23 @@ impl HostKernel {
                 }
             });
         }
-        self.current_local_board(
+        let loaded = self
+            .loaded_issues
+            .get(focused_project_id)
+            .map(Vec::as_slice);
+        let mut board = board::project_board(
             focused_project_id,
+            loaded,
             self.parent_filter.as_deref(),
             self.selected_issue_id.as_deref(),
+            self.recent_limit,
+            self.refresh_status_for(focused_project_id),
             self.graph_center_issue_id.as_deref(),
             self.complete_dependency_graph,
             self.issue_search
                 .get(focused_project_id)
                 .cloned()
                 .unwrap_or_default(),
-        )
-    }
-
-    fn current_local_board(
-        &self,
-        project_id: &str,
-        parent_filter_id: Option<&str>,
-        selected_issue_id: Option<&str>,
-        graph_center_issue_id: Option<&str>,
-        complete_dependency_graph: bool,
-        search: IssueSearch,
-    ) -> Option<BoardSnapshot> {
-        if project_id.is_empty() {
-            return None;
-        }
-        let loaded = self.loaded_issues.get(project_id).map(Vec::as_slice);
-        let mut board = board::project_board(
-            project_id,
-            loaded,
-            parent_filter_id,
-            selected_issue_id,
-            self.recent_limit,
-            self.refresh_status_for(project_id),
-            graph_center_issue_id,
-            complete_dependency_graph,
-            search,
         );
         if let Some(columns) = board.columns.as_mut() {
             for card in &mut columns.in_progress {
@@ -6072,7 +5305,7 @@ impl HostKernel {
         if let Some(selected) = board.selected.as_mut() {
             selected.document = self
                 .issue_documents
-                .get(project_id)
+                .get(focused_project_id)
                 .and_then(|documents| documents.get(&selected.id))
                 .cloned()
                 .unwrap_or_default();
@@ -6083,23 +5316,15 @@ impl HostKernel {
         Some(board)
     }
 
-    fn load_issue_document(&mut self, project_id: &str, issue_id: &str) -> Result<(), KernelError> {
-        let Some(task) = self.begin_issue_document_task(project_id, issue_id)? else {
-            return Ok(());
-        };
-        let completion = task.execute();
-        self.finish_issue_document_task(completion);
-        Ok(())
-    }
-
-    fn begin_issue_document_task(
-        &mut self,
-        project_id: &str,
-        issue_id: &str,
-    ) -> Result<Option<BackgroundIssueDocumentTask>, KernelError> {
-        let identity = (project_id.to_string(), issue_id.to_string());
-        if self.issue_documents_in_flight.contains(&identity) {
-            return Ok(None);
+    fn load_issue_document(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        let project_id = self
+            .focused_project_id
+            .clone()
+            .ok_or_else(|| KernelError::Protocol("no focused project".into()))?;
+        if self.selected_issue_id.as_deref() != Some(issue_id) {
+            return Err(KernelError::Protocol(
+                "Issue document can only be loaded for the selected Issue".into(),
+            ));
         }
         let project = self
             .projects
@@ -6107,21 +5332,14 @@ impl HostKernel {
             .find(|project| project.id == project_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        if !self
-            .loaded_issues
-            .get(project_id)
-            .is_some_and(|issues| issues.iter().any(|issue| issue.id() == issue_id))
-        {
-            return Err(KernelError::Protocol("unknown issue".into()));
-        }
         let previous = self
             .issue_documents
-            .get(project_id)
+            .get(&project_id)
             .and_then(|documents| documents.get(issue_id))
             .cloned();
         let previous_body = issue_document_body(previous.as_ref());
         self.issue_documents
-            .entry(project_id.to_string())
+            .entry(project_id.clone())
             .or_default()
             .insert(
                 issue_id.to_string(),
@@ -6132,47 +5350,17 @@ impl HostKernel {
                         .map(|(_, fetched_at_ms)| *fetched_at_ms),
                 },
             );
-        self.issue_documents_in_flight.insert(identity);
-        Ok(Some(BackgroundIssueDocumentTask {
-            project_id: project_id.to_string(),
-            issue_id: issue_id.to_string(),
-            github_host: project.github_host,
-            repository: project.repository,
-            host_secrets_path: self.data.host_secrets_path.clone(),
-            tracker: Arc::clone(&self.tracker),
-            now_ms: self.now_ms,
-            previous_body,
-        }))
-    }
-
-    pub(crate) fn finish_issue_document_task(
-        &mut self,
-        completion: BackgroundIssueDocumentCompletion,
-    ) {
-        let BackgroundIssueDocumentCompletion { task, result } = completion;
-        let BackgroundIssueDocumentTask {
-            project_id,
+        let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
+        let result = self.tracker.read_issue_document(
+            &tracker::ProbeContext {
+                tracker: project.tracker,
+                github_host: &project.github_host,
+                repository: &project.repository,
+                secrets_pat: pat.as_deref(),
+                secrets_path: &self.data.host_secrets_path,
+            },
             issue_id,
-            github_host,
-            repository,
-            now_ms,
-            previous_body,
-            ..
-        } = task;
-        self.issue_documents_in_flight
-            .remove(&(project_id.clone(), issue_id.clone()));
-        let project_is_current = self.projects.iter().any(|project| {
-            project.id == project_id
-                && project.github_host == github_host
-                && project.repository == repository
-        });
-        let issue_is_current = self
-            .loaded_issues
-            .get(&project_id)
-            .is_some_and(|issues| issues.iter().any(|issue| issue.id() == issue_id));
-        if !project_is_current || !issue_is_current {
-            return;
-        }
+        );
         let state = match result {
             Ok(document) => {
                 if let Some(issues) = self.loaded_issues.get_mut(&project_id) {
@@ -6189,7 +5377,7 @@ impl HostKernel {
                 }
                 IssueDocumentState::Ready {
                     body: document.body,
-                    fetched_at_ms: now_ms,
+                    fetched_at_ms: self.now_ms,
                 }
             }
             Err(error) => {
@@ -6207,8 +5395,9 @@ impl HostKernel {
         self.issue_documents
             .entry(project_id.clone())
             .or_default()
-            .insert(issue_id, state);
+            .insert(issue_id.to_string(), state);
         self.persist_tracker_snapshot(&project_id);
+        Ok(())
     }
 
     fn load_persisted_snapshot(&mut self, project_id: &str) {
@@ -6256,273 +5445,124 @@ impl HostKernel {
         );
     }
 
-    fn refresh_project(&mut self, project_id: &str, trigger: RefreshTrigger) -> bool {
-        if self.defer_tracker_refreshes {
-            if let Some(task) = self.begin_refresh_task(project_id, trigger) {
-                self.deferred_refresh_tasks.push(task);
-                return true;
-            }
-            return false;
-        }
-        let Some(task) = self.begin_refresh_task(project_id, trigger) else {
-            return false;
-        };
-        let completion = task.execute();
-        self.finish_refresh_task(completion)
+    pub(crate) fn begin_deferred_refreshes(&mut self) {
+        debug_assert!(!self.defer_refreshes);
+        debug_assert!(self.deferred_refreshes.is_empty());
+        self.defer_refreshes = true;
     }
 
-    fn refresh_project_with_continuation(
-        &mut self,
-        project_id: &str,
-        trigger: RefreshTrigger,
-        continuation: RefreshContinuation,
-    ) -> bool {
-        let Some(mut task) = self.begin_refresh_task(project_id, trigger) else {
-            if matches!(continuation, RefreshContinuation::PendingAdvance(_)) {
-                self.clear_pending(project_id, false);
+    pub(crate) fn take_deferred_refreshes(&mut self) -> Vec<PreparedRefresh> {
+        self.defer_refreshes = false;
+        std::mem::take(&mut self.deferred_refreshes)
+    }
+
+    pub(crate) fn cancel_prepared_refreshes(&mut self, prepared: &[PreparedRefresh]) {
+        for refresh in prepared {
+            if self.refresh_in_flight.get(&refresh.project_id).copied() == Some(refresh.generation)
+            {
+                self.refresh_in_flight.remove(&refresh.project_id);
             }
-            return false;
-        };
-        task.continuation = Some(continuation);
-        if self.defer_tracker_refreshes {
-            self.deferred_refresh_tasks.push(task);
-            true
-        } else {
-            self.finish_refresh_task(task.execute())
         }
     }
 
-    fn begin_refresh_task(
-        &mut self,
-        project_id: &str,
-        trigger: RefreshTrigger,
-    ) -> Option<BackgroundRefreshTask> {
-        if !self.should_attempt_refresh(project_id, trigger) {
-            return None;
-        }
-        if self.refresh_in_flight.contains(project_id) {
-            return None;
-        }
-        let Some(index) = self
-            .projects
-            .iter()
-            .position(|project| project.id == project_id)
-        else {
-            return None;
-        };
-        let previous = self.refresh.get(project_id).cloned();
-        let previous_fetched = previous.as_ref().and_then(|state| state.fetched_at_ms);
-        self.pending_events.push(HostEvent::RefreshStatusChanged {
-            project_id: project_id.to_string(),
-            status: RefreshStatus::Refreshing {
-                fetched_at_ms: previous_fetched,
-            },
+    pub(crate) fn execute_prepared_refresh(prepared: PreparedRefresh) -> CompletedRefresh {
+        let result = prepared.tracker.read_all(&tracker::ProbeContext {
+            tracker: prepared.tracker_kind,
+            github_host: &prepared.github_host,
+            repository: &prepared.repository,
+            secrets_pat: prepared.secrets_pat.as_deref(),
+            secrets_path: &prepared.secrets_path,
         });
-        let github_host = self.projects[index].github_host.clone();
-        let repository = self.projects[index].repository.clone();
-        self.refresh_in_flight.insert(project_id.to_string());
-        Some(BackgroundRefreshTask {
-            project_id: project_id.to_string(),
-            github_host,
-            repository,
-            host_secrets_path: self.data.host_secrets_path.clone(),
-            tracker: Arc::clone(&self.tracker),
-            now_ms: self.now_ms,
-            previous,
-            probe_connection: !matches!(
-                self.projects[index].connection,
-                ProjectConnection::Ready { .. }
-            ),
-            language: self.appearance.language,
-            continuation: None,
-        })
+        CompletedRefresh { prepared, result }
     }
 
-    pub(crate) fn finish_refresh_task(&mut self, completion: BackgroundRefreshCompletion) -> bool {
-        let (live, auto_advance) = self.finish_background_refresh_task(completion);
-        if let Some(task) = auto_advance {
-            let completion = task.execute();
-            if let Some(rollback) = self.finish_background_auto_advance(completion) {
-                let completion = rollback.execute();
-                self.finish_background_auto_advance_rollback(completion);
-            }
+    pub(crate) fn finish_prepared_refresh(&mut self, completed: CompletedRefresh) -> bool {
+        let CompletedRefresh { prepared, result } = completed;
+        if self.refresh_in_flight.get(&prepared.project_id).copied() != Some(prepared.generation) {
+            return false;
         }
-        live
-    }
-
-    pub(crate) fn finish_background_refresh_task(
-        &mut self,
-        completion: BackgroundRefreshCompletion,
-    ) -> (bool, Option<BackgroundAutoAdvanceTask>) {
-        let continuation = completion.task.continuation.clone();
-        let live = self.apply_refresh_completion(completion);
-        let auto_advance = continuation
-            .and_then(|continuation| self.finish_refresh_continuation(continuation, live));
-        (live, auto_advance)
-    }
-
-    fn finish_refresh_continuation(
-        &mut self,
-        continuation: RefreshContinuation,
-        live: bool,
-    ) -> Option<BackgroundAutoAdvanceTask> {
-        match continuation {
-            RefreshContinuation::RunEnded(run_id) if live => {
-                self.consider_auto_advance(&run_id);
-                None
-            }
-            RefreshContinuation::PendingAdvance(project_id) => {
-                if live {
-                    self.finish_pending_after_refresh(&project_id)
-                } else {
-                    self.clear_pending(&project_id, false);
-                    None
-                }
-            }
-            RefreshContinuation::SelfCheck(run_id) if live => {
-                self.finish_self_check_after_refresh(&run_id);
-                None
-            }
-            RefreshContinuation::RunEnded(_) | RefreshContinuation::SelfCheck(_) => None,
-        }
-    }
-
-    pub(crate) fn finish_background_auto_advance(
-        &mut self,
-        completion: BackgroundAutoAdvanceCompletion,
-    ) -> Option<BackgroundClaimRollbackTask> {
-        let BackgroundAutoAdvanceCompletion { task, result } = completion;
-        let rollback = task.rollback_task();
-        let pending_is_current = self
-            .pending_advance
-            .get(&task.pending.project_id)
-            .is_some_and(|pending| pending == &task.pending);
-        let project_is_current = self.projects.iter().any(|project| {
-            project.id == task.pending.project_id
-                && project.github_host == task.github_host
-                && project.repository == task.repository
-        });
-        let updated = match result {
-            Ok(updated) => updated,
-            Err(_) => {
-                if pending_is_current {
-                    self.clear_pending(&task.pending.project_id, false);
-                }
-                return None;
-            }
-        };
-        if updated.id() != task.issue_id || !pending_is_current || !project_is_current {
-            if pending_is_current {
-                self.clear_pending(&task.pending.project_id, false);
-            }
-            return Some(rollback);
-        }
-        self.merge_issue(
-            &task.pending.project_id,
-            updated,
-            &tracker_seam::TrackerWriteOp::Claim,
-        );
-        self.preclaimed_issue_id = Some(task.issue_id.clone());
-        let _ = self.start_bound_run_with_agent(&task.issue_id, &task.pending.agent_id);
-        self.preclaimed_issue_id = None;
-        let launched = self.active_run_id_for_issue(&task.issue_id).is_some();
-        self.clear_pending(&task.pending.project_id, launched);
-        (!launched).then_some(rollback)
-    }
-
-    pub(crate) fn finish_background_auto_advance_rollback(
-        &mut self,
-        completion: BackgroundClaimRollbackCompletion,
-    ) {
-        let _ = self.apply_background_claim_rollback(completion);
-    }
-
-    fn apply_refresh_completion(&mut self, completion: BackgroundRefreshCompletion) -> bool {
-        let BackgroundRefreshCompletion {
-            task,
-            result,
-            connection,
-        } = completion;
-        let BackgroundRefreshTask {
-            project_id,
-            github_host,
-            repository,
-            now_ms: now,
-            previous,
-            ..
-        } = task;
-        self.refresh_in_flight.remove(&project_id);
+        self.refresh_in_flight.remove(&prepared.project_id);
         let Some(index) = self.projects.iter().position(|project| {
-            project.id == project_id
-                && project.github_host == github_host
-                && project.repository == repository
+            project.id == prepared.project_id
+                && project.tracker == prepared.tracker_kind
+                && project.github_host == prepared.github_host
+                && project.repository == prepared.repository
         }) else {
             return false;
         };
-        let previous_fetched = previous.as_ref().and_then(|state| state.fetched_at_ms);
+        let previous_fetched = prepared
+            .previous
+            .as_ref()
+            .and_then(|state| state.fetched_at_ms);
         match result {
             Ok(tracker_seam::TrackerReadOutcome::Complete { issues }) => {
-                self.apply_read(
-                    &project_id,
+                let content_changed = self.apply_read(
+                    &prepared.project_id,
                     index,
-                    &github_host,
-                    &repository,
-                    now,
+                    &prepared.github_host,
+                    &prepared.repository,
+                    prepared.now_ms,
                     issues,
                     true,
                     None,
-                    connection.clone(),
                 );
-                let status = self.refresh_status_for(&project_id);
+                let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
-                    project_id: project_id.clone(),
+                    project_id: prepared.project_id.clone(),
                     status,
                 });
-                self.pending_events.push(HostEvent::BoardUpdated {
-                    project_id: project_id.clone(),
-                });
+                if content_changed {
+                    self.pending_events.push(HostEvent::BoardUpdated {
+                        project_id: prepared.project_id,
+                    });
+                }
                 true
             }
             Ok(tracker_seam::TrackerReadOutcome::Incomplete { issues, detail }) => {
-                self.apply_read(
-                    &project_id,
+                let content_changed = self.apply_read(
+                    &prepared.project_id,
                     index,
-                    &github_host,
-                    &repository,
-                    now,
+                    &prepared.github_host,
+                    &prepared.repository,
+                    prepared.now_ms,
                     issues,
                     false,
                     Some(detail),
-                    connection,
                 );
-                let status = self.refresh_status_for(&project_id);
+                let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
-                    project_id: project_id.clone(),
+                    project_id: prepared.project_id.clone(),
                     status,
                 });
-                self.pending_events.push(HostEvent::BoardUpdated {
-                    project_id: project_id.clone(),
-                });
+                if content_changed {
+                    self.pending_events.push(HostEvent::BoardUpdated {
+                        project_id: prepared.project_id,
+                    });
+                }
                 true
             }
             Err(tracker::TrackerReadError::RateLimited { retry_after_ms }) => {
                 self.refresh.insert(
-                    project_id.clone(),
+                    prepared.project_id.clone(),
                     ProjectRefreshState {
                         fetched_at_ms: previous_fetched,
-                        last_attempt_ms: now,
+                        last_attempt_ms: prepared.now_ms,
                         kind: StoredRefreshKind::RateLimited,
-                        retry_at_ms: retry_after_ms.map(|ms| now.saturating_add(ms)),
-                        complete: previous
+                        retry_at_ms: retry_after_ms.map(|ms| prepared.now_ms.saturating_add(ms)),
+                        complete: prepared
+                            .previous
                             .as_ref()
                             .map(|state| state.complete)
                             .unwrap_or(false),
-                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
+                        detail: prepared
+                            .previous
+                            .as_ref()
+                            .and_then(|state| state.detail.clone()),
                     },
                 );
-                let status = self.refresh_status_for(&project_id);
+                let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
-                    project_id: project_id.clone(),
+                    project_id: prepared.project_id,
                     status,
                 });
                 false
@@ -6534,36 +5574,40 @@ impl HostKernel {
             }) => {
                 self.projects[index].connection = ProjectConnection::Unreachable {
                     source,
-                    repair: tracker::repair_hint(cli_detected, &self.data.host_secrets_path),
+                    repair: tracker::repair_hint(cli_detected, &prepared.secrets_path),
                     message: auth_failure_message(
                         self.appearance.language,
                         AuthFailureKind::Unreachable,
                         detail.as_deref(),
-                        &github_host,
+                        &prepared.github_host,
                     ),
                 };
-                let has_data = self.loaded_issues.contains_key(&project_id);
+                let has_data = self.loaded_issues.contains_key(&prepared.project_id);
                 self.refresh.insert(
-                    project_id.clone(),
+                    prepared.project_id.clone(),
                     ProjectRefreshState {
                         fetched_at_ms: previous_fetched,
-                        last_attempt_ms: now,
+                        last_attempt_ms: prepared.now_ms,
                         kind: if has_data {
                             StoredRefreshKind::Offline
                         } else {
                             StoredRefreshKind::NeverFetched
                         },
                         retry_at_ms: None,
-                        complete: previous
+                        complete: prepared
+                            .previous
                             .as_ref()
                             .map(|state| state.complete)
                             .unwrap_or(false),
-                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
+                        detail: prepared
+                            .previous
+                            .as_ref()
+                            .and_then(|state| state.detail.clone()),
                     },
                 );
-                let status = self.refresh_status_for(&project_id);
+                let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
-                    project_id: project_id.clone(),
+                    project_id: prepared.project_id,
                     status,
                 });
                 false
@@ -6577,58 +5621,124 @@ impl HostKernel {
                 self.projects[index].connection = ProjectConnection::AuthFailed {
                     source,
                     kind,
-                    repair: tracker::repair_hint(cli_detected, &self.data.host_secrets_path),
+                    repair: tracker::repair_hint(cli_detected, &prepared.secrets_path),
                     message: auth_failure_message(
                         self.appearance.language,
                         kind,
                         detail.as_deref(),
-                        &github_host,
+                        &prepared.github_host,
                     ),
                 };
                 self.refresh.insert(
-                    project_id.clone(),
+                    prepared.project_id.clone(),
                     ProjectRefreshState {
                         fetched_at_ms: previous_fetched,
-                        last_attempt_ms: now,
+                        last_attempt_ms: prepared.now_ms,
                         kind: StoredRefreshKind::AuthFailed,
                         retry_at_ms: None,
-                        complete: previous
+                        complete: prepared
+                            .previous
                             .as_ref()
                             .map(|state| state.complete)
                             .unwrap_or(false),
-                        detail: previous.as_ref().and_then(|state| state.detail.clone()),
+                        detail: prepared
+                            .previous
+                            .as_ref()
+                            .and_then(|state| state.detail.clone()),
                     },
                 );
-                let status = self.refresh_status_for(&project_id);
+                let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
-                    project_id: project_id.clone(),
+                    project_id: prepared.project_id,
                     status,
                 });
                 false
             }
             Err(tracker::TrackerReadError::Failed { detail }) => {
                 let detail = detail.unwrap_or_else(|| "tracker business error".into());
-                let complete = previous
+                let complete = prepared
+                    .previous
                     .as_ref()
                     .map(|state| state.complete)
                     .unwrap_or(false);
                 self.refresh.insert(
-                    project_id.clone(),
+                    prepared.project_id.clone(),
                     ProjectRefreshState {
                         fetched_at_ms: previous_fetched,
-                        last_attempt_ms: now,
+                        last_attempt_ms: prepared.now_ms,
                         kind: StoredRefreshKind::TrackerError,
                         retry_at_ms: None,
                         complete,
                         detail: Some(detail),
                     },
                 );
-                let status = self.refresh_status_for(&project_id);
-                self.pending_events
-                    .push(HostEvent::RefreshStatusChanged { project_id, status });
+                let status = self.refresh_status_for(&prepared.project_id);
+                self.pending_events.push(HostEvent::RefreshStatusChanged {
+                    project_id: prepared.project_id,
+                    status,
+                });
                 false
             }
         }
+    }
+
+    fn refresh_project(&mut self, project_id: &str, trigger: RefreshTrigger) -> bool {
+        let Some(prepared) = self.prepare_refresh(project_id, trigger) else {
+            return false;
+        };
+        if self.defer_refreshes && trigger != RefreshTrigger::Action {
+            self.deferred_refreshes.push(prepared);
+            return true;
+        }
+        let completed = Self::execute_prepared_refresh(prepared);
+        self.finish_prepared_refresh(completed)
+    }
+
+    fn prepare_refresh(
+        &mut self,
+        project_id: &str,
+        trigger: RefreshTrigger,
+    ) -> Option<PreparedRefresh> {
+        if !self.should_attempt_refresh(project_id, trigger) {
+            return None;
+        }
+        let index = self
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)?;
+        let previous = self.refresh.get(project_id).cloned();
+        let previous_fetched = previous.as_ref().and_then(|state| state.fetched_at_ms);
+        self.next_refresh_generation = self.next_refresh_generation.saturating_add(1);
+        let generation = self.next_refresh_generation;
+        self.refresh_in_flight
+            .insert(project_id.to_string(), generation);
+        self.pending_events.push(HostEvent::RefreshStatusChanged {
+            project_id: project_id.to_string(),
+            status: RefreshStatus::Refreshing {
+                fetched_at_ms: previous_fetched,
+            },
+        });
+        let github_host = self.projects[index].github_host.clone();
+        let repository = self.projects[index].repository.clone();
+        let tracker_kind = self.projects[index].tracker;
+        if tracker_kind == TrackerKind::LocalMarkdown {
+            if let Ok(revision) = LocalMarkdownTracker::content_revision(Path::new(&repository)) {
+                self.local_tracker_revisions
+                    .insert(project_id.to_string(), revision);
+            }
+        }
+        Some(PreparedRefresh {
+            tracker: Arc::clone(&self.tracker),
+            project_id: project_id.to_string(),
+            github_host: github_host.clone(),
+            repository,
+            tracker_kind,
+            secrets_pat: read_github_pat(&self.data.host_secrets_path, &github_host),
+            secrets_path: self.data.host_secrets_path.clone(),
+            previous,
+            now_ms: self.now_ms,
+            generation,
+        })
     }
 
     /// 记录一次成功读取（完整或不完整）的结果并持久化快照。
@@ -6636,27 +5746,23 @@ impl HostKernel {
         &mut self,
         project_id: &str,
         index: usize,
-        _github_host: &str,
-        _repository: &str,
+        github_host: &str,
+        repository: &str,
         now: u64,
-        mut issues: Vec<IssueRecord>,
+        issues: Vec<IssueRecord>,
         complete: bool,
         detail: Option<String>,
-        connection: Option<ProjectConnection>,
-    ) {
-        if let Some(connection) = connection {
-            self.projects[index].connection = connection;
-        }
-        if !complete {
-            let mut seen = issues.iter().map(IssueRecord::id).collect::<BTreeSet<_>>();
-            if let Some(previous) = self.loaded_issues.get(project_id) {
-                issues.extend(
-                    previous
-                        .iter()
-                        .filter(|issue| seen.insert(issue.id()))
-                        .cloned(),
-                );
-            }
+    ) -> bool {
+        let connection_changed = !matches!(
+            self.projects[index].connection,
+            ProjectConnection::Ready { .. }
+        );
+        let content_changed = connection_changed
+            || self.loaded_issues.get(project_id) != Some(&issues)
+            || self.refresh.get(project_id).map(|state| state.complete) != Some(complete);
+        if connection_changed {
+            self.projects[index].connection =
+                self.probe_tracker(self.projects[index].tracker, github_host, repository);
         }
         let snapshot = refresh::StoredTrackerSnapshot {
             fetched_at_ms: now,
@@ -6682,7 +5788,7 @@ impl HostKernel {
                     detail: Some(format!("tracker snapshot could not be persisted: {err}")),
                 },
             );
-            return;
+            return true;
         }
         self.projects[index].tracker_synced = complete;
         self.loaded_issues.insert(project_id.to_string(), issues);
@@ -6701,6 +5807,7 @@ impl HostKernel {
                 detail,
             },
         );
+        content_changed
     }
 
     fn maybe_auto_refresh(&mut self) {
@@ -6715,7 +5822,28 @@ impl HostKernel {
         }
     }
 
+    fn maybe_refresh_local_markdown(&mut self) {
+        let changed: Vec<String> = self
+            .projects
+            .iter()
+            .filter(|project| project.tracker == TrackerKind::LocalMarkdown)
+            .filter_map(|project| {
+                let revision =
+                    LocalMarkdownTracker::content_revision(Path::new(&project.repository)).ok()?;
+                (self.local_tracker_revisions.get(&project.id).copied() != Some(revision))
+                    .then(|| project.id.clone())
+            })
+            .collect();
+        for project_id in changed {
+            self.issue_documents.remove(&project_id);
+            self.refresh_project(&project_id, RefreshTrigger::Immediate);
+        }
+    }
+
     fn should_attempt_refresh(&self, project_id: &str, trigger: RefreshTrigger) -> bool {
+        if self.refresh_in_flight.contains_key(project_id) && trigger != RefreshTrigger::Action {
+            return false;
+        }
         let Some(state) = self.refresh.get(project_id) else {
             return true;
         };
@@ -6780,7 +5908,7 @@ impl HostKernel {
     }
 
     fn refresh_status_for(&self, project_id: &str) -> RefreshStatus {
-        if self.refresh_in_flight.contains(project_id) {
+        if self.refresh_in_flight.contains_key(project_id) {
             return RefreshStatus::Refreshing {
                 fetched_at_ms: self
                     .refresh
@@ -6874,10 +6002,10 @@ impl HostKernel {
         }
     }
 
-    fn set_client_view(&mut self, client_id: &str, project_id: &str, visible: bool) -> bool {
+    fn set_client_view(&mut self, client_id: &str, project_id: &str, visible: bool) {
         if !visible || project_id.is_empty() {
             self.client_views.remove(client_id);
-            return false;
+            return;
         }
         let previous = self.client_views.insert(
             client_id.to_string(),
@@ -6890,7 +6018,9 @@ impl HostKernel {
         let changed = previous
             .map(|view| !view.visible || view.project_id != project_id)
             .unwrap_or(true);
-        changed
+        if changed {
+            self.refresh_project(project_id, RefreshTrigger::Immediate);
+        }
     }
 
     fn require_live_tracker(&mut self, project_id: &str) -> Result<(), KernelError> {
@@ -6927,38 +6057,6 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown issue".into()))
     }
 
-    fn project_id_for_issue_request(
-        &self,
-        request: &serde_json::Value,
-        issue_id: &str,
-    ) -> Result<String, KernelError> {
-        request
-            .get("projectId")
-            .and_then(|value| value.as_str())
-            .filter(|project_id| self.project_contains_issue(project_id, issue_id))
-            .or_else(|| {
-                request
-                    .get("clientView")
-                    .and_then(|view| view.get("focusedProjectId"))
-                    .and_then(|value| value.as_str())
-                    .filter(|project_id| self.project_contains_issue(project_id, issue_id))
-            })
-            .or_else(|| {
-                self.focused_project_id
-                    .as_deref()
-                    .filter(|project_id| self.project_contains_issue(project_id, issue_id))
-            })
-            .map(ToOwned::to_owned)
-            .or_else(|| self.project_id_for_issue(issue_id).ok())
-            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))
-    }
-
-    fn project_contains_issue(&self, project_id: &str, issue_id: &str) -> bool {
-        self.loaded_issues
-            .get(project_id)
-            .is_some_and(|issues| issues.iter().any(|issue| issue.id() == issue_id))
-    }
-
     fn write_block_reason(&self, project_id: &str) -> String {
         match self.refresh.get(project_id).map(|state| state.kind) {
             Some(StoredRefreshKind::RateLimited) => {
@@ -6988,20 +6086,15 @@ impl HostKernel {
         }
     }
 
-    fn probe_github(&mut self, github_host: &str, repository: &str) -> ProjectConnection {
-        if self
-            .precomputed_project_connection
-            .as_ref()
-            .is_some_and(|(host, repo, _)| host == github_host && repo == repository)
-        {
-            return self
-                .precomputed_project_connection
-                .take()
-                .expect("checked precomputed Project connection")
-                .2;
-        }
+    fn probe_tracker(
+        &self,
+        tracker_kind: TrackerKind,
+        github_host: &str,
+        repository: &str,
+    ) -> ProjectConnection {
         let pat = read_github_pat(&self.data.host_secrets_path, github_host);
         let outcome = self.tracker.probe(&tracker::ProbeContext {
+            tracker: tracker_kind,
             github_host,
             repository,
             secrets_pat: pat.as_deref(),
@@ -7070,10 +6163,6 @@ impl ShellCopy {
                 hosts: "Host".into(),
                 projects: "Project".into(),
                 this_machine: "本机".into(),
-                next_step: "下一步".into(),
-                forget_host: "忘记 Host".into(),
-                forget_host_confirm_title: "忘记这个远程 Host？".into(),
-                forget_host_confirm_body: "只会从当前 Client 移除连接信息，不会停止远程 Host 或撤销其他 Client。".into(),
                 shade_light: "浅".into(),
                 shade_dark: "深".into(),
                 edit_menu: "编辑".into(),
@@ -7100,18 +6189,18 @@ impl ShellCopy {
                 choose_directory: "选择目录".into(),
                 choose_directory_desktop_only: "系统目录选择只在本机桌面窗口可用。浏览器 Client 请手动粘贴 Host 上的绝对路径。".into(),
                 inferring_from_directory: "正在从本地目录推断…".into(),
-                inference_failed: "这个目录没有可用的 Git remote，请手动填写仓库。".into(),
+                inference_failed: "这个目录没有可用的 GitHub remote，请手动填写仓库。".into(),
                 active_project_edit_hint: "这个 Project 有活跃 Run，只能修改显示名称；要改目录或 GitHub 连接，请先停止所有活跃 Run。".into(),
                 remote_project_hint: "这里填写远程 Host 上的绝对路径。请在远程 Host 上确认目录，或手动粘贴该路径；不会选择这台 Client 上的目录。".into(),
                 operation_pending: "保存中…".into(),
                 inference_pending: "推断中…".into(),
                 retry_inference: "重试推断".into(),
                 removal_pending: "移除中…".into(),
-                github_host: "Git remote host".into(),
+                github_host: "GitHub host".into(),
                 repository: "仓库".into(),
                 infer_from_directory: "从本地目录推断".into(),
                 use_inference: "使用这份推断结果".into(),
-                inference_hint: "选好本地目录后，显示名称默认用目录名；若只有一个合法 Git remote 会自动填充。检测到多个 remote 时才显示候选供确认；手工填写始终有效。".into(),
+                inference_hint: "选好本地目录后，显示名称默认用目录名；GitHub 连接会作为候选显示，确认后才采纳。手工填写始终有效。".into(),
                 save_registration: "保存登记".into(),
                 cancel: "取消".into(),
                 remove_confirm_title: "移除这个 Project？".into(),
@@ -7136,24 +6225,22 @@ impl ShellCopy {
                 got_it: "知道了".into(),
                 auth_failed: "这个 Project 的 GitHub 凭据不可用。".into(),
                 connection_unavailable: "这个 Project 暂时连不上 GitHub。".into(),
-                local_tracker_unavailable: "这个 Project 的 Local Markdown tracker 不可用。".into(),
                 repair_cli: "用 gh 登录".into(),
                 repair_secrets: "在 Host 秘密文件里写入这个 host 的 PAT".into(),
                 repair_env: "设置应用专用或通用环境变量".into(),
                 no_gh_detected: "这台电脑上没检测到 gh。".into(),
                 connection_ready: "GitHub 已连通".into(),
-                local_tracker_ready: "Local Markdown 已就绪".into(),
                 project_menu: "管理".into(),
                 board_hint: "从左到右：阻塞中 → Frontier → 进行中 → 最近完成。不能拖列关票。".into(),
                 child_hint: "只看这些直接子票。仍是看板视图，不是第二种 Frontier。".into(),
-                graph_hint: "只画 Dependency，不画父子。点节点只换详情。".into(),
+                graph_hint: "概览点击 Issue 设为中心；中心模式点节点只换详情。只画 Dependency，不画父子。".into(),
                 view_board: "看板".into(),
                 view_graph: "依赖图".into(),
-                view_dependencies: "查看依赖".into(),
-                graph_overview: "未关闭 Issue 依赖概览".into(),
-                graph_return_overview: "返回依赖概览".into(),
-                graph_truncated: "共 {total} 个未关闭 Issue，展示 {shown} 个（已达上限）".into(),
-                graph_no_dependencies: "当前范围没有 Dependency；仍可点击任意 Issue 查看其上下游。".into(),
+                view_dependencies: "查看依赖图".into(),
+                graph_overview: "依赖图概览".into(),
+                graph_return_overview: "返回依赖图概览".into(),
+                graph_truncated: "仅显示 {shown}/{total} 个未关闭 Issue；已按稳定规则优先保留 Dependency 参与者。".into(),
+                graph_no_dependencies: "这些未关闭 Issue 之间没有 Dependency。".into(),
                 show_closed_context: "也显示已关闭上下文".into(),
                 graph_center: "中心 Issue：{issue}".into(),
                 graph_center_here: "从此处展开".into(),
@@ -7202,28 +6289,27 @@ impl ShellCopy {
                 recent_limit: "最近完成列张数".into(),
                 recent_limit_help: "默认 5。只影响最右那一列。不能拖进这一列来关票。".into(),
                 refresh_interval: "自动刷新间隔（秒）".into(),
-                refresh_interval_help: "有人在看这块看板时，按这个间隔拉 Tracker。最短 15 秒，不设最长时间。".into(),
+                refresh_interval_help: "有人在看这块看板时，按这个间隔拉 Tracker。默认 300 秒，最短 15 秒，不设最大值。".into(),
                 unclear_issue: "对端看不清".into(),
                 refresh_now: "刷新".into(),
                 refresh_refreshing: "正在刷新".into(),
                 refresh_as_of: "数据截至".into(),
                 refresh_next: "下次刷新".into(),
                 refresh_offline: "已离线".into(),
-                refresh_offline_recovery: "检查运行 Host 的电脑网络后点“刷新”重试。".into(),
                 refresh_never: "还没有成功拉过 Tracker。".into(),
                 refresh_rate_limited: "已被限流".into(),
                 refresh_retry: "大约可再刷新".into(),
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
-                refresh_auth_recovery: "在运行 Host 的电脑更新 GitHub 凭据后点“刷新”重试。".into(),
                 refresh_incomplete: "数据不完整".into(),
                 refresh_tracker_error: "Tracker 业务错误".into(),
                 new_run: "新建".into(),
                 execute_run: "执行".into(),
                 start_run: "启动".into(),
-                start_run_pending: "启动中…".into(),
                 switch_agent: "换一家".into(),
                 pick_agent: "选择 Agent".into(),
+                no_agent_selected: "尚未选择 Agent".into(),
+                next_step: "下一步".into(),
                 launch_title: "启动配置".into(),
                 prefill_current: "预填来自这个 Project 上次成功启动，本次可改。".into(),
                 prefill_other: "预填来自其它 Project 上这家 Agent 的记忆，本次可改。".into(),
@@ -7369,10 +6455,6 @@ impl ShellCopy {
                 hosts: "Host".into(),
                 projects: "Project".into(),
                 this_machine: "This machine".into(),
-                next_step: "Next".into(),
-                forget_host: "Forget Host".into(),
-                forget_host_confirm_title: "Forget this remote Host?".into(),
-                forget_host_confirm_body: "This removes the connection from this Client only. It does not stop the remote Host or revoke other Clients.".into(),
                 shade_light: "Light".into(),
                 shade_dark: "Dark".into(),
                 edit_menu: "Edit".into(),
@@ -7399,18 +6481,18 @@ impl ShellCopy {
                 choose_directory: "Choose folder".into(),
                 choose_directory_desktop_only: "The system folder picker is only available in the desktop window on this machine. In a browser Client, paste an absolute path on the Host.".into(),
                 inferring_from_directory: "Inferring from the local directory…".into(),
-                inference_failed: "No usable Git remote was found in this directory. Enter the repository manually.".into(),
+                inference_failed: "No usable GitHub remote was found in this directory. Enter the repository manually.".into(),
                 active_project_edit_hint: "This Project has an active Run. Only the display name can be changed; stop all active Runs before changing its directory or GitHub connection.".into(),
                 remote_project_hint: "Enter an absolute path on the remote Host. Confirm it on that Host or paste it manually; this Client will not choose a local folder.".into(),
                 operation_pending: "Saving…".into(),
                 inference_pending: "Inferring…".into(),
                 retry_inference: "Retry inference".into(),
                 removal_pending: "Removing…".into(),
-                github_host: "Git remote host".into(),
+                github_host: "GitHub host".into(),
                 repository: "Repository".into(),
                 infer_from_directory: "Infer from local directory".into(),
                 use_inference: "Use this inference".into(),
-                inference_hint: "After you choose a local directory, the display name defaults to the folder name. A single valid Git remote is filled automatically; candidates appear only when multiple remotes are detected. Manual values always remain valid.".into(),
+                inference_hint: "After you choose a local directory, the display name defaults to the folder name. The GitHub connection appears as a candidate and is adopted only after confirmation; manual values always remain valid.".into(),
                 save_registration: "Save registration".into(),
                 cancel: "Cancel".into(),
                 remove_confirm_title: "Remove this Project?".into(),
@@ -7435,24 +6517,22 @@ impl ShellCopy {
                 got_it: "Got it".into(),
                 auth_failed: "GitHub credentials for this Project are not available.".into(),
                 connection_unavailable: "This Project cannot reach GitHub right now.".into(),
-                local_tracker_unavailable: "The Local Markdown tracker for this Project is unavailable.".into(),
                 repair_cli: "Sign in with gh".into(),
                 repair_secrets: "Write a PAT for this host in the Host secrets file".into(),
                 repair_env: "Set the app-specific or generic environment variable".into(),
                 no_gh_detected: "gh was not detected on this machine.".into(),
                 connection_ready: "GitHub is connected".into(),
-                local_tracker_ready: "Local Markdown is ready".into(),
                 project_menu: "Manage".into(),
                 board_hint: "Blocked → Frontier → In progress → Recently closed. Closing is not drag.".into(),
                 child_hint: "Direct children only. Still a board, not a second Frontier.".into(),
-                graph_hint: "Dependencies only — not parent/child. Click a node to change details.".into(),
+                graph_hint: "In overview, click an Issue to make it the center. In focused mode, clicking a node only changes details. Dependencies only — not parent/child.".into(),
                 view_board: "Board".into(),
                 view_graph: "Dependency graph".into(),
-                view_dependencies: "View dependencies".into(),
-                graph_overview: "Open Issue dependency overview".into(),
-                graph_return_overview: "Back to dependency overview".into(),
-                graph_truncated: "{total} open Issues; showing {shown} at the limit".into(),
-                graph_no_dependencies: "No Dependencies in this range. Select any Issue to inspect its upstream and downstream.".into(),
+                view_dependencies: "View dependency graph".into(),
+                graph_overview: "Dependency graph overview".into(),
+                graph_return_overview: "Return to dependency graph overview".into(),
+                graph_truncated: "Showing {shown}/{total} open Issues; Dependency participants are retained first by a stable rule.".into(),
+                graph_no_dependencies: "These open Issues have no Dependencies between them.".into(),
                 show_closed_context: "Also show closed context".into(),
                 graph_center: "Center Issue: {issue}".into(),
                 graph_center_here: "Expand from here".into(),
@@ -7484,16 +6564,16 @@ impl ShellCopy {
                 issue_document_retry: "Retry load".into(),
                 issue_document_stale: "The document could not be refreshed. Showing the last read-only copy from".into(),
                 issue_document_failed: "The document has never loaded successfully.".into(),
-                family: "Parent / children".into(),
-                deps: "Blocked by / blocking".into(),
-                parent: "Parent".into(),
-                children: "Children".into(),
-                no_parent: "No parent. Still a first-class Issue.".into(),
-                no_kids: "No children".into(),
+                family: "Parent and child Issues".into(),
+                deps: "Dependencies".into(),
+                parent: "Parent Issue".into(),
+                children: "Child Issues".into(),
+                no_parent: "None".into(),
+                no_kids: "None".into(),
                 only_kids: "Only these children".into(),
-                blocked_by: "Blocked by".into(),
-                blocking: "Blocking".into(),
-                none_block: "None — can enter Frontier".into(),
+                blocked_by: "Blocked by these Issues".into(),
+                blocking: "Blocks these Issues".into(),
+                none_block: "None".into(),
                 none: "None".into(),
                 claimed: "Claimed".into(),
                 unclaimed: "Unclaimed".into(),
@@ -7501,28 +6581,27 @@ impl ShellCopy {
                 recent_limit: "Recently-closed count".into(),
                 recent_limit_help: "Default 5. Only the rightmost column. Dragging here does not close.".into(),
                 refresh_interval: "Auto-refresh interval (seconds)".into(),
-                refresh_interval_help: "While someone is looking at this board, pull Tracker on this interval. Minimum 15 seconds; there is no maximum.".into(),
+                refresh_interval_help: "While someone is looking at this board, pull Tracker on this interval. Default 300 seconds, minimum 15 seconds, with no maximum.".into(),
                 unclear_issue: "The other side is unclear".into(),
                 refresh_now: "Refresh".into(),
                 refresh_refreshing: "Refreshing".into(),
                 refresh_as_of: "Data as of".into(),
                 refresh_next: "Next refresh".into(),
                 refresh_offline: "Offline".into(),
-                refresh_offline_recovery: "Check the network on the computer running the Host, then select Refresh to retry.".into(),
                 refresh_never: "Tracker has never been fetched successfully.".into(),
                 refresh_rate_limited: "Rate limited".into(),
                 refresh_retry: "Can retry around".into(),
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
-                refresh_auth_recovery: "Update the GitHub credentials on the computer running the Host, then select Refresh to retry.".into(),
                 refresh_incomplete: "Incomplete data".into(),
                 refresh_tracker_error: "Tracker business error".into(),
                 new_run: "New".into(),
                 execute_run: "Run".into(),
                 start_run: "Start".into(),
-                start_run_pending: "Starting…".into(),
                 switch_agent: "Switch Agent".into(),
                 pick_agent: "Choose Agent".into(),
+                no_agent_selected: "No Agent selected".into(),
+                next_step: "Next".into(),
                 launch_title: "Launch".into(),
                 prefill_current: "Prefill is this Project's last successful launch. You can change it this time.".into(),
                 prefill_other: "Prefill is this Agent's memory from another Project. You can change it this time.".into(),
@@ -7963,25 +7042,6 @@ fn parse_launch_config(request: &serde_json::Value) -> Result<RunLaunchConfig, K
     })
 }
 
-fn client_local_operation(op: &str) -> bool {
-    matches!(
-        op,
-        "updateInstallGate"
-            | "beginUpdateInstall"
-            | "cancelUpdateInstall"
-            | "hideWindow"
-            | "showWindow"
-            | "setLanguage"
-            | "setTheme"
-            | "pairRemoteHost"
-            | "focusHost"
-            | "setRecentCompletedLimit"
-            | "refreshLaunchEnvironment"
-            | "setShowCommandPreview"
-            | "setNotificationPrefs"
-    )
-}
-
 fn required_string(request: &serde_json::Value, key: &str) -> Result<String, KernelError> {
     request
         .get(key)
@@ -7991,12 +7051,27 @@ fn required_string(request: &serde_json::Value, key: &str) -> Result<String, Ker
         .ok_or_else(|| KernelError::Protocol(format!("missing {key}")))
 }
 
+fn request_language(request: &serde_json::Value) -> Option<Language> {
+    request
+        .get("language")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
 fn optional_string(request: &serde_json::Value, key: &str) -> String {
     request
         .get(key)
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+fn tracker_kind_for_host(github_host: &str) -> TrackerKind {
+    if github_host == "local" {
+        TrackerKind::LocalMarkdown
+    } else {
+        TrackerKind::Github
+    }
 }
 
 fn parse_issue_ref(id: &str) -> Result<IssueRef, KernelError> {
@@ -8033,6 +7108,7 @@ fn probe_record(
 ) -> ProjectRecord {
     let pat = read_github_pat(secrets_path, &stored.github_host);
     let outcome = tracker.probe(&tracker::ProbeContext {
+        tracker: stored.tracker,
         github_host: &stored.github_host,
         repository: &stored.repository,
         secrets_pat: pat.as_deref(),
@@ -8108,33 +7184,25 @@ fn auth_failure_message(
             _ => base,
         };
     }
-    let host = tracker_display_name(github_host);
     let base = match (language, kind) {
         (Language::ZhCn, AuthFailureKind::MissingCredentials) => {
-            format!("没有可用的 {host} 凭据。")
+            "没有可用的 GitHub 凭据。".to_string()
         }
         (Language::En, AuthFailureKind::MissingCredentials) => {
-            format!("No {host} credentials are available.")
+            "No GitHub credentials are available.".to_string()
         }
-        (Language::ZhCn, AuthFailureKind::Rejected) => format!("{host} 拒绝了当前凭据。"),
+        (Language::ZhCn, AuthFailureKind::Rejected) => "GitHub 拒绝了当前凭据。".to_string(),
         (Language::En, AuthFailureKind::Rejected) => {
-            format!("{host} rejected the current credentials.")
+            "GitHub rejected the current credentials.".to_string()
         }
-        (Language::ZhCn, AuthFailureKind::Unreachable) => format!("连不上这个 {host} host。"),
+        (Language::ZhCn, AuthFailureKind::Unreachable) => "连不上这个 GitHub host。".to_string(),
         (Language::En, AuthFailureKind::Unreachable) => {
-            format!("This {host} host could not be reached.")
+            "This GitHub host could not be reached.".to_string()
         }
     };
     match detail {
         Some(detail) if !detail.is_empty() => format!("{base} {detail}"),
         _ => base,
-    }
-}
-
-fn tracker_display_name(github_host: &str) -> String {
-    match github_host.trim() {
-        "" | "github.com" => "GitHub".to_string(),
-        host => host.to_string(),
     }
 }
 

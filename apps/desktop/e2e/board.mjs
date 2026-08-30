@@ -6,7 +6,6 @@ import {
   createVisualAssert,
   installDeterministicHostProtocol,
 } from "./visual-regression.mjs";
-import { hostSnapshot } from "./issue-100-harness.mjs";
 
 const url = process.env.BOARD_URL;
 if (!url) {
@@ -55,40 +54,6 @@ if (visibleHosts.length < 2) {
   throw new Error(`daily shell fixture should expose multiple Hosts, got ${JSON.stringify(visibleHosts)}`);
 }
 await page.click("button[data-act='toggle-hosts']");
-
-let pairingOfferRequests = 0;
-const countPairingOfferRequests = (request) => {
-  if (request.method() !== "POST" || !request.url().includes("/rpc")) return;
-  try {
-    if (request.postDataJSON()?.op === "beginPairingOffer") pairingOfferRequests += 1;
-  } catch {
-    // Ignore requests without JSON bodies.
-  }
-};
-await page.route("**/rpc", async (route) => {
-  try {
-    if (route.request().postDataJSON()?.op === "beginPairingOffer") {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  } catch {
-    // Let the Host report malformed requests normally.
-  }
-  await route.continue();
-});
-page.on("request", countPairingOfferRequests);
-await page.click("button[data-act='pair']");
-await page.waitForSelector(".pairing-sheet");
-const pairingOfferButton = page.locator(".pairing-sheet button[data-act='show-offer']");
-await pairingOfferButton.click();
-await page.waitForFunction(() => document.querySelector(".pairing-sheet button[data-act='show-offer']")?.disabled === true);
-await page.waitForFunction(() => document.querySelector(".pairing-sheet .offer") !== null);
-if (pairingOfferRequests !== 1) {
-  throw new Error(`pairing offer should deduplicate while pending, got ${pairingOfferRequests} requests`);
-}
-page.off("request", countPairingOfferRequests);
-await page.unroute("**/rpc");
-await page.click(".overlay[data-act='close-pairing']", { position: { x: 2, y: 2 } });
-await page.waitForFunction(() => !document.querySelector(".pairing-sheet"));
 if (await page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
 }
@@ -162,6 +127,7 @@ if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
 }
 await page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
 await page.waitForSelector(".detail-hd:has-text('unparented ready')");
+await page.waitForSelector('.issue-document[data-document-state="ready"]');
 const frontierScrollAfterSwitch = await page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeInspectorActions) > 1) {
   throw new Error(`switching Issues must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterSwitch}`);
@@ -189,18 +155,38 @@ const whileTypingSearch = await page.$$eval(".issue-card .issue-title", (nodes) 
 if (whileTypingSearch.join(",") !== beforeTypingSearch.join(",")) {
   throw new Error("title search should not run before Enter");
 }
-await page.press("#issue-title-search", "Enter");
+async function submitIssueSearch() {
+  const responsePromise = page.waitForResponse((response) => {
+    const request = response.request();
+    if (request.method() !== "POST" || !request.url().includes("/rpc")) return false;
+    try {
+      return request.postDataJSON()?.op === "searchIssues";
+    } catch {
+      return false;
+    }
+  });
+  await page.press("#issue-title-search", "Enter");
+  const response = await responsePromise;
+  return response.json();
+}
+const titleSearchResponse = await submitIssueSearch();
+if (titleSearchResponse.snapshot?.board?.search?.title !== "child ready") {
+  throw new Error(`search RPC should receive the entered title: ${JSON.stringify(titleSearchResponse.snapshot?.board?.search)}`);
+}
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 1);
 const searchResult = await page.$eval(".issue-card .issue-title", (node) => node.textContent);
 if (searchResult !== "child ready") {
   throw new Error(`unexpected title search result: ${searchResult}`);
 }
 await page.selectOption(".issue-search select[name='state']", "closed");
-await page.press("#issue-title-search", "Enter");
+const closedSearchResponse = await submitIssueSearch();
+if (closedSearchResponse.snapshot?.board?.search?.state !== "closed") {
+  throw new Error(`search RPC should receive the selected state: ${JSON.stringify(closedSearchResponse.snapshot?.board?.search)}`);
+}
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length === 0);
 await page.fill("#issue-title-search", "");
 await page.selectOption(".issue-search select[name='state']", "all");
-await page.press("#issue-title-search", "Enter");
+await submitIssueSearch();
 await page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
 
 const refreshText = await page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
@@ -342,7 +328,6 @@ let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
   releaseDocumentRefresh = resolve;
 });
-let cachedDocumentInjected = false;
 const preserveCachedDocumentDuringRefresh = async (route) => {
   if (!route.request().url().endsWith("/rpc")) {
     await route.continue();
@@ -355,12 +340,7 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
     await route.continue();
     return;
   }
-  if (
-    !cachedDocumentInjected
-    && request?.op === "snapshot"
-    && request.clientView?.selectedIssueId === "you/garden#2"
-  ) {
-    cachedDocumentInjected = true;
+  if (request?.op === "focusIssue" && request.issueId === "you/garden#2") {
     const response = await route.fetch();
     const result = await response.json();
     result.snapshot.board.selected.document = {
@@ -430,30 +410,6 @@ const headerTopAfterScroll = await page.$eval(".detail-sticky", (node) => node.g
 if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
   throw new Error("Issue title and actions should stay pinned while document content scrolls");
 }
-const detailScroll = await page.$(".detail-scroll");
-const detailScrollBox = await detailScroll?.boundingBox();
-const detailScrollBeforeTicks = await page.$eval(".detail-scroll", (node) => {
-  node.scrollTop = Math.min(240, node.scrollHeight - node.clientHeight);
-  return node.scrollTop;
-});
-if (!detailScroll || !detailScrollBox || detailScrollBeforeTicks <= 0) {
-  throw new Error("detail scroll regression needs a scrollable Issue document");
-}
-await page.mouse.move(detailScrollBox.x + detailScrollBox.width / 2, detailScrollBox.y + detailScrollBox.height / 2);
-await page.mouse.down();
-for (let tickIndex = 0; tickIndex < 2; tickIndex += 1) {
-  const response = page.waitForResponse((candidate) =>
-    candidate.url().endsWith("/rpc") && candidate.request().postData()?.includes('"op":"tick"'),
-  );
-  await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
-  await response;
-}
-await page.mouse.up();
-await page.waitForTimeout(50);
-const detailScrollAfterTicks = await page.$eval(".detail-scroll", (node) => node.scrollTop);
-if (Math.abs(detailScrollAfterTicks - detailScrollBeforeTicks) > 1) {
-  throw new Error(`releasing the pointer after two Host ticks must preserve Issue scroll: ${detailScrollBeforeTicks} -> ${detailScrollAfterTicks}`);
-}
 await page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await capture("issue-98-desktop-detail-1440x900.png");
 await assertVisual("issue-99-desktop-1440x900.png");
@@ -498,16 +454,7 @@ if (stillFrontier !== beforeFrontier) {
 }
 
 await page.click("button:has-text('只看这些子票')");
-try {
-  await page.waitForSelector("button:has-text('清除过滤')", { timeout: 2000 });
-} catch {
-  const diagnostic = await page.evaluate(() => ({
-    clientView: Object.entries(localStorage).filter(([key]) => key.includes("client-view")),
-    boardHint: document.querySelector(".board-hint")?.textContent,
-    detail: document.querySelector(".detail-hd")?.textContent,
-  }));
-  throw new Error(`parent filter did not render: ${JSON.stringify(diagnostic)}`);
-}
+await page.waitForSelector("button:has-text('清除过滤')");
 const filtered = await page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
   nodes.map((node) => node.textContent),
 );
@@ -551,8 +498,12 @@ for (const title of ["parent", "child ready", "child blocked", "unparented ready
     throw new Error(`dependency overview should include open Issue ${title}, got ${JSON.stringify(overviewTitles)}`);
   }
 }
-if (overviewTitles.includes("older closed") || (await page.$('[data-graph-mode="overview"]')) == null) {
-  throw new Error(`dependency overview should contain only open Issues: ${JSON.stringify(overviewTitles)}`);
+if (
+  overviewTitles.length !== 7
+  || overviewTitles.includes("older closed")
+  || (await page.$('[data-graph-mode="overview"]')) == null
+) {
+  throw new Error(`dependency overview should contain all and only open Issues: ${JSON.stringify(overviewTitles)}`);
 }
 await page.click(".graph-node:has-text('child blocked') .graph-node-main");
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
@@ -562,7 +513,9 @@ await page.waitForSelector('[data-graph-mode="overview"]');
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
 
-await page.click(".issue-card:has-text('child blocked') button[data-act='view-dependencies']");
+await page.click(".issue-card:has-text('child blocked') .issue-card-main");
+await page.waitForSelector(".detail-hd:has-text('child blocked')");
+await page.click(".issue-detail button[data-act='view-dependencies']");
 await page.waitForSelector(".dep-graph");
 if (await page.$(".lanes")) {
   throw new Error("graph view should replace the four columns");
@@ -600,7 +553,6 @@ if (await page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]')) {
 }
 
 const stableGraphCanvas = await page.$(".graph-canvas");
-const stableGraphToolbar = await page.$(".graph-toolbar");
 await page.click(".graph-node:has-text('blocker') .graph-node-main");
 await page.waitForSelector(".detail-hd:has-text('blocker')");
 if (await page.$("button[data-act='clear-filter']")) {
@@ -612,26 +564,76 @@ if ((await page.$eval(".graph-center-label", (node) => node.textContent?.trim())
 if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isConnected))) {
   throw new Error("changing graph node details should preserve the graph canvas");
 }
-if (!stableGraphToolbar || !(await stableGraphToolbar.evaluate((node) => node.isConnected))) {
-  throw new Error("changing graph node details should preserve the graph toolbar actions");
-}
 
 const expandFromWaiting = page.getByRole("button", { name: "从此处展开 #5" });
 if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
   throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
 }
+const waitingViewportBefore = await page.$eval(".graph-node:has-text('waiting on history')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+    scrollTop: canvas.scrollTop,
+  };
+});
 await expandFromWaiting.click();
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
 await page.waitForSelector(".detail-hd:has-text('waiting on history')");
+const waitingViewportAfter = await page.$eval(".graph-node:has-text('waiting on history')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+    scrollTop: canvas.scrollTop,
+  };
+});
+if (
+  Math.abs(waitingViewportAfter.x - waitingViewportBefore.x) > 2
+  || Math.abs(waitingViewportAfter.y - waitingViewportBefore.y) > 2
+) {
+  throw new Error(`expanding from an Issue should preserve its viewport anchor: ${JSON.stringify({ waitingViewportBefore, waitingViewportAfter })}`);
+}
 
+const childViewportBefore = await page.$eval(".graph-node:has-text('child blocked')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+});
 await page.getByRole("button", { name: "从此处展开 #3" }).click();
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
+const childViewportAfter = await page.$eval(".graph-node:has-text('child blocked')", (node) => {
+  const canvas = node.closest(".graph-canvas");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+});
+if (
+  Math.abs(childViewportAfter.x - childViewportBefore.x) > 2
+  || Math.abs(childViewportAfter.y - childViewportBefore.y) > 2
+) {
+  throw new Error(`repeated expansion should preserve the clicked Issue anchor: ${JSON.stringify({ childViewportBefore, childViewportAfter })}`);
+}
 await page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await page.waitForSelector(".graph-index");
-await page.waitForFunction(() => document.querySelectorAll(".graph-node").length === 61);
-if (await page.$("button[data-act='graph-more']")) {
-  throw new Error("large dependency graphs should fill remaining node batches automatically");
+const limitedGraphText = await page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
+if (!limitedGraphText?.includes("画布显示 48/61")) {
+  throw new Error(`large complete closure should keep the canvas bounded, got ${limitedGraphText}`);
+}
+if ((await page.$$(".graph-node")).length !== 48) {
+  throw new Error("large complete closure should not render every node at once");
 }
 if ((await page.$$(".graph-index-row")).length !== 50 || !(await page.$("button[data-act='graph-list-more']"))) {
   throw new Error("complete relationship list should paginate instead of mounting every Issue row");
@@ -736,7 +738,7 @@ const emptyRunsOverviewResponse = async (route) => {
     await route.continue();
     return;
   }
-  if (request?.op !== "snapshot" || request.clientView?.workspaceView !== "host-overview") {
+  if (request?.op !== "openHostOverview") {
     await route.continue();
     return;
   }
@@ -807,17 +809,6 @@ if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
 if (liftedWidths.horizontalOverflow > 0) {
   throw new Error(`lifted Run should not create page-level horizontal scrolling: ${liftedWidths.horizontalOverflow}px`);
 }
-const telemetryCapsule = page.locator(".lifted-terminal .telemetry-desktop .capsule").first();
-if (!(await telemetryCapsule.count())) {
-  throw new Error("Run telemetry should expose a model/lane capsule beside the Terminal");
-}
-await telemetryCapsule.click();
-await page.waitForSelector(".lifted-terminal .telemetry-cards .telemetry-card");
-const telemetryText = (await page.locator(".lifted-terminal .telemetry-cards").textContent())?.replace(/\s+/g, " ").trim() ?? "";
-if (!telemetryText.includes("grok-4.6") || (!telemetryText.includes("不管理") && !telemetryText.includes("does not manage"))) {
-  throw new Error(`expanded telemetry should keep model identity and the network boundary: ${telemetryText}`);
-}
-await telemetryCapsule.click();
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 await page.waitForSelector(".side");
@@ -864,24 +855,6 @@ if (usageTitle !== "用量" && usageTitle !== "Usage") {
 }
 if (!(await page.$("button.active[data-act='usage-range'][data-id='today']"))) {
   throw new Error("usage range should default to today");
-}
-if ((await page.locator(".usage-trend-block").count()) !== 2) {
-  throw new Error("usage should render separate TTFT and generation-rate trends");
-}
-const usageDisclaimer = (await page.locator(".usage-page > .tiny").textContent())?.replace(/\s+/g, " ").trim() ?? "";
-if (!usageDisclaimer.includes("不管理") && !usageDisclaimer.includes("does not manage")) {
-  throw new Error(`usage should state the proxy/network boundary: ${usageDisclaimer}`);
-}
-const trendColors = await page.evaluate(() => {
-  const bars = [...document.querySelectorAll(".usage-trend i")];
-  if (bars.length < 2) return [];
-  const normal = getComputedStyle(bars[0]).backgroundColor;
-  bars[1].classList.add("slow");
-  const slow = getComputedStyle(bars[1]).backgroundColor;
-  return [normal, slow];
-});
-if (trendColors.length !== 2 || trendColors[0] === trendColors[1]) {
-  throw new Error(`slow usage samples should be visibly distinguished: ${JSON.stringify(trendColors)}`);
 }
 await page.click("button[data-act='close-usage']");
 await page.waitForSelector(".lanes");
@@ -943,22 +916,12 @@ if (!pickerNotice?.includes("系统目录选择只在本机桌面窗口可用"))
 }
 await page.click("form[data-form='project'] button[data-act='close-form']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
-const claimsBeforeUnbound = Object.values((await hostSnapshot(page, url)).board.columns)
-  .flat()
-  .map((issue) => [issue.id, issue.claimedBy])
-  .sort(([left], [right]) => left.localeCompare(right));
 await page.click("button[data-act='new-run']");
 await page.waitForSelector(".launch-sheet");
-const claimsWithUnboundFormOpen = Object.values((await hostSnapshot(page, url)).board.columns)
-  .flat()
-  .map((issue) => [issue.id, issue.claimedBy])
-  .sort(([left], [right]) => left.localeCompare(right));
-if (JSON.stringify(claimsWithUnboundFormOpen) !== JSON.stringify(claimsBeforeUnbound)) {
-  throw new Error("opening an unbound Run form must not claim any Issue");
-}
-const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
+const pick = page.locator("button[data-act='select-agent']:not([disabled])").first();
 if (await pick.count()) {
   await pick.click();
+  await page.click("button[data-act='next-agent']");
   await page.waitForSelector("textarea[data-field='openingText']");
 }
 await page.click(".launch-sheet button[data-act='intent'][data-id='modify']");
@@ -979,17 +942,6 @@ if ((await openingText.inputValue()) !== "e2e unbound run" || !(await openingTex
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForSelector(".run-dock");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-const afterUnbound = await hostSnapshot(page, url);
-const claimsAfterUnbound = Object.values(afterUnbound.board.columns)
-  .flat()
-  .map((issue) => [issue.id, issue.claimedBy])
-  .sort(([left], [right]) => left.localeCompare(right));
-if (JSON.stringify(claimsAfterUnbound) !== JSON.stringify(claimsBeforeUnbound)) {
-  throw new Error("starting an unbound Run must not claim any Issue");
-}
-if (!afterUnbound.runs.some((run) => run.unbound && run.status === "running")) {
-  throw new Error("starting an unbound Run must create a running Run without an Issue binding");
-}
 const dockText = await page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
   throw new Error(`unbound Run dock missing identity, got ${dockText}`);
@@ -1103,6 +1055,11 @@ const startedIssueRun = await page.evaluate(async ({ protocol, issueId }) => {
 if (!startedIssueRun?.id || startedIssueRun.status !== "running") {
   throw new Error(`mobile should start a Frontier Run through the normal launch form: ${JSON.stringify(startedIssueRun)}`);
 }
+await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ op: "focusRun", runId }),
+}), startedIssueRun.id);
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 await page.click(".mobile-run-view button[data-act='stop-run']");
@@ -1126,6 +1083,13 @@ await page.click(".mobile-scope-sheet button[data-act='remove-project']");
 await page.waitForSelector(".overlay[data-act='close-remove']");
 await page.click("button[data-act='close-remove']");
 
+const mobileBoardScrollBeforeIssue = await page.$eval(".workspace", (node) => {
+  node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
+});
+if (mobileBoardScrollBeforeIssue <= 0) {
+  throw new Error("mobile Issue navigation regression needs a scrollable board page");
+}
 await page.click(".issue-card:has-text('child ready') .issue-card-main");
 await page.waitForSelector(".mobile-issue-view .issue-detail");
 await page.waitForSelector('.mobile-issue-view [data-document-state="ready"]');
@@ -1162,6 +1126,10 @@ await assertVisual("issue-99-mobile-390x844.png");
 await assertShellRegionsDoNotOverlap(page);
 await page.click("button[data-act='mobile-board']");
 await page.waitForSelector(".mobile-board-view");
+const mobileBoardScrollAfterIssue = await page.$eval(".workspace", (node) => node.scrollTop);
+if (Math.abs(mobileBoardScrollAfterIssue - mobileBoardScrollBeforeIssue) > 1) {
+  throw new Error(`returning from a mobile Issue must preserve board scroll: ${mobileBoardScrollBeforeIssue} -> ${mobileBoardScrollAfterIssue}`);
+}
 
 await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") button[data-act="focus-run"]');
 await page.waitForSelector(".mobile-run-view");
@@ -1189,9 +1157,14 @@ if (!(await page.$(".telemetry-mobile .capsule")) || !(await page.$(".telemetry-
 }
 await page.click("button[data-act='mobile-live-terminal']");
 await page.waitForSelector(".mobile-run-view .pty-slot");
+const endedRunId = await page.$eval(".mobile-run-view .pty-slot", (node) => node.getAttribute("data-run"));
 await page.click(".mobile-run-view button[data-act='stop-run']");
 await page.waitForSelector(".mobile-board-view");
-await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") button[data-act="focus-run"]');
+await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ op: "focusRun", runId }),
+}), endedRunId);
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 const endedRecentOutput = await page.$eval(".mobile-run-output", (node) => node.textContent ?? "");

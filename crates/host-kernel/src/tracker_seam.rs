@@ -44,8 +44,8 @@ pub trait TrackerSeam: Send + Sync {
     ) -> Result<IssueRecord, TrackerWriteError>;
 }
 
-/// Routes project operations to the configured tracker without making the Host
-/// kernel own tracker-specific branches throughout its refresh/write paths.
+/// Routes project operations to the configured tracker without leaking
+/// tracker-specific branches into Host refresh and write paths.
 pub struct TrackerRouter {
     github: Arc<dyn TrackerSeam>,
     local: LocalMarkdownTracker,
@@ -60,7 +60,7 @@ impl TrackerRouter {
     }
 
     fn local(ctx: &ProbeContext<'_>) -> bool {
-        ctx.github_host == "local"
+        ctx.tracker == crate::tracker::TrackerKind::LocalMarkdown
     }
 }
 
@@ -72,6 +72,7 @@ impl TrackerSeam for TrackerRouter {
             self.github.probe(ctx)
         }
     }
+
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
         if Self::local(ctx) {
             TrackerPort::read_all(&self.local, ctx)
@@ -79,6 +80,7 @@ impl TrackerSeam for TrackerRouter {
             self.github.read_all(ctx)
         }
     }
+
     fn read_issue_document(
         &self,
         ctx: &ProbeContext<'_>,
@@ -90,12 +92,13 @@ impl TrackerSeam for TrackerRouter {
             self.github.read_issue_document(ctx, issue_id)
         }
     }
+
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
-    ) -> Result<crate::issue::IssueRecord, TrackerWriteError> {
+    ) -> Result<IssueRecord, TrackerWriteError> {
         if Self::local(ctx) {
             <LocalMarkdownTracker as TrackerSeam>::write_issue(&self.local, ctx, issue_id, op)
         } else {

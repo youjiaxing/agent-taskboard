@@ -33,6 +33,7 @@ fn env_with_path(cwd: &Path, path: &Path) -> LaunchEnvironment {
 
 fn probe_ctx<'a>(secrets_path: &'a Path) -> ProbeContext<'a> {
     ProbeContext {
+        tracker: host_kernel::TrackerKind::Github,
         github_host: "github.com",
         repository: "you/garden",
         secrets_pat: None,

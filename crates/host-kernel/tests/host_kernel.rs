@@ -1125,6 +1125,22 @@ fn dependency_graph_centering_and_expansion_are_forwarded_to_a_remote_host() {
     assert!(graph.complete);
     assert_eq!(graph.total_count, 3);
     assert_eq!(graph.nodes.len(), 3);
+
+    let overview = client
+        .handle(serde_json::json!({
+            "op": "setCenterView",
+            "view": "graph",
+        }))
+        .unwrap();
+    assert_eq!(
+        overview.snapshot.center_view,
+        host_kernel::CenterView::Graph
+    );
+    let graph = overview.snapshot.board.unwrap().graph.unwrap();
+    assert_eq!(graph.mode, host_kernel::DependencyGraphMode::Overview);
+    assert_eq!(graph.center_id, None);
+    assert!(!graph.complete);
+    assert_eq!(graph.nodes.len(), 3);
 }
 
 #[test]

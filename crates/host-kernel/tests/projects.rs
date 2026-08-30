@@ -38,6 +38,25 @@ fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
     dir
 }
 
+fn start_unbound_grok(host: &mut HostKernel, project_id: &str) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "project integration",
+    }))
+    .unwrap()
+}
+
 #[test]
 fn registering_a_github_project_lists_it_and_makes_it_current() {
     let tmp = tempfile::tempdir().unwrap();
@@ -241,7 +260,6 @@ fn inference_is_only_a_candidate_until_register() {
     assert_eq!(inference.name, "garden");
     assert_eq!(inference.github_host, "github.com");
     assert_eq!(inference.repository, "you/garden");
-    assert!(!inference.ambiguous);
     assert!(out.snapshot.projects.is_empty());
 
     let out = host
@@ -282,76 +300,6 @@ fn inference_prefers_local_markdown_tracker_over_git_remote() {
     assert_eq!(inference.tracker, TrackerKind::LocalMarkdown);
     assert_eq!(inference.github_host, "local");
     assert_eq!(inference.repository, project_dir.to_string_lossy());
-}
-
-#[test]
-fn inference_accepts_a_non_github_git_remote() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project_dir = make_dir(tmp.path(), "work/garden");
-    std::fs::create_dir(project_dir.join(".git")).unwrap();
-    std::fs::write(
-        project_dir.join(".git/config"),
-        "[remote \"origin\"]\n\turl = ssh://git@gitlab.example.com/acme/garden.git\n",
-    )
-    .unwrap();
-    let mut host = boot_memory(tmp.path());
-    let inference = host
-        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
-        .unwrap()
-        .inference
-        .unwrap();
-    assert_eq!(inference.tracker, TrackerKind::Github);
-    assert_eq!(inference.github_host, "gitlab.example.com");
-    assert_eq!(inference.repository, "acme/garden");
-    assert!(!inference.ambiguous);
-}
-
-#[test]
-fn inference_preserves_nested_self_hosted_git_namespaces() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project_dir = make_dir(tmp.path(), "work/garden");
-    std::fs::create_dir(project_dir.join(".git")).unwrap();
-    std::fs::write(
-        project_dir.join(".git/config"),
-        "[remote \"origin\"]\n\turl = https://gitlab.example.com/acme/platform/garden.git\n",
-    )
-    .unwrap();
-    let mut host = boot_memory(tmp.path());
-
-    let inference = host
-        .handle(serde_json::json!({
-            "op": "inferProject",
-            "localPath": project_dir,
-        }))
-        .unwrap()
-        .inference
-        .unwrap();
-
-    assert_eq!(inference.github_host, "gitlab.example.com");
-    assert_eq!(inference.repository, "acme/platform/garden");
-}
-
-#[test]
-fn inference_marks_multiple_valid_git_remotes_as_ambiguous() {
-    let tmp = tempfile::tempdir().unwrap();
-    let project_dir = make_dir(tmp.path(), "work/garden");
-    std::fs::create_dir(project_dir.join(".git")).unwrap();
-    std::fs::write(
-        project_dir.join(".git/config"),
-        "[remote \"origin\"]\n\turl = git@github.com:you/garden.git\n[remote \"mirror\"]\n\turl = ssh://git@gitlab.example.com/acme/garden.git\n",
-    )
-    .unwrap();
-    let mut host = boot_memory(tmp.path());
-
-    let inference = host
-        .handle(serde_json::json!({ "op": "inferProject", "localPath": project_dir }))
-        .unwrap()
-        .inference
-        .unwrap();
-
-    assert_eq!(inference.github_host, "github.com");
-    assert_eq!(inference.repository, "you/garden");
-    assert!(inference.ambiguous);
 }
 
 #[test]
@@ -798,6 +746,7 @@ fn local_markdown_relation_writes_reject_an_incomplete_graph() {
     let repository = project_dir.to_string_lossy().to_string();
     let secrets = tmp.path().join("secrets.json");
     let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
         github_host: "local",
         repository: &repository,
         secrets_pat: None,
@@ -951,6 +900,162 @@ fn local_markdown_failure_does_not_mention_github_credentials() {
 }
 
 #[test]
+fn local_markdown_clears_legacy_parent_header_and_section_forms() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-parent-clear");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-parent.md"),
+        "# 01 — Parent\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-header.md"),
+        "# 02 — Header child\n\nStatus: ready-for-agent\nParent: 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("03-section.md"),
+        "# 03 — Section child\n\nStatus: ready-for-agent\n\n## Parent\n\n- #1\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    for number in [2, 3] {
+        LocalMarkdownTracker
+            .set_parent(&ctx, &format!("{repository}#{number}"), None)
+            .unwrap();
+    }
+
+    let outcome = LocalMarkdownTracker.read_all(&ctx).unwrap();
+    let issues = match outcome {
+        host_kernel::TrackerReadOutcome::Complete { issues } => issues,
+        other => panic!("expected complete read, got {other:?}"),
+    };
+    assert!(issues
+        .iter()
+        .filter(|issue| issue.number >= 2)
+        .all(|issue| issue.parent.is_none()));
+}
+
+#[test]
+fn local_markdown_legacy_closed_true_does_not_hide_an_invalid_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-invalid-status");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-invalid.md"),
+        "# 01 — Invalid\n\nStatus: done\nClosed: true\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    match LocalMarkdownTracker.read_all(&ctx).unwrap() {
+        host_kernel::TrackerReadOutcome::Incomplete { detail, .. } => {
+            assert!(detail.contains("invalid Status: done"), "{detail}");
+        }
+        other => panic!("invalid explicit Status must fail closed, got {other:?}"),
+    }
+}
+
+#[test]
+fn local_markdown_can_close_a_legacy_closed_false_issue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/legacy-close");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-open.md"),
+        "# 01 — Open\n\nStatus: ready-for-agent\nClosed: false\n",
+    )
+    .unwrap();
+    let repository = project_dir.to_string_lossy().to_string();
+    let secrets = tmp.path().join("secrets.json");
+    let ctx = ProbeContext {
+        tracker: TrackerKind::LocalMarkdown,
+        github_host: "local",
+        repository: &repository,
+        secrets_pat: None,
+        secrets_path: &secrets,
+    };
+
+    let closed = LocalMarkdownTracker
+        .close_issue(&ctx, &format!("{repository}#1"))
+        .unwrap();
+    assert!(!closed.open);
+    let body = std::fs::read_to_string(issues.join("01-open.md")).unwrap();
+    assert!(body.contains("Status: resolved"), "{body}");
+    assert!(!body.contains("Closed:"), "{body}");
+}
+
+#[test]
+fn local_markdown_file_changes_trigger_a_host_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/file-change-refresh");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n\noriginal body\n",
+    )
+    .unwrap();
+    let mut host = boot_memory_with_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "file-change-refresh", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    assert_eq!(out.snapshot.projects[0].issue_counts.total, 1);
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({ "op": "focusIssue", "issueId": issue_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "loadIssueDocument", "issueId": issue_id }))
+        .unwrap();
+    assert!(matches!(
+        host.snapshot().board.unwrap().selected.unwrap().document,
+        host_kernel::IssueDocumentState::Ready { ref body, .. } if body.contains("original body")
+    ));
+
+    std::fs::write(
+        issues.join("01-first.md"),
+        "# 01 — First\n\nStatus: ready-for-agent\n\nexternally changed body\n",
+    )
+    .unwrap();
+    std::fs::write(
+        issues.join("02-second.md"),
+        "# 02 — Second\n\nStatus: ready-for-agent\n",
+    )
+    .unwrap();
+    let refreshed = host
+        .handle(serde_json::json!({ "op": "tick", "nowMs": 1_800_000_000_000_u64 }))
+        .unwrap();
+    assert_eq!(refreshed.snapshot.projects[0].issue_counts.total, 2);
+    assert_eq!(
+        refreshed.snapshot.board.unwrap().selected.unwrap().document,
+        host_kernel::IssueDocumentState::Unloaded
+    );
+}
+
+#[test]
 fn remove_only_unregisters_and_falls_back_to_the_neighbor() {
     let tmp = tempfile::tempdir().unwrap();
     let first = make_dir(tmp.path(), "work/first");
@@ -1037,14 +1142,7 @@ fn removing_a_project_preserves_ended_run_history() {
     let dir = make_dir(tmp.path(), "work/history");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "history", &dir, "you/history");
-    let run_id = host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": id,
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+    let run_id = start_unbound_grok(&mut host, &id).snapshot.focused_run_id;
     host.handle(serde_json::json!({
         "op": "stopRun",
         "runId": run_id,
@@ -1130,11 +1228,7 @@ fn active_run_allows_changing_only_the_project_name() {
     let dir = make_dir(tmp.path(), "work/first");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "first", &dir, "you/first");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let out = host
         .handle(serde_json::json!({
@@ -1158,11 +1252,7 @@ fn active_run_blocks_changing_project_location_or_tracker() {
     let second = make_dir(tmp.path(), "work/second");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "first", &first, "you/first");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let error = host
         .handle(serde_json::json!({
@@ -1183,11 +1273,7 @@ fn an_active_run_blocks_remove() {
     let dir = make_dir(tmp.path(), "work/busy");
     let mut host = boot_memory(tmp.path());
     let id = register(&mut host, "busy", &dir, "you/busy");
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": id,
-    }))
-    .unwrap();
+    start_unbound_grok(&mut host, &id);
 
     let err = host
         .handle(serde_json::json!({

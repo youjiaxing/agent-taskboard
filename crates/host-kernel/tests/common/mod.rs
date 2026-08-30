@@ -3,7 +3,9 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use host_kernel::{
     AuthFailureKind, CredentialSource, DependencyRef, IssueDocument, IssueRecord, IssueRef,
@@ -36,6 +38,8 @@ pub struct SeamTracker {
     read_modes: Mutex<BTreeMap<String, ReadMode>>,
     write_modes: Mutex<BTreeMap<String, WriteMode>>,
     reads: Mutex<BTreeMap<String, u64>>,
+    read_starts: Mutex<BTreeMap<String, u64>>,
+    read_delay_ms: AtomicU64,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
     bodies: Mutex<BTreeMap<String, String>>,
     write_log: Mutex<Vec<(String, Option<String>, TrackerWriteOp)>>,
@@ -90,6 +94,19 @@ impl SeamTracker {
             .get(repository)
             .copied()
             .unwrap_or(0)
+    }
+
+    pub fn read_start_count(&self, repository: &str) -> u64 {
+        self.read_starts
+            .lock()
+            .expect("seam tracker")
+            .get(repository)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn set_read_delay_ms(&self, delay_ms: u64) {
+        self.read_delay_ms.store(delay_ms, Ordering::Relaxed);
     }
 
     pub fn comments(&self, repository: &str) -> Vec<String> {
@@ -232,6 +249,16 @@ impl TrackerSeam for SeamTracker {
     }
 
     fn read_all(&self, ctx: &ProbeContext<'_>) -> Result<TrackerReadOutcome, TrackerReadError> {
+        *self
+            .read_starts
+            .lock()
+            .expect("seam tracker")
+            .entry(ctx.repository.to_string())
+            .or_default() += 1;
+        let delay_ms = self.read_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
         *self
             .reads
             .lock()

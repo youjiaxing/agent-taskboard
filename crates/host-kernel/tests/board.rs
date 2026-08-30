@@ -1,15 +1,15 @@
 mod common;
 
-use std::net::TcpListener;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, CenterView, DependencyGraph, DependencyGraphMode,
-    FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, LoopbackAssets, LoopbackServer,
-    MemoryTracker, SystemAppearance, TrackerRouter, TriageRole, WorkspaceView,
+    AgentField, AgentFieldKind, BoardEmptyReason, BootRequest, CenterView, DependencyGraph,
+    DependencyGraphMode, FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord,
+    LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TrackerRouter, TriageRole,
     DEFAULT_RECENT_LIMIT,
 };
 
@@ -63,6 +63,30 @@ fn register(host: &mut HostKernel, dir: &Path, repository: &str) -> String {
     .focused_project_id
 }
 
+fn start_bound_grok(
+    host: &mut HostKernel,
+    project_id: &str,
+    issue_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board integration",
+    }))
+    .unwrap()
+}
+
 fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) {
     let kernel = Arc::new(Mutex::new(host));
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -76,35 +100,15 @@ fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) 
         |_| {},
     )
     .unwrap();
-    let mut command = browser_command(script_name, client.protocol_url());
-    if let Some(value) = std::env::var_os("ISSUE_100_SCREENSHOT_DIR") {
-        command.env("ISSUE_100_SCREENSHOT_DIR", value);
-    }
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-    assert_browser_command(command, script_name);
-}
-
-fn run_browser_script(script_name: &str, board_url: &str, envs: &[(&str, &str)]) {
-    let mut command = browser_command(script_name, board_url);
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-    assert_browser_command(command, script_name);
-}
-
-fn browser_command(script_name: &str, board_url: impl AsRef<str>) -> Command {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = Command::new("node");
     command
         .arg(repo.join("apps/desktop/e2e").join(script_name))
         .current_dir(&repo)
-        .env("BOARD_URL", board_url.as_ref());
-    command
-}
-
-fn assert_browser_command(mut command: Command, script_name: &str) {
+        .env("BOARD_URL", client.protocol_url().to_string());
+    for (name, value) in envs {
+        command.env(name, value);
+    }
     let output = command.output().expect("playwright");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -120,232 +124,6 @@ fn ids(cards: &[host_kernel::IssueCard]) -> Vec<String> {
 
 fn node_ids(graph: &host_kernel::DependencyGraph) -> Vec<String> {
     graph.nodes.iter().map(|node| node.id.clone()).collect()
-}
-
-#[test]
-fn snapshots_honor_each_clients_explicit_view_without_shared_focus() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/garden", 1, "first client issue"));
-    tracker.add_issue(IssueRecord::open("you/garden", 2, "second client issue"));
-    let mut host = boot(tmp.path(), tracker);
-    let project_id = register(&mut host, &dir, "you/garden");
-
-    let snapshot_for = |host: &mut HostKernel, issue_id: &str| {
-        host.handle(serde_json::json!({
-            "op": "snapshot",
-            "clientView": {
-                "focusedHostId": "local",
-                "focusedProjectId": project_id,
-                "selectedIssueId": issue_id,
-                "focusedRunId": "",
-                "centerView": "board",
-                "workspaceView": "project",
-                "parentFilterId": null,
-                "search": {
-                    "title": "",
-                    "triageRole": null,
-                    "state": "all"
-                },
-                "graphMode": "overview",
-                "graphCenterIssueId": null,
-                "completeDependencyGraph": false
-            }
-        }))
-        .unwrap()
-        .snapshot
-    };
-
-    let first = snapshot_for(&mut host, "you/garden#1");
-    assert_eq!(
-        first.board.as_ref().unwrap().selected.as_ref().unwrap().id,
-        "you/garden#1"
-    );
-
-    let second = snapshot_for(&mut host, "you/garden#2");
-    assert_eq!(
-        second.board.as_ref().unwrap().selected.as_ref().unwrap().id,
-        "you/garden#2"
-    );
-
-    let first_again = snapshot_for(&mut host, "you/garden#1");
-    assert_eq!(
-        first_again
-            .board
-            .as_ref()
-            .unwrap()
-            .selected
-            .as_ref()
-            .unwrap()
-            .id,
-        "you/garden#1"
-    );
-}
-
-#[test]
-fn removing_a_project_keeps_another_clients_project_and_issue_focus() {
-    let tmp = tempfile::tempdir().unwrap();
-    let first_dir = make_dir(tmp.path(), "work/first");
-    let second_dir = make_dir(tmp.path(), "work/second");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/first", 1, "first issue"));
-    tracker.add_issue(IssueRecord::open("you/second", 2, "second issue"));
-    let mut host = boot(tmp.path(), tracker);
-    let first_id = register(&mut host, &first_dir, "you/first");
-    let second_id = host
-        .handle(serde_json::json!({
-            "op": "registerProject",
-            "name": "second",
-            "localPath": second_dir,
-            "repository": "you/second",
-        }))
-        .unwrap()
-        .snapshot
-        .projects
-        .iter()
-        .find(|project| project.id != first_id)
-        .unwrap()
-        .id
-        .clone();
-    let second_run_id = host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": second_id,
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
-
-    let client_b_view = serde_json::json!({
-        "focusedHostId": "local",
-        "focusedProjectId": second_id,
-        "selectedIssueId": "you/second#2",
-        "focusedRunId": second_run_id,
-        "centerView": "graph",
-        "workspaceView": "run",
-        "parentFilterId": null,
-        "search": { "title": "", "triageRole": null, "state": "all" },
-        "graphMode": "focused",
-        "graphCenterIssueId": "you/second#2",
-        "completeDependencyGraph": true
-    });
-
-    let before = host
-        .handle(serde_json::json!({
-            "op": "snapshot",
-            "clientId": "client-b",
-            "clientView": client_b_view,
-        }))
-        .unwrap()
-        .snapshot;
-    assert_eq!(before.focused_project_id, second_id);
-    assert_eq!(
-        before.board.as_ref().unwrap().selected.as_ref().unwrap().id,
-        "you/second#2"
-    );
-
-    let removed = host
-        .handle(serde_json::json!({
-            "op": "removeProject",
-            "projectId": first_id,
-            "clientId": "client-a",
-            "clientView": {
-                "focusedHostId": "local",
-                "focusedProjectId": first_id,
-                "selectedIssueId": "you/first#1",
-                "focusedRunId": "",
-                "centerView": "board",
-                "workspaceView": "project",
-                "parentFilterId": null,
-                "search": { "title": "", "triageRole": null, "state": "all" },
-                "graphMode": "overview",
-                "graphCenterIssueId": null,
-                "completeDependencyGraph": false
-            },
-        }))
-        .unwrap()
-        .snapshot;
-    assert_eq!(removed.focused_project_id, second_id);
-    assert_eq!(removed.board.as_ref().unwrap().project_id, second_id);
-
-    let after = host
-        .handle(serde_json::json!({
-            "op": "snapshot",
-            "clientId": "client-b",
-            "clientView": client_b_view,
-        }))
-        .unwrap()
-        .snapshot;
-    assert_eq!(after.focused_project_id, second_id);
-    assert_eq!(after.focused_run_id, second_run_id);
-    assert_eq!(after.center_view, CenterView::Graph);
-    assert_eq!(after.workspace_view, WorkspaceView::Run);
-    assert_eq!(
-        after.board.as_ref().unwrap().selected.as_ref().unwrap().id,
-        "you/second#2"
-    );
-}
-
-#[test]
-fn removing_a_middle_project_uses_the_host_fallback_for_the_removing_client() {
-    let tmp = tempfile::tempdir().unwrap();
-    let first_dir = make_dir(tmp.path(), "work/first");
-    let removed_dir = make_dir(tmp.path(), "work/removed");
-    let fallback_dir = make_dir(tmp.path(), "work/fallback");
-    let mut host = boot(tmp.path(), Arc::new(MemoryTracker::new()));
-    let first_id = register(&mut host, &first_dir, "you/first");
-    let removed_id = host
-        .handle(serde_json::json!({
-            "op": "registerProject",
-            "name": "removed",
-            "localPath": removed_dir,
-            "repository": "you/removed",
-        }))
-        .unwrap()
-        .snapshot
-        .focused_project_id;
-    let fallback_id = host
-        .handle(serde_json::json!({
-            "op": "registerProject",
-            "name": "fallback",
-            "localPath": fallback_dir,
-            "repository": "you/fallback",
-        }))
-        .unwrap()
-        .snapshot
-        .focused_project_id;
-    host.handle(serde_json::json!({
-        "op": "focusProject",
-        "projectId": removed_id,
-    }))
-    .unwrap();
-
-    let snapshot = host
-        .handle(serde_json::json!({
-            "op": "removeProject",
-            "projectId": removed_id,
-            "clientId": "client-a",
-            "clientView": {
-                "focusedHostId": "local",
-                "focusedProjectId": removed_id,
-                "selectedIssueId": null,
-                "focusedRunId": "",
-                "centerView": "board",
-                "workspaceView": "project",
-                "parentFilterId": null,
-                "search": { "title": "", "triageRole": null, "state": "all" },
-                "graphMode": "overview",
-                "graphCenterIssueId": null,
-                "completeDependencyGraph": false
-            },
-        }))
-        .unwrap()
-        .snapshot;
-
-    assert_eq!(snapshot.focused_project_id, fallback_id);
-    assert_ne!(snapshot.focused_project_id, first_id);
-    assert_eq!(snapshot.board.as_ref().unwrap().project_id, fallback_id);
 }
 
 fn edge_pairs(graph: &host_kernel::DependencyGraph) -> Vec<(String, String)> {
@@ -589,6 +367,11 @@ fn parent_filter_does_not_shrink_the_dependency_graph() {
         "view": "graph",
     }))
     .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
     let before = host.snapshot().board.unwrap().graph.expect("graph");
     assert_eq!(before.center_id.as_deref(), Some("you/garden#3"));
     assert_eq!(node_ids(&before), vec!["you/garden#9", "you/garden#3"]);
@@ -793,6 +576,11 @@ fn dependency_graph_contains_only_dependency_edges() {
         "view": "graph",
     }))
     .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#3",
+    }))
+    .unwrap();
     let board = host.snapshot().board.unwrap();
     let graph = board.graph.expect("graph");
 
@@ -808,7 +596,7 @@ fn dependency_graph_contains_only_dependency_edges() {
 }
 
 #[test]
-fn dependency_overview_caps_open_issues_and_prioritizes_dependency_participants() {
+fn dependency_graph_opens_as_a_capped_open_issue_overview() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -831,28 +619,24 @@ fn dependency_overview_caps_open_issues_and_prioritizes_dependency_participants(
         IssueRecord::open("you/garden", 999, "closed").closed_at("2026-08-20T10:00:00Z"),
     );
     let mut host = boot(tmp.path(), tracker);
-    let project_id = register(&mut host, &dir, "you/garden");
+    register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "focusIssue",
+        "issueId": "you/garden#205",
+    }))
+    .unwrap();
 
-    let snapshot = host
-        .handle(serde_json::json!({
-            "op": "snapshot",
-            "clientView": {
-                "focusedHostId": "local",
-                "focusedProjectId": project_id,
-                "selectedIssueId": null,
-                "focusedRunId": "",
-                "centerView": "graph",
-                "workspaceView": "project",
-                "parentFilterId": null,
-                "search": { "title": "", "triageRole": null, "state": "all" },
-                "graphMode": "overview",
-                "graphCenterIssueId": null,
-                "completeDependencyGraph": false
-            }
-        }))
+    host.handle(serde_json::json!({
+        "op": "setCenterView",
+        "view": "graph",
+    }))
+    .unwrap();
+    let graph = host
+        .snapshot()
+        .board
         .unwrap()
-        .snapshot;
-    let graph = snapshot.board.unwrap().graph.expect("overview graph");
+        .graph
+        .expect("overview graph");
     let ids = node_ids(&graph);
 
     assert_eq!(graph.mode, DependencyGraphMode::Overview);
@@ -865,10 +649,61 @@ fn dependency_overview_caps_open_issues_and_prioritizes_dependency_participants(
     assert!(ids.contains(&"you/garden#2".into()));
     assert!(ids.contains(&"you/garden#205".into()));
     assert!(!ids.contains(&"you/garden#7".into()));
+    assert!(!ids.contains(&"you/garden#999".into()));
     assert_eq!(
         edge_pairs(&graph),
         vec![("you/garden#1".into(), "you/garden#2".into())]
     );
+
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
+    let focused = host.snapshot().board.unwrap().graph.expect("focused graph");
+    assert_eq!(focused.mode, DependencyGraphMode::Focused);
+    assert_eq!(focused.center_id.as_deref(), Some("you/garden#1"));
+    assert_eq!(node_ids(&focused), vec!["you/garden#1", "you/garden#2"]);
+
+    host.handle(serde_json::json!({
+        "op": "showDependencyGraphOverview",
+    }))
+    .unwrap();
+    let restored = host
+        .snapshot()
+        .board
+        .unwrap()
+        .graph
+        .expect("overview graph");
+    assert_eq!(restored.mode, DependencyGraphMode::Overview);
+    assert_eq!(restored.center_id, None);
+    assert_eq!(restored.total_count, 205);
+}
+
+#[test]
+fn browser_dependency_graph_overview_renders_more_than_the_focused_canvas_batch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "dependency origin").blocking(
+            "you/garden",
+            2,
+            "dependency target",
+        ),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "dependency target"));
+    for number in 3..=60 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("open {number}"),
+        ));
+    }
+    let mut host = boot(tmp.path(), tracker);
+    register(&mut host, &dir, "you/garden");
+
+    run_browser_e2e(host, "dependency-graph-overview.mjs", &[]);
 }
 
 #[test]
@@ -889,10 +724,10 @@ fn legacy_dependency_graph_payload_defaults_new_centering_fields() {
 
     assert_eq!(graph.center_id, None);
     assert_eq!(graph.mode, DependencyGraphMode::Focused);
-    assert!(!graph.truncated);
     assert_eq!(graph.total_count, 0);
     assert!(!graph.complete);
     assert_eq!(graph.max_distance, 0);
+    assert!(!graph.truncated);
     assert_eq!(graph.nodes[0].distance, 0);
     assert_eq!(graph.nodes[0].relation, GraphRelation::Center);
 }
@@ -937,6 +772,11 @@ fn centered_dependency_graph_expands_the_complete_upstream_and_downstream_closur
     host.handle(serde_json::json!({
         "op": "setCenterView",
         "view": "graph",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "centerDependencyGraph",
+        "issueId": "you/garden#10",
     }))
     .unwrap();
     let before = host.snapshot().board.unwrap();
@@ -1141,26 +981,6 @@ fn unknown_move_op_does_not_change_tracker_state() {
 }
 
 #[test]
-fn browser_clients_keep_independent_issue_navigation() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/multi-client");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open(
-        "you/multi-client",
-        1,
-        "first client issue",
-    ));
-    tracker.add_issue(IssueRecord::open(
-        "you/multi-client",
-        2,
-        "second client issue",
-    ));
-    let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "you/multi-client");
-    run_browser_e2e(host, "multi-client-navigation.mjs", &[]);
-}
-
-#[test]
 fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
@@ -1252,11 +1072,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     );
     tracker.set_read_mode("you/garden", ReadMode::Complete);
     host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/garden#10",
-    }))
-    .unwrap();
+    start_bound_grok(&mut host, &garden_project_id, "you/garden#10");
     sessions
         .last_session()
         .expect("active Run session")
@@ -1284,12 +1100,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         "op": "snapshot",
     }))
     .unwrap();
-    let stopped_run_id = host
-        .handle(serde_json::json!({
-            "op": "startBoundRun",
-            "issueId": "you/garden#7",
-        }))
-        .unwrap()
+    let stopped_run_id = start_bound_grok(&mut host, &garden_project_id, "you/garden#7")
         .snapshot
         .focused_run_id;
     sessions
@@ -1322,6 +1133,17 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     host.handle(serde_json::json!({
         "op": "startUnboundRun",
         "projectId": host.snapshot().focused_project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board unbound integration",
     }))
     .unwrap();
     host.handle(serde_json::json!({
@@ -1365,6 +1187,45 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     }))
     .unwrap();
     run_browser_e2e(host, "board.mjs", &[]);
+}
+
+#[test]
+fn browser_clients_keep_navigation_and_forms_responsive_during_a_slow_tracker_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden_dir = make_dir(tmp.path(), "work/garden");
+    let notes_dir = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    for number in 1..=18 {
+        tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("garden issue {number}"),
+        ));
+    }
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut host, &garden_dir, "you/garden");
+    let notes_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "notes",
+            "localPath": notes_dir,
+            "repository": "you/notes",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id
+        .clone();
+    tracker.set_read_delay_ms(1_200);
+
+    run_browser_e2e(
+        host,
+        "client-isolation-refresh.mjs",
+        &[
+            ("GARDEN_PROJECT_ID", Path::new(&garden_id)),
+            ("NOTES_PROJECT_ID", Path::new(&notes_id)),
+        ],
+    );
 }
 
 fn run_degraded_shell_edge_state(
@@ -1474,56 +1335,6 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
 }
 
 #[test]
-fn browser_registers_local_markdown_and_self_hosted_git_projects_through_the_form() {
-    let tmp = tempfile::tempdir().unwrap();
-    let local = make_dir(tmp.path(), "work/local-tracker");
-    let remote = make_dir(tmp.path(), "work/gitlab-project");
-    let fallback = make_dir(tmp.path(), "work/fallback-project");
-    for (dir, number, title) in [(&local, 1, "local issue"), (&fallback, 2, "fallback issue")] {
-        let issue_dir = dir.join(".scratch/feature/issues");
-        std::fs::create_dir_all(&issue_dir).unwrap();
-        std::fs::write(
-            issue_dir.join(format!("{number:02}-issue.md")),
-            format!("# {number} — {title}\n\nStatus: ready-for-agent\n\nBlocked by: None\n"),
-        )
-        .unwrap();
-    }
-    std::fs::create_dir(remote.join(".git")).unwrap();
-    std::fs::write(
-        remote.join(".git/config"),
-        "[remote \"origin\"]\n\turl = https://gitlab.example.com/acme/platform/garden.git\n",
-    )
-    .unwrap();
-
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open(
-        "acme/platform/garden",
-        3,
-        "self-hosted issue",
-    ));
-    let mut host = HostKernel::boot_with_ports(
-        boot_req(tmp.path()),
-        host_kernel::KernelPorts {
-            tracker: Arc::new(TrackerRouter::new(Arc::clone(&tracker) as _)) as _,
-            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
-            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
-            sessions: host_kernel::MemorySessionFactory::new() as _,
-        },
-    )
-    .unwrap();
-    pin_board_test_time(&mut host);
-    run_browser_e2e(
-        host,
-        "project-tracker-lifecycle.mjs",
-        &[
-            ("LOCAL_PROJECT_DIR", local.as_path()),
-            ("REMOTE_PROJECT_DIR", remote.as_path()),
-            ("FALLBACK_PROJECT_DIR", fallback.as_path()),
-        ],
-    );
-}
-
-#[test]
 fn browser_covers_local_markdown_issue_111_write_forms() {
     let tmp = tempfile::tempdir().unwrap();
     let local = make_dir(tmp.path(), "work/issue-111-ui");
@@ -1557,321 +1368,97 @@ fn browser_covers_local_markdown_issue_111_write_forms() {
 }
 
 #[test]
-fn browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retry() {
+fn browser_supplements_issue_115_launch_form_behavior() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/garden");
+    let project = make_dir(tmp.path(), "work/issue-115-ui");
+    let field = |id: &str, kind: AgentFieldKind, options: &[&str], folded: bool| AgentField {
+        id: id.into(),
+        label: id.into(),
+        kind,
+        options: options.iter().map(|value| (*value).to_string()).collect(),
+        option_filter: None,
+        required: id == "model" || id == "effort",
+        folded,
+    };
+    let fields = vec![
+        field("model", AgentFieldKind::Select, &["fast", "deep"], false),
+        field("effort", AgentFieldKind::Select, &["low", "high"], false),
+        field("initial-instruction", AgentFieldKind::Multiline, &[], false),
+        field("profile", AgentFieldKind::Text, &[], false),
+        field(
+            "approval",
+            AgentFieldKind::Select,
+            &["on-request", "never"],
+            false,
+        ),
+        field(
+            "sandbox",
+            AgentFieldKind::Select,
+            &["workspace-write", "read-only"],
+            false,
+        ),
+        field("agent", AgentFieldKind::Text, &[], false),
+        field("add-dir", AgentFieldKind::Text, &[], false),
+        field("additional-args", AgentFieldKind::Text, &[], true),
+    ];
+    let seed = BTreeMap::from([
+        ("model".into(), "fast".into()),
+        ("effort".into(), "low".into()),
+        ("initial-instruction".into(), String::new()),
+        ("profile".into(), String::new()),
+        ("approval".into(), "on-request".into()),
+        ("sandbox".into(), "workspace-write".into()),
+        ("agent".into(), String::new()),
+        ("add-dir".into(), String::new()),
+        ("additional-args".into(), String::new()),
+    ]);
+    let grok = host_kernel::MemoryAgent::installed_grok().with_fields(fields.clone(), seed.clone());
+    let codex =
+        host_kernel::MemoryAgent::installed("codex", "Codex", "codex").with_fields(fields, seed);
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()) as _,
+            agents: vec![Arc::new(grok) as _, Arc::new(codex) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    register(&mut host, &project, "you/issue-115-ui");
+    run_browser_e2e(host, "issue-115-launch.mjs", &[]);
+}
+
+#[test]
+fn browser_clients_resize_move_and_restore_workbench_panels_independently() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = make_dir(tmp.path(), "work/issue-116-ui");
     let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/garden", 100, "core user journey"));
-    let sessions = host_kernel::MemorySessionFactory::new();
-    sessions.fail_next("pty unavailable");
+    tracker.add_issue(IssueRecord::open(
+        "you/issue-116-ui",
+        1,
+        "panel layout issue",
+    ));
+    for number in 2..=24 {
+        tracker.add_issue(IssueRecord::open(
+            "you/issue-116-ui",
+            number,
+            format!("scrollable panel issue {number}"),
+        ));
+    }
     let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         host_kernel::KernelPorts {
             tracker,
             agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
             launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
-            sessions,
-        },
-    )
-    .unwrap();
-    pin_board_test_time(&mut host);
-    register(&mut host, &dir, "you/garden");
-    run_browser_e2e(host, "run-launch-resilience.mjs", &[]);
-}
-
-#[test]
-fn browser_preserves_the_custom_usage_range_when_submission_fails() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/garden", 100, "core user journey"));
-    let mut host = boot(tmp.path(), tracker);
-    pin_board_test_time(&mut host);
-    register(&mut host, &dir, "you/garden");
-    run_browser_e2e(host, "usage-form-resilience.mjs", &[]);
-}
-
-#[test]
-fn browser_explains_why_an_agent_is_unavailable_before_launch() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/garden", 100, "core user journey"));
-    let mut host = HostKernel::boot_with_ports(
-        boot_req(tmp.path()),
-        host_kernel::KernelPorts {
-            tracker,
-            agents: vec![Arc::new(host_kernel::MemoryAgent::missing_grok()) as _],
-            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/opt/empty")) as _,
             sessions: host_kernel::MemorySessionFactory::new() as _,
         },
     )
     .unwrap();
     pin_board_test_time(&mut host);
-    register(&mut host, &dir, "you/garden");
-    run_browser_e2e(host, "agent-unavailable.mjs", &[]);
-}
+    let project_id = register(&mut host, &project, "you/issue-116-ui");
+    start_bound_grok(&mut host, &project_id, "you/issue-116-ui#1");
 
-#[test]
-fn browser_manages_projects_from_the_desktop_sidebar_without_losing_context() {
-    let tmp = tempfile::tempdir().unwrap();
-    let active_dir = make_dir(tmp.path(), "work/active");
-    let stopped_dir = make_dir(tmp.path(), "work/stopped");
-    let fallback_dir = make_dir(tmp.path(), "work/fallback");
-    let added_dir = make_dir(tmp.path(), "work/added");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/active", 1, "active issue"));
-    tracker.add_issue(IssueRecord::open("you/stopped", 1, "stopped issue"));
-    tracker.add_issue(IssueRecord::open("you/fallback", 1, "fallback issue"));
-    tracker.add_issue(IssueRecord::open("you/added", 1, "added issue"));
-    let sessions = host_kernel::MemorySessionFactory::new();
-    let mut host = HostKernel::boot_with_ports(
-        boot_req(tmp.path()),
-        host_kernel::KernelPorts {
-            tracker,
-            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
-            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
-            sessions: Arc::clone(&sessions) as _,
-        },
-    )
-    .unwrap();
-    pin_board_test_time(&mut host);
-    let active_id = host
-        .handle(serde_json::json!({
-            "op": "registerProject",
-            "name": "active-project",
-            "localPath": active_dir,
-            "repository": "you/active",
-        }))
-        .unwrap()
-        .snapshot
-        .focused_project_id;
-    let stopped_id = host
-        .handle(serde_json::json!({
-            "op": "registerProject",
-            "name": "stopped-project",
-            "localPath": stopped_dir,
-            "repository": "you/stopped",
-        }))
-        .unwrap()
-        .snapshot
-        .focused_project_id;
-    host.handle(serde_json::json!({
-        "op": "registerProject",
-        "name": "fallback-project",
-        "localPath": fallback_dir,
-        "repository": "you/fallback",
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "focusProject",
-        "projectId": stopped_id,
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/stopped#1",
-    }))
-    .unwrap();
-    sessions.last_session().unwrap().finish(2);
-    host.handle(serde_json::json!({ "op": "snapshot" }))
-        .unwrap();
-    host.handle(serde_json::json!({
-        "op": "focusProject",
-        "projectId": active_id,
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/active#1",
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "focusProject",
-        "projectId": stopped_id,
-    }))
-    .unwrap();
-    let snapshot = host.snapshot();
-    assert!(
-        snapshot
-            .projects
-            .iter()
-            .find(|project| project.id == active_id)
-            .unwrap()
-            .has_active_run
-    );
-    assert!(
-        snapshot
-            .projects
-            .iter()
-            .find(|project| project.id == stopped_id)
-            .unwrap()
-            .has_execution_stopped
-    );
-    run_browser_e2e(
-        host,
-        "project-management.mjs",
-        &[("ADDED_PROJECT_DIR", added_dir.as_path())],
-    );
-}
-
-#[test]
-fn browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/lifecycle");
-    assert!(Command::new("git")
-        .arg("init")
-        .current_dir(&dir)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["config", "user.email", "agent-taskboard@example.invalid"])
-        .current_dir(&dir)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["config", "user.name", "Agent Taskboard"])
-        .current_dir(&dir)
-        .status()
-        .unwrap()
-        .success());
-    std::fs::write(dir.join("notes.txt"), "baseline\n").unwrap();
-    assert!(Command::new("git")
-        .args(["add", "notes.txt"])
-        .current_dir(&dir)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .args(["commit", "-m", "test baseline"])
-        .current_dir(&dir)
-        .status()
-        .unwrap()
-        .success());
-
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open(
-        "you/lifecycle",
-        1,
-        "active lifecycle issue",
-    ));
-    tracker.add_issue(IssueRecord::open(
-        "you/lifecycle",
-        2,
-        "continue lifecycle issue",
-    ));
-    tracker.add_issue(IssueRecord::open(
-        "you/lifecycle",
-        3,
-        "release lifecycle issue",
-    ));
-    tracker.set_issue_body(
-        "you/lifecycle#1",
-        "# Active work\n\nKeep the complete Issue beside the Terminal while waiting for approval.",
-    );
-    let sessions = host_kernel::MemorySessionFactory::new();
-    let agent = Arc::new(host_kernel::MemoryAgent::installed_grok());
-    let mut host = HostKernel::boot_with_ports(
-        boot_req(tmp.path()),
-        host_kernel::KernelPorts {
-            tracker,
-            agents: vec![Arc::clone(&agent) as _],
-            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
-            sessions: Arc::clone(&sessions) as _,
-        },
-    )
-    .unwrap();
-    pin_board_test_time(&mut host);
-    let project_id = register(&mut host, &dir, "you/lifecycle");
-
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/lifecycle#1",
-    }))
-    .unwrap();
-    sessions.last_session().unwrap().set_waiting(true);
-    sessions
-        .last_session()
-        .unwrap()
-        .push_output(b"waiting for approval\n");
-
-    let isolated_dir = make_dir(tmp.path(), "isolated/continued");
-    agent.set_isolation_tree(Some(isolated_dir.clone()));
-    host.handle(serde_json::json!({
-        "op": "prepareRunLaunch",
-        "projectId": project_id,
-        "issueId": "you/lifecycle#2",
-        "agentId": "grok-build",
-    }))
-    .unwrap();
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": project_id,
-        "issueId": "you/lifecycle#2",
-        "agentId": "grok-build",
-        "values": {
-            "model": "grok-4.6",
-            "effort": "high",
-            "permission-mode": "normal",
-            "always-approve": "false",
-            "sandbox": "off",
-            "initial-instruction": "continue lifecycle issue",
-            "additional-args": "",
-            "isolation": "true"
-        },
-        "openingText": "continue lifecycle issue",
-    }))
-    .unwrap();
-    sessions.last_session().unwrap().finish(2);
-    host.handle(serde_json::json!({ "op": "snapshot" }))
-        .unwrap();
-    std::fs::remove_dir_all(&isolated_dir).unwrap();
-    agent.set_isolation_tree(None);
-
-    host.handle(serde_json::json!({
-        "op": "startBoundRun",
-        "issueId": "you/lifecycle#3",
-    }))
-    .unwrap();
-    sessions.last_session().unwrap().finish(2);
-    host.handle(serde_json::json!({ "op": "snapshot" }))
-        .unwrap();
-    std::fs::write(dir.join("notes.txt"), "baseline\nchanged during the Run\n").unwrap();
-    host.handle(serde_json::json!({
-        "op": "focusIssue",
-        "issueId": "you/lifecycle#1",
-    }))
-    .unwrap();
-    run_browser_e2e(host, "run-lifecycle.mjs", &[]);
-}
-
-#[test]
-fn browser_explains_an_occupied_loopback_port_without_disabling_the_client() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
-    let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "you/garden");
-    let kernel = Arc::new(Mutex::new(host));
-    let occupier = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
-    let occupied_port = occupier.local_addr().unwrap().port();
-    let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../apps/desktop/dist")
-        .canonicalize()
-        .expect("built desktop client");
-    let client = LoopbackServer::attach_without_host_tick(
-        kernel,
-        occupied_port,
-        LoopbackAssets::Directory(dist),
-        |_| {},
-    )
-    .unwrap();
-    run_browser_script(
-        "loopback-occupied.mjs",
-        client.protocol_url(),
-        &[("OCCUPIED_PORT", &occupied_port.to_string())],
-    );
+    run_browser_e2e(host, "panel-layout.mjs", &[]);
 }

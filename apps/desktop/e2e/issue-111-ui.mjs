@@ -1,11 +1,18 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { openIssue100Browser } from "./issue-100-harness.mjs";
+import { chromium } from "playwright";
 
+const url = process.env.BOARD_URL;
 const localProjectDir = process.env.LOCAL_PROJECT_DIR;
-if (!localProjectDir) throw new Error("missing LOCAL_PROJECT_DIR");
+if (!url || !localProjectDir) throw new Error("missing Issue #111 E2E environment");
 
-const { browser, page } = await openIssue100Browser();
+const browser = await chromium.launch({ headless: true });
+const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
+const page = await context.newPage();
+await page.addInitScript((protocol) => {
+  window.__HOST_PROTOCOL__ = protocol;
+}, url);
+await page.goto(url, { waitUntil: "domcontentloaded" });
 const issueId = (number) => `${localProjectDir}#${number}`;
 const issueFiles = async () => {
   const directory = join(localProjectDir, ".scratch", "feature", "issues");
@@ -140,6 +147,23 @@ await page.waitForSelector(".issue-card:has-text('Child edited from desktop UI')
 await page.locator(".issue-card-main", { hasText: "Child edited from desktop UI" }).click();
 await page.waitForSelector("section.issue-document[data-document-state='ready']");
 if (await page.locator(".issue-detail").count() !== 1) throw new Error("Issue detail should survive reload");
+
+const childPath = join(localProjectDir, ".scratch", "feature", "issues", "02-child.md");
+const childMarkdown = await readFile(childPath, "utf8");
+await writeFile(
+  childPath,
+  childMarkdown.replace("edited body from desktop UI", "externally changed body from markdown"),
+);
+await page.waitForSelector("section.issue-document[data-document-state='ready']", { timeout: 5_000 });
+await page.waitForFunction(
+  () => document.querySelector("section.issue-document")?.textContent?.includes("externally changed body from markdown"),
+  null,
+  { timeout: 5_000 },
+);
+await page.click("button[data-act='edit-issue']");
+if (await page.inputValue("#issue-edit-body") !== "externally changed body from markdown") {
+  throw new Error("external Local Markdown changes must reload into the open Issue editor");
+}
 
 await browser.close();
 console.log("Issue #111 desktop UI e2e ok");

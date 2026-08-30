@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use super::{
     additional_args_field, append_additional_args, append_flag, append_switch, boolean_field,
-    initial_instruction_field, local_bin, probe_binary, select_field, text_field, AgentField,
-    AgentPort, ProbeResult,
+    discovery, initial_instruction_field, local_bin, probe_binary, select_field, text_field,
+    AgentConfigDiscovery, AgentField, AgentPort, ProbeResult,
 };
 use crate::{Language, LaunchEnvironment};
 
@@ -74,6 +74,48 @@ impl AgentPort for AntigravityAdapter {
         ])
     }
 
+    fn discover_config(
+        &self,
+        executable: &Path,
+        env: &LaunchEnvironment,
+    ) -> Result<AgentConfigDiscovery, String> {
+        let models_output = discovery::run_cli(executable, &["models"], env)?;
+        let help = discovery::run_cli(executable, &["--help"], env)?;
+        let models = tabular_models(&models_output);
+        if models.is_empty() {
+            return Err("Antigravity CLI returned an empty model list".into());
+        }
+        let efforts = discovery::option_values(&help, "--effort");
+        let mut fields = self.config_fields();
+        discovery::set_options(&mut fields, "model", models.clone());
+        discovery::set_options_if_found(&mut fields, "effort", efforts.clone());
+        discovery::set_options_if_found(
+            &mut fields,
+            "execution-mode",
+            discovery::option_values(&help, "--mode"),
+        );
+        if !efforts.is_empty() {
+            let mut by_model = BTreeMap::new();
+            for model in models {
+                let encoded = efforts
+                    .iter()
+                    .find(|effort| model.ends_with(&format!("-{effort}")))
+                    .cloned();
+                by_model.insert(
+                    model,
+                    encoded
+                        .map(|value| vec![value])
+                        .unwrap_or_else(|| efforts.clone()),
+                );
+            }
+            discovery::set_option_filter(&mut fields, "effort", "model", by_model);
+        }
+        Ok(AgentConfigDiscovery {
+            fields,
+            seed: self.seed_config(),
+        })
+    }
+
     fn assemble_argv_for(
         &self,
         executable: &Path,
@@ -109,4 +151,22 @@ impl AgentPort for AntigravityAdapter {
             }
         }
     }
+}
+
+fn tabular_models(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("Fetching ") {
+                return None;
+            }
+            let value = line
+                .split_once('\t')
+                .map(|(value, _)| value)
+                .or_else(|| line.split_once("\\t").map(|(value, _)| value))
+                .unwrap_or_else(|| line.split_whitespace().next().unwrap_or(""));
+            (!value.is_empty()).then(|| value.to_string())
+        })
+        .collect()
 }

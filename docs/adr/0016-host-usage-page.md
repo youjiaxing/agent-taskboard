@@ -1,6 +1,6 @@
 # Host 用量页同时看 token 账和通路快慢
 
-用量是 Host 级独立页（左侧 Host 区进入，不是总览页签，也不是浮层）。主表面是按时间倒序的 Run 流水。除 input / output / cache / reasoning / total 外，用分时段趋势看首字和生成速率，供人判断本机网络通路（如 Clash Verge）是否不稳。看板不列出、不切换这些节点。缺字段显示 `—`，不当 `0`。一个 Run 上同时多个模型的现场展示不在这一页。
+用量是 Host 级独立页（左侧 Host 区进入，不是总览页签）。其信息架构和导航身份保持独立；桌面 Client 在空间不足或用户主动操作时可将页面浮窗/覆盖主内容，仍可关闭并返回看板。主表面是按时间倒序的 Run 流水。除 input / output / cache / reasoning / total 外，用分时段趋势看首字和生成速率，供人判断本机网络通路（如 Clash Verge）是否不稳。看板不列出、不切换这些节点。缺字段显示 `—`，不当 `0`。一个 Run 上同时多个模型的现场展示不在这一页。
 
 钉于 [原型：Host 用量统计页面的信息层级](https://github.com/youjiaxing/agent-taskboard/issues/34)。
 

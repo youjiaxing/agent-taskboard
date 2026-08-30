@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -68,6 +69,7 @@ pub enum ProjectConnection {
 }
 
 pub struct ProbeContext<'a> {
+    pub tracker: TrackerKind,
     pub github_host: &'a str,
     pub repository: &'a str,
     pub secrets_pat: Option<&'a str>,
@@ -396,6 +398,15 @@ impl LocalMarkdownTracker {
         files
     }
 
+    pub fn content_revision(root: &Path) -> std::io::Result<u64> {
+        let mut hasher = DefaultHasher::new();
+        for path in Self::issue_files(root) {
+            path.hash(&mut hasher);
+            std::fs::read(&path)?.hash(&mut hasher);
+        }
+        Ok(hasher.finish())
+    }
+
     fn validate_relation_update<F>(
         &self,
         ctx: &ProbeContext<'_>,
@@ -534,9 +545,7 @@ impl LocalMarkdownTracker {
         let closed = terminal_status && closed_legacy != Some(false) || closed_legacy == Some(true);
         let open = !closed;
         if closed_legacy == Some(true) {
-            metadata_errors.retain(|error| {
-                !error.starts_with("missing Status") && !error.starts_with("invalid Status")
-            });
+            metadata_errors.retain(|error| !error.starts_with("missing Status"));
         }
         let repository = root.to_string_lossy().to_string();
         let title = body
@@ -759,29 +768,45 @@ impl LocalMarkdownTracker {
         )
     }
 
-    fn rewrite_metadata(
+    fn rewrite_parent(
         root: &Path,
         issue_id: &str,
-        field: &str,
         value: Option<&str>,
     ) -> Result<(), TrackerWriteError> {
         let path = Self::locate_issue(root, issue_id)?;
         let body = std::fs::read_to_string(&path).map_err(|err| TrackerWriteError::Failed {
             message: err.to_string(),
         })?;
-        let wanted = normalize_metadata(field);
-        let mut lines = body.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let lines = body.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let mut rewritten = Vec::with_capacity(lines.len());
         let mut in_header = true;
-        lines.retain(|line| {
-            if line.trim_start().starts_with("## ") {
+        let mut index = 0;
+        while index < lines.len() {
+            let line = &lines[index];
+            if let Some(section) = line.trim().strip_prefix("## ") {
                 in_header = false;
+                if normalize_metadata(section) == "parent" {
+                    index += 1;
+                    while index < lines.len() && !lines[index].trim_start().starts_with("## ") {
+                        index += 1;
+                    }
+                    continue;
+                }
             }
-            !in_header || parse_field_line(line).is_none_or(|(name, _)| name != wanted)
-        });
-        if let Some(value) = value {
-            lines.insert(1.min(lines.len()), format!("{field}: {value}"));
+            if in_header
+                && parse_field_line(line)
+                    .is_some_and(|(name, _)| matches!(name.as_str(), "part of" | "parent"))
+            {
+                index += 1;
+                continue;
+            }
+            rewritten.push(line.clone());
+            index += 1;
         }
-        Self::atomic_write(&path, &format!("{}\n", lines.join("\n")))
+        if let Some(value) = value {
+            rewritten.insert(1.min(rewritten.len()), format!("Part of: {value}"));
+        }
+        Self::atomic_write(&path, &format!("{}\n", rewritten.join("\n")))
     }
 
     fn rewrite_blocked_by(
@@ -1521,7 +1546,7 @@ impl TrackerPort for LocalMarkdownTracker {
         ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueRecord, TrackerWriteError> {
-        Self::write_status(&Self::root(ctx), issue_id, "resolved", false, false)
+        Self::write_status(&Self::root(ctx), issue_id, "resolved", false, true)
     }
     fn reopen_issue(
         &self,
@@ -1618,10 +1643,9 @@ impl TrackerPort for LocalMarkdownTracker {
                     .collect()
             },
         )?;
-        Self::rewrite_metadata(
+        Self::rewrite_parent(
             &root,
             issue_id,
-            "Part of",
             parent.map(|id| id.rsplit_once('#').map(|(_, number)| number).unwrap_or(id)),
         )
     }

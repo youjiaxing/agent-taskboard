@@ -216,23 +216,26 @@ fn spawn_local_rpc_inner(
                     if tick_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let (should_exit, tasks) = {
+                    let (outcome, refreshes) = {
                         let Ok(mut host) = tick_kernel.lock() else {
                             break;
                         };
-                        match host.begin_background_tick_request(&serde_json::json!({
-                            "op": "tick"
-                        })) {
-                            Ok((outcome, tasks)) => (outcome.process == ProcessIntent::Exit, tasks),
-                            Err(_) => (false, Vec::new()),
-                        }
+                        host.begin_deferred_refreshes();
+                        let outcome = host.dispatch_background_tick(None);
+                        let refreshes = host.take_deferred_refreshes();
+                        (outcome, refreshes)
                     };
-                    for task in tasks {
-                        spawn_background_task(
-                            Arc::clone(&tick_kernel),
-                            BackgroundRpcTask::Refresh(task),
-                        );
+                    for refresh in refreshes {
+                        let completed = HostKernel::execute_prepared_refresh(refresh);
+                        let Ok(mut host) = tick_kernel.lock() else {
+                            break;
+                        };
+                        host.finish_prepared_refresh(completed);
                     }
+                    let should_exit = outcome
+                        .ok()
+                        .is_some_and(|process| process == ProcessIntent::Exit)
+                        || !kernel_process_alive(&tick_kernel);
                     if should_exit {
                         tick_stop.store(true, Ordering::Relaxed);
                     }
@@ -346,7 +349,7 @@ fn browser_same_origin_request(request: &HttpRequest, server_port: u16) -> bool 
 
 fn serve_connection(
     mut stream: TcpStream,
-    kernel: &Arc<Mutex<HostKernel>>,
+    kernel: &Mutex<HostKernel>,
     assets: &LoopbackAssets,
     server_port: u16,
 ) -> io::Result<Option<CommandOutcome>> {
@@ -428,296 +431,55 @@ fn serve_connection(
                 return Ok(None);
             }
         };
-        let remote_request = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?
-            .begin_background_remote_request(&value);
-        match remote_request {
-            Ok(Some(task)) => {
-                let completion = task.execute();
-                let result = kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .finish_background_remote_request(completion);
-                match result {
-                    Ok(outcome) => {
-                        let body = serde_json::to_string(&outcome.to_json())?;
-                        write_json(&mut stream, 200, response_origin, &body)?;
-                        return Ok(Some(outcome));
-                    }
-                    Err(err) => {
-                        write_kernel_error(&mut stream, response_origin, &err)?;
-                        return Ok(None);
-                    }
-                }
+        let defer_refreshes = request_defers_refreshes(&value);
+        let (initial, refreshes) = {
+            let mut host = kernel
+                .lock()
+                .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+            if defer_refreshes {
+                host.begin_deferred_refreshes();
             }
-            Ok(None) => {}
-            Err(err) => {
-                write_kernel_error(&mut stream, response_origin, &err)?;
-                return Ok(None);
+            let result = host.handle(value.clone());
+            let refreshes = if defer_refreshes {
+                host.take_deferred_refreshes()
+            } else {
+                Vec::new()
+            };
+            if result.is_err() {
+                host.cancel_prepared_refreshes(&refreshes);
             }
-        }
-        let pair_remote_host = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?
-            .begin_background_pair_remote_host_request(&value);
-        match pair_remote_host {
-            Ok(Some(task)) => {
-                let completion = task.execute();
-                let result = kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .finish_background_pair_remote_host_request(&value, completion);
-                match result {
-                    Ok(outcome) => {
-                        let body = serde_json::to_string(&outcome.to_json())?;
-                        write_json(&mut stream, 200, response_origin, &body)?;
-                        return Ok(Some(outcome));
-                    }
-                    Err(err) => {
-                        write_kernel_error(&mut stream, response_origin, &err)?;
-                        return Ok(None);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                write_kernel_error(&mut stream, response_origin, &err)?;
-                return Ok(None);
-            }
-        }
-        let project_probe = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?
-            .begin_background_project_probe_request(&value);
-        match project_probe {
-            Ok(Some(task)) => {
-                let completion = task.execute();
-                let result = kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .finish_background_project_probe_request(completion);
-                match result {
-                    Ok((outcome, tasks)) => {
-                        let body = serde_json::to_string(&outcome.to_json())?;
-                        write_json(&mut stream, 200, response_origin, &body)?;
-                        for task in tasks {
-                            spawn_background_task(
-                                Arc::clone(kernel),
-                                BackgroundRpcTask::Refresh(task),
-                            );
-                        }
-                        return Ok(Some(outcome));
-                    }
-                    Err(err) => {
-                        let status = match err {
-                            KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                            KernelError::Denied(_) => 403,
-                            KernelError::Io(_) => 500,
-                        };
-                        write_json(
-                            &mut stream,
-                            status,
-                            response_origin,
-                            &format!(
-                                r#"{{"error":{}}}"#,
-                                serde_json::to_string(&err.to_string()).unwrap()
-                            ),
-                        )?;
-                        return Ok(None);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                let status = match err {
-                    KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                    KernelError::Denied(_) => 403,
-                    KernelError::Io(_) => 500,
-                };
-                write_json(
-                    &mut stream,
-                    status,
-                    response_origin,
-                    &format!(
-                        r#"{{"error":{}}}"#,
-                        serde_json::to_string(&err.to_string()).unwrap()
-                    ),
-                )?;
-                return Ok(None);
-            }
-        }
-        let tracker_write = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?
-            .begin_background_tracker_write_request(&value);
-        match tracker_write {
-            Ok(Some(task)) => {
-                let completion = task.execute();
-                let finished = kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .finish_background_tracker_write_request(&value, completion);
-                let result = if let Some(rollback) = finished.rollback {
-                    let rollback = rollback.execute();
-                    let rollback_result = kernel
-                        .lock()
-                        .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                        .finish_background_claim_rollback(&value, rollback);
-                    match finished.result {
-                        Ok(_) => rollback_result,
-                        Err(error) => match rollback_result {
-                            Ok(_) => Err(error),
-                            Err(rollback_error) => Err(rollback_error),
-                        },
-                    }
-                } else {
-                    finished.result
-                };
-                match result {
-                    Ok(outcome) => {
-                        let body = serde_json::to_string(&outcome.to_json())?;
-                        write_json(&mut stream, 200, response_origin, &body)?;
-                        return Ok(Some(outcome));
-                    }
-                    Err(err) => {
-                        let status = match err {
-                            KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                            KernelError::Denied(_) => 403,
-                            KernelError::Io(_) => 500,
-                        };
-                        write_json(
-                            &mut stream,
-                            status,
-                            response_origin,
-                            &format!(
-                                r#"{{"error":{}}}"#,
-                                serde_json::to_string(&err.to_string()).unwrap()
-                            ),
-                        )?;
-                        return Ok(None);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                let status = match err {
-                    KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                    KernelError::Denied(_) => 403,
-                    KernelError::Io(_) => 500,
-                };
-                write_json(
-                    &mut stream,
-                    status,
-                    response_origin,
-                    &format!(
-                        r#"{{"error":{}}}"#,
-                        serde_json::to_string(&err.to_string()).unwrap()
-                    ),
-                )?;
-                return Ok(None);
-            }
-        }
-        let background_result = match value.get("op").and_then(|op| op.as_str()) {
-            Some("refresh") => Some(
-                kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .begin_background_refresh_request(&value)
-                    .map(|(outcome, task)| {
-                        (
-                            outcome,
-                            task.into_iter()
-                                .map(BackgroundRpcTask::Refresh)
-                                .collect::<Vec<_>>(),
-                        )
-                    }),
-            ),
-            Some("loadIssueDocument") => Some(
-                kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .begin_background_issue_document_request(&value)
-                    .map(|(outcome, task)| {
-                        (
-                            outcome,
-                            task.into_iter()
-                                .map(BackgroundRpcTask::IssueDocument)
-                                .collect::<Vec<_>>(),
-                        )
-                    }),
-            ),
-            Some("setClientView") => Some(
-                kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .begin_background_client_view_request(&value)
-                    .map(|(outcome, task)| {
-                        (
-                            outcome,
-                            task.into_iter()
-                                .map(BackgroundRpcTask::Refresh)
-                                .collect::<Vec<_>>(),
-                        )
-                    }),
-            ),
-            Some("tick") => Some(
-                kernel
-                    .lock()
-                    .map_err(|_| io::Error::other("kernel lock poisoned"))?
-                    .begin_background_tick_request(&value)
-                    .map(|(outcome, tasks)| {
-                        (
-                            outcome,
-                            tasks
-                                .into_iter()
-                                .map(BackgroundRpcTask::Refresh)
-                                .collect::<Vec<_>>(),
-                        )
-                    }),
-            ),
-            _ => None,
+            (result, refreshes)
         };
-        if let Some(result) = background_result {
-            match result {
-                Ok((outcome, tasks)) => {
-                    let body = serde_json::to_string(&outcome.to_json())?;
-                    write_json(&mut stream, 200, response_origin, &body)?;
-                    for task in tasks {
-                        spawn_background_task(Arc::clone(kernel), task);
+        match initial {
+            Ok(mut outcome) => {
+                if !refreshes.is_empty() {
+                    let mut events = std::mem::take(&mut outcome.events);
+                    let completed: Vec<_> = refreshes
+                        .into_iter()
+                        .map(HostKernel::execute_prepared_refresh)
+                        .collect();
+                    let snapshot_request = serde_json::json!({
+                        "op": "snapshot",
+                        "clientInstanceId": value
+                            .get("clientInstanceId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default(),
+                    });
+                    let mut host = kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                    for refresh in completed {
+                        host.finish_prepared_refresh(refresh);
                     }
-                    return Ok(Some(outcome));
+                    let mut refreshed = host
+                        .handle(snapshot_request)
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    events.append(&mut refreshed.events);
+                    refreshed.events = events;
+                    outcome = refreshed;
                 }
-                Err(err) => {
-                    let status = match err {
-                        KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                        KernelError::Denied(_) => 403,
-                        KernelError::Io(_) => 500,
-                    };
-                    write_json(
-                        &mut stream,
-                        status,
-                        response_origin,
-                        &format!(
-                            r#"{{"error":{}}}"#,
-                            serde_json::to_string(&err.to_string()).unwrap()
-                        ),
-                    )?;
-                    return Ok(None);
-                }
-            }
-        }
-        let (result, tasks) = kernel
-            .lock()
-            .map_err(|_| io::Error::other("kernel lock poisoned"))?
-            .handle_with_deferred_refreshes(value);
-        match result {
-            Ok(outcome) => {
                 let body = serde_json::to_string(&outcome.to_json())?;
                 write_json(&mut stream, 200, response_origin, &body)?;
-                for task in tasks {
-                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
-                }
                 return Ok(Some(outcome));
             }
             Err(err) => {
@@ -735,9 +497,6 @@ fn serve_connection(
                         serde_json::to_string(&err.to_string()).unwrap()
                     ),
                 )?;
-                for task in tasks {
-                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
-                }
                 return Ok(None);
             }
         }
@@ -752,61 +511,11 @@ fn serve_connection(
     Ok(None)
 }
 
-enum BackgroundRpcTask {
-    Refresh(crate::BackgroundRefreshTask),
-    IssueDocument(crate::BackgroundIssueDocumentTask),
-    AutoAdvance(crate::BackgroundAutoAdvanceTask),
-}
-
-fn spawn_background_task(kernel: Arc<Mutex<HostKernel>>, task: BackgroundRpcTask) {
-    let name = match &task {
-        BackgroundRpcTask::Refresh(_) => "host-tracker-refresh",
-        BackgroundRpcTask::IssueDocument(_) => "host-issue-document",
-        BackgroundRpcTask::AutoAdvance(_) => "host-auto-advance",
-    };
-    let _ = std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || match task {
-            BackgroundRpcTask::Refresh(task) => {
-                let completion = task.execute();
-                let auto_advance = kernel.lock().ok().and_then(|mut host| {
-                    let (_, auto_advance) = host.finish_background_refresh_task(completion);
-                    auto_advance
-                });
-                if let Some(task) = auto_advance {
-                    spawn_background_task(
-                        Arc::clone(&kernel),
-                        BackgroundRpcTask::AutoAdvance(task),
-                    );
-                }
-            }
-            BackgroundRpcTask::IssueDocument(task) => {
-                let completion = task.execute();
-                if let Ok(mut host) = kernel.lock() {
-                    host.finish_issue_document_task(completion);
-                }
-            }
-            BackgroundRpcTask::AutoAdvance(task) => {
-                let completion = task.execute();
-                let rollback = kernel
-                    .lock()
-                    .ok()
-                    .and_then(|mut host| host.finish_background_auto_advance(completion));
-                if let Some(task) = rollback {
-                    let completion = task.execute();
-                    if let Ok(mut host) = kernel.lock() {
-                        host.finish_background_auto_advance_rollback(completion);
-                    }
-                }
-            }
-        });
-}
-
 fn serve_run_io(
     stream: &mut TcpStream,
     request: &HttpRequest,
     origin: Option<&str>,
-    kernel: &Arc<Mutex<HostKernel>>,
+    kernel: &Mutex<HostKernel>,
 ) -> io::Result<Option<Option<CommandOutcome>>> {
     let Some((run_id, action)) = parse_run_route(&request.path) else {
         return Ok(None);
@@ -831,12 +540,8 @@ fn serve_run_io(
             };
             let chunk = session.read_after(after, Duration::from_secs(8));
             if let Some(code) = chunk.exit_code {
-                let tasks = kernel
-                    .lock()
-                    .map(|mut host| host.note_run_exit_with_deferred_refreshes(&run_id, code))
-                    .unwrap_or_default();
-                for task in tasks {
-                    spawn_background_task(Arc::clone(kernel), BackgroundRpcTask::Refresh(task));
+                if let Ok(mut host) = kernel.lock() {
+                    host.note_run_exit(&run_id, code);
                 }
             }
             let body = serde_json::json!({
@@ -1213,6 +918,13 @@ fn write_empty(stream: &mut TcpStream, status: u16, origin: Option<&str>) -> io:
     stream.write_all(response.as_bytes())
 }
 
+fn request_defers_refreshes(request: &serde_json::Value) -> bool {
+    matches!(
+        request.get("op").and_then(|value| value.as_str()),
+        Some("refresh" | "tick" | "setClientView" | "showWindow" | "focusProject" | "noteRunEnded")
+    )
+}
+
 fn write_bytes(
     stream: &mut TcpStream,
     status: u16,
@@ -1247,27 +959,6 @@ fn write_json(
         body.len()
     );
     stream.write_all(response.as_bytes())
-}
-
-fn write_kernel_error(
-    stream: &mut TcpStream,
-    origin: Option<&str>,
-    error: &KernelError,
-) -> io::Result<()> {
-    let status = match error {
-        KernelError::Protocol(_) | KernelError::Json(_) => 400,
-        KernelError::Denied(_) => 403,
-        KernelError::Io(_) => 500,
-    };
-    write_json(
-        stream,
-        status,
-        origin,
-        &format!(
-            r#"{{"error":{}}}"#,
-            serde_json::to_string(&error.to_string()).unwrap()
-        ),
-    )
 }
 
 fn authorize(
@@ -1349,5 +1040,103 @@ fn reason_phrase(status: u16) -> &'static str {
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         _ => "OK",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        BootRequest, HostEvent, IssueRecord, MemoryTracker, RefreshStatus, SystemAppearance,
+        DEFAULT_REFRESH_INTERVAL_MS,
+    };
+
+    #[test]
+    fn background_ticks_keep_board_updates_until_a_client_receives_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("work/garden");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let tracker = Arc::new(MemoryTracker::new());
+        tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+        let tracker_seam: Arc<dyn crate::TrackerSeam> = tracker.clone();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "zh-Hans-CN".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Studio".into(),
+            },
+            tracker_seam,
+        )
+        .unwrap();
+        let project_id = host
+            .handle(serde_json::json!({
+                "op": "registerProject",
+                "name": "garden",
+                "localPath": project_dir,
+                "repository": "you/garden",
+            }))
+            .unwrap()
+            .snapshot
+            .focused_project_id;
+        host.handle(serde_json::json!({
+            "op": "setClientView",
+            "clientId": "desktop",
+            "projectId": project_id,
+            "visible": true,
+        }))
+        .unwrap();
+        let fetched_at_ms = match host.snapshot().board.unwrap().refresh {
+            RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+            other => panic!("expected ready, got {other:?}"),
+        };
+
+        tracker.set_issues(
+            "you/garden",
+            vec![
+                IssueRecord::open("you/garden", 1, "ready"),
+                IssueRecord::open("you/garden", 2, "new from background refresh"),
+            ],
+        );
+        host.begin_deferred_refreshes();
+        assert_eq!(
+            host.dispatch_background_tick(Some(fetched_at_ms + DEFAULT_REFRESH_INTERVAL_MS))
+                .unwrap(),
+            ProcessIntent::KeepRunning
+        );
+        let refreshes = host.take_deferred_refreshes();
+        assert_eq!(refreshes.len(), 1);
+        for refresh in refreshes {
+            let completed = HostKernel::execute_prepared_refresh(refresh);
+            host.finish_prepared_refresh(completed);
+        }
+
+        host.begin_deferred_refreshes();
+        host.dispatch_background_tick(Some(fetched_at_ms + DEFAULT_REFRESH_INTERVAL_MS + 1_000))
+            .unwrap();
+        assert!(host.take_deferred_refreshes().is_empty());
+
+        let outcome = host
+            .handle(serde_json::json!({
+                "op": "snapshot",
+                "clientInstanceId": "desktop",
+            }))
+            .unwrap();
+        assert!(outcome.events.iter().any(|event| matches!(
+            event,
+            HostEvent::BoardUpdated { project_id: updated } if updated == &project_id
+        )));
+        assert_eq!(
+            outcome
+                .snapshot
+                .board
+                .unwrap()
+                .columns
+                .unwrap()
+                .frontier
+                .len(),
+            2
+        );
     }
 }

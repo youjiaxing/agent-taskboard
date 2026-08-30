@@ -98,7 +98,7 @@ fn grok_values() -> serde_json::Value {
     serde_json::json!({
         "model": "grok-4.6",
         "effort": "high",
-        "permission-mode": "normal",
+        "permission-mode": "default",
         "always-approve": "false",
         "sandbox": "off",
         "initial-instruction": "",

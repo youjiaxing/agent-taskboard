@@ -18,6 +18,31 @@ fn make_grok(dir: &std::path::Path) -> PathBuf {
     path
 }
 
+fn make_discoverable_grok(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("grok");
+    std::fs::write(
+        &path,
+        r#"#!/bin/sh
+if [ "$1" = "models" ]; then
+  printf '%s\n' 'Default model: grok-current' 'Available models:' '  * grok-current (default)' '  - grok-fast'
+  exit 0
+fi
+if [ "$1" = "--help" ]; then
+  printf '%s\n' '      --permission-mode <MODE>' '          [possible values: default, acceptEdits, auto, dontAsk, bypassPermissions, plan]' '      --reasoning-effort <EFFORT>' '          [possible values: low, medium, high, xhigh]'
+  exit 0
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
 #[test]
 fn grok_adapter_declares_interactive_tui_contract() {
     let adapter = GrokAdapter;
@@ -46,6 +71,56 @@ fn grok_adapter_declares_first_layer_fields() {
     assert!(fields
         .iter()
         .any(|field| field.id == "additional-args" && field.folded));
+    assert!(fields
+        .iter()
+        .find(|field| field.id == "permission-mode")
+        .unwrap()
+        .options
+        .is_empty());
+    assert!(fields
+        .iter()
+        .find(|field| field.id == "sandbox")
+        .unwrap()
+        .options
+        .is_empty());
+    assert_eq!(GrokAdapter.seed_config()["permission-mode"], "default");
+}
+
+#[test]
+fn grok_adapter_discovers_models_and_enums_from_the_cli() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_discoverable_grok(tmp.path());
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+    let discovery = GrokAdapter
+        .discover_config(&executable, &env)
+        .expect("Grok CLI discovery");
+    let field = |id: &str| {
+        discovery
+            .fields
+            .iter()
+            .find(|field| field.id == id)
+            .unwrap()
+    };
+    assert_eq!(field("model").options, vec!["grok-current", "grok-fast"]);
+    assert_eq!(
+        field("effort").options,
+        vec!["low", "medium", "high", "xhigh"]
+    );
+    assert_eq!(
+        field("permission-mode").options,
+        vec![
+            "default",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+            "plan"
+        ]
+    );
+    assert_eq!(discovery.seed["model"], "grok-current");
 }
 
 #[test]
@@ -63,10 +138,26 @@ fn grok_adapter_assembles_form_values_without_prompt_flag() {
     let argv = GrokAdapter.assemble_argv_for(&executable, &values);
     assert_eq!(argv[0], "/opt/fake/grok");
     assert!(argv.windows(2).any(|pair| pair == ["--model", "grok-4.6"]));
+    assert!(argv
+        .windows(2)
+        .any(|pair| pair == ["--permission-mode", "default"]));
     assert!(argv.iter().any(|arg| arg == "--always-approve"));
     assert!(argv.iter().any(|arg| arg == "--no-subagents"));
     assert!(!argv.iter().any(|arg| arg == "-p" || arg == "--single"));
     assert!(!argv.iter().any(|arg| arg == "--worktree"));
+}
+
+#[test]
+fn grok_permission_mode_and_always_approve_remain_separate_flags() {
+    let executable = PathBuf::from("/opt/fake/grok");
+    let mut values = GrokAdapter.seed_config();
+    values.insert("permission-mode".into(), "plan".into());
+    values.insert("always-approve".into(), "false".into());
+    let argv = GrokAdapter.assemble_argv_for(&executable, &values);
+    assert!(argv
+        .windows(2)
+        .any(|pair| pair == ["--permission-mode", "plan"]));
+    assert!(!argv.iter().any(|arg| arg == "--always-approve"));
 }
 
 #[test]
