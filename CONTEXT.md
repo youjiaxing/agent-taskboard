@@ -120,6 +120,10 @@ _Avoid_: Done 列, 已关闭列, 完成列, 待审
 Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。不是用户系统里的终端 App，也不是自研聊天 UI。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
 _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 / Windows Terminal 当产品终端
 
+**工作台面板（Workbench panel）**:
+Client 中可独立拖动、调整大小、停靠或浮窗的 Issue Inspector、Embedded Terminal 与用量区域。面板布局只记在当前 Client，不改变 Issue、Run 或用量页各自的语义。
+_Avoid_: 把面板说成独立 Host、把浮窗说成新的页面或 Run
+
 **Host**:
 跑 Issue Tracker 访问、Agent CLI 和 Run 的常驻进程。PTY 只存在于 Host 上。它所在的电脑就说「跑 Host 的那台电脑」。
 _Avoid_: Server（易理解成我们提供的云）, 后台（过糊）, 把 Host 说成那台机器

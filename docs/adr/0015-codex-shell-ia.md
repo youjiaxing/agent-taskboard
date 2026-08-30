@@ -8,7 +8,7 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 
 **总览**跟 Host，不跟当前 Project：先汇总这台 Host 上各 Project 的 Open、阻塞中、Frontier、进行中与 Closed Issue 数量，再铺开 Run 缩略图并按终端状态分组；Project 过滤同时作用于两部分。它不是完整看板，也不是跨 Host 总览。即使尚未通过 Agent Taskboard 启动 Run，Project 态势仍必须可见。入口在左侧 Host 区；侧栏收起后留在顶栏。
 
-**底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端。绑票开工走配置表，不再一步认领并启动，见 [ADR 0018](0018-run-launch-form.md)。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
+**底栏**跟当前选中的 Issue：有进行中的 Run 就切到那条 PTY；没有就收起终端。宽屏默认停靠在底栏；用户可按需拖动、调整大小或浮窗化，空间不足时用覆盖布局继续工作。绑票开工走配置表，不再一步认领并启动，见 [ADR 0018](0018-run-launch-form.md)。这台 Host 上的全部 Run 到总览或「所有 Run」里找。
 
 **进入 Run**时，从看板点击已有 Run 的 Issue 会直接把 Embedded Terminal 抬到中间，自动收起左侧，右侧保留完整 Issue；终端约占中间与详情区域的三分之二。「返回看板」恢复原看板和自动收起的左侧。依赖图节点仍只换 Issue 详情，不触发这条流转。
 
@@ -31,5 +31,6 @@ v1 每天盯的那一屏学 Codex Desktop 的气质和折叠方式，不学它�
 ## Consequences
 
 - `/to-spec` 按「左侧 Host/Project、中间看板|图、Host 级 Project 态势 + Run 总览、底栏跟 Issue、看板点 Run Issue 直达中间终端、折叠不占位」写，不要写回顶栏 Host 条或默认列出全部 Run 的底栏。
+- 底栏是 Terminal 的默认停靠位置；面板布局能力允许在桌面空间不足或用户主动操作时浮窗/覆盖，不改变 Terminal 仍跟随当前 Issue 的语义。
 - 手机按当前 Project 聚焦，不平铺全部 Host / Project；切换范围是次级面板。
 - 四列、依赖图、空状态三件套、最近完成 N、查看改动、Embedded Terminal 官方 CLI 仍按已钉能力做。
