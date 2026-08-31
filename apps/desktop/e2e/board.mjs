@@ -1055,11 +1055,6 @@ const startedIssueRun = await page.evaluate(async ({ protocol, issueId }) => {
 if (!startedIssueRun?.id || startedIssueRun.status !== "running") {
   throw new Error(`mobile should start a Frontier Run through the normal launch form: ${JSON.stringify(startedIssueRun)}`);
 }
-await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ op: "focusRun", runId }),
-}), startedIssueRun.id);
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 await page.click(".mobile-run-view button[data-act='stop-run']");
@@ -1160,11 +1155,6 @@ await page.waitForSelector(".mobile-run-view .pty-slot");
 const endedRunId = await page.$eval(".mobile-run-view .pty-slot", (node) => node.getAttribute("data-run"));
 await page.click(".mobile-run-view button[data-act='stop-run']");
 await page.waitForSelector(".mobile-board-view");
-await page.evaluate((runId) => fetch(`${window.__HOST_PROTOCOL__}/rpc`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ op: "focusRun", runId }),
-}), endedRunId);
 await page.click("button[data-act='mobile-run']");
 await page.waitForSelector(".mobile-run-view");
 const endedRecentOutput = await page.$eval(".mobile-run-output", (node) => node.textContent ?? "");
