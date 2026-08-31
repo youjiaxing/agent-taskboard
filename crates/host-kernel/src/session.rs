@@ -148,6 +148,11 @@ impl MemorySession {
         self.pulse.notify_all();
     }
 
+    /// Simulate the PTY channel disappearing without a user-requested stop.
+    pub fn disconnect(&self) {
+        self.finish(1);
+    }
+
     pub fn stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }

@@ -4,14 +4,15 @@ use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
     AgentField, AgentFieldKind, BoardEmptyReason, BootRequest, CenterView, DependencyGraph,
-    DependencyGraphMode, FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord,
-    LoopbackAssets, LoopbackServer, MemoryTracker, SystemAppearance, TrackerRouter, TriageRole,
-    DEFAULT_RECENT_LIMIT,
+    DependencyGraphMode, FrontierEmptyReason, GraphRelation, HostKernel, IssueRecord, KernelPorts,
+    LoopbackAssets, LoopbackServer, MemoryAgent, MemoryLaunchEnv, MemorySessionFactory,
+    MemoryTracker, SystemAppearance, TrackerRouter, TriageRole, DEFAULT_RECENT_LIMIT,
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
@@ -89,6 +90,15 @@ fn start_bound_grok(
 }
 
 fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) {
+    run_browser_e2e_with_outcome(host, script_name, envs, |_| {});
+}
+
+fn run_browser_e2e_with_outcome(
+    host: HostKernel,
+    script_name: &str,
+    envs: &[(&str, &Path)],
+    on_outcome: impl Fn(host_kernel::CommandOutcome) + Send + Sync + 'static,
+) {
     let kernel = Arc::new(Mutex::new(host));
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/dist")
@@ -98,7 +108,7 @@ fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) 
         Arc::clone(&kernel),
         0,
         LoopbackAssets::Directory(dist),
-        |_| {},
+        on_outcome,
     )
     .unwrap();
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -117,6 +127,25 @@ fn run_browser_e2e(host: HostKernel, script_name: &str, envs: &[(&str, &Path)]) 
         output.status.success(),
         "{script_name} browser e2e failed\nstdout:{stdout}\nstderr:{stderr}"
     );
+}
+
+fn run_browser_e2e_with_pty_disconnect(
+    host: HostKernel,
+    session_factory: Arc<MemorySessionFactory>,
+    script_name: &str,
+) {
+    let disconnect_once = Arc::new(AtomicBool::new(false));
+    let callback_factory = Arc::clone(&session_factory);
+    let callback_once = Arc::clone(&disconnect_once);
+    run_browser_e2e_with_outcome(host, script_name, &[], move |outcome| {
+        let has_active_run = outcome.snapshot.runs.iter().any(|run| run.is_active());
+        if has_active_run && !callback_once.swap(true, Ordering::SeqCst) {
+            callback_factory
+                .last_session()
+                .expect("bound Run PTY")
+                .disconnect();
+        }
+    });
 }
 
 fn run_browser_script(script_name: &str, board_url: &str, envs: &[(&str, &str)]) {
@@ -1756,6 +1785,33 @@ fn browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions() {
     }))
     .unwrap();
     run_browser_e2e(host, "run-lifecycle.mjs", &[]);
+}
+
+#[test]
+fn browser_recovers_when_a_bound_pty_disconnects_mid_journey() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/disconnect");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(
+        "you/disconnect",
+        1,
+        "PTY disconnect issue",
+    ));
+    let sessions = MemorySessionFactory::new();
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker,
+            agents: vec![Arc::new(MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    register(&mut host, &dir, "you/disconnect");
+
+    run_browser_e2e_with_pty_disconnect(host, sessions, "run-pty-disconnect.mjs");
 }
 
 #[test]

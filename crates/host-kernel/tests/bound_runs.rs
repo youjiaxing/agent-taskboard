@@ -287,6 +287,72 @@ fn abnormal_end_is_execution_stopped() {
 }
 
 #[test]
+fn pty_disconnect_is_execution_stopped_and_can_continue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-disconnect".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+
+    h.sessions.last_session().unwrap().disconnect();
+    let disconnected = h
+        .host
+        .handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+
+    assert_eq!(
+        disconnected.snapshot.runs[0].ended_reason,
+        Some(RunEndedReason::Abnormal)
+    );
+    assert_eq!(claimed_by(&mut h.host, "you/garden#1"), vec!["me"]);
+    h.host
+        .handle(serde_json::json!({
+            "op": "focusIssue",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+    assert!(
+        h.host
+            .snapshot()
+            .board
+            .unwrap()
+            .selected
+            .unwrap()
+            .execution_stopped
+    );
+
+    let continued = h
+        .host
+        .handle(serde_json::json!({
+            "op": "continueRun",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+    let resumed = continued
+        .snapshot
+        .runs
+        .iter()
+        .find(|run| run.id != first.id)
+        .unwrap();
+    assert_eq!(resumed.status, RunStatus::Running);
+    assert_eq!(resumed.previous_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(h.sessions.spawn_count(), 2);
+    assert!(h
+        .sessions
+        .last_spawn()
+        .unwrap()
+        .argv
+        .windows(2)
+        .any(|pair| pair == ["--resume", "sess-disconnect"]));
+}
+
+#[test]
 fn closing_an_issue_does_not_stop_the_run() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

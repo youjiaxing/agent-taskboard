@@ -19,7 +19,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 | 5 游离 Run | PASS | `board.mjs`：从 Project 行「新建」进入同一表单，初始指令可明确填写；打开表单前后及启动成功后逐 Issue 比较认领状态不变，同时出现未绑定 Issue 的运行中 Run。 |
 | 6 运行中 | PASS | `run-lifecycle.mjs`：从进行中卡片进入 Terminal，按需加载并保留完整 Issue；等待操作、注入一行、查看改动、停止、继续和释放认领均从可见入口完成；注入与改动备注另覆盖提交中、防重复、失败保留草稿和显式重试。 |
 | 7 结束后 | PASS | `run-lifecycle.mjs`：停止 Run 后仍为已认领、未关闭的 Issue，留在进行中；释放认领后回 Frontier；不会进入最近完成。`board.mjs` 另覆盖真正关闭的 Issue、最近完成和结束 Run 的查看改动。 |
-| 8 异常恢复 | PASS（自动化；PTY 中断仍需真人壳验收） | `shell-edge-state.mjs` 对离线、限流、鉴权分别断言网络检查、可重试时间或凭据修复位置，并实际触发手动刷新；`agent-unavailable.mjs` 列出 command、PATH 与已知安装位置；`run-launch-resilience.mjs` 覆盖启动失败重试；`run-lifecycle.mjs` 覆盖轻量表单、PTY stop/continue 和隔离目录消失恢复；真实 PTY/session 中途断开仍在最后脚本中验收；`loopback-occupied.mjs` 覆盖端口占用。 |
+| 8 异常恢复 | PASS（自动化；真实 PTY 中断仍需真人壳验收） | `shell-edge-state.mjs` 对离线、限流、鉴权分别断言网络检查、可重试时间或凭据修复位置，并实际触发手动刷新；`agent-unavailable.mjs` 列出 command、PATH 与已知安装位置；`run-launch-resilience.mjs` 覆盖启动失败重试；`run-lifecycle.mjs` 覆盖轻量表单、PTY stop/continue 和隔离目录消失恢复；`run-pty-disconnect.mjs` 从 Frontier 的「执行」入口开 Run，再在首个由 UI 创建的活跃 Run outcome 后模拟 PTY 中途断开，断言 UI 显示执行已停、保留认领，并实际点击继续恢复带 previous Run 的新 Run；真实 PTY 仍需真人壳验收；`loopback-occupied.mjs` 覆盖端口占用。 |
 | 9 手机 | PASS | `board.mjs` 在 390×844 覆盖看板 / 票 / Run、Host/Project 切换、完整 Issue、启动/停止 Run、只读最近输出与注入一行；不出现完整查看改动，完整 Terminal 仅作逃生入口。 |
 
 ## 本票修复的链路断点
@@ -59,6 +59,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 - Playwright 同一套 Client 代码覆盖桌面浏览器与 390×844 手机；Tauri 系统目录选择、系统通知、自启和 updater 仍属于真实平台边界。
 - 截图中的仓库、Issue 和 Run 为 deterministic fixture，不代表真实 GitHub #100 已被认领或关闭。
 - 250ms 响应门使用阻塞 `TrackerSeam` fixture，证明慢 Tracker 读取不会占住 Host Snapshot 锁；不把该 fixture 称为真实 GitHub 网络延迟数据。
+- `run-pty-disconnect.mjs` 使用公开 HostKernel/loopback seam 和 `MemorySession.disconnect()` fixture 控制事件；它证明 Client 的可恢复 UI，不升级为真实 Agent CLI 或真实 PTY 断线证据。
 
 ## #90 壳层 PARTIAL 重新判定
 
@@ -96,6 +97,8 @@ cargo test -p host-kernel --test board browser_manages_projects_from_the_desktop
 cargo test -p host-kernel --test board browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retry -- --nocapture
 cargo test -p host-kernel --test board browser_explains_why_an_agent_is_unavailable_before_launch -- --nocapture
 cargo test -p host-kernel --test board browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions -- --nocapture
+cargo test -p host-kernel --test board browser_recovers_when_a_bound_pty_disconnects_mid_journey -- --nocapture
+cargo test -p host-kernel --test bound_runs pty_disconnect_is_execution_stopped_and_can_continue -- --nocapture
 cargo test -p host-kernel --test board browser_clients_keep_independent_issue_navigation -- --nocapture
 cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_tracker_refresh_is_blocked -- --nocapture
 cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_issue_document_load_is_blocked -- --nocapture
