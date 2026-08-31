@@ -11,7 +11,7 @@ const text = (await unavailable.textContent())?.replace(/\s+/g, " ").trim() ?? "
 if (!text.includes("Grok Build") || !text.includes("找不到 grok") || !text.includes("已搜 PATH") || !text.includes("已知安装位置")) {
   throw new Error(`missing Agent should explain the command and searched locations: ${text}`);
 }
-if (!(await unavailable.locator("button[data-act='pick-agent']").isDisabled())) {
+if (!(await unavailable.locator("button[data-act='select-agent']").isDisabled())) {
   throw new Error("missing Agent launch action must remain disabled");
 }
 await capture("issue-100-agent-unavailable-1280x840.png");

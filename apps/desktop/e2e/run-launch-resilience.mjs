@@ -21,10 +21,10 @@ const issueWithFormOpen = formOpened.board.columns.frontier.find((issue) => issu
 if (!issueWithFormOpen || issueWithFormOpen.claimedBy.length !== 0 || formOpened.runs.length !== 0) {
   throw new Error(`opening the launch form must not claim or create a Run: ${JSON.stringify({ issueWithFormOpen, runs: formOpened.runs })}`);
 }
-const pick = page.locator("button[data-act='pick-agent']:not([disabled])").first();
+const pick = page.locator("button[data-act='select-agent']:not([disabled])").first();
 if (await pick.count()) {
   await pick.click();
-  await page.click("button[data-act='confirm-agent']");
+  await page.click("button[data-act='next-agent']");
   await page.waitForSelector("form[data-form='launch']");
 }
 const opening = page.locator("textarea[data-field='openingText']");

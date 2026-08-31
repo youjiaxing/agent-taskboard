@@ -24,7 +24,12 @@ await page.route("**/rpc", async (route) => {
     await route.fulfill({ response, json: result });
     return;
   }
-  if (request?.op !== "snapshot" || request?.clientAction !== "setUsageRange") {
+  if (
+    request?.op !== "setUsageRange"
+    || request?.range !== "custom"
+    || typeof request?.fromMs !== "number"
+    || typeof request?.toMs !== "number"
+  ) {
     await route.continue();
     return;
   }

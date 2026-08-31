@@ -490,22 +490,13 @@ fn failed_isolated_start_is_not_continued_as_an_isolated_run() {
     assert_eq!(first.working_directory, dir.display().to_string());
     assert!(first.isolation_note.is_none());
 
-    let continued = h
+    let error = h
         .host
         .handle(serde_json::json!({
             "op": "continueRun",
             "issueId": "you/garden#1",
         }))
-        .unwrap()
-        .snapshot
-        .runs
-        .into_iter()
-        .find(|run| run.id != first.id)
-        .unwrap();
-    assert_eq!(continued.status, RunStatus::Running);
-    assert!(!continued.isolated);
-    assert!(continued.isolation_note.is_none());
-    let spawn = h.sessions.last_spawn().unwrap();
-    assert_eq!(spawn.cwd, dir);
-    assert!(!spawn.argv.iter().any(|arg| arg == "--worktree"));
+        .unwrap_err();
+    assert!(error.to_string().contains("execution-stopped"));
+    assert_eq!(h.sessions.spawn_count(), 1);
 }

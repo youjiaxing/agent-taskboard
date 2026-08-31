@@ -1155,7 +1155,7 @@ fn remote_host_snapshots_honor_each_clients_explicit_issue_navigation() {
     let mut host_req = boot_req(host_dir.path());
     host_req.host_display_name = "Mini".into();
     let mut host_kernel = HostKernel::boot_with(host_req, tracker).unwrap();
-    let project_id = host_kernel
+    let _project_id = host_kernel
         .handle(serde_json::json!({
             "op": "registerProject",
             "name": "garden",
@@ -1201,13 +1201,16 @@ fn remote_host_snapshots_honor_each_clients_explicit_issue_navigation() {
     let snapshot_for = |client: &mut HostKernel, client_id: &str, issue_id: &str| {
         client
             .handle(serde_json::json!({
-                "op": "snapshot",
-                "clientId": client_id,
-                "clientView": {
-                    "focusedHostId": remote_id,
-                    "focusedProjectId": project_id,
-                    "selectedIssueId": issue_id,
-                }
+                "op": "focusHost",
+                "hostId": remote_id,
+                "clientInstanceId": client_id,
+            }))
+            .unwrap();
+        client
+            .handle(serde_json::json!({
+                "op": "focusIssue",
+                "issueId": issue_id,
+                "clientInstanceId": client_id,
             }))
             .unwrap()
             .snapshot
@@ -1228,14 +1231,8 @@ fn remote_host_snapshots_honor_each_clients_explicit_issue_navigation() {
 
     let first_again = client
         .handle(serde_json::json!({
-            "op": "setTheme",
-            "theme": "plain-paper",
-            "clientId": "client-a",
-            "clientView": {
-                "focusedHostId": remote_id,
-                "focusedProjectId": project_id,
-                "selectedIssueId": "you/garden#1",
-            }
+            "op": "snapshot",
+            "clientInstanceId": "client-a",
         }))
         .unwrap()
         .snapshot;

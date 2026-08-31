@@ -819,16 +819,19 @@ pub struct ShellCopy {
     pub refresh_as_of: String,
     pub refresh_next: String,
     pub refresh_offline: String,
+    pub refresh_offline_recovery: String,
     pub refresh_never: String,
     pub refresh_rate_limited: String,
     pub refresh_retry: String,
     pub refresh_paused: String,
     pub refresh_auth: String,
+    pub refresh_auth_recovery: String,
     pub refresh_incomplete: String,
     pub refresh_tracker_error: String,
     pub new_run: String,
     pub execute_run: String,
     pub start_run: String,
+    pub start_run_pending: String,
     pub switch_agent: String,
     pub pick_agent: String,
     pub no_agent_selected: String,
@@ -3524,6 +3527,10 @@ impl HostKernel {
                 }
             }
         }
+        let provisional_claim = issue_id
+            .as_deref()
+            .filter(|_| previous_run_id.is_none())
+            .map(ToOwned::to_owned);
         let before = if isolate {
             launch::git_worktrees(&project_dir)
         } else {
@@ -3603,8 +3610,13 @@ impl HostKernel {
             self.remember_launch(project_id, &config)?;
             self.launch_form = None;
             self.clear_pending_notes(project_id, issue_id.as_deref())?;
-        } else if let Some(form) = &mut self.launch_form {
-            form.error = result.record.failure.clone();
+        } else {
+            if let Some(issue_id) = provisional_claim.as_deref() {
+                let _ = self.release_issue(issue_id);
+            }
+            if let Some(form) = &mut self.launch_form {
+                form.error = result.record.failure.clone();
+            }
         }
         self.runs.push(result.record);
         self.persist_runs()?;
@@ -5753,12 +5765,32 @@ impl HostKernel {
         complete: bool,
         detail: Option<String>,
     ) -> bool {
+        let accepted_issues = if complete {
+            issues
+        } else {
+            let mut merged = self
+                .loaded_issues
+                .get(project_id)
+                .cloned()
+                .unwrap_or_default();
+            for issue in issues {
+                if let Some(existing) = merged
+                    .iter_mut()
+                    .find(|existing| existing.id() == issue.id())
+                {
+                    *existing = issue;
+                } else {
+                    merged.push(issue);
+                }
+            }
+            merged
+        };
         let connection_changed = !matches!(
             self.projects[index].connection,
             ProjectConnection::Ready { .. }
         );
         let content_changed = connection_changed
-            || self.loaded_issues.get(project_id) != Some(&issues)
+            || self.loaded_issues.get(project_id) != Some(&accepted_issues)
             || self.refresh.get(project_id).map(|state| state.complete) != Some(complete);
         if connection_changed {
             self.projects[index].connection =
@@ -5768,7 +5800,7 @@ impl HostKernel {
             fetched_at_ms: now,
             complete,
             detail: detail.clone(),
-            issues: issues.clone(),
+            issues: accepted_issues.clone(),
             documents: self.stored_issue_documents(project_id),
         };
         if let Err(err) = refresh::save_snapshot(
@@ -5776,7 +5808,8 @@ impl HostKernel {
             &snapshot,
         ) {
             self.projects[index].tracker_synced = false;
-            self.loaded_issues.insert(project_id.to_string(), issues);
+            self.loaded_issues
+                .insert(project_id.to_string(), accepted_issues);
             self.refresh.insert(
                 project_id.to_string(),
                 ProjectRefreshState {
@@ -5791,7 +5824,8 @@ impl HostKernel {
             return true;
         }
         self.projects[index].tracker_synced = complete;
-        self.loaded_issues.insert(project_id.to_string(), issues);
+        self.loaded_issues
+            .insert(project_id.to_string(), accepted_issues);
         self.refresh.insert(
             project_id.to_string(),
             ProjectRefreshState {
@@ -6296,16 +6330,19 @@ impl ShellCopy {
                 refresh_as_of: "数据截至".into(),
                 refresh_next: "下次刷新".into(),
                 refresh_offline: "已离线".into(),
+                refresh_offline_recovery: "检查运行 Host 的电脑网络后点“刷新”重试。".into(),
                 refresh_never: "还没有成功拉过 Tracker。".into(),
                 refresh_rate_limited: "已被限流".into(),
                 refresh_retry: "大约可再刷新".into(),
                 refresh_paused: "自动刷新已暂停，可手动再试。".into(),
                 refresh_auth: "凭据不可用".into(),
+                refresh_auth_recovery: "在运行 Host 的电脑更新 GitHub 凭据后点“刷新”重试。".into(),
                 refresh_incomplete: "数据不完整".into(),
                 refresh_tracker_error: "Tracker 业务错误".into(),
                 new_run: "新建".into(),
                 execute_run: "执行".into(),
                 start_run: "启动".into(),
+                start_run_pending: "启动中…".into(),
                 switch_agent: "换一家".into(),
                 pick_agent: "选择 Agent".into(),
                 no_agent_selected: "尚未选择 Agent".into(),
@@ -6588,16 +6625,19 @@ impl ShellCopy {
                 refresh_as_of: "Data as of".into(),
                 refresh_next: "Next refresh".into(),
                 refresh_offline: "Offline".into(),
+                refresh_offline_recovery: "Check the network on the computer running the Host, then select Refresh to retry.".into(),
                 refresh_never: "Tracker has never been fetched successfully.".into(),
                 refresh_rate_limited: "Rate limited".into(),
                 refresh_retry: "Can retry around".into(),
                 refresh_paused: "Auto-refresh is paused. You can try again manually.".into(),
                 refresh_auth: "Credentials unavailable".into(),
+                refresh_auth_recovery: "Update the GitHub credentials on the computer running the Host, then select Refresh to retry.".into(),
                 refresh_incomplete: "Incomplete data".into(),
                 refresh_tracker_error: "Tracker business error".into(),
                 new_run: "New".into(),
                 execute_run: "Run".into(),
                 start_run: "Start".into(),
+                start_run_pending: "Starting…".into(),
                 switch_agent: "Switch Agent".into(),
                 pick_agent: "Choose Agent".into(),
                 no_agent_selected: "No Agent selected".into(),

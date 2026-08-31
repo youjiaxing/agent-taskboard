@@ -46,9 +46,9 @@ const failFirstRpc = (op, message, matches = () => true) => {
 };
 
 let failure = failFirstRpc(
-  "snapshot",
+  "searchIssues",
   "search temporarily unavailable",
-  (request) => request.clientAction === "searchIssues",
+  () => true,
 );
 await page.fill("#issue-title-search", "active lifecycle issue");
 const tickResponse = page.waitForResponse((response) =>
@@ -142,12 +142,12 @@ await page.waitForSelector(".usage-page");
 await page.click("button[data-act='usage-range'][data-id='custom']");
 await page.waitForSelector("form[data-act='usage-custom']");
 failure = failFirstRpc(
-  "snapshot",
+  "setUsageRange",
   "usage range temporarily unavailable",
   (request) =>
-    request.clientAction === "setUsageRange"
-    && request.clientView?.usageQuery?.range === "custom"
-    && typeof request.clientView?.usageQuery?.customFromMs === "number",
+    request.range === "custom"
+    && typeof request.fromMs === "number"
+    && typeof request.toMs === "number",
 );
 await page.$eval("form[data-act='usage-custom']", (form) => {
   form.requestSubmit();
