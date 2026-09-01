@@ -1028,6 +1028,7 @@ const clientId = sessionClientId();
 let workbenchLayout: WorkbenchLayout;
 let panelPointerInteraction: PanelPointerInteraction | null = null;
 let frontWorkbenchPanel: WorkbenchPanelId = "inspector";
+let inspectorAnchorIssueId = "";
 
 const GRAPH_RELATION_META: Record<
   NonNullable<GraphNode["relation"]>,
@@ -1050,7 +1051,7 @@ function sessionClientId(): string {
     ? window.name.slice(windowMarkerPrefix.length)
     : "";
   const clonedFromOpener = Boolean(window.opener) && !windowMarker;
-  if (existing && !clonedFromOpener) {
+  if (existing && !clonedFromOpener && windowMarker) {
     if (!windowMarker) window.name = `${windowMarkerPrefix}${existing}`;
     return existing;
   }
@@ -1073,14 +1074,14 @@ function resetGraphUiState(): void {
   graphListQuery = "";
 }
 
-const WORKBENCH_LAYOUT_VERSION = 1;
+const WORKBENCH_LAYOUT_VERSION = 2;
 const WORKBENCH_LAYOUT_STORAGE_PREFIX = `agent-taskboard-panel-layout:v${WORKBENCH_LAYOUT_VERSION}:`;
 const WORKBENCH_LAYOUT_REGISTRY_KEY = `agent-taskboard-panel-layout-registry:v${WORKBENCH_LAYOUT_VERSION}`;
 const WORKBENCH_LAYOUT_INSTANCE_TTL_MS = 7 * 86_400_000;
 const WORKBENCH_LAYOUT_HEARTBEAT_MS = 5 * 60_000;
 const WORKBENCH_PANEL_DEFAULTS: WorkbenchLayout = {
-  inspector: { width: 400, height: 600, x: 2_400, y: 12, floating: true, runFloating: false },
-  terminal: { width: 760, height: 280, x: 80, y: 360, floating: false },
+  inspector: { width: 440, height: 640, x: 2_400, y: 12, floating: true, runFloating: false },
+  terminal: { width: 820, height: 360, x: 80, y: 360, floating: false },
   usage: { width: 920, height: 680, x: 48, y: 28, floating: false },
 };
 
@@ -1147,11 +1148,40 @@ function workbenchLayoutStorageKeys(): string[] {
   return keys;
 }
 
+function removeHistoricalWorkbenchLayouts(currentKey: string): boolean {
+  let changed = false;
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (
+        key
+        && key.startsWith("agent-taskboard-panel-layout:v")
+        && !key.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)
+        && key !== currentKey
+      ) {
+        localStorage.removeItem(key);
+        changed = true;
+      }
+      if (
+        key
+        && key.startsWith("agent-taskboard-panel-layout-registry:v")
+        && key !== WORKBENCH_LAYOUT_REGISTRY_KEY
+      ) {
+        localStorage.removeItem(key);
+        changed = true;
+      }
+    }
+  } catch {
+    // A restricted Client can keep historical entries without affecting this window.
+  }
+  return changed;
+}
+
 function touchWorkbenchLayoutInstance(currentKey = workbenchLayoutStorageKey()): void {
   try {
     const now = Date.now();
     const registry = readWorkbenchLayoutRegistry();
-    let changed = false;
+    let changed = removeHistoricalWorkbenchLayouts(currentKey);
     for (const key of workbenchLayoutStorageKeys()) {
       const lastSeen = registry[key];
     if (
@@ -1342,6 +1372,66 @@ function updatePanelNode(panelId: WorkbenchPanelId): void {
   if (size) size.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
 }
 
+function positionInspectorAwayFromCard(card: HTMLElement | null): void {
+  if (!card || mobileClient() || !panelIsFloating("inspector")) return;
+  const panel = app?.querySelector<HTMLElement>(
+    '[data-workbench-panel="inspector"]',
+  );
+  if (!panel) return;
+  const container = panelContainer(panel).getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const width = Math.min(panelWidth("inspector"), Math.max(280, container.width - 16));
+  const height = Math.min(workbenchLayout.inspector.height, Math.max(180, container.height - 16));
+  const gap = 12;
+  const leftSpace = cardRect.left - container.left;
+  const rightSpace = container.right - cardRect.right;
+  let x: number;
+  let y = clamp(cardRect.top - container.top, 8, container.height - height - 8);
+  const graphAnchor = Boolean(card.closest(".graph-node, .graph-index-row"));
+  const cardCenter = cardRect.left - container.left + cardRect.width / 2;
+  if (graphAnchor) {
+    x = 8;
+  } else if (cardCenter >= container.width / 2) {
+    x = leftSpace >= width + gap
+      ? cardRect.left - container.left - width - gap
+      : 8;
+  } else {
+    x = rightSpace >= width + gap
+      ? cardRect.right - container.left + gap
+      : container.width - width - 8;
+  }
+  workbenchLayout.inspector = {
+    ...workbenchLayout.inspector,
+    x: clamp(x, 8, container.width - width - 8),
+    y,
+  };
+  saveWorkbenchLayout();
+  updatePanelNode("inspector");
+}
+
+function inspectorAnchorForIssue(issueId: string): HTMLElement | null {
+  const selector = CSS.escape(issueId);
+  return app?.querySelector<HTMLElement>(
+    `.graph-node[data-id="${selector}"], .graph-index-row button[data-id="${selector}"], .issue-card[data-issue-id="${selector}"]`,
+  ) ?? null;
+}
+
+function issueCardAtPoint(clientX: number, clientY: number): HTMLButtonElement | null {
+  for (const element of document.elementsFromPoint(clientX, clientY)) {
+    const card = element.closest<HTMLButtonElement>(".issue-card-main");
+    if (card) return card;
+  }
+  return null;
+}
+
+function graphActionAtPoint(clientX: number, clientY: number): HTMLButtonElement | null {
+  for (const element of document.elementsFromPoint(clientX, clientY)) {
+    const action = element.closest<HTMLButtonElement>(".graph-center-act");
+    if (action) return action;
+  }
+  return null;
+}
+
 function refreshPanelSizeFeedback(): void {
   for (const panelId of ["inspector", "terminal", "usage"] as const) updatePanelNode(panelId);
 }
@@ -1480,13 +1570,22 @@ function refreshLaunchFieldOptions(): void {
   if (!snapshot?.launchForm || !launchDraft) return;
   for (const field of snapshot.launchForm.fields) {
     if (field.kind !== "select") continue;
-    const input = app?.querySelector<HTMLInputElement>(`[data-launch="${CSS.escape(field.id)}"]`);
-    const listId = input?.getAttribute("list");
-    const list = listId ? document.getElementById(listId) : null;
-    if (!list) continue;
-    list.innerHTML = launchFieldOptions(field, launchDraft.values)
-      .map((option) => `<option value="${escapeHtml(option)}"></option>`)
-      .join("");
+    const select = app?.querySelector<HTMLSelectElement>(
+      `[data-launch-select="${CSS.escape(field.id)}"]`,
+    );
+    if (!select) continue;
+    const options = launchFieldOptions(field, launchDraft.values);
+    const current = launchDraft.values[field.id] ?? "";
+    const known = options.includes(current);
+    select.innerHTML = launchSelectOptions(options, current);
+    select.value = known ? current : current ? "__custom__" : "";
+    const custom = app?.querySelector<HTMLInputElement>(
+      `[data-launch-custom="${CSS.escape(field.id)}"]`,
+    );
+    if (custom) {
+      custom.hidden = known || !current;
+      custom.value = known ? "" : current;
+    }
   }
 }
 
@@ -1802,8 +1901,23 @@ async function protocolBase(): Promise<string> {
 
 let rpcQueue: Promise<void> = Promise.resolve();
 let pendingCenterView: CenterView | null = null;
+let issueDocumentRequestSequence = 0;
 
-async function executeRpc(op: string, extra: Record<string, unknown>): Promise<RpcResult> {
+function commitRpcResult(result: RpcResult): void {
+  syncLaunchDraft(result.snapshot);
+  deliverHostEvents(result.events ?? [], result.snapshot);
+  snapshot = result.snapshot;
+  if (result.viewChanges) {
+    changesView = result.viewChanges;
+    changesOpen = true;
+  }
+}
+
+async function executeRpc(
+  op: string,
+  extra: Record<string, unknown>,
+  commit = true,
+): Promise<RpcResult> {
   const response = await fetch(`${await protocolBase()}/rpc`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1834,13 +1948,7 @@ async function executeRpc(op: string, extra: Record<string, unknown>): Promise<R
   result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
   result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
   result.events = result.events ?? [];
-  syncLaunchDraft(result.snapshot);
-  deliverHostEvents(result.events, result.snapshot);
-  snapshot = result.snapshot;
-  if (result.viewChanges) {
-    changesView = result.viewChanges;
-    changesOpen = true;
-  }
+  if (commit) commitRpcResult(result);
   return result;
 }
 
@@ -1867,8 +1975,14 @@ async function loadSelectedIssueDocument(force = false): Promise<void> {
   issue.document = state.kind === "ready" || state.kind === "stale" || state.kind === "loading"
     ? { kind: "loading", body: state.body, fetchedAtMs: state.fetchedAtMs }
     : { kind: "loading" };
+  const issueId = issue.id;
+  const sequence = ++issueDocumentRequestSequence;
   render();
-  await rpc("loadIssueDocument", { issueId: issue.id });
+  const result = await executeRpc("loadIssueDocument", { issueId }, false);
+  if (sequence !== issueDocumentRequestSequence || snapshot?.board?.selected?.id !== issueId) {
+    return;
+  }
+  commitRpcResult(result);
 }
 
 function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
@@ -2619,7 +2733,7 @@ function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
         : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
     </section>
-    ${run.status === "ended" ? "" : injectRunForm(copy, run)}
+    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
     ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
   </section>`;
 }
@@ -3185,7 +3299,7 @@ function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): str
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${run.status === "ended" ? "" : injectRunForm(copy, run)}
+    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
     ${panelResizeHandle("terminal")}
   </div>`;
 }
@@ -3967,8 +4081,12 @@ function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: str
     const asOf = state.kind === "loading" && state.fetchedAtMs != null
       ? ` · ${escapeHtml(copy.refreshAsOf)} ${escapeHtml(formatTime(state.fetchedAtMs))}`
       : "";
-    return `<section class="issue-document" data-document-state="${state.kind}">
-      <p class="document-status">${escapeHtml(copy.issueDocumentLoading)}${asOf}</p>
+    return `<section class="issue-document" data-document-state="${state.kind}" aria-busy="true">
+      <div class="document-loading document-status" role="status" aria-live="polite">
+        <span class="document-loading-dot" aria-hidden="true"></span>
+        <span>${escapeHtml(copy.issueDocumentLoading)}</span>${asOf ? `<span class="document-loading-as-of">${asOf}</span>` : ""}
+      </div>
+      <div class="document-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
       ${previous}
     </section>`;
   }
@@ -4306,11 +4424,20 @@ function launchField(field: AgentField, value: string, values: Record<string, st
   }
   if (field.kind === "select") {
     const options = launchFieldOptions(field, values);
-    const listId = `${id}-list`;
+    if (!options.length) {
+      return `<div class="field">
+        <label class="label" for="${id}">${escapeHtml(field.label)}</label>
+        <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
+      </div>`;
+    }
+    const known = options.includes(value);
+    const customValue = known ? "" : value;
     return `<div class="field">
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-      <input id="${id}" list="${listId}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-      <datalist id="${listId}">${options.map((option) => `<option value="${escapeHtml(option)}"></option>`).join("")}</datalist>
+      <select id="${id}" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
+        ${launchSelectOptions(options, value)}
+      </select>
+      <input class="launch-custom-value" data-launch-custom="${escapeHtml(field.id)}" value="${escapeHtml(customValue)}" ${customValue ? "" : "hidden"} placeholder="${escapeHtml(customOptionLabel())}" ${customValue && field.required ? "required" : ""} />
     </div>`;
   }
   if (field.kind === "multiline") {
@@ -4323,6 +4450,22 @@ function launchField(field: AgentField, value: string, values: Record<string, st
     <label class="label" for="${id}">${escapeHtml(field.label)}</label>
     <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
   </div>`;
+}
+
+function customOptionLabel(): string {
+  return effectiveClientLanguage() === "zh-CN" ? "自定义值" : "Custom value";
+}
+
+function launchSelectOptions(options: string[], value: string): string {
+  const selectedValue = options.includes(value) ? value : value ? "__custom__" : "";
+  const placeholder = value ? "" : `<option value="" disabled selected>${escapeHtml(selectPlaceholderLabel())}</option>`;
+  return `${placeholder}${options
+    .map((option) => `<option value="${escapeHtml(option)}" ${option === selectedValue ? "selected" : ""}>${escapeHtml(option)}</option>`)
+    .join("")}<option value="__custom__" ${selectedValue === "__custom__" ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
+}
+
+function selectPlaceholderLabel(): string {
+  return effectiveClientLanguage() === "zh-CN" ? "请选择" : "Select a value";
 }
 
 function launchFieldOptions(field: AgentField, values: Record<string, string>): string[] {
@@ -4670,7 +4813,8 @@ document.addEventListener("pointermove", (event) => {
     next.y = clamp(interaction.start.y + dy, 8, container.height - next.height - 8);
   } else if (!interaction.start.floating && interaction.panelId === "terminal") {
     const bottomEdgeHandle = window.matchMedia("(min-width: 641px) and (max-width: 900px)").matches;
-    next.height = clamp(interaction.start.height + (bottomEdgeHandle ? dy : -dy), 180, container.height * 0.72);
+    const maxHeight = Math.max(180, container.height - 16);
+    next.height = clamp(interaction.start.height + (bottomEdgeHandle ? dy : -dy), 180, maxHeight);
   } else if (!interaction.start.floating && interaction.panelId === "inspector") {
     next.width = clamp(interaction.start.width - dx, 280, container.width * 0.72);
     next.dockedWidth = next.width;
@@ -5392,11 +5536,16 @@ app.addEventListener("click", async (event) => {
     return;
   }
   if (act === "center-graph" && target.dataset.id) {
-    pendingGraphAnchor = captureGraphAnchor(target.dataset.id);
+    const graphAnchor = captureGraphAnchor(target.dataset.id);
+    pendingGraphAnchor = graphAnchor;
     await rpc("centerDependencyGraph", { issueId: target.dataset.id });
     render();
     await loadSelectedIssueDocument();
     render();
+    if (graphAnchor) {
+      const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+      if (canvas && restoreGraphAnchor(canvas, graphAnchor)) paintGraphEdges();
+    }
     return;
   }
   if (act === "graph-overview") {
@@ -5441,6 +5590,7 @@ app.addEventListener("click", async (event) => {
   }
   if (act === "focus-issue" && target.dataset.id) {
     issueDetailVisible = true;
+    inspectorAnchorIssueId = target.dataset.id;
     await rpc("focusIssue", { issueId: target.dataset.id });
     render();
     await loadSelectedIssueDocument();
@@ -5453,6 +5603,7 @@ app.addEventListener("click", async (event) => {
       sidebarVisible = false;
     }
     render();
+    positionInspectorAwayFromCard(inspectorAnchorForIssue(inspectorAnchorIssueId));
     return;
   }
   if (act === "filter-parent" && target.dataset.id) {
@@ -5868,6 +6019,12 @@ app.addEventListener("input", (event) => {
       refreshIntentChoices();
     }
   }
+  const customLaunchId = target.getAttribute("data-launch-custom");
+  if (customLaunchId && launchDraft && "value" in target) {
+    launchDraft.values[customLaunchId] = (target as HTMLInputElement).value;
+    refreshLaunchWarnings();
+    scheduleLaunchPreview();
+  }
   const launchId = target.getAttribute("data-launch");
   if (launchId && launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
     launchDraft.values[launchId] = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
@@ -5879,6 +6036,32 @@ app.addEventListener("input", (event) => {
 
 app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
+  const launchSelectId = target?.getAttribute("data-launch-select");
+  if (launchSelectId && launchDraft && target instanceof HTMLSelectElement) {
+    if (target.value === "__custom__") {
+      const field = snapshot?.launchForm?.fields.find((candidate) => candidate.id === launchSelectId);
+      const options = field ? launchFieldOptions(field, launchDraft.values) : [];
+      if (options.includes(launchDraft.values[launchSelectId] ?? "")) {
+        launchDraft.values[launchSelectId] = "";
+      }
+      const custom = app?.querySelector<HTMLInputElement>(
+        `[data-launch-custom="${CSS.escape(launchSelectId)}"]`,
+      );
+      if (custom) {
+        custom.hidden = false;
+        custom.required = Boolean(snapshot?.launchForm?.fields.find(
+          (field) => field.id === launchSelectId,
+        )?.required);
+        custom.focus();
+      }
+    } else {
+      launchDraft.values[launchSelectId] = target.value;
+      refreshLaunchFieldOptions();
+    }
+    refreshLaunchWarnings();
+    scheduleLaunchPreview();
+    return;
+  }
   if (target instanceof HTMLSelectElement && target.closest("form[data-act='issue-search']")) {
     const draft = editableIssueSearchDraft(snapshot?.focusedProjectId ?? "");
     if (target.name === "triageRole") draft.triageRole = target.value;
@@ -6073,6 +6256,27 @@ function finishPointerInteraction(pointerId: number): void {
 }
 
 document.addEventListener("pointerdown", (event) => activePointers.add(event.pointerId), true);
+document.addEventListener("pointerdown", (event) => {
+  if (mobileClient() || !snapshot) return;
+  const target = event.target as HTMLElement | null;
+  const panel = target?.closest<HTMLElement>(
+    '[data-workbench-panel="inspector"][data-floating="true"]',
+  );
+  if (!panel) return;
+  if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
+  const graphAction = graphActionAtPoint(event.clientX, event.clientY);
+  if (graphAction) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    graphAction.click();
+    return;
+  }
+  const card = issueCardAtPoint(event.clientX, event.clientY);
+  if (!card || card.dataset.issueId === snapshot.board?.selected?.id) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  card.click();
+}, true);
 document.addEventListener("pointerup", (event) => finishPointerInteraction(event.pointerId), true);
 document.addEventListener("pointercancel", (event) => finishPointerInteraction(event.pointerId), true);
 window.addEventListener("blur", () => {

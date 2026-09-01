@@ -143,8 +143,7 @@ await page.click("button[data-act='toggle-issue-open']");
 await waitForIssueText("Status: ready-for-agent");
 
 await page.reload({ waitUntil: "domcontentloaded" });
-await page.waitForSelector(".issue-card:has-text('Child edited from desktop UI')");
-await page.locator(".issue-card-main", { hasText: "Child edited from desktop UI" }).click();
+await page.waitForSelector(".issue-detail .detail-hd:has-text('Child edited from desktop UI')");
 await page.waitForSelector("section.issue-document[data-document-state='ready']");
 if (await page.locator(".issue-detail").count() !== 1) throw new Error("Issue detail should survive reload");
 

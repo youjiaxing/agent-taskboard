@@ -3613,23 +3613,34 @@ fn github_json(
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
         .build();
-    let request = agent
-        .request(method, url)
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("User-Agent", "Agent-Taskboard")
-        .set("Accept", "application/vnd.github+json");
-    let response = match body {
-        Some(body) => request
-            .set("Content-Type", "application/json")
-            .send_string(&body.to_string()),
-        None => request.call(),
-    };
-    let response = match response {
-        Ok(response) => response,
-        Err(ureq::Error::Status(code, response)) => {
-            return Err(classify_rest_status(code, response));
+    let mut attempt = 0;
+    let response = loop {
+        let request = agent
+            .request(method, url)
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("User-Agent", "Agent-Taskboard")
+            .set("Accept", "application/vnd.github+json");
+        let response = match body {
+            Some(body) => request
+                .set("Content-Type", "application/json")
+                .send_string(&body.to_string()),
+            None => request.call(),
+        };
+        match response {
+            Ok(response) => break response,
+            Err(ureq::Error::Status(code, response)) => {
+                return Err(classify_rest_status(code, response));
+            }
+            Err(err)
+                if method.eq_ignore_ascii_case("GET")
+                    && attempt < TRANSIENT_NETWORK_RETRIES
+                    && is_transient_transport_error(&err) =>
+            {
+                attempt += 1;
+                std::thread::sleep(transient_retry_delay(attempt));
+            }
+            Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
         }
-        Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
     };
     let payload: Value = serde_json::from_str(
         &response
@@ -3685,28 +3696,39 @@ fn graphql_post(
         .timeout(Duration::from_secs(20))
         .build();
     let body = serde_json::json!({ "query": query, "variables": variables });
-    let response = match agent
-        .post(&url)
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("User-Agent", "Agent-Taskboard")
-        .set("Accept", "application/vnd.github+json")
-        .set("Content-Type", "application/json")
-        .send_string(&body.to_string())
-    {
-        Ok(response) => response,
-        Err(ureq::Error::Status(401 | 403, _)) => {
-            return Err(ProbeError::Unauthorized { detail: None })
+    let mut attempt = 0;
+    let response = loop {
+        let response = agent
+            .post(&url)
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("User-Agent", "Agent-Taskboard")
+            .set("Accept", "application/vnd.github+json")
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string());
+        match response {
+            Ok(response) => break response,
+            Err(ureq::Error::Status(401 | 403, _)) => {
+                return Err(ProbeError::Unauthorized { detail: None })
+            }
+            Err(ureq::Error::Status(404, _)) => {
+                return Err(ProbeError::Unauthorized { detail: None })
+            }
+            Err(ureq::Error::Status(429, response)) => {
+                return Err(ProbeError::RateLimited {
+                    retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
+                });
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
+            }
+            Err(err)
+                if attempt < TRANSIENT_NETWORK_RETRIES && is_transient_transport_error(&err) =>
+            {
+                attempt += 1;
+                std::thread::sleep(transient_retry_delay(attempt));
+            }
+            Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
         }
-        Err(ureq::Error::Status(404, _)) => return Err(ProbeError::Unauthorized { detail: None }),
-        Err(ureq::Error::Status(429, response)) => {
-            return Err(ProbeError::RateLimited {
-                retry_after_ms: parse_retry_after_ms(response.header("retry-after")),
-            });
-        }
-        Err(ureq::Error::Status(code, _)) => {
-            return Err(ProbeError::Unreachable(format!("GitHub HTTP {code}")));
-        }
-        Err(err) => return Err(ProbeError::Unreachable(err.to_string())),
     };
     let payload: Value = serde_json::from_str(
         &response
@@ -3716,6 +3738,33 @@ fn graphql_post(
     .map_err(|err| ProbeError::Unreachable(err.to_string()))?;
     classify_graphql_errors(&payload)?;
     Ok(payload)
+}
+
+const TRANSIENT_NETWORK_RETRIES: u8 = 2;
+
+fn transient_retry_delay(attempt: u8) -> Duration {
+    Duration::from_millis(100 * u64::from(attempt))
+}
+
+fn is_transient_transport_error(error: &ureq::Error) -> bool {
+    if matches!(error, ureq::Error::Status(..)) {
+        return false;
+    }
+    is_transient_transport_detail(&error.to_string())
+}
+
+fn is_transient_transport_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    [
+        "unexpected end of file",
+        "connection reset",
+        "connection closed",
+        "timed out",
+        "timeout",
+        "tls connection init failed",
+    ]
+    .iter()
+    .any(|needle| detail.contains(needle))
 }
 
 fn classify_graphql_errors(payload: &Value) -> Result<(), ProbeError> {
@@ -3838,6 +3887,22 @@ fn github_graphql_url(host: &str) -> String {
         "https://api.github.com/graphql".into()
     } else {
         format!("https://{host}/api/graphql")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient_transport_detail;
+
+    #[test]
+    fn transient_tls_disconnects_are_retryable_but_business_errors_are_not() {
+        assert!(is_transient_transport_detail(
+            "tls connection init failed: unexpected end of file"
+        ));
+        assert!(is_transient_transport_detail("connection reset by peer"));
+        assert!(!is_transient_transport_detail(
+            "GitHub HTTP 422: validation failed"
+        ));
     }
 }
 

@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use common::{ReadMode, SeamTracker};
 use host_kernel::{
@@ -16,6 +16,15 @@ use host_kernel::{
 };
 
 const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
+
+static BROWSER_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn browser_e2e_guard() -> std::sync::MutexGuard<'static, ()> {
+    BROWSER_E2E_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn boot_req(root: &Path) -> BootRequest {
     BootRequest {
@@ -99,6 +108,7 @@ fn run_browser_e2e_with_outcome(
     envs: &[(&str, &Path)],
     on_outcome: impl Fn(host_kernel::CommandOutcome) + Send + Sync + 'static,
 ) {
+    let _browser_guard = browser_e2e_guard();
     let kernel = Arc::new(Mutex::new(host));
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/desktop/dist")
@@ -149,6 +159,7 @@ fn run_browser_e2e_with_pty_disconnect(
 }
 
 fn run_browser_script(script_name: &str, board_url: &str, envs: &[(&str, &str)]) {
+    let _browser_guard = browser_e2e_guard();
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = Command::new("node");
     command

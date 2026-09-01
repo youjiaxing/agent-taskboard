@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use host_kernel::{
-    probe_binary, AgentPort, GrokAdapter, LaunchEnvironment, ProbeResult, GROK_BIN, GROK_BUILD_ID,
-    GROK_BUILD_NAME,
+    probe_binary, AgentFieldKind, AgentPort, GrokAdapter, LaunchEnvironment, ProbeResult, GROK_BIN,
+    GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 
 fn make_grok(dir: &std::path::Path) -> PathBuf {
@@ -71,6 +71,14 @@ fn grok_adapter_declares_first_layer_fields() {
     assert!(fields
         .iter()
         .any(|field| field.id == "additional-args" && field.folded));
+    assert_eq!(
+        fields
+            .iter()
+            .find(|field| field.id == "model")
+            .unwrap()
+            .kind,
+        AgentFieldKind::Select
+    );
     assert!(fields
         .iter()
         .find(|field| field.id == "permission-mode")

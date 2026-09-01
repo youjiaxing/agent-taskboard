@@ -21,6 +21,16 @@ const capture = async (name) => {
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 const page = await context.newPage();
+const clickGraphAction = async (locator) => {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("graph action has no clickable geometry");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
+const clickCard = async (locator) => {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("Issue card has no clickable geometry");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
 const assertVisual = createVisualAssert(page);
 page.on("pageerror", (error) => {
   console.error("pageerror", error);
@@ -88,6 +98,32 @@ await page.keyboard.press("Enter");
 await page.waitForSelector(".issue-detail .detail-hd");
 await page.waitForSelector("button[data-act='toggle-issue']");
 await page.waitForSelector('.issue-document[data-document-state="ready"]');
+const rightmostIssueId = await page.$$eval(".issue-card", (nodes) => nodes
+  .map((node) => ({ id: node.getAttribute("data-issue-id"), left: node.getBoundingClientRect().left }))
+  .sort((left, right) => right.left - left.left)[0]?.id);
+if (rightmostIssueId) {
+  const leftmostIssueId = await page.$$eval(".issue-card", (nodes) => nodes
+    .map((node) => ({ id: node.getAttribute("data-issue-id"), left: node.getBoundingClientRect().left }))
+    .sort((left, right) => left.left - right.left)[0]?.id);
+  if (leftmostIssueId && leftmostIssueId !== rightmostIssueId) {
+    await clickCard(page.locator(`.issue-card[data-issue-id="${leftmostIssueId}"] .issue-card-main`));
+    await page.waitForSelector('.issue-document[data-document-state="ready"]');
+  }
+  const rightmostBox = await page.locator(`.issue-card[data-issue-id="${rightmostIssueId}"] .issue-card-main`).boundingBox();
+  if (!rightmostBox) throw new Error("rightmost Issue card has no clickable geometry");
+  await page.mouse.click(rightmostBox.x + rightmostBox.width / 2, rightmostBox.y + rightmostBox.height / 2);
+  await page.waitForFunction((id) => document.querySelector(`.issue-detail .detail-hd`)?.textContent?.includes(id.split("#").at(-1)), rightmostIssueId);
+  await page.waitForSelector('.issue-document[data-document-state="ready"]');
+  const overlap = await page.evaluate((id) => {
+    const card = document.querySelector(`.issue-card[data-issue-id="${CSS.escape(id)}"]`);
+    const detail = document.querySelector(".board-shell > .issue-detail");
+    if (!card || !detail || getComputedStyle(detail).position !== "absolute") return false;
+    const a = card.getBoundingClientRect();
+    const b = detail.getBoundingClientRect();
+    return a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
+  }, rightmostIssueId);
+  if (overlap) throw new Error("floating Issue Inspector must move away from the Issue card that was clicked");
+}
 const scrollRegressionStyle = await page.addStyleTag({
   content: '[data-lane="frontier"] { max-height: 120px; } .issue-detail .detail-scroll { max-height: 180px; }',
 });
@@ -358,7 +394,7 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
   await route.continue();
 };
 await page.route("**/*", preserveCachedDocumentDuringRefresh);
-await page.click(".issue-card:has-text('child ready') .issue-card-main");
+await clickCard(page.locator(".issue-card:has-text('child ready') .issue-card-main"));
 await page.waitForSelector(".detail-hd:has-text('child ready')");
 await page.waitForSelector('[data-document-state="stale"] .issue-markdown:has-text("Cached issue body")');
 if (await page.$('button[data-act="edit-issue"]')) {
@@ -513,7 +549,7 @@ await page.waitForSelector('[data-graph-mode="overview"]');
 await page.click("button[data-act='center-view'][data-id='board']");
 await page.waitForSelector(".lanes");
 
-await page.click(".issue-card:has-text('child blocked') .issue-card-main");
+await clickCard(page.locator(".issue-card:has-text('child blocked') .issue-card-main"));
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
 await page.click(".issue-detail button[data-act='view-dependencies']");
 await page.waitForSelector(".dep-graph");
@@ -608,7 +644,7 @@ const childViewportBefore = await page.$eval(".graph-node:has-text('child blocke
     y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
   };
 });
-await page.getByRole("button", { name: "从此处展开 #3" }).click();
+await clickGraphAction(page.getByRole("button", { name: "从此处展开 #3" }));
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await page.waitForSelector(".detail-hd:has-text('child blocked')");
 const childViewportAfter = await page.$eval(".graph-node:has-text('child blocked')", (node) => {
@@ -646,7 +682,7 @@ if (!searchedRelationship?.includes("just closed")) {
 }
 await page.fill('[data-field="graphSearch"]', "waiting on history");
 await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 1);
-await page.getByRole("button", { name: "从此处展开 #5" }).first().click();
+await clickGraphAction(page.getByRole("button", { name: "从此处展开 #5" }).first());
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
 await page.waitForSelector(".detail-hd:has-text('waiting on history')");
 if (!(await page.$(".graph-index")) || !(await page.getByRole("button", { name: "收起到一跳上下游" }).count())) {
@@ -657,7 +693,7 @@ if ((await page.inputValue('[data-field="graphSearch"]')) !== "waiting on histor
 }
 await page.fill('[data-field="graphSearch"]', "");
 await page.waitForFunction(() => document.querySelectorAll(".graph-index-row").length === 50);
-await page.getByRole("button", { name: "从此处展开 #3" }).first().click();
+await clickGraphAction(page.getByRole("button", { name: "从此处展开 #3" }).first());
 await page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await page.waitForSelector(".graph-index");
 
@@ -770,7 +806,7 @@ await page.unroute("**/*", emptyRunsOverviewResponse);
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
 
-await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
+await clickCard(page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
 await page.waitForSelector(".lifted-run");
 if (await page.$(".lanes")) {
   throw new Error("lifting a Run should replace the board");
@@ -815,7 +851,7 @@ await page.waitForSelector(".side");
 if (!(await page.$(".run-dock"))) {
   throw new Error("returning to the board should restore the active Issue terminal dock");
 }
-await page.click(".issue-card:has-text('child ready') .issue-card-main");
+await clickCard(page.locator(".issue-card:has-text('child ready') .issue-card-main"));
 await page.waitForSelector(".detail-hd:has-text('child ready')");
 if (await page.$(".run-dock")) {
   throw new Error("selecting an Issue without an active Run should remove the terminal dock");
@@ -834,7 +870,7 @@ const issueToggleLeftAfterSidebarFold = await page.$eval("button[data-act='toggl
 if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold) > 1) {
   throw new Error(`Issue detail toggle should keep its chrome coordinate when the sidebar folds: ${issueToggleLeftBeforeSidebarFold} -> ${issueToggleLeftAfterSidebarFold}`);
 }
-await page.click('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main');
+await clickCard(page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
 await page.waitForSelector(".lifted-run");
 await page.click("button[data-act='return-board']");
 await page.waitForSelector(".lanes");
@@ -1085,7 +1121,7 @@ const mobileBoardScrollBeforeIssue = await page.$eval(".workspace", (node) => {
 if (mobileBoardScrollBeforeIssue <= 0) {
   throw new Error("mobile Issue navigation regression needs a scrollable board page");
 }
-await page.click(".issue-card:has-text('child ready') .issue-card-main");
+await clickCard(page.locator(".issue-card:has-text('child ready') .issue-card-main"));
 await page.waitForSelector(".mobile-issue-view .issue-detail");
 await page.waitForSelector('.mobile-issue-view [data-document-state="ready"]');
 const mobileDocument = await page.$eval(".mobile-issue-view .issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());

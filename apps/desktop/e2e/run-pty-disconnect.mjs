@@ -28,17 +28,20 @@ const startedRun = started.runs.find((run) => run.issueId === "you/disconnect#1"
 const firstRunId = startedRun?.id;
 if (!firstRunId) throw new Error(`the UI-created Run must be observable after launch: ${JSON.stringify(started.runs)}`);
 
-const tickResponse = page.waitForResponse((response) =>
-  response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
-);
-await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
-await tickResponse;
-
-await page.waitForFunction(() => {
-  const card = [...document.querySelectorAll('[data-lane="inProgress"] .issue-card')]
-    .find((node) => node.textContent?.includes("PTY disconnect issue"));
-  return card?.classList.contains("execution-stopped") === true;
-});
+for (let attempt = 0; attempt < 40; attempt += 1) {
+  const tickResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
+  );
+  await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
+  await tickResponse;
+  const stopped = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('[data-lane="inProgress"] .issue-card')]
+      .find((node) => node.textContent?.includes("PTY disconnect issue"));
+    return card?.classList.contains("execution-stopped") === true;
+  });
+  if (stopped) break;
+  if (attempt === 39) throw new Error("timed out waiting for disconnected PTY to become execution-stopped");
+}
 const card = page.locator('[data-lane="inProgress"] .issue-card', { hasText: "PTY disconnect issue" }).first();
 const cardText = (await card.textContent())?.replace(/\s+/g, " ") ?? "";
 if (!cardText.includes("执行已停")) {

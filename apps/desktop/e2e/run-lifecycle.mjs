@@ -87,22 +87,10 @@ if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecyc
 }
 await capture("issue-100-terminal-and-issue-1280x840.png");
 
-failure = failFirstRpc("injectRunInput", "terminal input temporarily unavailable");
-await page.fill(".lifted-terminal .inject-row input", "resume after approval");
-await page.$eval(".lifted-terminal .inject-row", (form) => {
-  form.requestSubmit();
-  form.requestSubmit();
-});
-await page.waitForFunction(() => document.querySelector(".lifted-terminal .inject-row button[type='submit']")?.matches(":disabled") === true);
-failure.release();
-await page.waitForSelector(".lifted-terminal .form-feedback:has-text('terminal input temporarily unavailable')");
-if (failure.requests !== 1 || (await page.inputValue(".lifted-terminal .inject-row input")) !== "resume after approval") {
-  throw new Error(`Terminal injection failure must dedupe and preserve the draft: ${JSON.stringify(failure)}`);
-}
-await page.click(".lifted-terminal .inject-row button[type='submit']");
-if (failure.requests !== 2) throw new Error(`Terminal injection retry should issue one new request: ${failure.requests}`);
-rpcFailure = null;
 const activeRunId = await page.$eval(".lifted-terminal .pty-slot", (node) => node.dataset.run);
+await page.click(".lifted-terminal .pty-host");
+await page.keyboard.type("resume after approval");
+await page.keyboard.press("Enter");
 await page.waitForFunction(async ({ protocol, runId }) => {
   const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
   if (!response.ok) return false;

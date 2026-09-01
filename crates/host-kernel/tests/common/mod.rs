@@ -40,6 +40,8 @@ pub struct SeamTracker {
     reads: Mutex<BTreeMap<String, u64>>,
     read_starts: Mutex<BTreeMap<String, u64>>,
     read_delay_ms: AtomicU64,
+    read_document_delay_ms: AtomicU64,
+    write_delay_ms: AtomicU64,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
     bodies: Mutex<BTreeMap<String, String>>,
     write_log: Mutex<Vec<(String, Option<String>, TrackerWriteOp)>>,
@@ -107,6 +109,15 @@ impl SeamTracker {
 
     pub fn set_read_delay_ms(&self, delay_ms: u64) {
         self.read_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn set_read_document_delay_ms(&self, delay_ms: u64) {
+        self.read_document_delay_ms
+            .store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn set_write_delay_ms(&self, delay_ms: u64) {
+        self.write_delay_ms.store(delay_ms, Ordering::Relaxed);
     }
 
     pub fn comments(&self, repository: &str) -> Vec<String> {
@@ -312,6 +323,10 @@ impl TrackerSeam for SeamTracker {
         _ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueDocument, TrackerReadError> {
+        let delay_ms = self.read_document_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
         let issue = self
             .issues
             .lock()
@@ -341,6 +356,10 @@ impl TrackerSeam for SeamTracker {
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {
+        let delay_ms = self.write_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
         self.write_log.lock().expect("seam tracker").push((
             ctx.repository.to_string(),
             issue_id.map(ToOwned::to_owned),

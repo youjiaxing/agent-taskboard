@@ -1065,11 +1065,17 @@ pub struct HostKernel {
     remote_view: Option<RemoteView>,
     loaded_issues: BTreeMap<String, Vec<IssueRecord>>,
     issue_documents: BTreeMap<String, BTreeMap<String, IssueDocumentState>>,
+    issue_document_in_flight: BTreeMap<(String, String), u64>,
+    next_issue_document_generation: u64,
     refresh: BTreeMap<String, ProjectRefreshState>,
     refresh_in_flight: BTreeMap<String, u64>,
     next_refresh_generation: u64,
     defer_refreshes: bool,
     deferred_refreshes: Vec<PreparedRefresh>,
+    defer_issue_documents: bool,
+    deferred_issue_documents: Vec<PreparedIssueDocument>,
+    defer_issue_writes: bool,
+    deferred_issue_writes: Vec<PreparedIssueWrite>,
     local_tracker_revisions: BTreeMap<String, u64>,
     client_views: BTreeMap<String, ClientView>,
     client_navigation: BTreeMap<String, ClientNavigationState>,
@@ -1197,6 +1203,42 @@ pub(crate) struct PreparedRefresh {
 pub(crate) struct CompletedRefresh {
     prepared: PreparedRefresh,
     result: Result<tracker_seam::TrackerReadOutcome, tracker::TrackerReadError>,
+}
+
+pub(crate) struct PreparedIssueDocument {
+    tracker: Arc<dyn TrackerSeam>,
+    project_id: String,
+    issue_id: String,
+    github_host: String,
+    repository: String,
+    tracker_kind: TrackerKind,
+    secrets_pat: Option<String>,
+    secrets_path: PathBuf,
+    previous_body: Option<(String, u64)>,
+    now_ms: u64,
+    generation: u64,
+}
+
+pub(crate) struct CompletedIssueDocument {
+    prepared: PreparedIssueDocument,
+    result: Result<tracker::IssueDocument, tracker::TrackerReadError>,
+}
+
+pub(crate) struct PreparedIssueWrite {
+    tracker: Arc<dyn TrackerSeam>,
+    project_id: String,
+    issue_id: Option<String>,
+    github_host: String,
+    repository: String,
+    tracker_kind: TrackerKind,
+    secrets_pat: Option<String>,
+    secrets_path: PathBuf,
+    op: tracker_seam::TrackerWriteOp,
+}
+
+pub(crate) struct CompletedIssueWrite {
+    prepared: PreparedIssueWrite,
+    result: Result<IssueRecord, tracker::TrackerWriteError>,
 }
 
 #[derive(Debug, Clone)]
@@ -1374,11 +1416,17 @@ impl HostKernel {
             remote_view: None,
             loaded_issues: BTreeMap::new(),
             issue_documents: BTreeMap::new(),
+            issue_document_in_flight: BTreeMap::new(),
+            next_issue_document_generation: 0,
             refresh: BTreeMap::new(),
             refresh_in_flight: BTreeMap::new(),
             next_refresh_generation: 0,
             defer_refreshes: false,
             deferred_refreshes: Vec::new(),
+            defer_issue_documents: false,
+            deferred_issue_documents: Vec::new(),
+            defer_issue_writes: false,
+            deferred_issue_writes: Vec::new(),
             local_tracker_revisions: BTreeMap::new(),
             client_views: BTreeMap::new(),
             client_navigation: BTreeMap::new(),
@@ -3723,14 +3771,16 @@ impl HostKernel {
             return Err(KernelError::Protocol("unknown project".into()));
         }
         self.require_live_tracker(project_id)?;
-        self.write_issue_op(
-            project_id,
-            None,
-            tracker_seam::TrackerWriteOp::CreateIssue {
-                title: title.to_string(),
-                body: body.to_string(),
-            },
-        )?;
+        let op = tracker_seam::TrackerWriteOp::CreateIssue {
+            title: title.to_string(),
+            body: body.to_string(),
+        };
+        if self.defer_issue_writes {
+            self.deferred_issue_writes
+                .push(self.prepare_issue_write(project_id, None, op)?);
+        } else {
+            self.write_issue_op(project_id, None, op)?;
+        }
         Ok(())
     }
 
@@ -3816,6 +3866,17 @@ impl HostKernel {
         issue_id: Option<&str>,
         op: tracker_seam::TrackerWriteOp,
     ) -> Result<IssueRecord, KernelError> {
+        let prepared = self.prepare_issue_write(project_id, issue_id, op)?;
+        let completed = Self::execute_prepared_issue_write(prepared);
+        self.finish_prepared_issue_write(completed)
+    }
+
+    fn prepare_issue_write(
+        &self,
+        project_id: &str,
+        issue_id: Option<&str>,
+        op: tracker_seam::TrackerWriteOp,
+    ) -> Result<PreparedIssueWrite, KernelError> {
         let project = self
             .projects
             .iter()
@@ -3823,19 +3884,17 @@ impl HostKernel {
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
-        let ctx = tracker::ProbeContext {
-            tracker: project.tracker,
-            github_host: &project.github_host,
-            repository: &project.repository,
-            secrets_pat: pat.as_deref(),
-            secrets_path: &self.data.host_secrets_path,
-        };
-        let updated = self
-            .tracker
-            .write_issue(&ctx, issue_id, &op)
-            .map_err(write_tracker_error)?;
-        self.merge_issue(project_id, updated.clone(), &op);
-        Ok(updated)
+        Ok(PreparedIssueWrite {
+            tracker: Arc::clone(&self.tracker),
+            project_id: project_id.to_string(),
+            issue_id: issue_id.map(ToOwned::to_owned),
+            github_host: project.github_host,
+            repository: project.repository,
+            tracker_kind: project.tracker,
+            secrets_pat: pat,
+            secrets_path: self.data.host_secrets_path.clone(),
+            op,
+        })
     }
 
     fn merge_issue(
@@ -5188,6 +5247,8 @@ impl HostKernel {
         if registration_changed {
             self.loaded_issues.remove(project_id);
             self.issue_documents.remove(project_id);
+            self.issue_document_in_flight
+                .retain(|(pending_project, _), _| pending_project != project_id);
             self.refresh.remove(project_id);
             self.local_tracker_revisions.remove(project_id);
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
@@ -5233,6 +5294,8 @@ impl HostKernel {
         self.local_tracker_revisions.remove(project_id);
         self.loaded_issues.remove(project_id);
         self.issue_documents.remove(project_id);
+        self.issue_document_in_flight
+            .retain(|(pending_project, _), _| pending_project != project_id);
         self.clear_pending(project_id, false);
         if was_current {
             self.selected_issue_id = None;
@@ -5329,6 +5392,20 @@ impl HostKernel {
     }
 
     fn load_issue_document(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        let prepared = self.prepare_issue_document(issue_id)?;
+        if self.defer_issue_documents {
+            self.deferred_issue_documents.push(prepared);
+            return Ok(());
+        }
+        let completed = Self::execute_prepared_issue_document(prepared);
+        self.finish_prepared_issue_document(completed);
+        Ok(())
+    }
+
+    fn prepare_issue_document(
+        &mut self,
+        issue_id: &str,
+    ) -> Result<PreparedIssueDocument, KernelError> {
         let project_id = self
             .focused_project_id
             .clone()
@@ -5362,21 +5439,59 @@ impl HostKernel {
                         .map(|(_, fetched_at_ms)| *fetched_at_ms),
                 },
             );
+        self.next_issue_document_generation = self.next_issue_document_generation.saturating_add(1);
+        let generation = self.next_issue_document_generation;
+        self.issue_document_in_flight
+            .insert((project_id.clone(), issue_id.to_string()), generation);
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
-        let result = self.tracker.read_issue_document(
+        Ok(PreparedIssueDocument {
+            tracker: Arc::clone(&self.tracker),
+            project_id,
+            issue_id: issue_id.to_string(),
+            github_host: project.github_host,
+            repository: project.repository,
+            tracker_kind: project.tracker,
+            secrets_pat: pat,
+            secrets_path: self.data.host_secrets_path.clone(),
+            previous_body,
+            now_ms: self.now_ms,
+            generation,
+        })
+    }
+
+    pub(crate) fn execute_prepared_issue_document(
+        prepared: PreparedIssueDocument,
+    ) -> CompletedIssueDocument {
+        let result = prepared.tracker.read_issue_document(
             &tracker::ProbeContext {
-                tracker: project.tracker,
-                github_host: &project.github_host,
-                repository: &project.repository,
-                secrets_pat: pat.as_deref(),
-                secrets_path: &self.data.host_secrets_path,
+                tracker: prepared.tracker_kind,
+                github_host: &prepared.github_host,
+                repository: &prepared.repository,
+                secrets_pat: prepared.secrets_pat.as_deref(),
+                secrets_path: &prepared.secrets_path,
             },
-            issue_id,
+            &prepared.issue_id,
         );
+        CompletedIssueDocument { prepared, result }
+    }
+
+    pub(crate) fn finish_prepared_issue_document(
+        &mut self,
+        completed: CompletedIssueDocument,
+    ) -> bool {
+        let CompletedIssueDocument { prepared, result } = completed;
+        let key = (prepared.project_id.clone(), prepared.issue_id.clone());
+        if self.issue_document_in_flight.get(&key).copied() != Some(prepared.generation) {
+            return false;
+        }
+        self.issue_document_in_flight.remove(&key);
         let state = match result {
             Ok(document) => {
-                if let Some(issues) = self.loaded_issues.get_mut(&project_id) {
-                    if let Some(existing) = issues.iter_mut().find(|issue| issue.id() == issue_id) {
+                if let Some(issues) = self.loaded_issues.get_mut(&prepared.project_id) {
+                    if let Some(existing) = issues
+                        .iter_mut()
+                        .find(|issue| issue.id() == prepared.issue_id)
+                    {
                         // 单 Issue REST 响应不保证带原生父子与 Dependency；详情刷新只合并
                         // 该响应确实拥有的基础字段，关系仍由列表/GraphQL 真源维护。
                         existing.title = document.issue.title;
@@ -5389,12 +5504,12 @@ impl HostKernel {
                 }
                 IssueDocumentState::Ready {
                     body: document.body,
-                    fetched_at_ms: self.now_ms,
+                    fetched_at_ms: prepared.now_ms,
                 }
             }
             Err(error) => {
                 let failure = issue_document_failure(error);
-                match previous_body {
+                match prepared.previous_body {
                     Some((body, fetched_at_ms)) => IssueDocumentState::Stale {
                         body,
                         fetched_at_ms,
@@ -5405,11 +5520,14 @@ impl HostKernel {
             }
         };
         self.issue_documents
-            .entry(project_id.clone())
+            .entry(prepared.project_id.clone())
             .or_default()
-            .insert(issue_id.to_string(), state);
-        self.persist_tracker_snapshot(&project_id);
-        Ok(())
+            .insert(prepared.issue_id, state);
+        self.persist_tracker_snapshot(&prepared.project_id);
+        self.pending_events.push(HostEvent::BoardUpdated {
+            project_id: prepared.project_id,
+        });
+        true
     }
 
     fn load_persisted_snapshot(&mut self, project_id: &str) {
@@ -5475,6 +5593,65 @@ impl HostKernel {
                 self.refresh_in_flight.remove(&refresh.project_id);
             }
         }
+    }
+
+    pub(crate) fn begin_deferred_issue_documents(&mut self) {
+        debug_assert!(!self.defer_issue_documents);
+        debug_assert!(self.deferred_issue_documents.is_empty());
+        self.defer_issue_documents = true;
+    }
+
+    pub(crate) fn take_deferred_issue_documents(&mut self) -> Vec<PreparedIssueDocument> {
+        self.defer_issue_documents = false;
+        std::mem::take(&mut self.deferred_issue_documents)
+    }
+
+    pub(crate) fn cancel_prepared_issue_documents(&mut self, prepared: &[PreparedIssueDocument]) {
+        for document in prepared {
+            let key = (document.project_id.clone(), document.issue_id.clone());
+            if self.issue_document_in_flight.get(&key).copied() == Some(document.generation) {
+                self.issue_document_in_flight.remove(&key);
+            }
+        }
+    }
+
+    pub(crate) fn begin_deferred_issue_writes(&mut self) {
+        debug_assert!(!self.defer_issue_writes);
+        debug_assert!(self.deferred_issue_writes.is_empty());
+        self.defer_issue_writes = true;
+    }
+
+    pub(crate) fn take_deferred_issue_writes(&mut self) -> Vec<PreparedIssueWrite> {
+        self.defer_issue_writes = false;
+        std::mem::take(&mut self.deferred_issue_writes)
+    }
+
+    pub(crate) fn execute_prepared_issue_write(
+        prepared: PreparedIssueWrite,
+    ) -> CompletedIssueWrite {
+        let result = prepared.tracker.write_issue(
+            &tracker::ProbeContext {
+                tracker: prepared.tracker_kind,
+                github_host: &prepared.github_host,
+                repository: &prepared.repository,
+                secrets_pat: prepared.secrets_pat.as_deref(),
+                secrets_path: &prepared.secrets_path,
+            },
+            prepared.issue_id.as_deref(),
+            &prepared.op,
+        );
+        CompletedIssueWrite { prepared, result }
+    }
+
+    pub(crate) fn finish_prepared_issue_write(
+        &mut self,
+        completed: CompletedIssueWrite,
+    ) -> Result<IssueRecord, KernelError> {
+        let CompletedIssueWrite { prepared, result } = completed;
+        let updated = result.map_err(write_tracker_error)?;
+        let returned = updated.clone();
+        self.merge_issue(&prepared.project_id, updated, &prepared.op);
+        Ok(returned)
     }
 
     pub(crate) fn execute_prepared_refresh(prepared: PreparedRefresh) -> CompletedRefresh {

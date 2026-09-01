@@ -45,6 +45,9 @@ const focusProject = async (page, projectId, expectedName) => {
 };
 
 await focusProject(desktop, gardenProjectId, "garden");
+await desktop.waitForFunction(() =>
+  document.querySelectorAll('[data-lane="frontier"] .issue-card').length >= 18,
+);
 await desktop.click('[data-act="focus-issue"][data-id="you/garden#1"]');
 await desktop.waitForSelector('.detail-hd:has-text("garden issue 1")');
 await desktop.click('button[data-act="center-view"][data-id="graph"]');

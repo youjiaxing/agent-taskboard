@@ -207,9 +207,7 @@ await browserPage.click('header.chrome button[data-act="toggle-issue"]');
 
 await browserPage.setViewportSize({ width: 1280, height: 840 });
 
-const terminalDraft = "draft survives panel switches";
 const activeRunId = await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run");
-await browserPage.fill('[data-workbench-panel="terminal"] form[data-act="inject-run"] input', terminalDraft);
 await browserPage.click('[data-workbench-panel="terminal"] button[data-act="hide-terminal"]');
 await browserPage.waitForSelector(".lanes");
 await browserPage.waitForFunction(() => !document.querySelector('[data-workbench-panel="terminal"]'));
@@ -227,9 +225,6 @@ if (frontierScrollBefore <= 0) throw new Error("panel layout fixture needs a scr
 
 await browserPage.click("button[data-act='show-terminal']");
 await browserPage.waitForSelector('[data-workbench-panel="terminal"]');
-if (await browserPage.inputValue('[data-workbench-panel="terminal"] form[data-act="inject-run"] input') !== terminalDraft) {
-  throw new Error("hiding and restoring Terminal must retain its input draft");
-}
 if (await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run") !== activeRunId) {
   throw new Error("hiding and restoring Terminal must retain the current Run");
 }

@@ -471,7 +471,7 @@ fn intent_only_changes_opening_text() {
         .read_after(0, Duration::from_millis(10));
     assert_eq!(
         String::from_utf8_lossy(&chunk.data),
-        "根据下面的说明修改实现。\n修一下测试\n"
+        "根据下面的说明修改实现。\n修一下测试\r"
     );
     assert!(h.host.snapshot().launch_form.is_none());
 }

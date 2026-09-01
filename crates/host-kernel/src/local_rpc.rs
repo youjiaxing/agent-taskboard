@@ -261,7 +261,13 @@ fn spawn_local_rpc_inner(
                         let _ = std::thread::Builder::new()
                             .name("host-local-rpc-conn".into())
                             .spawn(move || {
-                                match serve_connection(stream, &kernel, &assets, server_port) {
+                                match serve_connection(
+                                    stream,
+                                    &kernel,
+                                    &assets,
+                                    server_port,
+                                    Arc::clone(&kernel),
+                                ) {
                                     Ok(Some(outcome)) => {
                                         if outcome.process == ProcessIntent::Exit {
                                             stop.store(true, Ordering::Relaxed);
@@ -352,6 +358,7 @@ fn serve_connection(
     kernel: &Mutex<HostKernel>,
     assets: &LoopbackAssets,
     server_port: u16,
+    document_kernel: Arc<Mutex<HostKernel>>,
 ) -> io::Result<Option<CommandOutcome>> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -432,12 +439,20 @@ fn serve_connection(
             }
         };
         let defer_refreshes = request_defers_refreshes(&value);
-        let (initial, refreshes) = {
+        let defer_issue_document = request_defers_issue_document(&value);
+        let defer_issue_write = request_defers_issue_write(&value);
+        let (initial, refreshes, issue_documents, issue_writes) = {
             let mut host = kernel
                 .lock()
                 .map_err(|_| io::Error::other("kernel lock poisoned"))?;
             if defer_refreshes {
                 host.begin_deferred_refreshes();
+            }
+            if defer_issue_document {
+                host.begin_deferred_issue_documents();
+            }
+            if defer_issue_write {
+                host.begin_deferred_issue_writes();
             }
             let result = host.handle(value.clone());
             let refreshes = if defer_refreshes {
@@ -445,10 +460,21 @@ fn serve_connection(
             } else {
                 Vec::new()
             };
+            let issue_documents = if defer_issue_document {
+                host.take_deferred_issue_documents()
+            } else {
+                Vec::new()
+            };
+            let issue_writes = if defer_issue_write {
+                host.take_deferred_issue_writes()
+            } else {
+                Vec::new()
+            };
             if result.is_err() {
                 host.cancel_prepared_refreshes(&refreshes);
+                host.cancel_prepared_issue_documents(&issue_documents);
             }
-            (result, refreshes)
+            (result, refreshes, issue_documents, issue_writes)
         };
         match initial {
             Ok(mut outcome) => {
@@ -471,6 +497,74 @@ fn serve_connection(
                     for refresh in completed {
                         host.finish_prepared_refresh(refresh);
                     }
+                    let mut refreshed = host
+                        .handle(snapshot_request)
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    events.append(&mut refreshed.events);
+                    refreshed.events = events;
+                    outcome = refreshed;
+                }
+                if !issue_documents.is_empty() {
+                    let mut events = std::mem::take(&mut outcome.events);
+                    let completed: Vec<_> = issue_documents
+                        .into_iter()
+                        .map(HostKernel::execute_prepared_issue_document)
+                        .collect();
+                    let mut host = document_kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                    for document in completed {
+                        host.finish_prepared_issue_document(document);
+                    }
+                    let snapshot_request = serde_json::json!({
+                        "op": "snapshot",
+                        "clientInstanceId": value
+                            .get("clientInstanceId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default(),
+                    });
+                    let mut refreshed = host
+                        .handle(snapshot_request)
+                        .map_err(|err| io::Error::other(err.to_string()))?;
+                    events.append(&mut refreshed.events);
+                    refreshed.events = events;
+                    outcome = refreshed;
+                }
+                if !issue_writes.is_empty() {
+                    let completed: Vec<_> = issue_writes
+                        .into_iter()
+                        .map(HostKernel::execute_prepared_issue_write)
+                        .collect();
+                    let mut host = document_kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                    for write in completed {
+                        if let Err(error) = host.finish_prepared_issue_write(write) {
+                            let status = match &error {
+                                KernelError::Protocol(_) | KernelError::Json(_) => 400,
+                                KernelError::Denied(_) => 403,
+                                KernelError::Io(_) => 500,
+                            };
+                            write_json(
+                                &mut stream,
+                                status,
+                                response_origin,
+                                &format!(
+                                    r#"{{"error":{}}}"#,
+                                    serde_json::to_string(&error.to_string()).unwrap()
+                                ),
+                            )?;
+                            return Ok(None);
+                        }
+                    }
+                    let mut events = std::mem::take(&mut outcome.events);
+                    let snapshot_request = serde_json::json!({
+                        "op": "snapshot",
+                        "clientInstanceId": value
+                            .get("clientInstanceId")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or_default(),
+                    });
                     let mut refreshed = host
                         .handle(snapshot_request)
                         .map_err(|err| io::Error::other(err.to_string()))?;
@@ -923,6 +1017,14 @@ fn request_defers_refreshes(request: &serde_json::Value) -> bool {
         request.get("op").and_then(|value| value.as_str()),
         Some("refresh" | "tick" | "setClientView" | "showWindow" | "focusProject" | "noteRunEnded")
     )
+}
+
+fn request_defers_issue_document(request: &serde_json::Value) -> bool {
+    request.get("op").and_then(|value| value.as_str()) == Some("loadIssueDocument")
+}
+
+fn request_defers_issue_write(request: &serde_json::Value) -> bool {
+    request.get("op").and_then(|value| value.as_str()) == Some("createIssue")
 }
 
 fn write_bytes(

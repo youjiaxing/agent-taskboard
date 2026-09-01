@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use host_kernel::{
-    BootRequest, Command, HostKernel, KernelPorts, Language, LaunchEnvironment, MemoryAgent,
-    MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, ProcessIntent, RunStatus,
+    AgentSession, BootRequest, Command, HostKernel, KernelPorts, Language, LaunchEnvironment,
+    MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, ProcessIntent, RunStatus,
     SystemAppearance,
 };
 
@@ -211,6 +211,15 @@ fn probe_and_start_share_one_launch_env_and_exec_absolute_path() {
     let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
     let project_id = register(&mut h.host, &dir);
     start_unbound(&mut h.host, &project_id).unwrap();
+
+    assert_eq!(
+        h.sessions
+            .last_session()
+            .unwrap()
+            .read_after(0, Duration::ZERO)
+            .data,
+        b"run lifecycle integration\r"
+    );
 
     assert_eq!(h.launch_env.capture_count(), 3);
     let spawn = h.sessions.last_spawn().unwrap();

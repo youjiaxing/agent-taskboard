@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use serde_json::Value;
 
 use super::{
     additional_args_field, append_additional_args, append_flag, append_isolation_flag,
     boolean_field, discovery, home_dir, hooks, initial_instruction_field, probe_binary,
-    select_field, text_field, AgentConfigDiscovery, AgentField, AgentPort, CompletionHookPlan,
-    ProbeResult,
+    select_field, AgentConfigDiscovery, AgentField, AgentPort, CompletionHookPlan, ProbeResult,
 };
 use crate::LaunchEnvironment;
 
@@ -69,6 +71,16 @@ impl AgentPort for GrokAdapter {
         let mut fields = self.config_fields();
         let mut seed = self.seed_config();
         discovery::set_options(&mut fields, "model", models);
+        let effort_by_model = model_efforts_from_cache()
+            .into_iter()
+            .filter(|(model, _)| {
+                fields
+                    .iter()
+                    .find(|field| field.id == "model")
+                    .is_some_and(|field| field.options.iter().any(|option| option == model))
+            })
+            .collect();
+        discovery::set_option_filter(&mut fields, "effort", "model", effort_by_model);
         discovery::set_options_if_found(
             &mut fields,
             "effort",
@@ -123,7 +135,7 @@ impl AgentPort for GrokAdapter {
 
 pub(super) fn grok_fields() -> Vec<AgentField> {
     vec![
-        text_field("model", "model", true, false),
+        select_field("model", "model", &[], true, false),
         select_field("effort", "effort", &["low", "medium", "high"], true, false),
         select_field("permission-mode", "权限模式", &[], true, false),
         boolean_field("always-approve", "alwaysApprove", false),
@@ -185,4 +197,63 @@ fn bullet_models(output: &str) -> Vec<String> {
                 .map(ToOwned::to_owned)
         })
         .collect()
+}
+
+fn model_efforts_from_cache() -> BTreeMap<String, Vec<String>> {
+    let Some(home) = home_dir() else {
+        return BTreeMap::new();
+    };
+    let path = home.join(".grok").join("models_cache.json");
+    let Ok(raw) = fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    model_efforts_from_cache_raw(&raw)
+}
+
+fn model_efforts_from_cache_raw(raw: &str) -> BTreeMap<String, Vec<String>> {
+    let Ok(root) = serde_json::from_str::<Value>(raw) else {
+        return BTreeMap::new();
+    };
+    root.get("models")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|models| models.iter())
+        .filter_map(|(id, model)| {
+            let efforts = model
+                .get("info")
+                .and_then(|info| info.get("reasoning_efforts"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|effort| {
+                    effort
+                        .get("value")
+                        .or_else(|| effort.get("id"))
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>();
+            (!efforts.is_empty()).then_some((id.clone(), efforts))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_efforts_from_cache_raw;
+
+    #[test]
+    fn grok_model_cache_exposes_efforts_per_model() {
+        let options = model_efforts_from_cache_raw(
+            r#"{
+                "models": {
+                    "grok-fast": {"info": {"reasoning_efforts": [{"value":"low"},{"value":"medium"}]}},
+                    "grok-deep": {"info": {"reasoning_efforts": [{"id":"high"},{"id":"xhigh"}]}}
+                }
+            }"#,
+        );
+        assert_eq!(options["grok-fast"], vec!["low", "medium"]);
+        assert_eq!(options["grok-deep"], vec!["high", "xhigh"]);
+    }
 }

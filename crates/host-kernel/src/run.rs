@@ -222,9 +222,9 @@ pub fn start_unbound(
             match sessions.spawn(request) {
                 Ok(session) => {
                     if !config.opening_text.trim().is_empty() {
-                        if let Err(err) =
-                            session.write(format!("{}\n", config.opening_text.trim()).as_bytes())
-                        {
+                        let mut opening = config.opening_text.trim().as_bytes().to_vec();
+                        opening.push(b'\r');
+                        if let Err(err) = session.write(&opening) {
                             session.stop();
                             record.status = RunStatus::Ended;
                             record.ended_reason = Some(RunEndedReason::Abnormal);
