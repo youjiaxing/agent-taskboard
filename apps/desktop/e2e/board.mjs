@@ -14,13 +14,13 @@ if (!url) {
 }
 const screenshotDir = process.env.ISSUE_DOCUMENT_SCREENSHOT_DIR;
 if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
-const capture = async (name) => {
-  if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
-};
 
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
-const page = await context.newPage();
+let context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
+let page = await context.newPage();
+let capture = async (name) => {
+  if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
+};
 const clickGraphAction = async (locator) => {
   const box = await locator.boundingBox();
   if (!box) throw new Error("graph action has no clickable geometry");
@@ -31,24 +31,27 @@ const clickCard = async (locator) => {
   if (!box) throw new Error("Issue card has no clickable geometry");
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 };
-const assertVisual = createVisualAssert(page);
-page.on("pageerror", (error) => {
-  console.error("pageerror", error);
-});
-page.on("console", (msg) => {
-  if (msg.type() === "error") {
-    console.error("console", msg.text());
-  }
-});
-await installDeterministicHostProtocol(page, url);
-await page.addInitScript(() => {
-  window.__OPENED_URLS__ = [];
-  window.open = (target) => {
-    window.__OPENED_URLS__.push(String(target));
-    return null;
-  };
-});
-await page.goto(url, { waitUntil: "domcontentloaded" });
+let assertVisual = createVisualAssert(page);
+const configurePage = async () => {
+  page.on("pageerror", (error) => {
+    console.error("pageerror", error);
+  });
+  page.on("console", (msg) => {
+    if (msg.type() === "error") {
+      console.error("console", msg.text());
+    }
+  });
+  await installDeterministicHostProtocol(page, url);
+  await page.addInitScript(() => {
+    window.__OPENED_URLS__ = [];
+    window.open = (target) => {
+      window.__OPENED_URLS__.push(String(target));
+      return null;
+    };
+  });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+};
+await configurePage();
 try {
   await page.waitForSelector(".lanes");
 } catch (error) {
@@ -1034,7 +1037,14 @@ await page.waitForFunction(() => document.querySelectorAll('[data-lane="recently
 await page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
 await page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-settings']"));
 
-await page.setViewportSize({ width: 390, height: 844 });
+await context.close();
+context = await browser.newContext({ locale: "zh-CN", viewport: { width: 390, height: 844 } });
+page = await context.newPage();
+capture = async (name) => {
+  if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
+};
+assertVisual = createVisualAssert(page);
+await configurePage();
 await page.waitForSelector(".mobile-nav");
 const mobileNavLabels = await page.$$eval(".mobile-nav button", (nodes) => nodes.map((node) => node.textContent?.trim()));
 if (mobileNavLabels.join("|") !== "看板|票|Run") {

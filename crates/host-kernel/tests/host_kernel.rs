@@ -1,25 +1,18 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use host_kernel::{
-    bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, BootRequest, Command,
-    EmptyAction, HostKernel, HostMode, IssueRecord, Language, LoopbackAssets, LoopbackPage,
-    LoopbackServer, MemoryTracker, ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
-};
+mod common;
 
-fn boot_req(root: &Path) -> BootRequest {
-    BootRequest {
-        app_local_data_dir: root.to_path_buf(),
-        app_log_dir: root.join("logs"),
-        system_locale: "zh-Hans-CN".into(),
-        system_appearance: SystemAppearance::Light,
-        host_display_name: "Studio".into(),
-    }
-}
+use common::boot_req;
+use host_kernel::{
+    bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, Command, EmptyAction, HostKernel,
+    HostMode, IssueRecord, Language, LoopbackAssets, LoopbackPage, LoopbackServer, MemoryTracker,
+    ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
+};
+use std::path::Path;
 
 #[test]
 fn opening_the_desktop_app_starts_the_local_host() {

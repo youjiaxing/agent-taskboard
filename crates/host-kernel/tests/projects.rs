@@ -4,57 +4,20 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod common;
+
+use common::{
+    boot as boot_base, boot_local, boot_req, make_dir, register_project as register,
+    start_unbound_grok,
+};
 use host_kernel::{
-    bind_local_rpc, spawn_local_rpc, AuthFailureKind, BootRequest, CredentialSource, GitHubTracker,
-    HostKernel, KernelError, LocalMarkdownTracker, MemoryTracker, ProbeContext, ProjectConnection,
-    ScriptedGitHub, SystemAppearance, TrackerKind, TrackerPort, TrackerRouter,
+    bind_local_rpc, spawn_local_rpc, AuthFailureKind, CredentialSource, GitHubTracker, HostKernel,
+    KernelError, LocalMarkdownTracker, MemoryTracker, ProbeContext, ProjectConnection,
+    ScriptedGitHub, TrackerKind, TrackerPort,
 };
 
-fn boot_req(root: &Path) -> BootRequest {
-    BootRequest {
-        app_local_data_dir: root.to_path_buf(),
-        app_log_dir: root.join("logs"),
-        system_locale: "zh-Hans-CN".into(),
-        system_appearance: SystemAppearance::Light,
-        host_display_name: "Studio".into(),
-    }
-}
-
 fn boot_memory(root: &Path) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), Arc::new(MemoryTracker::new())).unwrap()
-}
-
-fn boot_memory_with_local(root: &Path) -> HostKernel {
-    HostKernel::boot_with(
-        boot_req(root),
-        Arc::new(TrackerRouter::new(Arc::new(MemoryTracker::new()))),
-    )
-    .unwrap()
-}
-
-fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
-    let dir = root.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn start_unbound_grok(host: &mut HostKernel, project_id: &str) -> host_kernel::CommandOutcome {
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": project_id,
-        "agentId": "grok-build",
-        "values": {
-            "model": "grok-4.6",
-            "effort": "high",
-            "permission-mode": "default",
-            "always-approve": "false",
-            "sandbox": "off",
-            "initial-instruction": "",
-            "additional-args": ""
-        },
-        "openingText": "project integration",
-    }))
-    .unwrap()
+    boot_base(root, Arc::new(MemoryTracker::new()))
 }
 
 #[test]
@@ -313,7 +276,7 @@ fn local_markdown_project_reads_and_claims_issue_files() {
         "# 01 — Foundation\n\nStatus: ready-for-agent\n\nBlocked by: None\n\nBody\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject",
@@ -351,7 +314,7 @@ fn local_markdown_parses_status_type_assignee_parent_and_dependency_semantics() 
         "# 02 — Follow up\n\nStatus: ready-for-agent\nPart of: 01 — Foundation\nBlocked by: 01 — Foundation\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject",
@@ -402,7 +365,7 @@ fn local_markdown_parses_bullet_relationship_sections() {
         "# 02 — Child\n\nStatus: ready-for-agent\n\n## Parent\n\n- #1\n\n## Blocked by\n\n- #1\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject", "name": "bullets", "localPath": project_dir,
@@ -431,7 +394,7 @@ fn local_markdown_invalid_metadata_is_fail_closed_and_does_not_draw_frontier() {
         "# 01 — Invalid\n\nStatus: done\nBlocked by: missing\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject",
@@ -479,7 +442,7 @@ fn local_markdown_supports_create_edit_comment_and_relationship_writes() {
         "# 02 — Child\n\nStatus: ready-for-agent\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let project_id = host
         .handle(serde_json::json!({
             "op": "registerProject", "name": "garden", "localPath": project_dir,
@@ -515,7 +478,7 @@ fn local_markdown_edit_does_not_duplicate_colon_bearing_body_lines() {
         "# 01 — Work\n\nStatus: ready-for-agent\nType: task\n\nNote: keep this\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let issue_id = format!("{}#1", project_dir.display());
     host.handle(serde_json::json!({
         "op": "registerProject", "name": "colon-body", "localPath": project_dir,
@@ -558,7 +521,7 @@ fn local_markdown_replaces_blocked_by_atomically() {
         "# 03 — Child\n\nStatus: ready-for-agent\nBlocked by: 1\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let issue_id = format!("{}#3", project_dir.display());
     host.handle(serde_json::json!({
         "op": "registerProject", "name": "atomic-dependencies", "localPath": project_dir,
@@ -597,7 +560,7 @@ fn local_markdown_rejects_dependency_cycles_before_writing() {
         "# 02 — Second\n\nStatus: ready-for-agent\nBlocked by: None\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     host.handle(serde_json::json!({
         "op": "registerProject", "name": "dependency-cycle-write", "localPath": project_dir,
         "githubHost": "local", "repository": project_dir,
@@ -632,7 +595,7 @@ fn local_markdown_rejects_parent_cycles_before_writing() {
         "# 02 — Second\n\nStatus: ready-for-agent\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     host.handle(serde_json::json!({
         "op": "registerProject", "name": "parent-cycle-write", "localPath": project_dir,
         "githubHost": "local", "repository": project_dir,
@@ -666,7 +629,7 @@ fn local_markdown_parent_cycles_are_fail_closed_on_read() {
         "# 02 — Second\n\nStatus: ready-for-agent\nPart of: 1\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
 
     let out = host
         .handle(serde_json::json!({
@@ -703,7 +666,7 @@ fn local_markdown_duplicate_issue_numbers_are_fail_closed() {
         "# 01 — Second\n\nStatus: ready-for-agent\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
 
     let out = host
         .handle(serde_json::json!({
@@ -789,7 +752,7 @@ fn local_markdown_can_clear_body_and_release_explicit_assignee() {
         "# 01 — Work\n\nStatus: claimed\nAssignee: alice\n\nOld body\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let issue_id = format!("{}#1", project_dir.display());
     host.handle(serde_json::json!({
         "op": "registerProject", "name": "clear", "localPath": project_dir,
@@ -817,7 +780,7 @@ fn local_markdown_claim_release_and_restart_preserve_tracker_state() {
         "# 01 — Work\n\nStatus: ready-for-agent\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let issue_id = format!("{}#1", project_dir.display());
     host.handle(serde_json::json!({ "op": "registerProject", "name": "garden", "localPath": project_dir, "githubHost": "local", "repository": project_dir })).unwrap();
     host.handle(serde_json::json!({ "op": "claimIssue", "issueId": issue_id }))
@@ -831,7 +794,7 @@ fn local_markdown_claim_release_and_restart_preserve_tracker_state() {
         .unwrap()
         .contains("Status: ready-for-agent"));
     drop(host);
-    let host = boot_memory_with_local(tmp.path());
+    let host = boot_local(tmp.path());
     let issue = host
         .snapshot()
         .board
@@ -862,7 +825,7 @@ fn local_markdown_accepts_legacy_closed_true_but_rejects_dependency_cycles() {
         "# 03 — B\n\nStatus: ready-for-agent\nBlocked by: 02\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host.handle(serde_json::json!({ "op": "registerProject", "name": "legacy", "localPath": project_dir, "githubHost": "local", "repository": project_dir })).unwrap();
     let board = out.snapshot.board.unwrap();
     assert!(board.columns.is_none());
@@ -879,7 +842,7 @@ fn local_markdown_accepts_legacy_closed_true_but_rejects_dependency_cycles() {
 fn local_markdown_failure_does_not_mention_github_credentials() {
     let tmp = tempfile::tempdir().unwrap();
     let project_dir = make_dir(tmp.path(), "work/missing-local-tracker");
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject",
@@ -1017,7 +980,7 @@ fn local_markdown_file_changes_trigger_a_host_refresh() {
         "# 01 — First\n\nStatus: ready-for-agent\n\noriginal body\n",
     )
     .unwrap();
-    let mut host = boot_memory_with_local(tmp.path());
+    let mut host = boot_local(tmp.path());
     let out = host
         .handle(serde_json::json!({
             "op": "registerProject", "name": "file-change-refresh", "localPath": project_dir,
@@ -1443,23 +1406,6 @@ fn an_unreachable_host_is_not_reported_as_auth_failure() {
         }
         other => panic!("expected unreachable, got {other:?}"),
     }
-}
-
-fn register(host: &mut HostKernel, name: &str, dir: &Path, repository: &str) -> String {
-    host.handle(serde_json::json!({
-        "op": "registerProject",
-        "name": name,
-        "localPath": dir,
-        "repository": repository,
-    }))
-    .unwrap()
-    .snapshot
-    .projects
-    .iter()
-    .find(|project| project.name == name)
-    .unwrap()
-    .id
-    .clone()
 }
 
 fn write_pat(root: &Path, host: &str, token: &str) {

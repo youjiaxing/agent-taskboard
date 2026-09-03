@@ -3,8 +3,9 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use host_kernel::{
@@ -12,6 +13,91 @@ use host_kernel::{
     ProbeContext, ProbeOutcome, TrackerReadError, TrackerReadOutcome, TrackerSeam,
     TrackerWriteError, TrackerWriteOp,
 };
+
+pub fn browser_e2e_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
+
+pub fn boot_req(root: &Path) -> host_kernel::BootRequest {
+    host_kernel::BootRequest {
+        app_local_data_dir: root.to_path_buf(),
+        app_log_dir: root.join("logs"),
+        system_locale: "zh-Hans-CN".into(),
+        system_appearance: host_kernel::SystemAppearance::Light,
+        host_display_name: "Studio".into(),
+    }
+}
+
+pub fn make_dir(root: &Path, name: &str) -> PathBuf {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+pub fn boot(root: &Path, tracker: Arc<host_kernel::MemoryTracker>) -> host_kernel::HostKernel {
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_local(root: &Path) -> host_kernel::HostKernel {
+    let tracker = Arc::new(host_kernel::TrackerRouter::new(Arc::new(
+        host_kernel::MemoryTracker::new(),
+    )));
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> host_kernel::HostKernel {
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_board(
+    root: &Path,
+    tracker: Arc<host_kernel::MemoryTracker>,
+) -> host_kernel::HostKernel {
+    let mut host = boot(root, tracker);
+    pin_board_test_time(&mut host);
+    host
+}
+
+pub fn boot_board_seam(root: &Path, tracker: Arc<SeamTracker>) -> host_kernel::HostKernel {
+    let mut host = boot_seam(root, tracker);
+    pin_board_test_time(&mut host);
+    host
+}
+
+pub fn pin_board_test_time(host: &mut host_kernel::HostKernel) {
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": BOARD_TEST_NOW_MS,
+    }))
+    .unwrap();
+}
+
+pub fn register_project(
+    host: &mut host_kernel::HostKernel,
+    name: &str,
+    dir: &Path,
+    repository: &str,
+) -> String {
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": name,
+        "localPath": dir,
+        "repository": repository,
+    }))
+    .unwrap()
+    .snapshot
+    .projects
+    .iter()
+    .find(|project| project.name == name)
+    .unwrap()
+    .id
+    .clone()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadMode {
@@ -397,4 +483,50 @@ impl TrackerSeam for SeamTracker {
         }
         self.apply_write(ctx, issue_id, op)
     }
+}
+
+pub fn start_unbound_grok(
+    host: &mut host_kernel::HostKernel,
+    project_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "project integration",
+    }))
+    .unwrap()
+}
+
+pub fn start_bound_grok(
+    host: &mut host_kernel::HostKernel,
+    project_id: &str,
+    issue_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board integration",
+    }))
+    .unwrap()
 }

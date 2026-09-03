@@ -6,46 +6,21 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{ReadMode, SeamTracker};
+use common::{
+    boot as boot_base, boot_req, boot_seam as boot_seam_base, make_dir,
+    register_project as register, ReadMode, SeamTracker,
+};
 use host_kernel::{
-    BoardEmptyReason, BootRequest, HostEvent, HostKernel, IssueRecord, KernelError, LoopbackServer,
-    MemoryTracker, RefreshStatus, SystemAppearance, DEFAULT_REFRESH_INTERVAL_MS,
+    BoardEmptyReason, HostEvent, HostKernel, IssueRecord, KernelError, LoopbackServer,
+    MemoryTracker, RefreshStatus, DEFAULT_REFRESH_INTERVAL_MS,
 };
 
-fn boot_req(root: &Path) -> BootRequest {
-    BootRequest {
-        app_local_data_dir: root.to_path_buf(),
-        app_log_dir: root.join("logs"),
-        system_locale: "zh-Hans-CN".into(),
-        system_appearance: SystemAppearance::Light,
-        host_display_name: "Studio".into(),
-    }
-}
-
-fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {
-    let dir = root.join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 fn boot(root: &Path, tracker: Arc<MemoryTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
+    boot_base(root, tracker)
 }
 
 fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> HostKernel {
-    HostKernel::boot_with(boot_req(root), tracker).unwrap()
-}
-
-fn register(host: &mut HostKernel, dir: &Path, name: &str, repository: &str) -> String {
-    host.handle(serde_json::json!({
-        "op": "registerProject",
-        "name": name,
-        "localPath": dir,
-        "repository": repository,
-    }))
-    .unwrap()
-    .snapshot
-    .focused_project_id
+    boot_seam_base(root, tracker)
 }
 
 fn frontier_ids(host: &HostKernel) -> Vec<String> {
@@ -111,7 +86,7 @@ fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
     tracker.set_read_document_delay_ms(350);
     let project_dir = dir.clone();
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
-    register(&mut kernel, &project_dir, "garden", "you/garden");
+    register(&mut kernel, "garden", &project_dir, "you/garden");
     let kernel = Arc::new(Mutex::new(kernel));
     let server = LoopbackServer::attach_without_host_tick(
         Arc::clone(&kernel),
@@ -187,7 +162,7 @@ fn slow_issue_creation_does_not_hold_the_kernel_lock_for_other_navigation() {
     );
     tracker.set_write_delay_ms(350);
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut kernel, &dir, "garden", "you/garden");
+    let project_id = register(&mut kernel, "garden", &dir, "you/garden");
     let kernel = Arc::new(Mutex::new(kernel));
     let server = LoopbackServer::attach_without_host_tick(
         Arc::clone(&kernel),
@@ -252,7 +227,7 @@ fn never_fetched_project_does_not_draw_four_columns() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.fail_read("you/garden");
     let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let board = host.snapshot().board.unwrap();
     assert_eq!(board.empty, Some(BoardEmptyReason::NoData));
     assert!(board.columns.is_none());
@@ -266,7 +241,7 @@ fn successful_refresh_persists_last_data_and_keeps_it_when_offline() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
 
     let path = snapshot_path(&host, &project_id);
     assert!(path.is_file());
@@ -302,7 +277,7 @@ fn snapshot_persistence_failure_is_reported_as_incomplete_data() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     let path = snapshot_path(&host, &project_id);
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
@@ -325,7 +300,7 @@ fn refresh_emits_refreshing_then_a_terminal_status() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let out = host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
     let kinds: Vec<_> = out
         .events
@@ -348,7 +323,7 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     tracker.add_issue(IssueRecord::open("you/notes", 2, "note"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let garden_id = register(&mut host, &garden, "garden", "you/garden");
+    let garden_id = register(&mut host, "garden", &garden, "you/garden");
     let notes_id = host
         .handle(serde_json::json!({
             "op": "registerProject",
@@ -399,7 +374,7 @@ fn visible_project_polls_every_five_minutes_and_hidden_does_not() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let fetched = match refresh_status(&host) {
         RefreshStatus::Ready {
             fetched_at_ms,
@@ -463,7 +438,7 @@ fn another_visible_client_can_keep_polling_when_window_is_hidden() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     host.handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
     host.handle(serde_json::json!({
@@ -495,7 +470,7 @@ fn run_end_refreshes_even_when_nobody_is_watching() {
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     tracker.add_issue(IssueRecord::open("you/notes", 2, "note"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let garden_id = register(&mut host, &garden, "garden", "you/garden");
+    let garden_id = register(&mut host, "garden", &garden, "you/garden");
     host.handle(serde_json::json!({
         "op": "registerProject",
         "name": "notes",
@@ -525,7 +500,7 @@ fn claim_close_check_and_auto_advance_only_refresh_the_involved_project() {
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     tracker.add_issue(IssueRecord::open("you/notes", 2, "note"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let garden_id = register(&mut host, &garden, "garden", "you/garden");
+    let garden_id = register(&mut host, "garden", &garden, "you/garden");
     host.handle(serde_json::json!({
         "op": "registerProject",
         "name": "notes",
@@ -571,7 +546,7 @@ fn last_data_is_not_used_to_claim_or_advance_when_read_fails() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     let path = snapshot_path(&host, &project_id);
     let before = std::fs::read(&path).unwrap();
     tracker.fail_read("you/garden");
@@ -652,7 +627,7 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let fetched = match refresh_status(&host) {
         RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
         other => panic!("expected ready, got {other:?}"),
@@ -704,7 +679,7 @@ fn rate_limit_without_retry_after_stays_paused_until_manual_success() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let fetched = match refresh_status(&host) {
         RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
         other => panic!("expected ready, got {other:?}"),
@@ -733,7 +708,7 @@ fn auth_failure_is_project_degraded_not_offline() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     tracker.fail_auth("you/garden");
     host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
     assert!(matches!(
@@ -761,7 +736,7 @@ fn check_issue_closed_uses_live_read_not_last_data() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     assert_eq!(frontier_ids(&host), vec!["you/garden#1"]);
 
     tracker.set_issues(
@@ -785,7 +760,7 @@ fn refresh_interval_is_configurable_and_survives_reboot() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     host.handle(serde_json::json!({
         "op": "setRefreshInterval",
         "intervalMs": 15_000,
@@ -833,7 +808,7 @@ fn refresh_interval_has_a_five_minute_default_and_no_artificial_maximum() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
 
     let one_day = 24 * 60 * 60 * 1_000;
     let outcome = host
@@ -860,7 +835,7 @@ fn incomplete_read_persists_snapshot_and_board_across_reboot() {
         ReadMode::Incomplete("truncated at 500 issues".into()),
     );
     let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
 
     let board = host.snapshot().board.unwrap();
     assert_eq!(board.empty, Some(BoardEmptyReason::IncompleteRead));
@@ -921,7 +896,7 @@ fn offline_after_incomplete_read_is_shown_as_offline() {
         ReadMode::Incomplete("truncated at 500 issues".into()),
     );
     let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     match refresh_status(&host) {
         RefreshStatus::Incomplete { .. } => {}
         other => panic!("expected incomplete, got {other:?}"),
@@ -941,7 +916,7 @@ fn run_end_refreshes_even_when_rate_limited() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     tracker.fail_rate_limited("you/garden", Some(120_000));
     host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
     let fetched = match refresh_status(&host) {
@@ -974,7 +949,7 @@ fn stale_client_view_without_heartbeat_stops_polling() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     host.handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
     host.handle(serde_json::json!({
@@ -1012,7 +987,7 @@ fn tick_heartbeat_keeps_visible_client_past_ttl() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host, &dir, "garden", "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
     host.handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
     host.handle(serde_json::json!({
@@ -1046,7 +1021,7 @@ fn host_and_client_ticks_do_not_duplicate_interval_fetch() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let fetched = match refresh_status(&host) {
         RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
         other => panic!("expected ready, got {other:?}"),
@@ -1073,7 +1048,7 @@ fn tauri_client_viewing_remote_host_keeps_that_project_watched() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut host_kernel = boot(host_dir.path(), Arc::clone(&tracker));
-    let project_id = register(&mut host_kernel, &garden, "garden", "you/garden");
+    let project_id = register(&mut host_kernel, "garden", &garden, "you/garden");
     host_kernel
         .handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
@@ -1185,7 +1160,7 @@ fn claim_without_last_data_still_live_reads_the_focused_project() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.fail_read("you/garden");
     let mut host = boot(tmp.path(), tracker);
-    register(&mut host, &dir, "garden", "you/garden");
+    register(&mut host, "garden", &dir, "you/garden");
     let err = host
         .handle(serde_json::json!({
             "op": "claimIssue",
@@ -1202,7 +1177,7 @@ fn slow_refresh_does_not_hold_the_kernel_lock_against_other_client_rpc() {
     let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut kernel, &dir, "garden", "you/garden");
+    let project_id = register(&mut kernel, "garden", &dir, "you/garden");
     let host = Arc::new(Mutex::new(kernel));
     let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
     let protocol_url = server.protocol_url().to_string();
@@ -1263,7 +1238,7 @@ fn refresh_response_keeps_its_board_update_when_another_client_is_waiting() {
     let tracker = Arc::new(SeamTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
-    let project_id = register(&mut kernel, &dir, "garden", "you/garden");
+    let project_id = register(&mut kernel, "garden", &dir, "you/garden");
     let host = Arc::new(Mutex::new(kernel));
     let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
     let protocol_url = server.protocol_url().to_string();
