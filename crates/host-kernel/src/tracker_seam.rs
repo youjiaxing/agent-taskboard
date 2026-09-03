@@ -1,6 +1,105 @@
+pub trait TrackerPort: Send + Sync {
+    fn probe(&self, ctx: &ProbeContext<'_>) -> ProbeOutcome;
+    fn read_issues(&self, ctx: &ProbeContext<'_>) -> Result<Vec<IssueRecord>, TrackerReadError>;
+    fn read_all(
+        &self,
+        ctx: &ProbeContext<'_>,
+    ) -> Result<crate::tracker_seam::TrackerReadOutcome, TrackerReadError> {
+        self.read_issues(ctx)
+            .map(|issues| crate::tracker_seam::TrackerReadOutcome::Complete { issues })
+    }
+    fn read_issue_document(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError>;
+    fn create_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        title: &str,
+        body: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn update_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        edit: IssueEdit<'_>,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn close_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn reopen_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn add_comment(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        body: &str,
+    ) -> Result<IssueComment, TrackerWriteError>;
+    fn claim_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    fn release_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerWriteError>;
+    /// 把 issue 挂到 parent 之下（None 表示摘除父）。
+    /// 走原生边写入；读回依赖下一次 read_issues。
+    fn set_parent(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        parent: Option<&str>,
+    ) -> Result<(), TrackerWriteError>;
+    /// 在原生边上添加 blocked_by 边。
+    fn add_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        blocking_issue_id: &str,
+    ) -> Result<(), TrackerWriteError>;
+    /// 在原生边上移除 blocked_by 边。
+    fn remove_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        blocking_issue_id: &str,
+    ) -> Result<(), TrackerWriteError>;
+    /// Replace the complete blocked_by set. Trackers with a transactional or
+    /// single-document representation should override this to avoid partial writes.
+    fn set_blocked_by(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        current_issue_ids: &[String],
+        blocking_issue_ids: &[String],
+    ) -> Result<(), TrackerWriteError> {
+        for blocker in current_issue_ids
+            .iter()
+            .filter(|id| !blocking_issue_ids.contains(id))
+        {
+            self.remove_blocked_by(ctx, issue_id, blocker)?;
+        }
+        for blocker in blocking_issue_ids
+            .iter()
+            .filter(|id| !current_issue_ids.contains(id))
+        {
+            self.add_blocked_by(ctx, issue_id, blocker)?;
+        }
+        Ok(())
+    }
+}
 use crate::issue::{DependencyRef, IssueRecord, IssueRef};
 use crate::tracker::{
-    IssueDocument, IssueEdit, LocalMarkdownTracker, ProbeContext, ProbeOutcome, TrackerPort,
+    IssueComment, IssueDocument, IssueEdit, LocalMarkdownTracker, ProbeContext, ProbeOutcome,
     TrackerReadError, TrackerWriteError,
 };
 use std::sync::Arc;
