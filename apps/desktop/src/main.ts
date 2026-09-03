@@ -8,7 +8,19 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
+import "./shell-mobile.css";
 import { startupCopy, type StartupCopy } from "./startup-copy";
+import { mobileMain as renderMobileMain, mobileNavigation as renderMobileNavigation, mobileScopeSheet as renderMobileScopeSheet, type MobileView } from "./mobile-renderers";
+import {
+  addOpt,
+  escapeHtml,
+  formatCountdown,
+  formatTime,
+  parsePairingPayload,
+  renderMarkdown,
+  safeHttpUrl,
+  toLocalInput,
+} from "./client-utils";
 
 type Language = "zh-CN" | "en";
 type Theme = "warm-paper" | "plain-paper" | "plain-night";
@@ -1014,7 +1026,6 @@ let graphListQuery = "";
 let overviewProjectId = "";
 let overviewShowEnded = false;
 let sidebarBeforeLift = true;
-type MobileView = "board" | "issue" | "run";
 type MobileAppearance = { language: Language; theme: Theme; lastLightTheme: Theme };
 let mobileView: MobileView = "board";
 let mobileScopeOpen = false;
@@ -2671,71 +2682,27 @@ function currentProject(snap: Snapshot): Project | undefined {
 }
 
 function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  return `<nav class="mobile-nav" aria-label="${escapeHtml([copy.mobileBoard, copy.mobileIssue, copy.mobileRun].join(" / "))}">
-    <button type="button" class="${mobileView === "board" ? "active" : ""}" data-act="mobile-board">${escapeHtml(copy.mobileBoard)}</button>
-    <button type="button" class="${mobileView === "issue" ? "active" : ""}" data-act="mobile-issue">${escapeHtml(copy.mobileIssue)}</button>
-    <button type="button" class="${mobileView === "run" ? "active" : ""}" data-act="mobile-run" ${run ? "" : "disabled"}>${escapeHtml(copy.mobileRun)}</button>
-  </nav>`;
+  return renderMobileNavigation(copy, snap, mobileView);
 }
 
 function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
-  const hosts = snap.hosts
-    .map((host) => `<button type="button" class="item ${host.id === snap.focusedHostId ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(host.id)}"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`)
-    .join("");
-  const projects = snap.projects
-    .map((project) => `<div class="mobile-scope-project ${project.id === snap.focusedProjectId ? "active" : ""}">
-      <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}"><b>${escapeHtml(project.name)}</b><span>${escapeHtml(project.repository)}</span></button>
-      <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
-      <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
-    </div>`)
-    .join("");
-  return `<div class="overlay modal" data-act="close-mobile-scope">
-    <section class="sheet mobile-scope-sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.mobileSwitchScope)}</h2>
-      <div class="mobile-scope-hosts">${hosts}</div>
-      <div class="mobile-scope-projects">${projects}</div>
-      <div class="actions">
-        <button type="button" data-act="register">${escapeHtml(copy.addProject)}</button>
-        <button type="button" data-act="pair">${escapeHtml(copy.pairAnotherHost)}</button>
-        <button type="button" data-act="open-usage">${escapeHtml(copy.usage)}</button>
-      </div>
-    </section>
-  </div>`;
+  return renderMobileScopeSheet(copy, snap);
 }
 
 function mobileMain(copy: ShellCopy, snap: Snapshot): string {
-  if (mobileView === "run") return mobileRunView(copy, snap);
-  if (mobileView === "issue") {
-    return `<section class="mobile-issue-view"><aside class="issue-detail">${snap.board ? issueDetail(copy, snap.board, false) : ""}</aside></section>`;
-  }
-  return `<section class="mobile-board-view">${projectMain(copy, snap)}</section>`;
-}
-
-function mobileRunView(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!run) {
-    return `<section class="mobile-run-view"><p class="board-empty">${escapeHtml(copy.noItems)}</p></section>`;
-  }
-  const identity = runIdentity(copy, run);
-  return `<section class="mobile-run-view">
-    <header class="run-dock-hd">
-      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
-      <div class="actions">
-        <button type="button" class="mobile-usage-entry" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.usage)}</button>
-        <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
-      </div>
-    </header>
-    ${telemetryBar(copy, run)}
-    <section class="mobile-output-panel">
-      <div class="lane-hd">${escapeHtml(copy.mobileRecentOutput)}</div>
-      ${mobileLiveTerminal
-        ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
-        : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(run.id) ?? "" : mobilePtyText.get(run.id) ?? run.recentOutput ?? "")}</pre>`}
-    </section>
-    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
-    ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
-  </section>`;
+  return renderMobileMain({
+    copy,
+    snapshot: snap,
+    mobileView,
+    mobileLiveTerminal,
+    mobilePtyText,
+    focusedRun: (mobileSnapshot) => focusedRun(mobileSnapshot as Snapshot),
+    issueDetail: (mobileCopy, board, showPanelToggle) => issueDetail(mobileCopy as ShellCopy, board as BoardSnapshot, showPanelToggle),
+    projectMain: (mobileCopy, mobileSnapshot) => projectMain(mobileCopy as ShellCopy, mobileSnapshot as Snapshot),
+    telemetryBar: (mobileCopy, run) => telemetryBar(mobileCopy as ShellCopy, run as RunSummary),
+    injectRunForm: (mobileCopy, run) => injectRunForm(mobileCopy as ShellCopy, run as RunSummary),
+    board: snap.board,
+  });
 }
 
 function focusedRun(snap: Snapshot): RunSummary | undefined {
@@ -3254,17 +3221,6 @@ function usageCompact(copy: ShellCopy, usage: UsagePage): string {
         `<article class="usage-row"><header><b>${escapeHtml(line.name)}</b></header><div class="token-row">${tokenCells(copy, line.tokens)}</div></article>`,
     )
     .join("");
-}
-
-function addOpt(left?: number | null, right?: number | null): number | null {
-  if (left == null || right == null) return null;
-  return left + right;
-}
-
-function toLocalInput(ms: number): string {
-  const date = new Date(ms);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function injectRunForm(copy: ShellCopy, run: RunSummary): string {
@@ -4106,82 +4062,6 @@ function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: str
   </section>`;
 }
 
-function renderMarkdown(markdown: string, baseUrl: string): string {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  const blocks: string[] = [];
-  let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "), baseUrl)}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    const tag = list.ordered ? "ol" : "ul";
-    blocks.push(`<${tag}>${list.items.map((item) => `<li>${renderInlineMarkdown(item, baseUrl)}</li>`).join("")}</${tag}>`);
-    list = null;
-  };
-  for (const line of lines) {
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    const item = /^\s*([-*+] |\d+\. )(.+)$/.exec(line);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2], baseUrl)}</h${level}>`);
-    } else if (item) {
-      flushParagraph();
-      const ordered = /^\d/.test(item[1]);
-      if (list && list.ordered !== ordered) flushList();
-      list ??= { ordered, items: [] };
-      list.items.push(item[2]);
-    } else if (!line.trim()) {
-      flushParagraph();
-      flushList();
-    } else {
-      flushList();
-      paragraph.push(line.trim());
-    }
-  }
-  flushParagraph();
-  flushList();
-  return blocks.join("");
-}
-
-function renderInlineMarkdown(source: string, baseUrl: string): string {
-  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\n)]+\))/g;
-  let html = "";
-  let offset = 0;
-  for (const match of source.matchAll(token)) {
-    const index = match.index ?? 0;
-    html += escapeHtml(source.slice(offset, index));
-    const value = match[0];
-    if (value.startsWith("`")) {
-      html += `<code>${escapeHtml(value.slice(1, -1))}</code>`;
-    } else if (value.startsWith("**")) {
-      html += `<strong>${escapeHtml(value.slice(2, -2))}</strong>`;
-    } else {
-      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(value);
-      const href = link ? safeHttpUrl(link[2], baseUrl) : null;
-      html += href
-        ? `<a href="${escapeHtml(href)}" data-act="open-external" data-url="${escapeHtml(href)}">${escapeHtml(link?.[1] ?? "")}</a>`
-        : `<span class="unsafe-link">${escapeHtml(link?.[1] ?? value)}</span>`;
-    }
-    offset = index + value.length;
-  }
-  return html + escapeHtml(source.slice(offset));
-}
-
-function safeHttpUrl(raw: string, baseUrl?: string): string | null {
-  try {
-    const url = baseUrl ? new URL(raw.trim(), baseUrl) : new URL(raw.trim());
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
 function issueLink(copy: ShellCopy, link: IssueLink): string {
   if (!link.visible) {
     return `<span class="muted">${escapeHtml(copy.unclearIssue)}</span>`;
@@ -4271,24 +4151,6 @@ function pendingBar(copy: ShellCopy, snap: Snapshot): string {
     <span>${escapeHtml(copy.pendingConfirmation)} · ${escapeHtml(pending.issueId)} · ${formatCountdown(pending.remainingMs)}</span>
     <button type="button" data-act="veto-advance" data-id="${escapeHtml(pending.projectId)}">${escapeHtml(copy.vetoAdvance)}</button>
   </div>`;
-}
-
-function formatTime(ms: number): string {
-  try {
-    return new Date(ms).toLocaleString();
-  } catch {
-    return String(ms);
-  }
-}
-
-function formatCountdown(ms: number): string {
-  const seconds = Math.max(0, Math.ceil(ms / 1000));
-  if (seconds >= 60) {
-    const minutes = Math.floor(seconds / 60);
-    const rest = seconds % 60;
-    return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
-  }
-  return `${seconds}s`;
 }
 
 function connectionPanel(copy: ShellCopy, project: Project): string {
@@ -4571,14 +4433,6 @@ function removeDialog(copy: ShellCopy, project: Project): string {
 function loopbackNotice(page: LoopbackPage): string {
   if (page.status === "serving") return "";
   return `<p class="notice">${escapeHtml(page.reason)}</p>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
@@ -6149,19 +6003,6 @@ app.addEventListener("submit", async (event) => {
   }
   render();
 });
-
-function parsePairingPayload(raw: string): { address: string; code: string } | null {
-  const parts = raw
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return null;
-  const address = parts[0];
-  const code = parts[parts.length - 1];
-  if (!address.includes("://") || !code) return null;
-  return { address, code };
-}
 
 function shouldReportClientView(): boolean {
   return true;
