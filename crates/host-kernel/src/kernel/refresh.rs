@@ -34,6 +34,7 @@ pub(crate) struct PreparedRefresh {
     secrets_pat: Option<String>,
     secrets_path: PathBuf,
     previous: Option<kernel::refresh::ProjectRefreshState>,
+    local_revision_at_prepare: Option<u64>,
     now_ms: u64,
     generation: u64,
 }
@@ -194,6 +195,7 @@ impl HostKernel {
                     true,
                     None,
                 );
+                self.record_local_tracker_revision(&prepared);
                 let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
                     project_id: prepared.project_id.clone(),
@@ -217,6 +219,7 @@ impl HostKernel {
                     false,
                     Some(detail),
                 );
+                self.record_local_tracker_revision(&prepared);
                 let status = self.refresh_status_for(&prepared.project_id);
                 self.pending_events.push(HostEvent::RefreshStatusChanged {
                     project_id: prepared.project_id.clone(),
@@ -370,6 +373,15 @@ impl HostKernel {
         }
     }
 
+    fn record_local_tracker_revision(&mut self, prepared: &PreparedRefresh) {
+        if prepared.tracker_kind == TrackerKind::LocalMarkdown {
+            if let Some(revision) = prepared.local_revision_at_prepare {
+                self.local_tracker_revisions
+                    .insert(prepared.project_id.clone(), revision);
+            }
+        }
+    }
+
     pub(crate) fn refresh_project(&mut self, project_id: &str, trigger: RefreshTrigger) -> bool {
         let Some(prepared) = self.prepare_refresh(project_id, trigger) else {
             return false;
@@ -409,11 +421,18 @@ impl HostKernel {
         let github_host = self.projects[index].github_host.clone();
         let repository = self.projects[index].repository.clone();
         let tracker_kind = self.projects[index].tracker;
-        if tracker_kind == TrackerKind::LocalMarkdown {
-            if let Ok(revision) = LocalMarkdownTracker::content_revision(Path::new(&repository)) {
-                self.local_tracker_revisions
-                    .insert(project_id.to_string(), revision);
-            }
+        let local_revision_at_prepare = (tracker_kind == TrackerKind::LocalMarkdown)
+            .then(|| LocalMarkdownTracker::content_revision(Path::new(&repository)).ok())
+            .flatten();
+        let local_documents_may_be_stale = tracker_kind == TrackerKind::LocalMarkdown
+            && match local_revision_at_prepare {
+                Some(revision) => {
+                    self.local_tracker_revisions.get(project_id).copied() != Some(revision)
+                }
+                None => self.issue_documents.contains_key(project_id),
+            };
+        if local_documents_may_be_stale {
+            self.invalidate_issue_documents(project_id);
         }
         Some(PreparedRefresh {
             tracker: Arc::clone(&self.tracker),
@@ -424,6 +443,7 @@ impl HostKernel {
             secrets_pat: read_github_pat(&self.data.host_secrets_path, &github_host),
             secrets_path: self.data.host_secrets_path.clone(),
             previous,
+            local_revision_at_prepare,
             now_ms: self.now_ms,
             generation,
         })
@@ -538,15 +558,21 @@ impl HostKernel {
             .filter(|project| project.tracker == TrackerKind::LocalMarkdown)
             .filter_map(|project| {
                 let revision =
-                    LocalMarkdownTracker::content_revision(Path::new(&project.repository)).ok()?;
-                (self.local_tracker_revisions.get(&project.id).copied() != Some(revision))
-                    .then(|| project.id.clone())
+                    LocalMarkdownTracker::content_revision(Path::new(&project.repository)).ok();
+                let changed = revision.is_none()
+                    || self.local_tracker_revisions.get(&project.id).copied() != revision;
+                changed.then(|| project.id.clone())
             })
             .collect();
         for project_id in changed {
-            self.issue_documents.remove(&project_id);
             self.refresh_project(&project_id, RefreshTrigger::Immediate);
         }
+    }
+
+    fn invalidate_issue_documents(&mut self, project_id: &str) {
+        self.issue_documents.remove(project_id);
+        self.issue_document_in_flight
+            .retain(|(pending_project, _), _| pending_project != project_id);
     }
 
     fn should_attempt_refresh(&self, project_id: &str, trigger: RefreshTrigger) -> bool {

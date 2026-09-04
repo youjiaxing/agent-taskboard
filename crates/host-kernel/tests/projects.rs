@@ -1019,6 +1019,47 @@ fn local_markdown_file_changes_trigger_a_host_refresh() {
 }
 
 #[test]
+fn explicit_local_markdown_refresh_invalidates_changed_issue_documents() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = make_dir(tmp.path(), "work/explicit-file-change-refresh");
+    let issues = project_dir.join(".scratch/feature/issues");
+    std::fs::create_dir_all(&issues).unwrap();
+    let issue_path = issues.join("01-first.md");
+    std::fs::write(
+        &issue_path,
+        "# 01 — First\n\nStatus: ready-for-agent\n\noriginal body\n",
+    )
+    .unwrap();
+    let mut host = boot_local(tmp.path());
+    let out = host
+        .handle(serde_json::json!({
+            "op": "registerProject", "name": "explicit-file-change-refresh", "localPath": project_dir,
+            "githubHost": "local", "repository": project_dir,
+        }))
+        .unwrap();
+    let project_id = out.snapshot.focused_project_id;
+    let issue_id = format!("{}#1", project_dir.display());
+    host.handle(serde_json::json!({ "op": "focusIssue", "issueId": issue_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "loadIssueDocument", "issueId": issue_id }))
+        .unwrap();
+
+    std::fs::write(
+        issue_path,
+        "# 01 — First\n\nStatus: ready-for-agent\n\nexternally changed body\n",
+    )
+    .unwrap();
+    let refreshed = host
+        .handle(serde_json::json!({ "op": "refresh", "projectId": project_id }))
+        .unwrap();
+
+    assert_eq!(
+        refreshed.snapshot.board.unwrap().selected.unwrap().document,
+        host_kernel::IssueDocumentState::Unloaded
+    );
+}
+
+#[test]
 fn remove_only_unregisters_and_falls_back_to_the_neighbor() {
     let tmp = tempfile::tempdir().unwrap();
     let first = make_dir(tmp.path(), "work/first");
