@@ -178,3 +178,141 @@ impl HostKernel {
         true
     }
 }
+
+impl HostKernel {
+    pub(crate) fn begin_deferred_issue_documents(&mut self) {
+        debug_assert!(!self.defer_issue_documents);
+        debug_assert!(self.deferred_issue_documents.is_empty());
+        self.defer_issue_documents = true;
+    }
+
+    pub(crate) fn take_deferred_issue_documents(
+        &mut self,
+    ) -> Vec<kernel::issue_documents::PreparedIssueDocument> {
+        self.defer_issue_documents = false;
+        std::mem::take(&mut self.deferred_issue_documents)
+    }
+
+    pub(crate) fn cancel_prepared_issue_documents(
+        &mut self,
+        prepared: &[kernel::issue_documents::PreparedIssueDocument],
+    ) {
+        for document in prepared {
+            let key = (document.project_id.clone(), document.issue_id.clone());
+            if self.issue_document_in_flight.get(&key).copied() == Some(document.generation) {
+                self.issue_document_in_flight.remove(&key);
+            }
+        }
+    }
+
+    pub(crate) fn begin_deferred_issue_writes(&mut self) {
+        debug_assert!(!self.defer_issue_writes);
+        debug_assert!(self.deferred_issue_writes.is_empty());
+        self.defer_issue_writes = true;
+    }
+
+    pub(crate) fn take_deferred_issue_writes(
+        &mut self,
+    ) -> Vec<kernel::issue_documents::PreparedIssueWrite> {
+        self.defer_issue_writes = false;
+        std::mem::take(&mut self.deferred_issue_writes)
+    }
+
+    pub(crate) fn execute_prepared_issue_write(
+        prepared: kernel::issue_documents::PreparedIssueWrite,
+    ) -> kernel::issue_documents::CompletedIssueWrite {
+        let result = prepared.tracker.write_issue(
+            &tracker::ProbeContext {
+                tracker: prepared.tracker_kind,
+                github_host: &prepared.github_host,
+                repository: &prepared.repository,
+                secrets_pat: prepared.secrets_pat.as_deref(),
+                secrets_path: &prepared.secrets_path,
+            },
+            prepared.issue_id.as_deref(),
+            &prepared.op,
+        );
+        kernel::issue_documents::CompletedIssueWrite { prepared, result }
+    }
+
+    pub(crate) fn finish_prepared_issue_write(
+        &mut self,
+        completed: kernel::issue_documents::CompletedIssueWrite,
+    ) -> Result<IssueRecord, KernelError> {
+        let kernel::issue_documents::CompletedIssueWrite { prepared, result } = completed;
+        let updated = result.map_err(write_tracker_error)?;
+        let returned = updated.clone();
+        self.merge_issue(&prepared.project_id, updated, &prepared.op);
+        Ok(returned)
+    }
+}
+
+pub(crate) fn issue_document_body(state: Option<&IssueDocumentState>) -> Option<(String, u64)> {
+    match state? {
+        IssueDocumentState::Ready {
+            body,
+            fetched_at_ms,
+        }
+        | IssueDocumentState::Stale {
+            body,
+            fetched_at_ms,
+            ..
+        } => Some((body.clone(), *fetched_at_ms)),
+        IssueDocumentState::Loading {
+            body: Some(body),
+            fetched_at_ms: Some(fetched_at_ms),
+        } => Some((body.clone(), *fetched_at_ms)),
+        IssueDocumentState::Unloaded
+        | IssueDocumentState::Loading { .. }
+        | IssueDocumentState::Failed { .. } => None,
+    }
+}
+
+pub(crate) fn issue_document_failure(error: tracker::TrackerReadError) -> IssueDocumentFailure {
+    match error {
+        tracker::TrackerReadError::Offline { detail, .. } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Offline,
+            message: detail.unwrap_or_else(|| "Issue Tracker is offline".into()),
+            retry_after_ms: None,
+        },
+        tracker::TrackerReadError::RateLimited { retry_after_ms } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::RateLimited,
+            message: "Issue Tracker rate limit reached".into(),
+            retry_after_ms,
+        },
+        tracker::TrackerReadError::Auth { detail, .. } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Auth,
+            message: detail.unwrap_or_else(|| "Issue Tracker authentication failed".into()),
+            retry_after_ms: None,
+        },
+        tracker::TrackerReadError::Failed { detail } => IssueDocumentFailure {
+            kind: IssueDocumentFailureKind::Tracker,
+            message: detail.unwrap_or_else(|| "Issue Tracker could not load this Issue".into()),
+            retry_after_ms: None,
+        },
+    }
+}
+
+impl HostKernel {
+    pub(crate) fn stored_issue_documents(
+        &self,
+        project_id: &str,
+    ) -> BTreeMap<String, refresh::StoredIssueDocument> {
+        self.issue_documents
+            .get(project_id)
+            .into_iter()
+            .flat_map(|documents| documents.iter())
+            .filter_map(|(issue_id, state)| {
+                issue_document_body(Some(state)).map(|(body, fetched_at_ms)| {
+                    (
+                        issue_id.clone(),
+                        refresh::StoredIssueDocument {
+                            body,
+                            fetched_at_ms,
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+}

@@ -2,40 +2,6 @@
 
 use super::super::*;
 
-#[derive(Debug, Clone)]
-pub(crate) struct CachedAgentConfig {
-    pub(crate) at_ms: u64,
-    pub(crate) discovery: AgentConfigDiscovery,
-    pub(crate) error: Option<AgentConfigFailure>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum AgentConfigFailure {
-    LaunchEnvironment(String),
-    Missing {
-        command: String,
-        searched_path: String,
-        known_locations: Vec<PathBuf>,
-    },
-    Cli(String),
-}
-
-impl AgentConfigFailure {
-    pub(crate) fn message(&self, language: Language) -> String {
-        let detail = match self {
-            Self::LaunchEnvironment(error) | Self::Cli(error) => error.clone(),
-            Self::Missing {
-                command,
-                searched_path,
-                known_locations,
-            } => launch::missing_agent_cli(command, searched_path, known_locations, language),
-        };
-        launch::option_discovery_failure(&detail, language)
-    }
-}
-
-const AGENT_CONFIG_CACHE_MS: u64 = 5 * 60 * 1000;
-
 pub(crate) struct PreviousRun {
     pub(crate) id: String,
     pub(crate) native_session_id: Option<String>,
@@ -301,66 +267,275 @@ impl HostKernel {
         Ok(())
     }
 
-    fn agent_config_for(
+    pub(crate) fn remember_launch(
         &mut self,
-        cwd: &Path,
-        agent: &dyn AgentPort,
-        language: Language,
-    ) -> (AgentConfigDiscovery, Option<String>) {
-        let key = (cwd.to_path_buf(), agent.id().to_string());
-        if let Some(cached) = self
-            .agent_config_cache
-            .get(&key)
-            .filter(|cached| self.now_ms.saturating_sub(cached.at_ms) < AGENT_CONFIG_CACHE_MS)
-        {
-            return (
-                cached.discovery.clone(),
-                cached.error.as_ref().map(|error| error.message(language)),
-            );
+        project_id: &str,
+        config: &RunLaunchConfig,
+    ) -> Result<(), KernelError> {
+        let remembered = launch::remembered_values(&config.values);
+        self.launch_defaults
+            .entry(project_id.to_string())
+            .or_default()
+            .insert(config.agent_id.clone(), remembered);
+        self.last_successful_agent
+            .insert(project_id.to_string(), config.agent_id.clone());
+        self.persist_host_settings()
+    }
+
+    pub(crate) fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        if let Some(session) = self.live.get(run_id).cloned() {
+            session.stop();
         }
-        let fallback = || AgentConfigDiscovery {
-            fields: agent.config_fields(),
-            seed: agent.seed_config(),
-        };
-        let result = self
-            .launch_env
-            .capture(cwd)
-            .map_err(AgentConfigFailure::LaunchEnvironment)
-            .and_then(|env| {
-                let prepared =
-                    agent::prepare_launch_env(env, &[], &agent.known_install_locations());
-                Ok((prepared.clone(), agent.probe(&prepared)))
+        if self.runs.iter().any(|run| run.id == run_id) {
+            self.mark_run_ended(run_id, RunEndedReason::Stopped);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn focus_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.focused_run_id = Some(run.id);
+        if self
+            .projects
+            .iter()
+            .any(|project| project.id == run.project_id)
+        {
+            self.focused_project_id = Some(run.project_id);
+        }
+        if let Some(issue_id) = run.issue_id {
+            self.selected_issue_id = Some(issue_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stop_all_runs(&mut self) {
+        let ids = self
+            .runs
+            .iter()
+            .filter(|run| run.is_active())
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.stop_run(&id);
+        }
+    }
+
+    pub(crate) fn reap_runs(&mut self) {
+        let ended = self
+            .live
+            .iter()
+            .filter_map(|(id, session)| {
+                session.exit_code().map(|code| {
+                    (
+                        id.clone(),
+                        RunEndedReason::from_exit(code, session.was_stopped()),
+                    )
+                })
             })
-            .and_then(|(env, probe)| match probe {
-                ProbeResult::Found { executable } => agent
-                    .discover_config(&executable, &env)
-                    .map_err(AgentConfigFailure::Cli),
-                ProbeResult::Missing {
-                    command,
-                    searched_path,
-                    known_locations,
-                } => Err(AgentConfigFailure::Missing {
-                    command,
-                    searched_path,
-                    known_locations,
-                }),
-            });
-        let (discovery, error) = match result {
-            Ok(discovery) => (discovery, None),
-            Err(error) => (fallback(), Some(error)),
+            .collect::<Vec<_>>();
+        for (id, reason) in ended {
+            self.mark_run_ended(&id, reason);
+        }
+    }
+
+    pub(crate) fn observe_live_runs(&mut self) {
+        self.ingest_telemetry();
+        self.harvest_live_signals();
+        let stop_failures = self
+            .runs
+            .iter()
+            .filter(|run| run.is_active() && run.stop_failure && !run.self_check_attempted)
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for run_id in stop_failures {
+            self.maybe_inject_self_check(&run_id);
+        }
+        self.reap_runs();
+        let waiting = self
+            .live
+            .iter()
+            .map(|(id, session)| (id.clone(), session.waiting_for_user()))
+            .collect::<Vec<_>>();
+        let mut became_waiting = Vec::new();
+        for (id, is_waiting) in waiting {
+            let Some(run) = self.runs.iter_mut().find(|run| run.id == id) else {
+                continue;
+            };
+            if !run.is_active() || run.waiting_for_user == is_waiting {
+                continue;
+            }
+            run.waiting_for_user = is_waiting;
+            if is_waiting {
+                became_waiting.push(id);
+            }
+        }
+        for id in became_waiting {
+            self.pending_events
+                .push(HostEvent::Waiting { run_id: id.clone() });
+            self.push_notification(NotificationKind::Waiting, &id);
+        }
+    }
+
+    pub(crate) fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
+        let Some(run) = self.runs.iter().find(|run| run.id == run_id) else {
+            return;
         };
-        self.agent_config_cache.insert(
-            key,
-            CachedAgentConfig {
-                at_ms: self.now_ms,
-                discovery: discovery.clone(),
-                error: error.clone(),
-            },
-        );
-        (
-            discovery,
-            error.as_ref().map(|error| error.message(language)),
-        )
+        self.pending_events.push(HostEvent::Notification {
+            kind,
+            run_id: run.id.clone(),
+            issue_id: run.issue_id.clone(),
+            project_id: run.project_id.clone(),
+        });
+    }
+
+    pub(crate) fn issue_waiting(&self, issue_id: &str) -> bool {
+        self.runs.iter().any(|run| {
+            run.issue_id.as_deref() == Some(issue_id) && run.is_active() && run.waiting_for_user
+        })
+    }
+
+    pub(crate) fn run_for_issue(&self, issue_id: &str) -> Option<&RunSummary> {
+        self.runs
+            .iter()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .or_else(|| {
+                self.runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
+            })
+    }
+
+    pub(crate) fn issue_activity(&self, issue_id: &str) -> Option<IssueActivity> {
+        if self.issue_waiting(issue_id) {
+            Some(IssueActivity::Waiting)
+        } else if self.active_run_id_for_issue(issue_id).is_some() {
+            Some(IssueActivity::Running)
+        } else if self.execution_stopped(issue_id) {
+            Some(IssueActivity::ExecutionStopped)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
+        self.harvest_run_signals(run_id);
+        let recent_output = self.live.get(run_id).map(|session| {
+            let chunk = session.read_after(0, Duration::ZERO);
+            String::from_utf8_lossy(&chunk.data)
+                .chars()
+                .rev()
+                .take(16_000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        });
+        let mut issue_id = None;
+        let mut project_id = None;
+        let mut newly_ended = false;
+        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+            if run.status != RunStatus::Ended {
+                run.status = RunStatus::Ended;
+                run.waiting_for_user = false;
+                run.ended_reason = Some(reason);
+                if let Some(output) = &recent_output {
+                    run.recent_output = output.clone();
+                }
+                issue_id = run.issue_id.clone();
+                project_id = Some(run.project_id.clone());
+                newly_ended = true;
+            }
+        }
+        if newly_ended {
+            self.pending_events.push(HostEvent::RunStatusChanged {
+                run_id: run_id.to_string(),
+                status: RunStatus::Ended,
+            });
+            match reason {
+                RunEndedReason::Exited => {
+                    self.push_notification(NotificationKind::Completed, run_id);
+                }
+                RunEndedReason::Abnormal => {
+                    self.push_notification(NotificationKind::AbnormalStop, run_id);
+                }
+                RunEndedReason::Stopped | RunEndedReason::Crash => {}
+            }
+        }
+        self.live.remove(run_id);
+        if let Some(issue_id) = issue_id {
+            if self.execution_stopped(&issue_id) {
+                self.pending_events.push(HostEvent::ExecutionStopped {
+                    issue_id,
+                    run_id: run_id.to_string(),
+                });
+            }
+        }
+        let active = self.active_run_count();
+        if active == 0 {
+            self.quit_offer = None;
+        } else if let Some(offer) = &mut self.quit_offer {
+            offer.active_run_count = active;
+        }
+        let _ = self.persist_runs();
+        if newly_ended {
+            if let Some(project_id) = project_id {
+                let live = self.refresh_project(&project_id, RefreshTrigger::RunEnded);
+                if live {
+                    self.consider_auto_advance(run_id);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn project_has_active_run(&self, project_id: &str) -> bool {
+        self.runs
+            .iter()
+            .any(|run| run.project_id == project_id && run.is_active())
+    }
+
+    pub(crate) fn project_has_execution_stopped(&self, project_id: &str) -> bool {
+        self.loaded_issues
+            .get(project_id)
+            .into_iter()
+            .flatten()
+            .any(|issue| self.execution_stopped(&issue.id()))
+    }
+
+    pub(crate) fn active_run_id_for_issue(&self, issue_id: &str) -> Option<String> {
+        self.runs
+            .iter()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .map(|run| run.id.clone())
+    }
+
+    pub(crate) fn last_bound_run(&self, issue_id: &str) -> Option<&RunSummary> {
+        self.runs
+            .iter()
+            .rev()
+            .find(|run| run.issue_id.as_deref() == Some(issue_id))
+    }
+
+    pub(crate) fn execution_stopped(&self, issue_id: &str) -> bool {
+        let claimed = self
+            .issue_by_id(issue_id)
+            .is_some_and(|issue| issue.claimed());
+        if !claimed || self.active_run_id_for_issue(issue_id).is_some() {
+            return false;
+        }
+        self.last_bound_run(issue_id)
+            .and_then(|run| run.ended_reason)
+            .is_some_and(RunEndedReason::execution_stopped)
+    }
+
+    pub(crate) fn active_run_count(&self) -> u32 {
+        self.runs.iter().filter(|run| run.is_active()).count() as u32
     }
 
     pub(crate) fn update_run_launch(
@@ -707,276 +882,5 @@ impl HostKernel {
         for run_id in crashed_ids {
             self.push_notification(NotificationKind::CrashRecovered, &run_id);
         }
-    }
-
-    fn remember_launch(
-        &mut self,
-        project_id: &str,
-        config: &RunLaunchConfig,
-    ) -> Result<(), KernelError> {
-        let remembered = launch::remembered_values(&config.values);
-        self.launch_defaults
-            .entry(project_id.to_string())
-            .or_default()
-            .insert(config.agent_id.clone(), remembered);
-        self.last_successful_agent
-            .insert(project_id.to_string(), config.agent_id.clone());
-        self.persist_host_settings()
-    }
-
-    pub(crate) fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
-        if let Some(session) = self.live.get(run_id).cloned() {
-            session.stop();
-        }
-        if self.runs.iter().any(|run| run.id == run_id) {
-            self.mark_run_ended(run_id, RunEndedReason::Stopped);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn focus_run(&mut self, run_id: &str) -> Result<(), KernelError> {
-        let run = self
-            .runs
-            .iter()
-            .find(|run| run.id == run_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
-        self.focused_run_id = Some(run.id);
-        if self
-            .projects
-            .iter()
-            .any(|project| project.id == run.project_id)
-        {
-            self.focused_project_id = Some(run.project_id);
-        }
-        if let Some(issue_id) = run.issue_id {
-            self.selected_issue_id = Some(issue_id);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn stop_all_runs(&mut self) {
-        let ids = self
-            .runs
-            .iter()
-            .filter(|run| run.is_active())
-            .map(|run| run.id.clone())
-            .collect::<Vec<_>>();
-        for id in ids {
-            let _ = self.stop_run(&id);
-        }
-    }
-
-    fn reap_runs(&mut self) {
-        let ended = self
-            .live
-            .iter()
-            .filter_map(|(id, session)| {
-                session.exit_code().map(|code| {
-                    (
-                        id.clone(),
-                        RunEndedReason::from_exit(code, session.was_stopped()),
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        for (id, reason) in ended {
-            self.mark_run_ended(&id, reason);
-        }
-    }
-
-    pub(crate) fn observe_live_runs(&mut self) {
-        self.ingest_telemetry();
-        self.harvest_live_signals();
-        let stop_failures = self
-            .runs
-            .iter()
-            .filter(|run| run.is_active() && run.stop_failure && !run.self_check_attempted)
-            .map(|run| run.id.clone())
-            .collect::<Vec<_>>();
-        for run_id in stop_failures {
-            self.maybe_inject_self_check(&run_id);
-        }
-        self.reap_runs();
-        let waiting = self
-            .live
-            .iter()
-            .map(|(id, session)| (id.clone(), session.waiting_for_user()))
-            .collect::<Vec<_>>();
-        let mut became_waiting = Vec::new();
-        for (id, is_waiting) in waiting {
-            let Some(run) = self.runs.iter_mut().find(|run| run.id == id) else {
-                continue;
-            };
-            if !run.is_active() || run.waiting_for_user == is_waiting {
-                continue;
-            }
-            run.waiting_for_user = is_waiting;
-            if is_waiting {
-                became_waiting.push(id);
-            }
-        }
-        for id in became_waiting {
-            self.pending_events
-                .push(HostEvent::Waiting { run_id: id.clone() });
-            self.push_notification(NotificationKind::Waiting, &id);
-        }
-    }
-
-    fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
-        let Some(run) = self.runs.iter().find(|run| run.id == run_id) else {
-            return;
-        };
-        self.pending_events.push(HostEvent::Notification {
-            kind,
-            run_id: run.id.clone(),
-            issue_id: run.issue_id.clone(),
-            project_id: run.project_id.clone(),
-        });
-    }
-
-    pub(crate) fn issue_waiting(&self, issue_id: &str) -> bool {
-        self.runs.iter().any(|run| {
-            run.issue_id.as_deref() == Some(issue_id) && run.is_active() && run.waiting_for_user
-        })
-    }
-
-    pub(crate) fn run_for_issue(&self, issue_id: &str) -> Option<&RunSummary> {
-        self.runs
-            .iter()
-            .rev()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
-            .or_else(|| {
-                self.runs
-                    .iter()
-                    .rev()
-                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
-            })
-    }
-
-    pub(crate) fn issue_activity(&self, issue_id: &str) -> Option<IssueActivity> {
-        if self.issue_waiting(issue_id) {
-            Some(IssueActivity::Waiting)
-        } else if self.active_run_id_for_issue(issue_id).is_some() {
-            Some(IssueActivity::Running)
-        } else if self.execution_stopped(issue_id) {
-            Some(IssueActivity::ExecutionStopped)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
-        self.harvest_run_signals(run_id);
-        let recent_output = self.live.get(run_id).map(|session| {
-            let chunk = session.read_after(0, Duration::ZERO);
-            String::from_utf8_lossy(&chunk.data)
-                .chars()
-                .rev()
-                .take(16_000)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>()
-        });
-        let mut issue_id = None;
-        let mut project_id = None;
-        let mut newly_ended = false;
-        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
-            if run.status != RunStatus::Ended {
-                run.status = RunStatus::Ended;
-                run.waiting_for_user = false;
-                run.ended_reason = Some(reason);
-                if let Some(output) = &recent_output {
-                    run.recent_output = output.clone();
-                }
-                issue_id = run.issue_id.clone();
-                project_id = Some(run.project_id.clone());
-                newly_ended = true;
-            }
-        }
-        if newly_ended {
-            self.pending_events.push(HostEvent::RunStatusChanged {
-                run_id: run_id.to_string(),
-                status: RunStatus::Ended,
-            });
-            match reason {
-                RunEndedReason::Exited => {
-                    self.push_notification(NotificationKind::Completed, run_id);
-                }
-                RunEndedReason::Abnormal => {
-                    self.push_notification(NotificationKind::AbnormalStop, run_id);
-                }
-                RunEndedReason::Stopped | RunEndedReason::Crash => {}
-            }
-        }
-        self.live.remove(run_id);
-        if let Some(issue_id) = issue_id {
-            if self.execution_stopped(&issue_id) {
-                self.pending_events.push(HostEvent::ExecutionStopped {
-                    issue_id,
-                    run_id: run_id.to_string(),
-                });
-            }
-        }
-        let active = self.active_run_count();
-        if active == 0 {
-            self.quit_offer = None;
-        } else if let Some(offer) = &mut self.quit_offer {
-            offer.active_run_count = active;
-        }
-        let _ = self.persist_runs();
-        if newly_ended {
-            if let Some(project_id) = project_id {
-                let live = self.refresh_project(&project_id, RefreshTrigger::RunEnded);
-                if live {
-                    self.consider_auto_advance(run_id);
-                }
-            }
-        }
-    }
-
-    pub(crate) fn project_has_active_run(&self, project_id: &str) -> bool {
-        self.runs
-            .iter()
-            .any(|run| run.project_id == project_id && run.is_active())
-    }
-
-    pub(crate) fn project_has_execution_stopped(&self, project_id: &str) -> bool {
-        self.loaded_issues
-            .get(project_id)
-            .into_iter()
-            .flatten()
-            .any(|issue| self.execution_stopped(&issue.id()))
-    }
-
-    pub(crate) fn active_run_id_for_issue(&self, issue_id: &str) -> Option<String> {
-        self.runs
-            .iter()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
-            .map(|run| run.id.clone())
-    }
-
-    fn last_bound_run(&self, issue_id: &str) -> Option<&RunSummary> {
-        self.runs
-            .iter()
-            .rev()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id))
-    }
-
-    pub(crate) fn execution_stopped(&self, issue_id: &str) -> bool {
-        let claimed = self
-            .issue_by_id(issue_id)
-            .is_some_and(|issue| issue.claimed());
-        if !claimed || self.active_run_id_for_issue(issue_id).is_some() {
-            return false;
-        }
-        self.last_bound_run(issue_id)
-            .and_then(|run| run.ended_reason)
-            .is_some_and(RunEndedReason::execution_stopped)
-    }
-
-    pub(crate) fn active_run_count(&self) -> u32 {
-        self.runs.iter().filter(|run| run.is_active()).count() as u32
     }
 }
