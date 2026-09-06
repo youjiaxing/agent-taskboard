@@ -380,8 +380,6 @@ html[data-theme="plain-night"] button.danger.primary {
 
 .muted { color: var(--muted); font-size: 12px; }
 
-button[data-act="view-changes"] { display: none; }
-
 .notice.ok { border-color: var(--dot); }
 
 .notice.bad { border-color: var(--accent); }

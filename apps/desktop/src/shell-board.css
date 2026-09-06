@@ -161,6 +161,7 @@
 
 @media (max-width: 600px) {
   .lanes { grid-template-columns: 1fr; }
+  button[data-act="view-changes"] { display: none; }
 }
 
 .workspace.board-open {
