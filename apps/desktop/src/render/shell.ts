@@ -1,0 +1,654 @@
+import type { ChangeFile, ChangeLine, ChangeRepo, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
+import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
+import { changeNoteFormKey, formFeedback, injectFormKey, usageCustomFormKey } from "../form-keys";
+import { desktopShellAvailable } from "../launch-session";
+import { focusedRun, mobileClient } from "../view-helpers";
+import { panelControls, panelCssVariables, panelIsFloating, panelResizeHandle, panelWidth, workbenchIssuePanel } from "../workbench";
+import { projectMain } from "./board";
+import { ui } from "../ui";
+import { type StartupCopy } from "../startup-copy";
+
+export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
+  const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
+  return `<div class="project-block">
+    ${projectRow(copy, project, focusedId)}
+    ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
+  </div>`;
+}
+
+export function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
+  const active = project.id === focusedId;
+  const degraded = project.connection.status !== "ready";
+  return `<div class="project-row ${active ? "active" : ""}">
+    <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
+      <b>${escapeHtml(project.name)}</b>
+      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
+    </button>
+    ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
+    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
+    <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
+    ${
+      ui.projectMenuId === project.id
+        ? `<div class="project-menu">
+            <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
+            <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
+          </div>`
+        : ""
+    }
+  </div>`;
+}
+
+export function runIdentity(copy: ShellCopy, run: RunSummary): string {
+  return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
+}
+
+export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
+  const identity = runIdentity(copy, run);
+  const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
+  const stateClass =
+    run.waitingForUser && run.status !== "ended"
+      ? "waiting"
+      : run.endedReason && run.endedReason !== "exited"
+        ? "execution-stopped"
+        : run.status;
+  const stateTag =
+    run.waitingForUser && run.status !== "ended"
+      ? copy.waiting
+      : run.endedReason && run.endedReason !== "exited"
+        ? copy.executionStopped
+        : run.status === "running"
+          ? copy.running
+          : "";
+  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+    <b>${escapeHtml(run.agentName)}</b>
+    <span>${escapeHtml(identity)}</span>
+    ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
+    ${action ? `<span class="run-action">${action}</span>` : ""}
+    ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
+    ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
+  </button>`;
+}
+
+export function dash(value?: number | null): string {
+  return value == null ? "—" : String(value);
+}
+
+export function laneLabel(copy: ShellCopy, lane: TelemetryLaneKind): string {
+  if (lane === "subagent") return copy.laneSubagent;
+  if (lane === "switched") return copy.laneSwitched;
+  return copy.laneMain;
+}
+
+export function tokenCells(copy: ShellCopy, tokens: TokenCounts): string {
+  const cells: Array<[string, number | null | undefined]> = [
+    [copy.tokenInput, tokens.input],
+    [copy.tokenOutput, tokens.output],
+    [copy.tokenCacheRead, tokens.cacheRead],
+    [copy.tokenCacheWrite, tokens.cacheWrite],
+    [copy.tokenReasoning, tokens.reasoning],
+    [copy.tokenTotal, tokens.total],
+  ];
+  return cells
+    .map(([label, value]) => `<span class="token-cell"><i>${escapeHtml(label)}</i>${dash(value)}</span>`)
+    .join("");
+}
+
+export function sparkline(points: TelemetryPoint[], field: "ttftMs" | "tokensPerSec"): string {
+  const values = points.map((point) => point[field] ?? 0);
+  const max = Math.max(...values, 1);
+  return `<span class="spark">${points
+    .map((point) => {
+      const value = point[field] ?? 0;
+      const height = Math.max(8, Math.round((value / max) * 28));
+      return `<i class="${point.spike ? "slow" : ""}" style="height:${height}px"></i>`;
+    })
+    .join("")}</span>`;
+}
+
+export function telemetryBar(copy: ShellCopy, run: RunSummary): string {
+  const lanes = run.telemetry ?? [];
+  if (!lanes.length) return "";
+  const capsule = (lane: RunTelemetryLane) =>
+    `<button type="button" class="capsule ${lane.spike ? "slow" : ""}" data-act="toggle-telemetry">${escapeHtml(lane.model)}<small>${escapeHtml(laneLabel(copy, lane.lane))}</small></button>`;
+  const main = lanes.find((lane) => lane.lane === "main") ?? lanes[0];
+  const capsules = lanes.map(capsule).join("");
+  const simple = `<div class="telemetry-mobile">${capsule(main)}<ul class="telemetry-simple">${lanes
+    .map(
+      (lane) =>
+        `<li>${escapeHtml(lane.model)} · ${escapeHtml(laneLabel(copy, lane.lane))} · ${copy.tokenTotal} ${dash(lane.tokens.total)}</li>`,
+    )
+    .join("")}</ul></div>`;
+  const cards = ui.telemetryExpanded
+    ? `<div class="telemetry-cards">${lanes
+        .map(
+          (lane) => `<article class="telemetry-card ${lane.spike ? "slow" : ""}">
+            <header><b>${escapeHtml(lane.model)}</b><span>${escapeHtml(laneLabel(copy, lane.lane))}</span></header>
+            <div class="token-row">${tokenCells(copy, lane.tokens)}</div>
+            <div class="telemetry-meta">${escapeHtml(copy.ttft)} ${dash(lane.ttftMs)} · ${escapeHtml(copy.genRate)} ${dash(lane.tokensPerSec)}</div>
+            ${sparkline(lane.recent, "ttftMs")}
+          </article>`,
+        )
+        .join("")}<p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p></div>`
+    : "";
+  return `<div class="telemetry-bar"><div class="telemetry-desktop">${capsules}</div>${simple}${cards}</div>`;
+}
+
+export function usagePage(copy: ShellCopy, snap: Snapshot): string {
+  const usage = snap.usage;
+  if (!usage) return "";
+  const range = usage.range;
+  const customKey = usageCustomFormKey(snap.focusedHostId);
+  const customPending = ui.formOperations.pending.has(customKey);
+  const customDraft = ui.usageCustomDraft?.hostId === snap.focusedHostId ? ui.usageCustomDraft : {
+    hostId: snap.focusedHostId,
+    from: toLocalInput(usage.fromMs),
+    to: toLocalInput(usage.toMs),
+  };
+  const rangeBtn = (id: UsageRange, label: string) =>
+    `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
+  const optionList = (items: UsageOption[], selected: string | null | undefined) =>
+    `<option value="">${escapeHtml(copy.filterAll)}</option>${items
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`,
+      )
+      .join("")}`;
+  const rows = usage.runs.length
+    ? usage.runs
+        .map(
+          (row) => `<article class="usage-row ${row.highlighted ? "sel" : ""}">
+            <header>
+              <div>
+                <b>${escapeHtml(row.projectName)}</b>
+                <span>${escapeHtml(row.agentName)}${row.models.length ? ` · ${escapeHtml(row.models.join(", "))}` : ""}</span>
+              </div>
+              <button type="button" data-act="open-run-usage" data-id="${escapeHtml(row.runId)}">${escapeHtml(copy.openThisRun)}</button>
+            </header>
+            <div class="token-row">${tokenCells(copy, row.tokens)}</div>
+          </article>`,
+        )
+        .join("")
+    : `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
+  const trend = `${usageTrend(copy.ttft, usage.buckets, "ttftMs")}${usageTrend(copy.genRate, usage.buckets, "tokensPerSec")}`;
+  const hit =
+    usage.cacheHitRate == null ? "—" : `${Math.round(usage.cacheHitRate * 1000) / 10}%`;
+  const panel = ui.workbenchLayout.usage;
+  return `<div class="usage-page workbench-panel" data-workbench-panel="usage" data-floating="${panel.floating}" data-front="${ui.frontWorkbenchPanel === "usage"}" style="${panelCssVariables("usage")}">
+    ${panelControls("usage")}
+    <div class="board-head">
+      <div class="board-head-row">
+        <div>
+          <h1>${escapeHtml(copy.usage)}</h1>
+          <p>${escapeHtml(copy.usageHint)}</p>
+        </div>
+        <button type="button" data-act="close-usage">${escapeHtml(copy.closeUsage)}</button>
+      </div>
+    </div>
+    <div class="choices usage-ranges">
+      ${rangeBtn("24-hours", copy.range24Hours)}
+      ${rangeBtn("today", copy.rangeToday)}
+      ${rangeBtn("7-days", copy.range7Days)}
+      ${rangeBtn("30-days", copy.range30Days)}
+      ${rangeBtn("custom", copy.rangeCustom)}
+    </div>
+    ${
+      range === "custom"
+        ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
+            <input type="datetime-local" name="from" required value="${escapeHtml(customDraft.from)}" ${customPending ? "disabled" : ""} />
+            <input type="datetime-local" name="to" required value="${escapeHtml(customDraft.to)}" ${customPending ? "disabled" : ""} />
+            <button type="submit" ${customPending ? "disabled" : ""}>${escapeHtml(customPending ? copy.operationPending : copy.rangeCustom)}</button>
+          </form>${formFeedback(customKey)}`
+        : ""
+    }
+    <div class="usage-filters">
+      <label>${escapeHtml(copy.filterProject)}<select data-usage-filter="projectId">${optionList(usage.projects, usage.filter.projectId)}</select></label>
+      <label>${escapeHtml(copy.filterAgent)}<select data-usage-filter="agentId">${optionList(usage.agents, usage.filter.agentId)}</select></label>
+      <label>${escapeHtml(copy.filterModel)}<select data-usage-filter="model"><option value="">${escapeHtml(copy.filterAll)}</option>${usage.models
+        .map(
+          (model) =>
+            `<option value="${escapeHtml(model)}" ${model === usage.filter.model ? "selected" : ""}>${escapeHtml(model)}</option>`,
+        )
+        .join("")}</select></label>
+    </div>
+    <div class="token-row totals">${tokenCells(copy, usage.totals)}<span class="token-cell"><i>${escapeHtml(copy.cacheHit)}</i>${hit}</span></div>
+    ${trend}
+    <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
+    <div class="usage-list usage-full">${rows}</div>
+    <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
+    ${panelResizeHandle("usage")}
+  </div>`;
+}
+
+export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+  if (ui.overviewProjectId && !snap.projects.some((project) => project.id === ui.overviewProjectId)) {
+    ui.overviewProjectId = "";
+  }
+  const visibleProjects = snap.projects.filter(
+    (project) => !ui.overviewProjectId || project.id === ui.overviewProjectId,
+  );
+  const visibleRuns = (snap.runs ?? []).filter(
+    (run) => !ui.overviewProjectId || run.projectId === ui.overviewProjectId,
+  );
+  const groups: Array<[string, string, RunSummary[]]> = [
+    ["waiting", copy.runGroupWaiting, visibleRuns.filter((run) => run.status !== "ended" && Boolean(run.waitingForUser))],
+    ["running", copy.runGroupRunning, visibleRuns.filter((run) => run.status !== "ended" && !run.waitingForUser)],
+    ["stopped", copy.runGroupStopped, visibleRuns.filter((run) => run.status === "ended" && Boolean(run.endedReason) && run.endedReason !== "exited")],
+    ["ended", copy.runGroupEnded, visibleRuns.filter((run) => run.status === "ended" && (!run.endedReason || run.endedReason === "exited"))],
+  ];
+  const projectOptions = snap.projects
+    .map(
+      (project) => `<option value="${escapeHtml(project.id)}" ${project.id === ui.overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
+    )
+    .join("");
+  const totalCounts = visibleProjects.reduce(
+    (total, project) => {
+      const counts = projectIssueCounts(project);
+      if (counts.dataAvailable) {
+        total.open += counts.open;
+        total.frontier += counts.frontier;
+        total.available += 1;
+      }
+      return total;
+    },
+    { open: 0, frontier: 0, available: 0 },
+  );
+  const allCountsAvailable = visibleProjects.length > 0 && totalCounts.available === visibleProjects.length;
+  const activeRuns = visibleRuns.filter((run) => run.status !== "ended").length;
+  return `<div class="overview-page">
+    <div class="board-head">
+      <div class="board-head-row">
+        <div><h1>${escapeHtml(copy.hostOverview)}</h1><p>${escapeHtml(copy.hostOverviewHint)}</p></div>
+        <button type="button" data-act="return-board">${escapeHtml(copy.returnToBoard)}</button>
+      </div>
+    </div>
+    <div class="overview-controls">
+      <label>${escapeHtml(copy.filterProject)}
+        <select data-overview-filter="project"><option value="">${escapeHtml(copy.filterAll)}</option>${projectOptions}</select>
+      </label>
+      <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${ui.overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
+    </div>
+    <div class="overview-stats">
+      <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.open : "—"}</b><span>Open Issue</span></div>
+      <div><b>${allCountsAvailable ? totalCounts.frontier : "—"}</b><span>Frontier</span></div>
+      <div><b>${activeRuns}</b><span>Run</span></div>
+    </div>
+    <section class="overview-project-section">
+      <div class="lane-hd">${escapeHtml(copy.projects)} <span>${visibleProjects.length}</span></div>
+      <div class="overview-projects">
+        ${visibleProjects.map((project) => overviewProjectCard(copy, project)).join("")}
+      </div>
+    </section>
+    <section class="overview-run-section">
+      <div class="lane-hd">Run <span>${visibleRuns.length}</span></div>
+      ${visibleRuns.length === 0
+        ? `<div class="overview-runs-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
+        : `<div class="overview-groups">
+          ${groups
+            .filter(([id]) => id !== "ended" || ui.overviewShowEnded)
+            .map(
+              ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
+                <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
+                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+              </section>`,
+            )
+            .join("")}
+        </div>`}
+    </section>
+  </div>`;
+}
+
+export function projectIssueCounts(project: Project): ProjectIssueCounts {
+  return project.issueCounts ?? {
+    dataAvailable: false,
+    total: 0,
+    open: 0,
+    closed: 0,
+    blocked: 0,
+    frontier: 0,
+    inProgress: 0,
+  };
+}
+
+export function overviewProjectCard(copy: ShellCopy, project: Project): string {
+  const counts = projectIssueCounts(project);
+  const metric = (label: string, value: number) =>
+    `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
+  const connection = project.connection.status === "ready"
+    ? copy.connectionReady
+    : project.connection.status === "unreachable"
+      ? copy.connectionUnavailable
+      : copy.authFailed;
+  return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-metrics">
+      ${metric("Open", counts.open)}
+      ${metric(copy.colBlocked, counts.blocked)}
+      ${metric(copy.colFrontier, counts.frontier)}
+      ${metric(copy.colInProgress, counts.inProgress)}
+      ${metric("Closed", counts.closed)}
+    </span>
+  </button>`;
+}
+
+export function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
+  const project = snap.projects.find((item) => item.id === run.projectId);
+  const action = run.recentAction?.trim() || run.failure?.trim() || "";
+  return `<button type="button" class="run-thumbnail" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+    <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
+    <b>${escapeHtml(runIdentity(copy, run))}</b>
+    <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
+  </button>`;
+}
+
+export function usageTrend(
+  label: string,
+  buckets: UsageBucket[],
+  field: "ttftMs" | "tokensPerSec",
+): string {
+  const max = Math.max(...buckets.map((bucket) => bucket[field] ?? 0), 1);
+  return `<div class="usage-trend-block"><span class="tiny">${escapeHtml(label)}</span><div class="usage-trend">${buckets
+    .map((bucket) => {
+      const height = Math.max(4, Math.round(((bucket[field] ?? 0) / max) * 48));
+      return `<i class="${bucket.slow ? "slow" : ""}" style="height:${height}px" title="${dash(bucket[field])}"></i>`;
+    })
+    .join("")}</div></div>`;
+}
+
+export function usageCompact(copy: ShellCopy, usage: UsagePage): string {
+  const byProject = new Map<string, { name: string; tokens: TokenCounts }>();
+  for (const row of usage.runs) {
+    const current = byProject.get(row.projectId);
+    if (!current) {
+      byProject.set(row.projectId, { name: row.projectName, tokens: row.tokens });
+    } else {
+      current.tokens = {
+        input: addOpt(current.tokens.input, row.tokens.input),
+        output: addOpt(current.tokens.output, row.tokens.output),
+        cacheRead: addOpt(current.tokens.cacheRead, row.tokens.cacheRead),
+        cacheWrite: addOpt(current.tokens.cacheWrite, row.tokens.cacheWrite),
+        reasoning: addOpt(current.tokens.reasoning, row.tokens.reasoning),
+        total: addOpt(current.tokens.total, row.tokens.total),
+      };
+    }
+  }
+  const lines = [...byProject.values()].slice(0, 3);
+  if (!lines.length) return `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
+  return lines
+    .map(
+      (line) =>
+        `<article class="usage-row"><header><b>${escapeHtml(line.name)}</b></header><div class="token-row">${tokenCells(copy, line.tokens)}</div></article>`,
+    )
+    .join("");
+}
+
+export function injectRunForm(copy: ShellCopy, run: RunSummary): string {
+  const key = injectFormKey(run.id);
+  const pending = ui.formOperations.pending.has(key);
+  return `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}" aria-busy="${pending ? "true" : "false"}">
+    <input name="text" maxlength="4000" value="${escapeHtml(ui.terminalInputDrafts.get(run.id) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" ${pending ? "disabled" : ""} />
+    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.injectLine)}</button>
+    ${formFeedback(key)}
+  </form>`;
+}
+
+export function runControls(copy: ShellCopy, run: RunSummary): string {
+  return `<div class="actions">
+    <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
+    ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>`}
+    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+  </div>`;
+}
+
+export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
+  const identity = runIdentity(copy, run);
+  const panel = ui.workbenchLayout.terminal;
+  return `<div class="${className} workbench-panel" data-workbench-panel="terminal" data-floating="${panel.floating}" data-front="${ui.frontWorkbenchPanel === "terminal"}" style="${panelCssVariables("terminal")}">
+    ${panelControls("terminal")}
+    <header class="run-dock-hd">
+      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
+      ${runControls(copy, run)}
+    </header>
+    ${telemetryBar(copy, run)}
+    ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
+    ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
+    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
+    <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
+    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
+    ${panelResizeHandle("terminal")}
+  </div>`;
+}
+
+export function runDock(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!ui.terminalPanelVisible || !run || run.status === "ended") return "";
+  const selectedIssueId = snap.board?.selected?.id;
+  if (!run.unbound && run.issueId !== selectedIssueId) return "";
+  return terminalPanel(copy, run, "run-dock");
+}
+
+export function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
+  const run = focusedRun(snap);
+  if (!run) return projectMain(copy, snap);
+  const inspectorOpen = ui.issueDetailVisible && Boolean(snap.board?.selected);
+  const inspectorFloating = panelIsFloating("inspector");
+  const inspectorWidth = panelWidth("inspector");
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
+    ${ui.terminalPanelVisible ? terminalPanel(copy, run, "lifted-terminal") : projectMain(copy, snap)}
+    ${inspectorOpen && snap.board ? workbenchIssuePanel(copy, snap.board) : ""}
+  </section>`;
+}
+
+export function viewChangesPanel(copy: ShellCopy): string {
+  const view = ui.changesView;
+  const scope = view?.scope ?? ui.changesScope;
+  return `<div class="overlay modal" data-act="close-changes">
+    <div class="sheet form-sheet changes-sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.viewChanges)}</h2>
+      <div class="choices">
+        <button type="button" class="${scope === "this-round" ? "active" : ""}" data-act="changes-scope" data-id="this-round">${escapeHtml(copy.thisRound)}</button>
+        <button type="button" class="${scope === "uncommitted" ? "active" : ""}" data-act="changes-scope" data-id="uncommitted">${escapeHtml(copy.uncommitted)}</button>
+      </div>
+      ${
+        !view
+          ? `<p class="notice">${escapeHtml(copy.viewChanges)}</p>`
+          : !view.available
+            ? `<p class="notice bad">${escapeHtml(view.unavailableReason || copy.viewChanges)}</p>`
+            : view.repos
+                .map((repo) => changeRepoBlock(copy, view, repo))
+                .join("")
+      }
+      <div class="actions">
+        <button type="button" data-act="close-changes">${escapeHtml(copy.cancel)}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+export function changeRepoBlock(copy: ShellCopy, view: ViewChanges, repo: ChangeRepo): string {
+  const title = repo.displayPath === "." ? view.workingDirectory : repo.displayPath;
+  if (!repo.available) {
+    return `<section class="change-repo">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="notice">${escapeHtml(repo.unavailableReason || copy.viewChanges)}</p>
+    </section>`;
+  }
+  if (!repo.files.length) {
+    return `<section class="change-repo">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="muted">${escapeHtml(copy.noItems)}</p>
+    </section>`;
+  }
+  return `<section class="change-repo">
+    <h3>${escapeHtml(title)}</h3>
+    ${repo.files.map((file) => changeFileBlock(copy, view, repo, file)).join("")}
+  </section>`;
+}
+
+export function changeFileBlock(
+  copy: ShellCopy,
+  view: ViewChanges,
+  repo: ChangeRepo,
+  file: ChangeFile,
+): string {
+  return `<article class="change-file">
+    <h4>${escapeHtml(file.path)}</h4>
+    ${file.hunks
+      .map(
+        (hunk) => `<div class="diff">${hunk.lines
+          .map((line) => changeLineRow(copy, view, repo, file, line))
+          .join("")}</div>`,
+      )
+      .join("")}
+  </article>`;
+}
+
+export function changeLineRow(
+  copy: ShellCopy,
+  view: ViewChanges,
+  repo: ChangeRepo,
+  file: ChangeFile,
+  line: ChangeLine,
+): string {
+  const mark = line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ";
+  const number = line.newLine ?? line.oldLine ?? 0;
+  const notes = view.notes.filter(
+    (note) => note.repo === repo.displayPath && note.path === file.path && note.line === number,
+  );
+  const canNote = line.kind !== "delete" && line.newLine;
+  const active =
+    ui.noteTarget &&
+    ui.noteTarget.repo === repo.displayPath &&
+    ui.noteTarget.path === file.path &&
+    ui.noteTarget.line === line.newLine;
+  const noteKey = changeNoteFormKey(view.runId);
+  const notePending = ui.formOperations.pending.has(noteKey);
+  const noteForm = active
+    ? `<form class="note-form" data-act="write-note" aria-busy="${notePending ? "true" : "false"}">
+        <input name="text" maxlength="400" value="${escapeHtml(ui.noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" ${notePending ? "disabled" : ""} />
+        <button type="submit" ${notePending ? "disabled" : ""}>${escapeHtml(notePending ? copy.operationPending : copy.addChangeNote)}</button>
+        ${formFeedback(noteKey)}
+      </form>`
+    : "";
+  const noteList = notes
+    .map(
+      (note) =>
+        `<div class="change-note">${escapeHtml(note.text)} <button type="button" data-act="delete-note" data-id="${escapeHtml(note.id)}">${escapeHtml(copy.deleteChangeNote)}</button></div>`,
+    )
+    .join("");
+  const attrs = canNote
+    ? ` data-act="note-line" data-repo="${escapeHtml(repo.displayPath)}" data-path="${escapeHtml(file.path)}" data-line="${line.newLine}"`
+    : "";
+  return `<span class="diff-line ${line.kind}"${attrs}><span class="diff-no">${number || ""}</span><span class="diff-mark">${mark}</span><span class="diff-text">${escapeHtml(line.text)}</span></span>${noteForm}${noteList}`;
+}
+
+export function quitOfferDialog(copy: ShellCopy): string {
+  return `<div class="overlay modal" data-act="cancel-quit">
+    <div class="sheet" data-act="form-noop">
+      <h2>${escapeHtml(copy.quitActiveTitle)}</h2>
+      <p class="notice">${escapeHtml(copy.quitActiveBody)}</p>
+      <div class="actions">
+        <button type="button" data-act="cancel-quit">${escapeHtml(copy.quitReturn)}</button>
+        <button type="button" class="danger primary" data-act="confirm-quit">${escapeHtml(copy.quitStopAll)}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+export function launchEnvironmentStatus(copy: StartupCopy): string {
+  const state = ui.launchEnvironmentState;
+  const text = state.status === "ready"
+    ? copy.launchEnvironmentReady
+    : state.status === "failed"
+      ? copy.launchEnvironmentFailed
+      : copy.launchEnvironmentIdle;
+  const detail = ui.launchEnvironmentError || state.message || "";
+  return `<p class="hint ${state.status === "failed" || detail ? "notice bad" : ""}" data-launch-environment-status="${state.status}">${escapeHtml(text)}${detail ? `<br>${escapeHtml(detail)}` : ""}</p>`;
+}
+
+export function startupSettings(copy: StartupCopy, snap: Snapshot): string {
+  if (!desktopShellAvailable()) {
+    return `<div class="field startup-settings"><div class="label">${escapeHtml(copy.hostStartup)}</div><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
+  }
+  return `<div class="field startup-settings">
+    <div class="label">${escapeHtml(copy.hostStartup)}</div>
+    <div class="choices">
+      <button type="button" class="${snap.hostMode === "host-and-client" ? "active" : ""}" data-act="host-mode" data-id="host-and-client">${escapeHtml(copy.hostAndClient)}</button>
+      <button type="button" class="${snap.hostMode === "client-only" ? "active" : ""}" data-act="host-mode" data-id="client-only">${escapeHtml(copy.clientOnly)}</button>
+    </div>
+    <p class="hint">${escapeHtml(copy.hostModeHelp)} ${escapeHtml(copy.restartToApply)}</p>
+    <label class="graph-opt">
+      <input type="checkbox" data-field="startAtLogin" ${ui.startAtLogin ? "checked" : ""} ${ui.startAtLogin == null ? "disabled" : ""} />
+      ${escapeHtml(copy.startAtLogin)}
+    </label>
+    <p class="hint">${escapeHtml(copy.startAtLoginHelp)}</p>
+    ${ui.startupSettingsError ? `<p class="notice bad">${escapeHtml(ui.startupSettingsError)}</p>` : ""}
+  </div>`;
+}
+
+export function updateSettings(copy: ShellCopy): string {
+  const status = ui.updateState.kind === "checking"
+    ? copy.updateChecking
+    : ui.updateState.kind === "current"
+      ? copy.updateCurrent
+      : ui.updateState.kind === "failed"
+        ? `${copy.updateFailed} ${ui.updateState.message}`.trim()
+        : ui.updateState.kind === "blocked"
+          ? `${copy.updateActiveRuns} (${ui.updateState.activeRunCount})`
+          : "";
+  return `<div class="field update-settings">
+    <div class="label">${escapeHtml(copy.updates)}</div>
+    ${desktopShellAvailable()
+      ? `<button type="button" data-act="check-updates" ${ui.updateState.kind === "checking" || ui.updateState.kind === "installing" ? "disabled" : ""}>${escapeHtml(ui.updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates)}</button>`
+      : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
+    ${status ? `<p class="hint update-status">${escapeHtml(status)}</p>` : ""}
+  </div>`;
+}
+
+export function updateDialog(copy: ShellCopy): string {
+  if (ui.updateState.kind === "available") {
+    return `<div class="overlay modal update-dialog" data-act="update-later">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateAvailable)} ${escapeHtml(ui.updateState.version)}</h2>
+        <p class="notice">${escapeHtml(copy.updateReady)}</p>
+        ${ui.updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(ui.updateState.notes)}</p></div>` : ""}
+        <div class="actions">
+          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
+          <button type="button" class="primary" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if (ui.updateState.kind === "blocked") {
+    return `<div class="overlay modal update-dialog" data-act="update-later">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateAvailable)}</h2>
+        <p class="notice bad">${escapeHtml(copy.updateActiveRuns)} (${ui.updateState.activeRunCount})</p>
+        <div class="actions">
+          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
+          <button type="button" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if (ui.updateState.kind === "installing") {
+    const progress = ui.updateState.progress == null ? "" : ` ${ui.updateState.progress}%`;
+    return `<div class="overlay modal update-dialog">
+      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
+        <h2>${escapeHtml(copy.updateInstalling)}${progress}</h2>
+        ${ui.updateState.progress == null ? "" : `<progress max="100" value="${ui.updateState.progress}"></progress>`}
+      </div>
+    </div>`;
+  }
+  return "";
+}
+
+export function keyboardHelpDialog(copy: ShellCopy): string {
+  return `<div class="overlay modal keyboard-help" data-act="close-keyboard-help">
+    <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true" aria-label="${escapeHtml(copy.keyboardHelp)}">
+      <h2>${escapeHtml(copy.keyboardHelp)}</h2>
+      <p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>
+      <div class="actions"><button type="button" data-act="close-keyboard-help">${escapeHtml(copy.gotIt)}</button></div>
+    </div>
+  </div>`;
+}

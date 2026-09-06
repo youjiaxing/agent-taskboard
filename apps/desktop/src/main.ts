@@ -1,2009 +1,82 @@
+import { ensureMobileAppearance, focusedRun, loadMobileAppearance, mobileClient } from "./view-helpers";
+import { loadSelectedIssueDocument, protocolBase, rpc, rpcDetached } from "./rpc";
 import { FitAddon } from "@xterm/addon-fit";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { open as openDirectory } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
+import "./shell-board.css";
+import "./shell-issue.css";
+import "./shell-graph.css";
+import "./shell-run.css";
+import "./shell-dialogs.css";
 import "./shell-mobile.css";
-import { startupCopy, type StartupCopy } from "./startup-copy";
-import { mobileMain as renderMobileMain, mobileNavigation as renderMobileNavigation, mobileScopeSheet as renderMobileScopeSheet, type MobileView } from "./mobile-renderers";
+
 import {
-  addOpt,
   escapeHtml,
   formatCountdown,
-  formatTime,
-  parsePairingPayload,
-  renderMarkdown,
-  safeHttpUrl,
-  toLocalInput,
 } from "./client-utils";
-
-type Language = "zh-CN" | "en";
-type Theme = "warm-paper" | "plain-paper" | "plain-night";
-
-type ShellCopy = {
-  appName: string;
-  registerFirstProject: string;
-  pairAnotherHost: string;
-  noProjectTitle: string;
-  noProjectBody: string;
-  quitHost: string;
-  showWindow: string;
-  settings: string;
-  updates: string;
-  checkForUpdates: string;
-  updateChecking: string;
-  updateAvailable: string;
-  updateReady: string;
-  updateNotes: string;
-  updateConfirm: string;
-  updateLater: string;
-  updateCurrent: string;
-  updateUnavailableBrowser: string;
-  updateActiveRuns: string;
-  updateInstalling: string;
-  updateFailed: string;
-  language: string;
-  theme: string;
-  languageZh: string;
-  languageEn: string;
-  themeWarmPaper: string;
-  themePlainPaper: string;
-  themePlainNight: string;
-  hosts: string;
-  projects: string;
-  thisMachine: string;
-  shadeLight: string;
-  shadeDark: string;
-  editMenu: string;
-  pairingRequired: string;
-  pairingTitle: string;
-  pairingThisHost: string;
-  pairingToAnother: string;
-  pairingAddress: string;
-  pairingShow: string;
-  pairingCopy: string;
-  pairingSamePayload: string;
-  pairingPaste: string;
-  pairingConnect: string;
-  pairedClients: string;
-  revokeClient: string;
-  noPairedClients: string;
-  addProject: string;
-  editProject: string;
-  removeProject: string;
-  registerProjectTitle: string;
-  editProjectTitle: string;
-  displayName: string;
-  localDirectory: string;
-  chooseDirectory: string;
-  chooseDirectoryDesktopOnly: string;
-  inferringFromDirectory: string;
-  inferenceFailed: string;
-  activeProjectEditHint: string;
-  remoteProjectHint: string;
-  operationPending: string;
-  inferencePending: string;
-  retryInference: string;
-  removalPending: string;
-  githubHost: string;
-  repository: string;
-  inferFromDirectory: string;
-  useInference: string;
-  inferenceHint: string;
-  saveRegistration: string;
-  cancel: string;
-  removeConfirmTitle: string;
-  removeConfirmBody: string;
-  removeConfirm: string;
-  cannotRemoveActiveRun: string;
-  cannotRemoveActiveRunBody: string;
-  removeKeepClaimsBody: string;
-  continueRun: string;
-  releaseClaim: string;
-  executionStopped: string;
-  waiting: string;
-  running: string;
-  injectLine: string;
-  injectPlaceholder: string;
-  notifyDesktop: string;
-  notifySound: string;
-  notifyWaiting: string;
-  notifyCompleted: string;
-  notifyAbnormal: string;
-  notifyCrash: string;
-  gotIt: string;
-  authFailed: string;
-  connectionUnavailable: string;
-  repairCli: string;
-  repairSecrets: string;
-  repairEnv: string;
-  noGhDetected: string;
-  connectionReady: string;
-  projectMenu: string;
-  boardHint: string;
-  childHint: string;
-  graphHint: string;
-  viewBoard: string;
-  viewGraph: string;
-  viewDependencies: string;
-  graphOverview: string;
-  graphReturnOverview: string;
-  graphTruncated: string;
-  graphNoDependencies: string;
-  showClosedContext: string;
-  graphCenter: string;
-  graphCenterHere: string;
-  graphShowComplete: string;
-  graphShowNeighborhood: string;
-  graphShowMore: string;
-  graphCanvasLimit: string;
-  graphCompleteList: string;
-  graphSearchPlaceholder: string;
-  graphUpstream: string;
-  graphDownstream: string;
-  graphBoth: string;
-  clearFilter: string;
-  colBlocked: string;
-  colFrontier: string;
-  colInProgress: string;
-  colRecent: string;
-  noItems: string;
-  noFrontierBlocked: string;
-  noFrontierClaimed: string;
-  noFrontierEmpty: string;
-  noRecent: string;
-  recentNote: string;
-  emptyNoData: string;
-  emptyIncomplete: string;
-  emptyTrackerError: string;
-  issueDocument: string;
-  issueDocumentLoading: string;
-  issueDocumentRetry: string;
-  issueDocumentStale: string;
-  issueDocumentFailed: string;
-  family: string;
-  deps: string;
-  parent: string;
-  children: string;
-  noParent: string;
-  noKids: string;
-  onlyKids: string;
-  blockedBy: string;
-  blocking: string;
-  noneBlock: string;
-  none: string;
-  claimed: string;
-  unclaimed: string;
-  pickIssue: string;
-  recentLimit: string;
-  recentLimitHelp: string;
-  refreshInterval: string;
-  refreshIntervalHelp: string;
-  unclearIssue: string;
-  refreshNow: string;
-  refreshRefreshing: string;
-  refreshAsOf: string;
-  refreshNext: string;
-  refreshOffline: string;
-  refreshOfflineRecovery: string;
-  refreshNever: string;
-  refreshRateLimited: string;
-  refreshRetry: string;
-  refreshPaused: string;
-  refreshAuth: string;
-  refreshAuthRecovery: string;
-  refreshIncomplete: string;
-  refreshTrackerError: string;
-  newRun: string;
-  executeRun: string;
-  startRun: string;
-  startRunPending: string;
-  switchAgent: string;
-  pickAgent: string;
-  noAgentSelected: string;
-  nextStep: string;
-  launchTitle: string;
-  prefillCurrent: string;
-  prefillOther: string;
-  prefillSeed: string;
-  isolation: string;
-  isolationOffReason: string;
-  isolationHint: string;
-  runIntent: string;
-  intentNone: string;
-  intentModify: string;
-  intentContinue: string;
-  intentAnswer: string;
-  intentReview: string;
-  intentCustom: string;
-  openingPlaceholder: string;
-  foldedOptions: string;
-  commandPreview: string;
-  showCommandPreview: string;
-  instructionRequired: string;
-  workingDirectory: string;
-  unboundIssue: string;
-  stopRun: string;
-  quitActiveTitle: string;
-  quitActiveBody: string;
-  quitReturn: string;
-  quitStopAll: string;
-  viewChanges: string;
-  focusRun: string;
-  openIssue: string;
-  searchTitle: string;
-  searchPlaceholder: string;
-  searchAllTriage: string;
-  searchAllStates: string;
-  searchOpen: string;
-  searchClosed: string;
-  searchSubmit: string;
-  keyboardHelp: string;
-  keyboardHelpBody: string;
-  thisRound: string;
-  uncommitted: string;
-  addChangeNote: string;
-  changeNotePlaceholder: string;
-  deleteChangeNote: string;
-  autoAdvance: string;
-  autoAdvanceHelp: string;
-  projectAutoAdvance: string;
-  restoreAutoAdvance: string;
-  restoreDelay: string;
-  pendingConfirmation: string;
-  vetoAdvance: string;
-  usage: string;
-  usageHint: string;
-  hostOverview: string;
-  hostOverviewHint: string;
-  hostOverviewEmpty: string;
-  returnToBoard: string;
-  showSidebar: string;
-  hideSidebar: string;
-  showIssueDetail: string;
-  hideIssueDetail: string;
-  showEndedRuns: string;
-  runGroupWaiting: string;
-  runGroupRunning: string;
-  runGroupStopped: string;
-  runGroupEnded: string;
-  range24Hours: string;
-  rangeToday: string;
-  range7Days: string;
-  range30Days: string;
-  rangeCustom: string;
-  filterAll: string;
-  filterProject: string;
-  filterAgent: string;
-  filterModel: string;
-  tokenInput: string;
-  tokenOutput: string;
-  tokenCacheRead: string;
-  tokenCacheWrite: string;
-  tokenReasoning: string;
-  tokenTotal: string;
-  ttft: string;
-  genRate: string;
-  cacheHit: string;
-  spike: string;
-  proxyDisclaimer: string;
-  openHostUsage: string;
-  openThisRun: string;
-  laneMain: string;
-  laneSubagent: string;
-  laneSwitched: string;
-  usageEmpty: string;
-  closeUsage: string;
-  mobileSwitchScope: string;
-  mobileBoard: string;
-  mobileIssue: string;
-  mobileRun: string;
-  mobileRecentOutput: string;
-  mobileLiveTerminal: string;
-  createIssue: string;
-  editIssue: string;
-  saveIssue: string;
-  issueTitle: string;
-  issueBody: string;
-  addComment: string;
-  commentPlaceholder: string;
-  parentIssue: string;
-  dependencyBlockers: string;
-  clearDependency: string;
-  saveRelations: string;
-  closeIssue: string;
-  reopenIssue: string;
-  issueUpdates: string;
-};
-
-type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
-
-type Repair = {
-  cliDetected: boolean;
-  secretsPath: string;
-  appEnv: string;
-  genericEnv: string;
-  suggestedScope: string;
-};
-
-type ProjectConnection =
-  | { status: "ready"; source: CredentialSource }
-  | {
-      status: "auth-failed";
-      source?: CredentialSource;
-      kind: "missing-credentials" | "rejected" | "unreachable";
-      repair: Repair;
-      message: string;
-    }
-  | {
-      status: "unreachable";
-      source?: CredentialSource;
-      repair: Repair;
-      message: string;
-    };
-
-type Project = {
-  id: string;
-  name: string;
-  localPath: string;
-  tracker: "github" | "local-markdown";
-  githubHost: string;
-  repository: string;
-  connection: ProjectConnection;
-  hasActiveRun: boolean;
-  hasExecutionStopped?: boolean;
-  trackerSynced: boolean;
-  autoAdvance?: boolean;
-  restoreAutoAdvance?: boolean;
-  restoreDelayMs?: number;
-  issueCounts?: ProjectIssueCounts;
-};
-
-type ProjectIssueCounts = {
-  dataAvailable: boolean;
-  total: number;
-  open: number;
-  closed: number;
-  blocked: number;
-  frontier: number;
-  inProgress: number;
-};
-
-type ProjectDraft = {
-  name: string;
-  localPath: string;
-  githubHost: string;
-  repository: string;
-  tracker?: "github" | "local-markdown";
-  ambiguous?: boolean;
-};
-
-type IssueContentDraft = {
-  title: string;
-  body: string;
-};
-
-type IssueRelationDraft = {
-  parent: string;
-  blockedBy: string[];
-};
-
-type FormKey =
-  | `issue-search:${string}`
-  | `issue-create:${string}`
-  | `issue-edit:${string}`
-  | `issue-comment:${string}`
-  | `issue-parent:${string}`
-  | `issue-blockers:${string}`
-  | `issue-open:${string}`
-  | `inject-run:${string}`
-  | `change-note:${string}`
-  | `usage-custom:${string}`
-  | `launch:${string}`;
-
-type IssueSearchDraft = {
-  projectId: string;
-  title: string;
-  triageRole: string;
-  state: string;
-};
-
-type UsageCustomDraft = {
-  hostId: string;
-  from: string;
-  to: string;
-};
-
-type FormOperationState = {
-  pending: Set<FormKey>;
-  errors: Map<FormKey, string>;
-};
-
-type ProjectInferenceState =
-  | { status: "idle"; requestId: number }
-  | { status: "pending"; requestId: number }
-  | { status: "candidate"; requestId: number; candidate: ProjectDraft }
-  | { status: "failed"; requestId: number; message: string };
-
-type TriageRole =
-  | "needs-triage"
-  | "needs-info"
-  | "ready-for-agent"
-  | "ready-for-human"
-  | "wontfix";
-
-type IssueCard = {
-  id: string;
-  repository: string;
-  number: number;
-  title: string;
-  url: string;
-  claimedBy: string[];
-  labels: string[];
-  triageRole: TriageRole | null;
-  open: boolean;
-  activity?: "running" | "waiting" | "execution-stopped" | null;
-  runId?: string | null;
-};
-
-type IssueLink = {
-  id: string;
-  repository: string;
-  number: number | null;
-  title: string;
-  open: boolean | null;
-  visible: boolean;
-};
-
-type IssueDetail = {
-  id: string;
-  repository: string;
-  number: number;
-  title: string;
-  url: string;
-  open: boolean;
-  claimedBy: string[];
-  triageRole: TriageRole | null;
-  labels: string[];
-  parent: IssueLink | null;
-  children: IssueLink[];
-  blockedBy: IssueLink[];
-  blocking: IssueLink[];
-  document: IssueDocumentState;
-  executionStopped?: boolean;
-  waitingForUser?: boolean;
-  activeRunId?: string | null;
-};
-
-type IssueDocumentFailure = {
-  kind: "offline" | "rate-limited" | "auth" | "tracker";
-  message: string;
-  retryAfterMs?: number | null;
-};
-
-type IssueDocumentState =
-  | { kind: "unloaded" }
-  | { kind: "loading"; body?: string | null; fetchedAtMs?: number | null }
-  | { kind: "ready"; body: string; fetchedAtMs: number }
-  | { kind: "stale"; body: string; fetchedAtMs: number; failure: IssueDocumentFailure }
-  | { kind: "failed"; failure: IssueDocumentFailure };
-
-type BoardColumns = {
-  blocked: IssueCard[];
-  frontier: IssueCard[];
-  inProgress: IssueCard[];
-  recentlyCompleted: IssueCard[];
-};
-
-type RefreshStatus =
-  | { kind: "refreshing"; fetchedAtMs?: number | null }
-  | { kind: "ready"; fetchedAtMs: number; nextRefreshInMs?: number | null }
-  | { kind: "offline"; fetchedAtMs: number; nextRefreshInMs?: number | null }
-  | { kind: "never-fetched" }
-  | { kind: "rate-limited"; fetchedAtMs?: number | null; retryAtMs?: number | null }
-  | { kind: "auth-failed"; fetchedAtMs?: number | null }
-  | {
-      kind: "incomplete" | "tracker-error";
-      fetchedAtMs?: number | null;
-      dataComplete?: boolean;
-      nextRefreshInMs?: number | null;
-      detail?: string | null;
-    };
-
-type GraphNode = {
-  id: string;
-  repository: string;
-  number: number;
-  title: string;
-  open: boolean;
-  rank: number;
-  distance?: number;
-  relation?: "center" | "upstream" | "downstream" | "both";
-};
-
-type GraphEdge = {
-  from: string;
-  to: string;
-};
-
-type DependencyGraph = {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  mode?: "overview" | "focused";
-  centerId?: string | null;
-  totalCount?: number;
-  complete?: boolean;
-  maxDistance?: number;
-  truncated?: boolean;
-  closedCount?: number;
-};
-
-type CenterView = "board" | "graph";
-type WorkspaceView = "project" | "host-overview" | "run";
-
-type BoardSnapshot = {
-  projectId: string;
-  columns: BoardColumns | null;
-  empty: "no-data" | "incomplete-read" | "tracker-error" | null;
-  frontierEmpty: "all-blocked" | "all-claimed" | "no-open" | null;
-  parentFilter: IssueCard | null;
-  selected: IssueDetail | null;
-  issueOptions: IssueLink[];
-  labelMappingActive: boolean;
-  recentLimit: number;
-  refresh: RefreshStatus;
-  graph: DependencyGraph | null;
-  showClosedGraphContext: boolean;
-  search: {
-    title: string;
-    triageRole: TriageRole | null;
-    state: "all" | "open" | "closed";
-  };
-};
-
-type PairingOffer = {
-  address: string;
-  code: string;
-  text: string;
-  qrText: string;
-  qrSvg: string;
-};
-
-type PairedClient = { id: string; name: string };
-
-type LoopbackPage =
-  | { status: "serving"; url: string }
-  | { status: "occupied"; url: string; reason: string }
-  | { status: "host-not-running"; url: string; reason: string };
-
-type Snapshot = {
-  running: boolean;
-  windowVisible: boolean;
-  hostMode: "host-and-client" | "client-only";
-  focusedHostId: string;
-  focusedProjectId: string;
-  hosts: { id: string; displayName: string; local: boolean }[];
-  projects: Project[];
-  appearance: {
-    language: Language;
-    theme: Theme;
-    lastLightTheme: Theme;
-    languages: Language[];
-    themes: Theme[];
-  };
-  copy: ShellCopy;
-  copyCatalog: Record<Language, ShellCopy>;
-  emptyActions: Array<"register-first-project" | "pair-another-host">;
-  loopbackPage: LoopbackPage;
-  pairingOffer: PairingOffer | null;
-  pairedClients: PairedClient[];
-  board: BoardSnapshot | null;
-  recentCompletedLimit: number;
-  refreshIntervalMs: number;
-  centerView: CenterView;
-  workspaceView: WorkspaceView;
-  runs: RunSummary[];
-  focusedRunId: string;
-  quitOffer: QuitOffer | null;
-  launchForm?: RunLaunchForm | null;
-  showCommandPreview?: boolean;
-  notifyDesktop?: boolean;
-  notifySound?: boolean;
-  autoAdvance?: boolean;
-  pendingConfirmation?: PendingConfirmation | null;
-  usageOpen?: boolean;
-  usage?: UsagePage;
-};
-
-type PendingConfirmation = {
-  projectId: string;
-  issueId: string;
-  runId: string;
-  agentId: string;
-  deadlineMs: number;
-  remainingMs: number;
-};
-
-type AgentFieldKind = "text" | "select" | "boolean" | "multiline";
-
-type AgentField = {
-  id: string;
-  label: string;
-  kind: AgentFieldKind;
-  options?: string[];
-  optionFilter?: {
-    fieldId: string;
-    optionsByValue: Record<string, string[]>;
-  } | null;
-  required: boolean;
-  folded: boolean;
-};
-
-type AgentSummary = {
-  id: string;
-  name: string;
-  installed: boolean;
-  unavailableReason?: string | null;
-  fields: AgentField[];
-};
-
-type IntentOption = {
-  id: string;
-  label: string;
-  prefix: string;
-};
-
-type RunLaunchForm = {
-  projectId: string;
-  issueId?: string | null;
-  agents: AgentSummary[];
-  selectedAgentId: string;
-  skipAgentPicker: boolean;
-  fields: AgentField[];
-  values: Record<string, string>;
-  prefillSource: "current-project" | "other-project" | "cli-seed";
-  workingDirectory: string;
-  isolationSupported: boolean;
-  isolationReason: string;
-  openingText: string;
-  changeNotesText?: string;
-  commandPreview: string;
-  intents: IntentOption[];
-  warnings?: string[];
-  error?: string | null;
-  optionDiscoveryError?: string | null;
-};
-
-type ChangeScope = "this-round" | "uncommitted";
-
-type ChangeLine = {
-  kind: "context" | "add" | "delete";
-  oldLine?: number | null;
-  newLine?: number | null;
-  text: string;
-};
-
-type ChangeHunk = {
-  header: string;
-  lines: ChangeLine[];
-};
-
-type ChangeFile = {
-  path: string;
-  hunks: ChangeHunk[];
-};
-
-type ChangeRepo = {
-  path: string;
-  displayPath: string;
-  available: boolean;
-  unavailableReason?: string | null;
-  startCommit?: string | null;
-  files: ChangeFile[];
-};
-
-type ChangeNote = {
-  id: string;
-  runId: string;
-  projectId: string;
-  issueId?: string | null;
-  repo: string;
-  path: string;
-  line: number;
-  text: string;
-};
-
-type ViewChanges = {
-  runId: string;
-  issueId?: string | null;
-  workingDirectory: string;
-  isolated: boolean;
-  scope: ChangeScope;
-  available: boolean;
-  unavailableReason?: string | null;
-  repos: ChangeRepo[];
-  notes: ChangeNote[];
-};
-
-type LaunchDraft = {
-  projectId: string;
-  issueId?: string | null;
-  agentId: string;
-  values: Record<string, string>;
-  openingText: string;
-  intentId: string;
-  custom: boolean;
-};
-
-type RunStatus = "starting" | "running" | "ended";
-
-type RunSummary = {
-  id: string;
-  projectId: string;
-  agentId: string;
-  agentName: string;
-  issueId?: string | null;
-  unbound: boolean;
-  status: RunStatus;
-  waitingForUser?: boolean;
-  recentAction?: string | null;
-  failure?: string | null;
-  previousRunId?: string | null;
-  nativeSessionId?: string | null;
-  endedReason?: "exited" | "stopped" | "abnormal" | "crash" | null;
-  workingDirectory?: string;
-  isolated?: boolean;
-  isolationNote?: string | null;
-  startedAtMs?: number;
-  telemetry?: RunTelemetryLane[];
-  recentOutput?: string;
-};
-
-type TokenCounts = {
-  input?: number | null;
-  output?: number | null;
-  cacheRead?: number | null;
-  cacheWrite?: number | null;
-  reasoning?: number | null;
-  total?: number | null;
-};
-
-type TelemetryLaneKind = "main" | "subagent" | "switched";
-
-type TelemetryPoint = {
-  atMs: number;
-  ttftMs?: number | null;
-  tokensPerSec?: number | null;
-  spike: boolean;
-};
-
-type RunTelemetryLane = {
-  model: string;
-  lane: TelemetryLaneKind;
-  tokens: TokenCounts;
-  ttftMs?: number | null;
-  tokensPerSec?: number | null;
-  recent: TelemetryPoint[];
-  spike: boolean;
-};
-
-type UsageRange = "today" | "24-hours" | "7-days" | "30-days" | "custom";
-
-type UsageFilter = {
-  projectId?: string | null;
-  agentId?: string | null;
-  model?: string | null;
-};
-
-type UsageOption = { id: string; name: string };
-
-type UsageRunRow = {
-  runId: string;
-  projectId: string;
-  projectName: string;
-  agentId: string;
-  agentName: string;
-  issueId?: string | null;
-  startedAtMs: number;
-  models: string[];
-  tokens: TokenCounts;
-  highlighted: boolean;
-};
-
-type UsageBucket = {
-  startMs: number;
-  tokens: TokenCounts;
-  ttftMs?: number | null;
-  tokensPerSec?: number | null;
-  slow: boolean;
-};
-
-type UsagePage = {
-  range: UsageRange;
-  customFromMs?: number | null;
-  customToMs?: number | null;
-  filter: UsageFilter;
-  bucketKind: "hour" | "day";
-  fromMs: number;
-  toMs: number;
-  runs: UsageRunRow[];
-  buckets: UsageBucket[];
-  totals: TokenCounts;
-  cacheHitRate?: number | null;
-  highlightedRunId?: string | null;
-  projects: UsageOption[];
-  agents: UsageOption[];
-  models: string[];
-};
-
-type QuitOffer = {
-  activeRunCount: number;
-};
-
-type UpdateInstallGate = {
-  allowed: boolean;
-  activeRunCount: number;
-};
-
-type UpdateState =
-  | { kind: "idle" }
-  | { kind: "checking"; manual: boolean }
-  | { kind: "current" }
-  | { kind: "available"; version: string; notes: string }
-  | { kind: "blocked"; activeRunCount: number }
-  | { kind: "installing"; progress: number | null }
-  | { kind: "failed"; message: string };
-
-type NotificationKind = "waiting" | "completed" | "abnormal-stop" | "crash-recovered";
-
-type HostEvent =
-  | { type: "refresh-status-changed"; projectId: string; status: RefreshStatus }
-  | { type: "board-updated"; projectId: string }
-  | { type: "run-status-changed"; runId: string; status: RunStatus }
-  | { type: "waiting"; runId: string }
-  | { type: "execution-stopped"; issueId: string; runId: string }
-  | { type: "host-crashed-recovered"; runIds: string[] }
-  | {
-      type: "pending-confirmation-started";
-      projectId: string;
-      issueId: string;
-      runId: string;
-    }
-  | {
-      type: "pending-confirmation-ended";
-      projectId: string;
-      issueId: string;
-      runId: string;
-      advanced: boolean;
-    }
-  | {
-      type: "notification";
-      kind: NotificationKind;
-      runId: string;
-      issueId?: string | null;
-      projectId: string;
-    }
-  | { type: "telemetry"; runId: string };
-
-type LaunchEnvironmentState = {
-  status: "idle" | "ready" | "failed";
-  refreshedDirectories: number;
-  message?: string | null;
-};
-
-type RpcResult = {
-  snapshot: Snapshot;
-  process: "keep-running" | "exit";
-  launchEnvironment?: LaunchEnvironmentState;
-  inference?: ProjectDraft;
-  updateInstallGate?: UpdateInstallGate;
-  events?: HostEvent[];
-  viewChanges?: ViewChanges;
-};
-
-type WorkbenchPanelId = "inspector" | "terminal" | "usage";
-
-type WorkbenchPanelGeometry = {
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-  floating: boolean;
-  runFloating?: boolean;
-  dockedWidth?: number;
-};
-
-type WorkbenchLayout = Record<WorkbenchPanelId, WorkbenchPanelGeometry>;
-
-type PanelPointerInteraction = {
-  pointerId: number;
-  panelId: WorkbenchPanelId;
-  kind: "drag" | "resize";
-  startClientX: number;
-  startClientY: number;
-  start: WorkbenchPanelGeometry;
-};
-
-const app = document.querySelector<HTMLDivElement>("#app");
-if (!app) {
-  throw new Error("missing #app");
-}
-
-let snapshot: Snapshot | null = null;
-let settingsOpen = false;
-let startAtLogin: boolean | null = null;
-let startupSettingsError = "";
-let launchEnvironmentState: LaunchEnvironmentState = {
-  status: "idle",
-  refreshedDirectories: 0,
-};
-let launchEnvironmentError = "";
-let updateState: UpdateState = { kind: "idle" };
-let pendingUpdate: Update | null = null;
-let pendingUpdateDownloaded = false;
-let startupUpdateChecked = false;
-let pairingOpen = false;
-let hostPickerOpen = false;
-let pairingAddress = "";
-let pairingPaste = "";
-let pairingError = "";
-let projectMenuId = "";
-let formOpen: "register" | "edit" | null = null;
-let formProjectId = "";
-let formDraft: ProjectDraft = emptyDraft();
-let autoFilledProjectName = "";
-let projectInference: ProjectInferenceState = { status: "idle", requestId: 0 };
-let formError = "";
-let removeError = "";
-let projectOperation: "save" | "remove" | null = null;
-let removeProject: Project | null = null;
-let refreshing = false;
-let tickTimer: number | undefined;
-const activePointers = new Set<number>();
-let tickRenderPending = false;
-let tickFullRenderPending = false;
-let term: Terminal | null = null;
-let fitAddon: FitAddon | null = null;
-let termHost: HTMLDivElement | null = null;
-let ptyOffset = 0;
-let ptyRunId = "";
-let ptyPumping = false;
-let launchDraft: LaunchDraft | null = null;
-let launchFolded = false;
-let launchPickerProjectId = "";
-let launchPickerAgentId = "";
-let launchPreviewTimer: number | undefined;
-let launchPreviewSequence = 0;
-let changesOpen = false;
-let changesScope: ChangeScope = "this-round";
-let changesView: ViewChanges | null = null;
-let noteDraft = "";
-let noteTarget: { repo: string; path: string; line: number } | null = null;
-let createIssueOpen = false;
-let createIssueProjectId = "";
-let createIssueDraft: IssueContentDraft = { title: "", body: "" };
-let issueEditOpenId: string | null = null;
-const issueEditDrafts = new Map<string, IssueContentDraft>();
-const issueCommentDrafts = new Map<string, string>();
-const terminalInputDrafts = new Map<string, string>();
-let issueSearchDraft: IssueSearchDraft | null = null;
-let usageCustomDraft: UsageCustomDraft | null = null;
-const issueRelationDrafts = new Map<string, IssueRelationDraft>();
-const issueMaintenanceOpen = new Set<string>();
-const formOperations: FormOperationState = {
-  pending: new Set<FormKey>(),
-  errors: new Map<FormKey, string>(),
-};
-let telemetryExpanded = false;
-let keyboardHelpOpen = false;
-let keyboardCursorIssueId = "";
-let sidebarVisible = true;
-let issueDetailVisible = true;
-let terminalPanelVisible = true;
-let renderedDetailIssueId = "";
-let renderedBoardProjectId = "";
-let renderedMobileWorkspaceKey = "";
-type ScrollPosition = { scrollTop: number; scrollLeft: number };
-type BoardScrollPosition = ScrollPosition & {
-  lanes: Record<string, ScrollPosition>;
-};
-const issueDetailScrollPositions = new Map<string, ScrollPosition>();
-const boardScrollPositions = new Map<string, BoardScrollPosition>();
-const mobileWorkspaceScrollPositions = new Map<string, ScrollPosition>();
-let renderedGraphKey = "";
-let renderedGraphProjectId = "";
-let renderedGraphCenterId = "";
-type GraphViewportAnchor = { issueId: string; viewportX: number; viewportY: number };
-let pendingGraphAnchor: GraphViewportAnchor | null = null;
-let graphCanvasLimit = 48;
-let graphListLimit = 50;
-let graphListQuery = "";
-let overviewProjectId = "";
-let overviewShowEnded = false;
-let sidebarBeforeLift = true;
-type MobileAppearance = { language: Language; theme: Theme; lastLightTheme: Theme };
-let mobileView: MobileView = "board";
-let mobileScopeOpen = false;
-let mobileLiveTerminal = false;
-let mobilePtyOffset = 0;
-let mobilePtyRunId = "";
-let mobilePtyPumping = false;
-const mobilePtyText = new Map<string, string>();
-let mobileAppearance = loadMobileAppearance();
-const clientId = sessionClientId();
-let workbenchLayout: WorkbenchLayout;
-let panelPointerInteraction: PanelPointerInteraction | null = null;
-let frontWorkbenchPanel: WorkbenchPanelId = "inspector";
-let inspectorAnchorIssueId = "";
-
-const GRAPH_RELATION_META: Record<
-  NonNullable<GraphNode["relation"]>,
-  { order: number; label: (copy: ShellCopy) => string }
-> = {
-  upstream: { order: 0, label: (copy) => copy.graphUpstream },
-  center: {
-    order: 1,
-    label: (copy) => copy.graphCenter.replace("：{issue}", "").replace(": {issue}", ""),
-  },
-  both: { order: 2, label: (copy) => copy.graphBoth },
-  downstream: { order: 3, label: (copy) => copy.graphDownstream },
-};
-
-function sessionClientId(): string {
-  const key = "agent-taskboard-client-id";
-  const windowMarkerPrefix = "agent-taskboard-client-window:";
-  const existing = sessionStorage.getItem(key);
-  const windowMarker = window.name.startsWith(windowMarkerPrefix)
-    ? window.name.slice(windowMarkerPrefix.length)
-    : "";
-  const clonedFromOpener = Boolean(window.opener) && !windowMarker;
-  if (existing && !clonedFromOpener && windowMarker) {
-    if (!windowMarker) window.name = `${windowMarkerPrefix}${existing}`;
-    return existing;
-  }
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  sessionStorage.setItem(key, id);
-  window.name = `${windowMarkerPrefix}${id}`;
-  return id;
-}
-
-function emptyDraft(): ProjectDraft {
-  return { name: "", localPath: "", githubHost: "github.com", repository: "" };
-}
-
-function resetGraphUiState(): void {
-  graphCanvasLimit = 48;
-  graphListLimit = 50;
-  graphListQuery = "";
-}
-
-const WORKBENCH_LAYOUT_VERSION = 2;
-const WORKBENCH_LAYOUT_STORAGE_PREFIX = `agent-taskboard-panel-layout:v${WORKBENCH_LAYOUT_VERSION}:`;
-const WORKBENCH_LAYOUT_REGISTRY_KEY = `agent-taskboard-panel-layout-registry:v${WORKBENCH_LAYOUT_VERSION}`;
-const WORKBENCH_LAYOUT_INSTANCE_TTL_MS = 7 * 86_400_000;
-const WORKBENCH_LAYOUT_HEARTBEAT_MS = 5 * 60_000;
-const WORKBENCH_PANEL_DEFAULTS: WorkbenchLayout = {
-  inspector: { width: 440, height: 640, x: 2_400, y: 12, floating: true, runFloating: false },
-  terminal: { width: 820, height: 360, x: 80, y: 360, floating: false },
-  usage: { width: 920, height: 680, x: 48, y: 28, floating: false },
-};
-
-function clonePanelGeometry(geometry: WorkbenchPanelGeometry): WorkbenchPanelGeometry {
-  return { ...geometry };
-}
-
-function workbenchLayoutStorageKey(): string {
-  const clientKind = desktopShellAvailable() ? "tauri" : "browser";
-  let identity = clientId;
-  if (clientKind === "tauri") {
-    try {
-      const tauriInternals = (window as typeof window & {
-        __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
-      }).__TAURI_INTERNALS__;
-      identity = tauriInternals?.metadata?.currentWindow?.label ?? "";
-    } catch {
-      identity = "";
-    }
-    if (!identity) {
-      const key = "agent-taskboard-tauri-layout-client-id";
-      identity = localStorage.getItem(key) ?? "";
-      if (!identity) {
-        identity = `tauri-${crypto.randomUUID?.() ?? Date.now()}`;
-        localStorage.setItem(key, identity);
-      }
-    }
-  }
-  return `${WORKBENCH_LAYOUT_STORAGE_PREFIX}${clientKind}:${identity}`;
-}
-
-function readWorkbenchLayoutRegistry(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(WORKBENCH_LAYOUT_REGISTRY_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        ([key, value]) =>
-          key.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)
-          && typeof value === "number"
-          && Number.isFinite(value),
-      ),
-    ) as Record<string, number>;
-  } catch {
-    return {};
-  }
-}
-
-function writeWorkbenchLayoutRegistry(registry: Record<string, number>): void {
-  try {
-    localStorage.setItem(WORKBENCH_LAYOUT_REGISTRY_KEY, JSON.stringify(registry));
-  } catch {
-    // A restricted Client can still use the layout without the cleanup registry.
-  }
-}
-
-function workbenchLayoutStorageKeys(): string[] {
-  const keys: string[] = [];
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (key?.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)) keys.push(key);
-  }
-  return keys;
-}
-
-function removeHistoricalWorkbenchLayouts(currentKey: string): boolean {
-  let changed = false;
-  try {
-    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-      const key = localStorage.key(index);
-      if (
-        key
-        && key.startsWith("agent-taskboard-panel-layout:v")
-        && !key.startsWith(WORKBENCH_LAYOUT_STORAGE_PREFIX)
-        && key !== currentKey
-      ) {
-        localStorage.removeItem(key);
-        changed = true;
-      }
-      if (
-        key
-        && key.startsWith("agent-taskboard-panel-layout-registry:v")
-        && key !== WORKBENCH_LAYOUT_REGISTRY_KEY
-      ) {
-        localStorage.removeItem(key);
-        changed = true;
-      }
-    }
-  } catch {
-    // A restricted Client can keep historical entries without affecting this window.
-  }
-  return changed;
-}
-
-function touchWorkbenchLayoutInstance(currentKey = workbenchLayoutStorageKey()): void {
-  try {
-    const now = Date.now();
-    const registry = readWorkbenchLayoutRegistry();
-    let changed = removeHistoricalWorkbenchLayouts(currentKey);
-    for (const key of workbenchLayoutStorageKeys()) {
-      const lastSeen = registry[key];
-    if (
-      key !== currentKey
-      && (lastSeen == null || now - lastSeen > WORKBENCH_LAYOUT_INSTANCE_TTL_MS)
-    ) {
-        localStorage.removeItem(key);
-        delete registry[key];
-        changed = true;
-      }
-    }
-    for (const key of Object.keys(registry)) {
-      if (!localStorage.getItem(key) && key !== currentKey) {
-        delete registry[key];
-        changed = true;
-      }
-    }
-    if (registry[currentKey] !== now) {
-      registry[currentKey] = now;
-      changed = true;
-    }
-    if (changed) writeWorkbenchLayoutRegistry(registry);
-  } catch {
-    // A restricted Client can still use the layout for this window.
-  }
-}
-
-function startWorkbenchLayoutHeartbeat(): void {
-  window.setInterval(() => touchWorkbenchLayoutInstance(), WORKBENCH_LAYOUT_HEARTBEAT_MS);
-}
-
-function normalizePanelGeometry(
-  panelId: WorkbenchPanelId,
-  candidate: Partial<WorkbenchPanelGeometry> | undefined,
-): WorkbenchPanelGeometry {
-  const fallback = WORKBENCH_PANEL_DEFAULTS[panelId];
-  const number = (value: unknown, defaultValue: number, minimum: number, maximum: number) =>
-    typeof value === "number" && Number.isFinite(value)
-      ? Math.min(maximum, Math.max(minimum, value))
-      : defaultValue;
-  return {
-    width: number(candidate?.width, fallback.width, 280, 1_200),
-    height: number(candidate?.height, fallback.height, 180, 900),
-    x: number(candidate?.x, fallback.x, 0, 2_400),
-    y: number(candidate?.y, fallback.y, 0, 1_600),
-    floating: typeof candidate?.floating === "boolean" ? candidate.floating : fallback.floating,
-    ...(panelId === "inspector"
-      ? {
-          runFloating: typeof candidate?.runFloating === "boolean" ? candidate.runFloating : false,
-          dockedWidth: number(
-            candidate?.dockedWidth,
-            candidate?.floating === false ? candidate?.width ?? 480 : 480,
-            280,
-            1_200,
-          ),
-        }
-      : {}),
-  };
-}
-
-function loadWorkbenchLayout(): WorkbenchLayout {
-  try {
-    const key = workbenchLayoutStorageKey();
-    touchWorkbenchLayoutInstance(key);
-    const raw = localStorage.getItem(key);
-    const candidate = raw ? JSON.parse(raw) as Partial<WorkbenchLayout> : {};
-    return {
-      inspector: normalizePanelGeometry("inspector", candidate.inspector),
-      terminal: normalizePanelGeometry("terminal", candidate.terminal),
-      usage: normalizePanelGeometry("usage", candidate.usage),
-    };
-  } catch {
-    return {
-      inspector: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.inspector),
-      terminal: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.terminal),
-      usage: clonePanelGeometry(WORKBENCH_PANEL_DEFAULTS.usage),
-    };
-  }
-}
-
-function saveWorkbenchLayout(): void {
-  try {
-    const key = workbenchLayoutStorageKey();
-    touchWorkbenchLayoutInstance(key);
-    localStorage.setItem(key, JSON.stringify(workbenchLayout));
-  } catch {
-    // A restricted Client can still use the layout for this window.
-  }
-}
-
-function panelCssVariables(panelId: WorkbenchPanelId): string {
-  const panel = workbenchLayout[panelId];
-  const width = panelWidth(panelId);
-  const dimensions = panelIsFloating(panelId)
-    ? `width:${Math.round(width)}px;height:${Math.round(panel.height)}px;`
-    : "";
-  return `--panel-width:${Math.round(width)}px;--panel-height:${Math.round(panel.height)}px;--panel-x:${Math.round(panel.x)}px;--panel-y:${Math.round(panel.y)}px;${dimensions}`;
-}
-
-function panelUiText() {
-  const chinese = effectiveClientLanguage() === "zh-CN";
-  return chinese
-    ? { move: "拖动面板", resize: "调整面板大小", float: "浮窗", dock: "停靠", hide: "收起面板", showTerminal: "显示 Terminal" }
-    : { move: "Move panel", resize: "Resize panel", float: "Float", dock: "Dock", hide: "Hide panel", showTerminal: "Show Terminal" };
-}
-
-function panelControls(panelId: WorkbenchPanelId): string {
-  if (mobileClient()) return "";
-  const panel = workbenchLayout[panelId];
-  const floating = panelIsFloating(panelId);
-  const text = panelUiText();
-  return `<div class="panel-layout-bar">
-    <button type="button" class="panel-drag-handle" data-panel-drag="${panelId}" aria-label="${escapeHtml(text.move)}" title="${escapeHtml(text.move)}">⋮⋮</button>
-    <output class="panel-size" data-panel-size="${panelId}">${Math.round(panelWidth(panelId))} × ${Math.round(panel.height)}</output>
-    <button type="button" class="panel-mode" data-act="panel-mode" data-id="${panelId}" data-panel-mode="${panelId}">${escapeHtml(floating ? text.dock : text.float)}</button>
-    ${panelId === "terminal" ? `<button type="button" data-act="hide-terminal" aria-label="${escapeHtml(text.hide)}" title="${escapeHtml(text.hide)}">×</button>` : ""}
-  </div>`;
-}
-
-function panelResizeHandle(panelId: WorkbenchPanelId): string {
-  const text = panelUiText();
-  return `<div class="panel-resize-handle" data-panel-resize="${panelId}" role="separator" aria-label="${escapeHtml(text.resize)}" title="${escapeHtml(text.resize)}"></div>`;
-}
-
-function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
-  return `<aside class="issue-detail workbench-panel" data-workbench-panel="inspector" data-floating="${panelIsFloating("inspector")}" data-front="${frontWorkbenchPanel === "inspector"}" style="${panelCssVariables("inspector")}">
-    ${panelControls("inspector")}
-    ${issueDetail(copy, board)}
-    ${panelResizeHandle("inspector")}
-  </aside>`;
-}
-
-function panelContainer(panel: HTMLElement): HTMLElement {
-  return panel.closest<HTMLElement>(".board-shell, .lifted-run, .workspace") ?? document.documentElement;
-}
-
-function floatingOrigin(panelId: WorkbenchPanelId, panel: HTMLElement): WorkbenchPanelGeometry {
-  const current = workbenchLayout[panelId];
-  const container = panelContainer(panel).getBoundingClientRect();
-  const width = Math.min(panelWidth(panelId), Math.max(280, container.width - 16));
-  const height = Math.min(current.height, Math.max(180, container.height - 16));
-  return {
-    ...current,
-    width,
-    height,
-    x: Math.max(8, Math.min(current.x, container.width - width - 8)),
-    y: Math.max(8, Math.min(current.y, container.height - height - 8)),
-  };
-}
-
-function panelIsFloating(panelId: WorkbenchPanelId): boolean {
-  const panel = workbenchLayout[panelId];
-  return panelId === "inspector" && snapshot?.workspaceView === "run"
-    ? panel.runFloating ?? false
-    : panel.floating;
-}
-
-function panelWidth(panelId: WorkbenchPanelId): number {
-  const panel = workbenchLayout[panelId];
-  return panelId === "inspector" && !panelIsFloating(panelId)
-    ? panel.dockedWidth ?? 480
-    : panel.width;
-}
-
-function withPanelFloating(
-  panelId: WorkbenchPanelId,
-  geometry: WorkbenchPanelGeometry,
-  floating: boolean,
-): WorkbenchPanelGeometry {
-  return panelId === "inspector" && snapshot?.workspaceView === "run"
-    ? { ...geometry, runFloating: floating }
-    : { ...geometry, floating };
-}
-
-function updatePanelNode(panelId: WorkbenchPanelId): void {
-  const panel = app?.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
-  if (!panel) return;
-  panel.dataset.floating = String(panelIsFloating(panelId));
-  panel.style.cssText = panelCssVariables(panelId);
-  if (panelId === "inspector") {
-    const parent = panel.closest<HTMLElement>(".board-shell, .lifted-run");
-    const width = `${Math.round(panelWidth(panelId))}px`;
-    parent?.style.setProperty("--inspector-panel-width", width);
-    parent?.style.setProperty("--issue-detail-width", width);
-  }
-  const size = panel.querySelector<HTMLOutputElement>(`[data-panel-size="${panelId}"]`);
-  const rect = panel.getBoundingClientRect();
-  if (size) size.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
-}
-
-function positionInspectorAwayFromCard(card: HTMLElement | null): void {
-  if (!card || mobileClient() || !panelIsFloating("inspector")) return;
-  const panel = app?.querySelector<HTMLElement>(
-    '[data-workbench-panel="inspector"]',
-  );
-  if (!panel) return;
-  const container = panelContainer(panel).getBoundingClientRect();
-  const cardRect = card.getBoundingClientRect();
-  const width = Math.min(panelWidth("inspector"), Math.max(280, container.width - 16));
-  const height = Math.min(workbenchLayout.inspector.height, Math.max(180, container.height - 16));
-  const gap = 12;
-  const leftSpace = cardRect.left - container.left;
-  const rightSpace = container.right - cardRect.right;
-  let x: number;
-  let y = clamp(cardRect.top - container.top, 8, container.height - height - 8);
-  const graphAnchor = Boolean(card.closest(".graph-node, .graph-index-row"));
-  const cardCenter = cardRect.left - container.left + cardRect.width / 2;
-  if (graphAnchor) {
-    x = 8;
-  } else if (cardCenter >= container.width / 2) {
-    x = leftSpace >= width + gap
-      ? cardRect.left - container.left - width - gap
-      : 8;
-  } else {
-    x = rightSpace >= width + gap
-      ? cardRect.right - container.left + gap
-      : container.width - width - 8;
-  }
-  workbenchLayout.inspector = {
-    ...workbenchLayout.inspector,
-    x: clamp(x, 8, container.width - width - 8),
-    y,
-  };
-  saveWorkbenchLayout();
-  updatePanelNode("inspector");
-}
-
-function inspectorAnchorForIssue(issueId: string): HTMLElement | null {
-  const selector = CSS.escape(issueId);
-  return app?.querySelector<HTMLElement>(
-    `.graph-node[data-id="${selector}"], .graph-index-row button[data-id="${selector}"], .issue-card[data-issue-id="${selector}"]`,
-  ) ?? null;
-}
-
-function issueCardAtPoint(clientX: number, clientY: number): HTMLButtonElement | null {
-  for (const element of document.elementsFromPoint(clientX, clientY)) {
-    const card = element.closest<HTMLButtonElement>(".issue-card-main");
-    if (card) return card;
-  }
-  return null;
-}
-
-function graphActionAtPoint(clientX: number, clientY: number): HTMLButtonElement | null {
-  for (const element of document.elementsFromPoint(clientX, clientY)) {
-    const action = element.closest<HTMLButtonElement>(".graph-center-act");
-    if (action) return action;
-  }
-  return null;
-}
-
-function refreshPanelSizeFeedback(): void {
-  for (const panelId of ["inspector", "terminal", "usage"] as const) updatePanelNode(panelId);
-}
-
-workbenchLayout = loadWorkbenchLayout();
-startWorkbenchLayoutHeartbeat();
-
-function workbenchPanelId(value: string | undefined): WorkbenchPanelId | null {
-  return value === "inspector" || value === "terminal" || value === "usage" ? value : null;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
-}
-
-function setPanelFloating(panelId: WorkbenchPanelId, floating: boolean): void {
-  const node = app?.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
-  if (!node) return;
-  const geometry = floating ? floatingOrigin(panelId, node) : workbenchLayout[panelId];
-  workbenchLayout[panelId] = withPanelFloating(panelId, geometry, floating);
-  frontWorkbenchPanel = panelId;
-  saveWorkbenchLayout();
-  render();
-  fitAddon?.fit();
-}
-
-function bringPanelToFront(panelId: WorkbenchPanelId): void {
-  frontWorkbenchPanel = panelId;
-  for (const panel of app?.querySelectorAll<HTMLElement>("[data-workbench-panel]") ?? []) {
-    panel.dataset.front = String(panel.dataset.workbenchPanel === panelId);
-  }
-}
-
-function finishPanelPointer(pointerId: number): void {
-  if (panelPointerInteraction?.pointerId !== pointerId) return;
-  panelPointerInteraction = null;
-  saveWorkbenchLayout();
-  fitAddon?.fit();
-  const runId = snapshot?.focusedRunId;
-  if (runId && !mobileClient()) void sendPtyResize(runId);
-}
-
-const MOBILE_BREAKPOINT = 640;
-const MOBILE_APPEARANCE_KEY = "agent-taskboard-mobile-appearance";
-
-function mobileClient(): boolean {
-  return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
-}
-
-function systemMobileAppearance(): MobileAppearance {
-  const language = navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  return {
-    language,
-    theme: dark ? "plain-night" : "warm-paper",
-    lastLightTheme: "warm-paper",
-  };
-}
-
-function loadMobileAppearance(): MobileAppearance | null {
-  try {
-    const raw = localStorage.getItem(MOBILE_APPEARANCE_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as Partial<MobileAppearance>;
-    if (
-      (value.language === "zh-CN" || value.language === "en")
-      && (value.theme === "warm-paper" || value.theme === "plain-paper" || value.theme === "plain-night")
-      && (value.lastLightTheme === "warm-paper" || value.lastLightTheme === "plain-paper")
-    ) {
-      return value as MobileAppearance;
-    }
-  } catch {
-    // Use the browser defaults when local settings are invalid.
-  }
-  return null;
-}
-
-function ensureMobileAppearance(): MobileAppearance {
-  if (!mobileAppearance) {
-    mobileAppearance = systemMobileAppearance();
-    saveMobileAppearance(mobileAppearance);
-  }
-  return mobileAppearance;
-}
-
-function saveMobileAppearance(appearance: MobileAppearance): void {
-  mobileAppearance = appearance;
-  localStorage.setItem(MOBILE_APPEARANCE_KEY, JSON.stringify(appearance));
-}
-
-function syncLaunchDraft(snap: Snapshot): void {
-  const form = snap.launchForm;
-  if (!form) {
-    launchDraft = null;
-    launchPickerProjectId = "";
-    launchPickerAgentId = "";
-    return;
-  }
-  if (!form.skipAgentPicker) {
-    launchDraft = null;
-    if (
-      launchPickerProjectId !== form.projectId
-      || (form.selectedAgentId && form.selectedAgentId !== launchPickerAgentId)
-    ) {
-      launchPickerProjectId = form.projectId;
-      launchPickerAgentId = form.selectedAgentId;
-    }
-    return;
-  }
-  launchPickerProjectId = form.projectId;
-  launchPickerAgentId = form.selectedAgentId;
-  if (
-    !launchDraft
-    || launchDraft.projectId !== form.projectId
-    || launchDraft.agentId !== form.selectedAgentId
-  ) {
-    launchDraft = {
-      projectId: form.projectId,
-      issueId: form.issueId,
-      agentId: form.selectedAgentId,
-      values: { ...form.values },
-      openingText: form.openingText,
-      intentId: "",
-      custom: false,
-    };
-  }
-}
-
-function prefillHint(copy: ShellCopy, source: RunLaunchForm["prefillSource"]): string {
-  if (source === "current-project") return copy.prefillCurrent;
-  if (source === "other-project") return copy.prefillOther;
-  return copy.prefillSeed;
-}
-
-function refreshLaunchFieldOptions(): void {
-  if (!snapshot?.launchForm || !launchDraft) return;
-  for (const field of snapshot.launchForm.fields) {
-    if (field.kind !== "select") continue;
-    const select = app?.querySelector<HTMLSelectElement>(
-      `[data-launch-select="${CSS.escape(field.id)}"]`,
-    );
-    if (!select) continue;
-    const options = launchFieldOptions(field, launchDraft.values);
-    const current = launchDraft.values[field.id] ?? "";
-    const known = options.includes(current);
-    select.innerHTML = launchSelectOptions(options, current);
-    select.value = known ? current : current ? "__custom__" : "";
-    const custom = app?.querySelector<HTMLInputElement>(
-      `[data-launch-custom="${CSS.escape(field.id)}"]`,
-    );
-    if (custom) {
-      custom.hidden = known || !current;
-      custom.value = known ? "" : current;
-    }
-  }
-}
-
-function scheduleLaunchPreview(): void {
-  if (!snapshot?.launchForm || !launchDraft) return;
-  const sequence = ++launchPreviewSequence;
-  if (launchPreviewTimer != null) window.clearTimeout(launchPreviewTimer);
-  launchPreviewTimer = window.setTimeout(() => {
-    launchPreviewTimer = undefined;
-    const draft = launchDraft;
-    if (!draft) return;
-    void rpc("updateRunLaunch", {
-      projectId: draft.projectId,
-      agentId: draft.agentId,
-      values: { ...draft.values },
-      openingText: draft.openingText,
-      language: effectiveClientLanguage(),
-    }).then(() => {
-      if (sequence !== launchPreviewSequence) return;
-      const preview = app?.querySelector<HTMLElement>(".launch-command-preview");
-      if (preview && snapshot?.launchForm) preview.textContent = snapshot.launchForm.commandPreview;
-      refreshLaunchWarnings();
-    }).catch(() => {});
-  }, 120);
-}
-
-function refreshLaunchWarnings(): void {
-  const node = app?.querySelector<HTMLElement>(".launch-warnings");
-  if (!node || !snapshot?.launchForm) return;
-  const warnings = snapshot.launchForm.warnings ?? [];
-  node.textContent = warnings.join(" ");
-  node.hidden = warnings.length === 0;
-}
-
-function refreshIntentChoices(): void {
-  if (!app || !launchDraft) return;
-  for (const button of app.querySelectorAll<HTMLButtonElement>(".launch-sheet button[data-act='intent']")) {
-    button.classList.toggle(
-      "active",
-      !launchDraft.custom && (button.dataset.id ?? "") === launchDraft.intentId,
-    );
-  }
-  const custom = app.querySelector<HTMLButtonElement>(".launch-sheet button[data-act='intent-custom']");
-  if (custom) {
-    custom.hidden = !launchDraft.custom;
-    custom.classList.toggle("active", launchDraft.custom);
-  }
-}
-
-function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
-  const prefix = form.intents.find((intent) => intent.id === draft.intentId)?.prefix ?? "";
-  const body = (draft.values["initial-instruction"] ?? "").trim();
-  const notes = (form.changeNotesText ?? "").trim();
-  const core = prefix && body ? `${prefix}\n${body}` : prefix || body;
-  if (core && notes) return `${core}\n\n${notes}`;
-  return core || notes;
-}
-
-async function openExternalUrl(url: string): Promise<void> {
-  if (desktopShellAvailable()) {
-    await openUrl(url);
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function isLoopbackPage(): boolean {
-  const { hostname, port } = window.location;
-  return (
-    (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]") &&
-    port === "10529"
-  );
-}
-
-function desktopShellAvailable(): boolean {
-  return isTauri() || "__TAURI_INTERNALS__" in window;
-}
-
-function focusedHostIsLocal(): boolean {
-  const snap = snapshot;
-  if (!snap) return false;
-  const focused = snap.hosts.find((host) => host.id === snap.focusedHostId);
-  if (focused) return focused.local;
-  return snap.hosts.some((host) => host.local) && snap.hosts.every((host) => host.local);
-}
-
-function directoryName(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  const parts = trimmed.split(/[\\/]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : "";
-}
-
-function supersedeProjectInference(): void {
-  projectInference = { status: "idle", requestId: projectInference.requestId + 1 };
-}
-
-function applyLocalPath(path: string, prefillName: boolean): void {
-  const nextPath = path.trim();
-  const nextName = directoryName(nextPath);
-  const shouldPrefillName =
-    prefillName &&
-    Boolean(nextName) &&
-    (!formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName);
-  formDraft = {
-    ...formDraft,
-    localPath: path,
-    name: shouldPrefillName ? nextName : formDraft.name,
-  };
-  if (shouldPrefillName) autoFilledProjectName = nextName;
-  supersedeProjectInference();
-  formError = "";
-  void inferFromLocalPath(nextPath);
-}
-
-async function inferFromLocalPath(path: string): Promise<void> {
-  const requestedPath = path.trim();
-  if (!requestedPath || !focusedHostIsLocal()) return;
-  const requestId = projectInference.requestId + 1;
-  projectInference = { status: "pending", requestId };
-  render();
-  try {
-    const result = await rpc("inferProject", { localPath: requestedPath });
-    if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
-    projectInference = result.inference
-      ? { status: "candidate", requestId, candidate: result.inference }
-      : { status: "failed", requestId, message: snapshot?.copy.inferenceFailed ?? "" };
-  } catch (error) {
-    if (requestId !== projectInference.requestId || formDraft.localPath.trim() !== requestedPath) return;
-    projectInference = {
-      status: "failed",
-      requestId,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  render();
-}
-
-async function chooseProjectDirectory(): Promise<void> {
-  if (!focusedHostIsLocal()) return;
-  formError = "";
-  if (!desktopShellAvailable()) {
-    formError = snapshot?.copy.chooseDirectoryDesktopOnly ?? "";
-    render();
-    return;
-  }
-  try {
-    const selected = await openDirectory({
-      directory: true,
-      multiple: false,
-      title: snapshot?.copy.localDirectory,
-      defaultPath: formDraft.localPath.trim() || undefined,
-      canCreateDirectories: false,
-    });
-    if (typeof selected !== "string" || !selected) return;
-    applyLocalPath(selected, true);
-  } catch (error) {
-    formError = error instanceof Error ? error.message : String(error);
-    render();
-  }
-}
-
-async function loadStartupSettings(): Promise<void> {
-  startupSettingsError = "";
-  if (!desktopShellAvailable()) {
-    startAtLogin = null;
-    return;
-  }
-  try {
-    startAtLogin = await isEnabled();
-  } catch (error) {
-    startupSettingsError = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function setHostMode(mode: Snapshot["hostMode"]): Promise<void> {
-  startupSettingsError = "";
-  try {
-    if (mode === "client-only") {
-      const gate = await readUpdateInstallGate("updateInstallGate");
-      if (!gate.allowed) {
-        startupSettingsError = startupCopy(snapshot?.appearance.language ?? "en").hostModeActiveRuns;
-        return;
-      }
-    }
-    await invoke("set_host_mode", { mode });
-    await relaunch();
-  } catch (error) {
-    startupSettingsError = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function setStartAtLogin(enabled: boolean): Promise<void> {
-  startupSettingsError = "";
-  try {
-    if (enabled) await enable();
-    else await disable();
-    startAtLogin = await isEnabled();
-  } catch (error) {
-    startupSettingsError = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function checkForUpdates(manual: boolean): Promise<void> {
-  if (!desktopShellAvailable()) {
-    updateState = { kind: "failed", message: snapshot?.copy.updateUnavailableBrowser ?? "" };
-    render();
-    return;
-  }
-  if (updateState.kind === "checking" || updateState.kind === "installing") return;
-  updateState = { kind: "checking", manual };
-  render();
-  try {
-    pendingUpdate?.close().catch(() => {});
-    pendingUpdate = await check({ timeout: 30_000 });
-    pendingUpdateDownloaded = false;
-    updateState = pendingUpdate
-      ? {
-          kind: "available",
-          version: pendingUpdate.version,
-          notes: pendingUpdate.body ?? "",
-        }
-      : { kind: "current" };
-  } catch (error) {
-    if (manual) {
-      updateState = {
-        kind: "failed",
-        message: error instanceof Error ? error.message : String(error),
-      };
-    } else {
-      updateState = { kind: "idle" };
-    }
-  }
-  render();
-}
-
-async function readUpdateInstallGate(op = "updateInstallGate"): Promise<UpdateInstallGate> {
-  const result = await rpc(op);
-  if (!result.updateInstallGate) throw new Error("Host returned no update install gate");
-  return result.updateInstallGate;
-}
-
-async function installPendingUpdate(): Promise<void> {
-  if (!pendingUpdate || updateState.kind === "installing") return;
-  let gate: UpdateInstallGate;
-  try {
-    gate = await readUpdateInstallGate();
-  } catch (error) {
-    updateState = {
-      kind: "failed",
-      message: error instanceof Error ? error.message : String(error),
-    };
-    render();
-    return;
-  }
-  if (!gate.allowed) {
-    updateState = { kind: "blocked", activeRunCount: gate.activeRunCount };
-    render();
-    return;
-  }
-  updateState = { kind: "installing", progress: null };
-  render();
-  let downloaded = 0;
-  let contentLength: number | undefined;
-  try {
-    if (!pendingUpdateDownloaded) {
-      await pendingUpdate.download((event) => {
-        if (event.event === "Started") {
-          contentLength = event.data.contentLength;
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-        }
-        const progress = contentLength && contentLength > 0
-          ? Math.min(100, Math.round((downloaded / contentLength) * 100))
-          : null;
-        updateState = { kind: "installing", progress };
-        render();
-      });
-      pendingUpdateDownloaded = true;
-    }
-    const finalGate = await readUpdateInstallGate("beginUpdateInstall");
-    if (!finalGate.allowed) {
-      updateState = { kind: "blocked", activeRunCount: finalGate.activeRunCount };
-      render();
-      return;
-    }
-    await pendingUpdate.install();
-    await relaunch();
-  } catch (error) {
-    await rpc("cancelUpdateInstall").catch(() => {});
-    updateState = {
-      kind: "failed",
-      message: error instanceof Error ? error.message : String(error),
-    };
-    render();
-  }
-}
-
-async function protocolBase(): Promise<string> {
-  if (window.__HOST_PROTOCOL__) {
-    return window.__HOST_PROTOCOL__;
-  }
-  if (isLoopbackPage()) {
-    return "";
-  }
-  for (let i = 0; i < 50; i += 1) {
-    if (window.__HOST_PROTOCOL__) {
-      return window.__HOST_PROTOCOL__;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("Host protocol is not available");
-}
-
-let rpcQueue: Promise<void> = Promise.resolve();
-let pendingCenterView: CenterView | null = null;
-let issueDocumentRequestSequence = 0;
-
-function commitRpcResult(result: RpcResult): void {
-  syncLaunchDraft(result.snapshot);
-  deliverHostEvents(result.events ?? [], result.snapshot);
-  snapshot = result.snapshot;
-  if (result.viewChanges) {
-    changesView = result.viewChanges;
-    changesOpen = true;
-  }
-}
-
-async function executeRpc(
-  op: string,
-  extra: Record<string, unknown>,
-  commit = true,
-): Promise<RpcResult> {
-  const response = await fetch(`${await protocolBase()}/rpc`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ op, clientInstanceId: clientId, ...extra }),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `Host protocol ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { error?: string; message?: string };
-      message = parsed.message || parsed.error || message;
-    } catch {
-      // keep raw body
-    }
-    throw new Error(message);
-  }
-  const result = (await response.json()) as RpcResult;
-  result.snapshot.runs = result.snapshot.runs ?? [];
-  result.snapshot.focusedRunId = result.snapshot.focusedRunId ?? "";
-  result.snapshot.workspaceView = result.snapshot.workspaceView ?? "project";
-  if (result.snapshot.board) {
-    result.snapshot.board.issueOptions = result.snapshot.board.issueOptions ?? [];
-  }
-  if (pendingCenterView) result.snapshot.centerView = pendingCenterView;
-  result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
-  result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
-  result.snapshot.notifySound = result.snapshot.notifySound ?? true;
-  result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-  result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
-  result.events = result.events ?? [];
-  if (commit) commitRpcResult(result);
-  return result;
-}
-
-async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  const request = rpcQueue.then(() => executeRpc(op, extra));
-  rpcQueue = request.then(() => undefined, () => undefined);
-  return request;
-}
-
-function rpcDetached(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  return executeRpc(op, extra);
-}
-
-async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {
-  const result = await rpc("viewChanges", { runId, scope });
-  changesView = result.viewChanges ?? null;
-}
-
-async function loadSelectedIssueDocument(force = false): Promise<void> {
-  const issue = snapshot?.board?.selected;
-  if (!issue) return;
-  const state = issue.document ?? { kind: "unloaded" as const };
-  if (!force && state.kind !== "unloaded" && state.kind !== "loading") return;
-  issue.document = state.kind === "ready" || state.kind === "stale" || state.kind === "loading"
-    ? { kind: "loading", body: state.body, fetchedAtMs: state.fetchedAtMs }
-    : { kind: "loading" };
-  const issueId = issue.id;
-  const sequence = ++issueDocumentRequestSequence;
-  render();
-  const result = await executeRpc("loadIssueDocument", { issueId }, false);
-  if (sequence !== issueDocumentRequestSequence || snapshot?.board?.selected?.id !== issueId) {
-    return;
-  }
-  commitRpcResult(result);
-}
-
-function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
+import { ui } from "./ui";
+import { handleAppClick } from "./events/click";
+import { bindFormEvents } from "./events/forms";
+import {
+  clonePanelGeometry,
+  saveWorkbenchLayout,
+  panelContainer,
+  floatingOrigin,
+  panelIsFloating,
+  withPanelFloating,
+  updatePanelNode,
+  issueCardAtPoint,
+  graphActionAtPoint,
+  workbenchPanelId,
+  clamp,
+  bringPanelToFront,
+  finishPanelPointer,
+} from "./workbench";
+import {
+  desktopShellAvailable,
+  checkForUpdates,
+} from "./launch-session";
+import {
+  refreshBar,
+} from "./render/board";
+import {
+  render,
+} from "./render/app";
+import type {
+  Language,
+  Theme,
+  ShellCopy,
+  Project,
+  DependencyGraph,
+  BoardSnapshot,
+  Snapshot,
+  NotificationKind,
+  HostEvent,
+  RpcResult,
+  GraphViewportAnchor,
+} from "./protocol";
+
+
+
+ui.mobileAppearance = loadMobileAppearance();
+export function resetGraphUiState(): void {
+  ui.graphCanvasLimit = 48;
+  ui.graphListLimit = 50;
+  ui.graphListQuery = "";
+}
+
+
+
+export function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
   if (kind === "waiting") return copy.notifyWaiting;
   if (kind === "completed") return copy.notifyCompleted;
   if (kind === "abnormal-stop") return copy.notifyAbnormal;
   return copy.notifyCrash;
 }
 
-function playNotifySound(): void {
+export function playNotifySound(): void {
   const AudioCtx =
     window.AudioContext ||
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -2023,13 +96,13 @@ function playNotifySound(): void {
   };
 }
 
-async function jumpToNotification(event: Extract<HostEvent, { type: "notification" }>): Promise<void> {
+export async function jumpToNotification(event: Extract<HostEvent, { type: "notification" }>): Promise<void> {
   await rpc("showWindow");
   if (event.projectId) {
     await rpc("focusProject", { projectId: event.projectId });
   }
   if (event.issueId) {
-    issueDetailVisible = true;
+    ui.issueDetailVisible = true;
     await rpc("focusIssue", { issueId: event.issueId });
   }
   if (event.runId) {
@@ -2038,7 +111,7 @@ async function jumpToNotification(event: Extract<HostEvent, { type: "notificatio
   render();
 }
 
-function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
+export function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
   if (mobileClient()) return;
   for (const event of events) {
     if (event.type !== "notification") continue;
@@ -2065,36 +138,36 @@ function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
   }
 }
 
-function emptyActionAct(action: Snapshot["emptyActions"][number]): string {
+export function emptyActionAct(action: Snapshot["emptyActions"][number]): string {
   return action === "register-first-project" ? "register" : "pair";
 }
 
-function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions"][number]): string {
+export function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions"][number]): string {
   return action === "register-first-project"
     ? copy.registerFirstProject
     : copy.pairAnotherHost;
 }
 
-function themeLabel(copy: ShellCopy, theme: Theme): string {
+export function themeLabel(copy: ShellCopy, theme: Theme): string {
   if (theme === "warm-paper") return copy.themeWarmPaper;
   if (theme === "plain-paper") return copy.themePlainPaper;
   return copy.themePlainNight;
 }
 
-function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
-  return snapshot?.copyCatalog?.[language] ?? fallback;
+export function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
+  return ui.snapshot?.copyCatalog?.[language] ?? fallback;
 }
 
-function effectiveClientLanguage(): Language {
+export function effectiveClientLanguage(): Language {
   if (mobileClient()) return ensureMobileAppearance().language;
-  return snapshot?.appearance.language ?? "en";
+  return ui.snapshot?.appearance.language ?? "en";
 }
 
-function languageLabel(copy: ShellCopy, language: Language): string {
+export function languageLabel(copy: ShellCopy, language: Language): string {
   return language === "zh-CN" ? copy.languageZh : copy.languageEn;
 }
 
-function captureActiveField(): {
+export function captureActiveField(): {
   selector: string;
   start: number | null;
   end: number | null;
@@ -2102,7 +175,7 @@ function captureActiveField(): {
   scrollLeft: number;
 } | null {
   const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-  if (!active || !app?.contains(active)) return null;
+  if (!active || !ui.app?.contains(active)) return null;
   if (!("value" in active)) return null;
   let selector = active.id ? `#${CSS.escape(active.id)}` : "";
   if (!selector) {
@@ -2126,7 +199,7 @@ function captureActiveField(): {
   };
 }
 
-function restoreActiveField(field: {
+export function restoreActiveField(field: {
   selector: string;
   start: number | null;
   end: number | null;
@@ -2134,7 +207,7 @@ function restoreActiveField(field: {
   scrollLeft: number;
 } | null): void {
   if (!field) return;
-  const next = app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(field.selector);
+  const next = ui.app?.querySelector<HTMLInputElement | HTMLTextAreaElement>(field.selector);
   if (!next) return;
   next.focus();
   if (field.start != null && field.end != null) {
@@ -2143,12 +216,12 @@ function restoreActiveField(field: {
   next.scrollLeft = field.scrollLeft;
 }
 
-function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
+export function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
   if (!board?.graph) return "";
-  return JSON.stringify([board.graph, graphCanvasLimit]);
+  return JSON.stringify([board.graph, ui.graphCanvasLimit]);
 }
 
-function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
+export function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
   if (typeof graph.closedCount === "number") {
     return copy.showClosedContext.replace("{count}", String(graph.closedCount));
   }
@@ -2157,423 +230,10 @@ function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): 
     .replace(/\s*\([^)]*\{count\}[^)]*\)/, "");
 }
 
-function render(): void {
-  if (!snapshot || !app) return;
-  const snap = snapshot;
-  const isMobile = mobileClient();
-  const activeField = captureActiveField();
-  const appearance = isMobile
-    ? { ...snap.appearance, ...ensureMobileAppearance() }
-    : snap.appearance;
-  const copy = isMobile && appearance.language !== snap.appearance.language
-    ? clientCopy(appearance.language, snap.copy)
-    : snap.copy;
-  const { hosts, projects } = snap;
-  const project = currentProject(snap);
-  document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
-  document.documentElement.dataset.theme = appearance.theme;
-  document.documentElement.dataset.mobile = isMobile ? "true" : "false";
-  document.title = copy.appName;
-
-  const host = hosts.find((item) => item.id === snapshot?.focusedHostId) ?? hosts[0];
-  const empty = snapshot.emptyActions.length > 0;
-  const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
-  const showSidebar = !isMobile && sidebarVisible && !runLifted;
-  const selectedIssue = snap.board?.selected;
-  const previousDetailScrollNode = app.querySelector<HTMLElement>(".detail-scroll");
-  if (previousDetailScrollNode && renderedDetailIssueId) {
-    issueDetailScrollPositions.set(renderedDetailIssueId, {
-      scrollTop: previousDetailScrollNode.scrollTop,
-      scrollLeft: previousDetailScrollNode.scrollLeft,
-    });
-  }
-  const previousLanes = app.querySelector<HTMLElement>(".lanes");
-  if (previousLanes && renderedBoardProjectId) {
-    const laneScrolls: Record<string, ScrollPosition> = {};
-    for (const lane of previousLanes.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
-      const key = lane.dataset.lane;
-      if (!key) continue;
-      laneScrolls[key] = { scrollTop: lane.scrollTop, scrollLeft: lane.scrollLeft };
-    }
-    boardScrollPositions.set(renderedBoardProjectId, {
-      scrollTop: previousLanes.scrollTop,
-      scrollLeft: previousLanes.scrollLeft,
-      lanes: laneScrolls,
-    });
-  }
-  const previousWorkspace = app.querySelector<HTMLElement>(".workspace");
-  if (previousWorkspace && renderedMobileWorkspaceKey) {
-    mobileWorkspaceScrollPositions.set(renderedMobileWorkspaceKey, {
-      scrollTop: previousWorkspace.scrollTop,
-      scrollLeft: previousWorkspace.scrollLeft,
-    });
-  }
-  const inspectorOpen = issueDetailVisible && Boolean(selectedIssue);
-  const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
-  const previousGraphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
-  const previousLaunchScrollTop = app.querySelector<HTMLElement>(".launch-sheet")?.scrollTop ?? 0;
-  const previousGraph = previousGraphCanvas
-    ? {
-        canvas: previousGraphCanvas,
-        projectId: renderedGraphProjectId,
-        centerId: renderedGraphCenterId,
-        renderKey: renderedGraphKey,
-        scrollLeft: previousGraphCanvas.scrollLeft,
-        scrollTop: previousGraphCanvas.scrollTop,
-        clientWidth: previousGraphCanvas.clientWidth,
-        clientHeight: previousGraphCanvas.clientHeight,
-        scrollWidth: previousGraphCanvas.scrollWidth,
-        scrollHeight: previousGraphCanvas.scrollHeight,
-      }
-    : null;
-  const desktopProjectGraph =
-    !isMobile &&
-    !empty &&
-    !snap.usageOpen &&
-    snap.workspaceView === "project" &&
-    !runLifted &&
-    snap.centerView === "graph" &&
-    Boolean(snap.board?.graph);
-  const nextGraphKey = desktopProjectGraph ? dependencyGraphRenderKey(snap.board) : "";
-  const nextGraphCenterId = desktopProjectGraph ? snap.board?.graph?.centerId ?? "" : "";
-  const graphContentChanged = Boolean(previousGraph && previousGraph.renderKey !== nextGraphKey);
-  const reuseGraphCanvas = Boolean(
-    previousGraph &&
-      previousGraph.projectId === snap.focusedProjectId &&
-      previousGraph.renderKey === nextGraphKey,
-  );
-  if (!pairingAddress) {
-    pairingAddress = (snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
-  }
-
-  app.innerHTML = `
-    <div class="frame">
-      <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
-        <div class="chrome-lead">
-          ${isMobile
-            ? `<button type="button" class="chrome-button" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
-            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-               ${showSidebar ? `<span class="chrome-app">${escapeHtml(copy.appName)}</span>` : ""}`}
-        </div>
-        <div class="chrome-main">
-          <div class="chrome-primary">
-            ${!isMobile && !empty && !snap.usageOpen && snap.workspaceView === "project" && !runLifted
-              ? `<div class="view-switch" role="tablist">
-                  <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
-                  <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
-                </div>`
-              : ""}
-            ${runLifted ? `<button type="button" class="chrome-button" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
-            ${!isMobile && snap.workspaceView === "host-overview" ? `<span class="chrome-title">${escapeHtml(copy.hostOverview)}</span>` : ""}
-            ${!isMobile && snap.usageOpen ? `<span class="chrome-title">${escapeHtml(copy.usage)}</span>` : ""}
-            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
-          </div>
-          ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
-          <div class="chrome-trail">
-            ${!isMobile && focusedRun(snap) && !terminalPanelVisible
-              ? `<button type="button" class="chrome-button" data-act="show-terminal">${escapeHtml(panelUiText().showTerminal)}</button>`
-              : ""}
-            ${showIssueToggle
-              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
-              : ""}
-            <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
-            <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
-            <button type="button" class="chrome-button ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
-          </div>
-        </div>
-      </header>
-      <div class="body ${showSidebar ? "" : "side-collapsed"}">
-        ${showSidebar ? `<aside class="side">
-          <div>
-            <div class="group-name">${escapeHtml(copy.hosts)}</div>
-            ${
-              host
-                ? `<div class="host-line">
-                    <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
-                    <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
-                  </div>
-                  <button type="button" class="item ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>
-                  <button type="button" class="item ${snap.usageOpen ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
-                : ""
-            }
-            ${
-              hostPickerOpen && hosts.length > 1
-                ? `<div class="host-picker">${hosts
-                    .map(
-                      (item) =>
-                        `<button type="button" class="item ${item.id === host?.id ? "active" : ""}" data-act="focus-host" data-id="${escapeHtml(item.id)}">${escapeHtml(item.displayName)}${item.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>`,
-                    )
-                    .join("")}</div>`
-                : ""
-            }
-          </div>
-          <div>
-            <div class="group-head">
-              <div class="group-name">${escapeHtml(copy.projects)}</div>
-              <button type="button" class="title-icon" data-act="register" aria-label="${escapeHtml(copy.addProject)}">＋</button>
-            </div>
-            ${
-              projects.length
-                ? projects
-                    .map((project) => projectBlock(copy, snap, project, snap.focusedProjectId))
-                    .join("")
-                : `<div class="nested">${escapeHtml(copy.noProjectTitle)}</div>`
-            }
-          </div>
-        </aside>` : ""}
-        <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
-          ${
-            empty
-              ? `<div class="empty">
-                  ${loopbackNotice(snap.loopbackPage)}
-                  <h1>${escapeHtml(copy.noProjectTitle)}</h1>
-                  <p>${escapeHtml(copy.noProjectBody)}</p>
-                  <div class="actions">
-                    ${snap.emptyActions
-                      .map(
-                        (action, index) =>
-                          `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
-                      )
-                      .join("")}
-                  </div>
-                </div>`
-              : snap.usageOpen
-                ? usagePage(copy, snap)
-                : isMobile
-                  ? mobileMain(copy, snap)
-                  : snap.workspaceView === "host-overview"
-                    ? hostOverviewPage(copy, snap)
-                    : runLifted
-                      ? liftedRunView(copy, snap)
-                      : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
-          }
-        </main>
-      </div>
-      ${isMobile && !empty && !snap.usageOpen ? mobileNavigation(copy, snap) : ""}
-    </div>
-    ${isMobile && mobileScopeOpen ? mobileScopeSheet(copy, snap) : ""}
-    ${
-      settingsOpen
-        ? `<div class="overlay" data-act="close-settings">
-            <div class="sheet" data-stop="true">
-              <h2>${escapeHtml(copy.settings)}</h2>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.language)}</div>
-                <div class="choices">
-                  ${appearance.languages
-                    .map(
-                      (language) =>
-                        `<button type="button" class="${appearance.language === language ? "active" : ""}" data-act="language" data-id="${language}">${escapeHtml(languageLabel(copy, language))}</button>`,
-                    )
-                    .join("")}
-                </div>
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.theme)}</div>
-                <div class="choices">
-                  ${appearance.themes
-                    .map(
-                      (theme) =>
-                        `<button type="button" class="${appearance.theme === theme ? "active" : ""}" data-act="theme" data-id="${theme}">${escapeHtml(themeLabel(copy, theme))}</button>`,
-                    )
-                    .join("")}
-                </div>
-              </div>
-              ${startupSettings(startupCopy(appearance.language), snap)}
-              <div class="field">
-                <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(startupCopy(appearance.language).rereadLaunchEnvironment)}</button>
-                ${launchEnvironmentStatus(startupCopy(appearance.language))}
-              </div>
-              ${updateSettings(copy)}
-              <div class="field">
-                <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 300_000) / 1000)}" />
-                <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
-              </div>
-              <div class="field">
-                <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
-                <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
-                <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
-              </div>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
-                ${escapeHtml(copy.showCommandPreview)}
-              </label>
-              ${isMobile ? "" : `<label class="graph-opt">
-                <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
-                ${escapeHtml(copy.notifyDesktop)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
-                ${escapeHtml(copy.notifySound)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.autoAdvance)}
-              </label>
-              <p class="hint">${escapeHtml(copy.autoAdvanceHelp)}</p>
-              ${
-                currentProject(snap)
-                  ? `<label class="graph-opt">
-                <input type="checkbox" data-field="projectAutoAdvance" ${currentProject(snap)?.autoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.projectAutoAdvance)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="restoreAutoAdvance" ${currentProject(snap)?.restoreAutoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.restoreAutoAdvance)}
-              </label>
-              <div class="field">
-                <label class="label" for="restore-delay">${escapeHtml(copy.restoreDelay)}</label>
-                <input id="restore-delay" type="number" min="0" max="600" data-field="restoreDelay" value="${Math.round((currentProject(snap)?.restoreDelayMs ?? 60000) / 1000)}" />
-              </div>`
-                  : ""
-              }
-              <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>`}
-            </div>
-          </div>`
-        : ""
-    }
-    ${
-      pairingOpen
-        ? `<div class="overlay" data-act="close-pairing">
-            <div class="sheet pairing-sheet" data-act="pairing-noop">
-              <h2>${escapeHtml(copy.pairingTitle)}</h2>
-              <p class="hint">${escapeHtml(copy.pairingSamePayload)}</p>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairingThisHost)}</div>
-                <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
-                <input id="pairing-address" data-field="address" value="${escapeHtml(pairingAddress)}" />
-                <div class="actions">
-                  <button type="button" class="primary" data-act="show-offer">${escapeHtml(copy.pairingShow)}</button>
-                </div>
-                ${
-                  snapshot.pairingOffer
-                    ? `<div class="offer">
-                        <div class="qr">${snapshot.pairingOffer.qrSvg}</div>
-                        <pre class="payload">${escapeHtml(snapshot.pairingOffer.text)}</pre>
-                        <button type="button" data-act="copy-offer">${escapeHtml(copy.pairingCopy)}</button>
-                      </div>`
-                    : ""
-                }
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairedClients)}</div>
-                ${
-                  snapshot.pairedClients.length
-                    ? snapshot.pairedClients
-                        .map(
-                          (client) =>
-                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}">${escapeHtml(copy.revokeClient)}</button></div>`,
-                        )
-                        .join("")
-                    : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`
-                }
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairingToAnother)}</div>
-                <textarea data-field="paste" rows="4" placeholder="${escapeHtml(copy.pairingPaste)}">${escapeHtml(pairingPaste)}</textarea>
-                <div class="actions">
-                  <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
-                </div>
-              </div>
-              ${pairingError ? `<p class="notice">${escapeHtml(pairingError)}</p>` : ""}
-            </div>
-          </div>`
-        : ""
-    }
-    ${formOpen ? projectForm(copy) : ""}
-    ${snap.launchForm ? launchForm(copy, snap) : ""}
-    ${removeProject ? removeDialog(copy, removeProject) : ""}
-    ${snap.quitOffer ? quitOfferDialog(copy) : ""}
-    ${updateDialog(copy)}
-    ${changesOpen ? viewChangesPanel(copy) : ""}
-    ${keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
-  `;
-  refreshPanelSizeFeedback();
-  const graphPlaceholder = app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
-  if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
-    graphPlaceholder.replaceWith(previousGraph.canvas);
-  }
-  const graphCanvas = app.querySelector<HTMLElement>(".graph-canvas");
-  const sameGraphCenter = Boolean(
-    previousGraph &&
-      previousGraph.projectId === snap.focusedProjectId &&
-      previousGraph.centerId === nextGraphCenterId,
-  );
-  if (graphCanvas && sameGraphCenter && !graphContentChanged && previousGraph) {
-    graphCanvas.scrollLeft = previousGraph.scrollLeft;
-    graphCanvas.scrollTop = previousGraph.scrollTop;
-  }
-  renderedGraphKey = graphCanvas ? nextGraphKey : "";
-  renderedGraphProjectId = graphCanvas ? snap.focusedProjectId : "";
-  renderedGraphCenterId = graphCanvas ? nextGraphCenterId : "";
-  const graphLayoutChanged = Boolean(
-    graphCanvas &&
-      previousGraph &&
-      (graphCanvas.clientWidth !== previousGraph.clientWidth ||
-        graphCanvas.clientHeight !== previousGraph.clientHeight ||
-        graphCanvas.scrollWidth !== previousGraph.scrollWidth ||
-        graphCanvas.scrollHeight !== previousGraph.scrollHeight),
-  );
-  if (!reuseGraphCanvas || graphLayoutChanged) {
-    paintGraphEdges();
-  }
-  syncGraphSelection(graphCanvas, snap.board?.selected?.id);
-  const restoredGraphAnchor = Boolean(
-    graphCanvas && pendingGraphAnchor && restoreGraphAnchor(graphCanvas, pendingGraphAnchor),
-  );
-  if (graphCanvas && pendingGraphAnchor) pendingGraphAnchor = null;
-  if (graphCanvas && (!sameGraphCenter || graphContentChanged) && !restoredGraphAnchor) {
-    centerGraphViewport(graphCanvas, nextGraphCenterId);
-  }
-  if (restoredGraphAnchor) paintGraphEdges();
-  restoreActiveField(activeField);
-  const nextLaunchSheet = app.querySelector<HTMLElement>(".launch-sheet");
-  if (nextLaunchSheet) nextLaunchSheet.scrollTop = previousLaunchScrollTop;
-  const nextDetailScroll = app.querySelector<HTMLElement>(".detail-scroll");
-  const savedDetailScroll = selectedIssue
-    ? issueDetailScrollPositions.get(selectedIssue.id)
-    : undefined;
-  if (nextDetailScroll && savedDetailScroll) {
-    nextDetailScroll.scrollTop = savedDetailScroll.scrollTop;
-    nextDetailScroll.scrollLeft = savedDetailScroll.scrollLeft;
-  }
-  const nextLanes = app.querySelector<HTMLElement>(".lanes");
-  const savedBoardScroll = boardScrollPositions.get(snap.focusedProjectId);
-  if (nextLanes && savedBoardScroll) {
-    nextLanes.scrollTop = savedBoardScroll.scrollTop;
-    nextLanes.scrollLeft = savedBoardScroll.scrollLeft;
-    for (const lane of nextLanes.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
-      const key = lane.dataset.lane;
-      const position = key ? savedBoardScroll.lanes[key] : undefined;
-      if (!position) continue;
-      lane.scrollTop = position.scrollTop;
-      lane.scrollLeft = position.scrollLeft;
-    }
-  }
-  const nextWorkspace = app.querySelector<HTMLElement>(".workspace");
-  const nextMobileWorkspaceKey = isMobile ? `${snap.focusedProjectId}:${mobileView}` : "";
-  const savedMobileWorkspaceScroll = mobileWorkspaceScrollPositions.get(nextMobileWorkspaceKey);
-  if (nextWorkspace && savedMobileWorkspaceScroll) {
-    nextWorkspace.scrollTop = savedMobileWorkspaceScroll.scrollTop;
-    nextWorkspace.scrollLeft = savedMobileWorkspaceScroll.scrollLeft;
-  }
-  renderedDetailIssueId = selectedIssue?.id ?? "";
-  renderedBoardProjectId = nextLanes ? snap.focusedProjectId : "";
-  renderedMobileWorkspaceKey = nextWorkspace ? nextMobileWorkspaceKey : "";
-  if (isMobile && !mobileLiveTerminal) {
-    ptyPumping = false;
-    void pumpMobileOutput(snap);
-  } else {
-    mobilePtyPumping = false;
-    attachTerminal(snap);
-  }
-}
-
-function paintGraphEdges(): void {
-  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
-  const svg = app?.querySelector<SVGSVGElement>(".graph-edges");
-  const graph = snapshot?.board?.graph;
+export function paintGraphEdges(): void {
+  const canvas = ui.app?.querySelector<HTMLElement>(".graph-canvas");
+  const svg = ui.app?.querySelector<SVGSVGElement>(".graph-edges");
+  const graph = ui.snapshot?.board?.graph;
   if (!canvas || !svg || !graph) return;
   const origin = canvas.getBoundingClientRect();
   const width = Math.max(canvas.scrollWidth, canvas.clientWidth);
@@ -2601,14 +261,14 @@ function paintGraphEdges(): void {
   svg.innerHTML = `<defs><marker id="graph-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"></path></marker></defs>${paths}`;
 }
 
-function syncGraphSelection(canvas: HTMLElement | null, selectedId: string | undefined): void {
+export function syncGraphSelection(canvas: HTMLElement | null, selectedId: string | undefined): void {
   if (!canvas) return;
   for (const node of canvas.querySelectorAll<HTMLElement>(".graph-node")) {
     node.classList.toggle("sel", node.dataset.id === selectedId);
   }
 }
 
-function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
+export function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
   if (!centerId) return;
   const center = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
     .find((node) => node.dataset.id === centerId);
@@ -2621,8 +281,8 @@ function centerGraphViewport(canvas: HTMLElement, centerId: string): void {
   canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
 }
 
-function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
-  const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
+export function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
+  const canvas = ui.app?.querySelector<HTMLElement>(".graph-canvas");
   const node = canvas
     ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
       .find((item) => item.dataset.id === issueId)
@@ -2637,7 +297,7 @@ function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
   };
 }
 
-function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
+export function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
   const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
     .find((item) => item.dataset.id === anchor.issueId);
   if (!node) return false;
@@ -2675,1476 +335,28 @@ function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): b
   return true;
 }
 
-function currentProject(snap: Snapshot): Project | undefined {
-  return (
-    snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
-  );
-}
-
-function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileNavigation(copy, snap, mobileView);
-}
-
-function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileScopeSheet(copy, snap);
-}
-
-function mobileMain(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileMain({
-    copy,
-    snapshot: snap,
-    mobileView,
-    mobileLiveTerminal,
-    mobilePtyText,
-    focusedRun: (mobileSnapshot) => focusedRun(mobileSnapshot as Snapshot),
-    issueDetail: (mobileCopy, board, showPanelToggle) => issueDetail(mobileCopy as ShellCopy, board as BoardSnapshot, showPanelToggle),
-    projectMain: (mobileCopy, mobileSnapshot) => projectMain(mobileCopy as ShellCopy, mobileSnapshot as Snapshot),
-    telemetryBar: (mobileCopy, run) => telemetryBar(mobileCopy as ShellCopy, run as RunSummary),
-    injectRunForm: (mobileCopy, run) => injectRunForm(mobileCopy as ShellCopy, run as RunSummary),
-    board: snap.board,
-  });
-}
-
-function focusedRun(snap: Snapshot): RunSummary | undefined {
-  return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
-}
-
-function issueCreateFormKey(projectId: string): FormKey {
-  return `issue-create:${projectId}`;
-}
-
-function issueEditFormKey(issueId: string): FormKey {
-  return `issue-edit:${issueId}`;
-}
-
-function issueCommentFormKey(issueId: string): FormKey {
-  return `issue-comment:${issueId}`;
-}
-
-function issueParentFormKey(issueId: string): FormKey {
-  return `issue-parent:${issueId}`;
-}
-
-function issueBlockersFormKey(issueId: string): FormKey {
-  return `issue-blockers:${issueId}`;
-}
-
-function issueOpenFormKey(issueId: string): FormKey {
-  return `issue-open:${issueId}`;
-}
-
-function issueSearchFormKey(projectId: string): FormKey {
-  return `issue-search:${projectId}`;
-}
-
-function editableIssueSearchDraft(projectId: string): IssueSearchDraft {
-  if (issueSearchDraft?.projectId === projectId) return issueSearchDraft;
-  const search = snapshot?.board?.search;
-  issueSearchDraft = {
-    projectId,
-    title: search?.title ?? "",
-    triageRole: search?.triageRole ?? "",
-    state: search?.state ?? "all",
-  };
-  return issueSearchDraft;
-}
-
-function injectFormKey(runId: string): FormKey {
-  return `inject-run:${runId}`;
-}
-
-function changeNoteFormKey(runId: string): FormKey {
-  return `change-note:${runId}`;
-}
-
-function launchFormKey(projectId: string): FormKey {
-  return `launch:${projectId}`;
-}
-
-function usageCustomFormKey(hostId: string): FormKey {
-  return `usage-custom:${hostId}`;
-}
-
-function issueDocumentBody(issue: IssueDetail): string {
-  const document = issue.document;
-  return document.kind === "ready" || document.kind === "stale"
-    ? document.body ?? ""
-    : "";
-}
-
-function editableIssueBody(issue: IssueDetail): string {
-  const raw = issueDocumentBody(issue);
-  const project = snapshot?.projects.find((item) => item.id === snapshot?.board?.projectId);
-  if (project?.tracker !== "local-markdown") return raw;
-  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
-  let start = 0;
-  while (start < lines.length && !/^\s*#\s+/.test(lines[start])) start += 1;
-  if (start < lines.length) start += 1;
-  const metadata = /^\s*\**(?:status|type|assignees?|part of|parent|blocked by|closed)\s*:/i;
-  while (start < lines.length && (lines[start].trim() === "" || metadata.test(lines[start]))) start += 1;
-  const body = lines.slice(start);
-  const comments = body.findIndex((line) => /^\s*##\s+comments\s*$/i.test(line));
-  return (comments >= 0 ? body.slice(0, comments) : body).join("\n").trim();
-}
-
-function editableIssueDraft(issue: IssueDetail): IssueContentDraft {
-  const existing = issueEditDrafts.get(issue.id);
-  if (existing) return existing;
-  const draft = { title: issue.title, body: editableIssueBody(issue) };
-  issueEditDrafts.set(issue.id, draft);
-  return draft;
-}
-
-function editableIssueRelations(issue: IssueDetail): IssueRelationDraft {
-  const existing = issueRelationDrafts.get(issue.id);
-  if (existing) return existing;
-  const draft = {
-    parent: issue.parent?.id ?? "",
-    blockedBy: issue.blockedBy.map((link) => link.id),
-  };
-  issueRelationDrafts.set(issue.id, draft);
-  return draft;
-}
-
-function issueOptionLabel(link: IssueLink): string {
-  const number = link.number == null ? "" : `#${link.number} `;
-  return `${number}${link.title || link.id}`.trim();
-}
-
-function issueOptionList(board: BoardSnapshot, issue: IssueDetail): IssueLink[] {
-  const options = [...(board.issueOptions ?? [])];
-  const known = new Set(options.map((option) => option.id));
-  for (const relation of [issue.parent, ...issue.blockedBy]) {
-    if (relation && !known.has(relation.id)) {
-      options.push(relation);
-      known.add(relation.id);
-    }
-  }
-  return options.filter((option) => option.id !== issue.id);
-}
-
-function formFeedback(key: FormKey): string {
-  const error = formOperations.errors.get(key);
-  return error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : "";
-}
-
-function clearFormOperation(key: FormKey): void {
-  formOperations.errors.delete(key);
-}
-
-async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
-  if (formOperations.pending.has(key)) return false;
-  formOperations.pending.add(key);
-  formOperations.errors.delete(key);
-  render();
-  try {
-    await operation();
-    return true;
-  } catch (error) {
-    formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
-    return false;
-  } finally {
-    formOperations.pending.delete(key);
-    render();
-  }
-}
-
-function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
-  const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
-  return `<div class="project-block">
-    ${projectRow(copy, project, focusedId)}
-    ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
-  </div>`;
-}
-
-function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
-  const active = project.id === focusedId;
-  const degraded = project.connection.status !== "ready";
-  return `<div class="project-row ${active ? "active" : ""}">
-    <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
-      <b>${escapeHtml(project.name)}</b>
-      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
-    </button>
-    ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
-    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
-    <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
-    ${
-      projectMenuId === project.id
-        ? `<div class="project-menu">
-            <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
-            <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
-          </div>`
-        : ""
-    }
-  </div>`;
-}
-
-function runIdentity(copy: ShellCopy, run: RunSummary): string {
-  return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
-}
-
-function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
-  const identity = runIdentity(copy, run);
-  const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
-  const stateClass =
-    run.waitingForUser && run.status !== "ended"
-      ? "waiting"
-      : run.endedReason && run.endedReason !== "exited"
-        ? "execution-stopped"
-        : run.status;
-  const stateTag =
-    run.waitingForUser && run.status !== "ended"
-      ? copy.waiting
-      : run.endedReason && run.endedReason !== "exited"
-        ? copy.executionStopped
-        : run.status === "running"
-          ? copy.running
-          : "";
-  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-    <b>${escapeHtml(run.agentName)}</b>
-    <span>${escapeHtml(identity)}</span>
-    ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
-    ${action ? `<span class="run-action">${action}</span>` : ""}
-    ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
-    ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
-  </button>`;
-}
-
-function dash(value?: number | null): string {
-  return value == null ? "—" : String(value);
-}
-
-function laneLabel(copy: ShellCopy, lane: TelemetryLaneKind): string {
-  if (lane === "subagent") return copy.laneSubagent;
-  if (lane === "switched") return copy.laneSwitched;
-  return copy.laneMain;
-}
-
-function tokenCells(copy: ShellCopy, tokens: TokenCounts): string {
-  const cells: Array<[string, number | null | undefined]> = [
-    [copy.tokenInput, tokens.input],
-    [copy.tokenOutput, tokens.output],
-    [copy.tokenCacheRead, tokens.cacheRead],
-    [copy.tokenCacheWrite, tokens.cacheWrite],
-    [copy.tokenReasoning, tokens.reasoning],
-    [copy.tokenTotal, tokens.total],
-  ];
-  return cells
-    .map(([label, value]) => `<span class="token-cell"><i>${escapeHtml(label)}</i>${dash(value)}</span>`)
-    .join("");
-}
-
-function sparkline(points: TelemetryPoint[], field: "ttftMs" | "tokensPerSec"): string {
-  const values = points.map((point) => point[field] ?? 0);
-  const max = Math.max(...values, 1);
-  return `<span class="spark">${points
-    .map((point) => {
-      const value = point[field] ?? 0;
-      const height = Math.max(8, Math.round((value / max) * 28));
-      return `<i class="${point.spike ? "slow" : ""}" style="height:${height}px"></i>`;
-    })
-    .join("")}</span>`;
-}
-
-function telemetryBar(copy: ShellCopy, run: RunSummary): string {
-  const lanes = run.telemetry ?? [];
-  if (!lanes.length) return "";
-  const capsule = (lane: RunTelemetryLane) =>
-    `<button type="button" class="capsule ${lane.spike ? "slow" : ""}" data-act="toggle-telemetry">${escapeHtml(lane.model)}<small>${escapeHtml(laneLabel(copy, lane.lane))}</small></button>`;
-  const main = lanes.find((lane) => lane.lane === "main") ?? lanes[0];
-  const capsules = lanes.map(capsule).join("");
-  const simple = `<div class="telemetry-mobile">${capsule(main)}<ul class="telemetry-simple">${lanes
-    .map(
-      (lane) =>
-        `<li>${escapeHtml(lane.model)} · ${escapeHtml(laneLabel(copy, lane.lane))} · ${copy.tokenTotal} ${dash(lane.tokens.total)}</li>`,
-    )
-    .join("")}</ul></div>`;
-  const cards = telemetryExpanded
-    ? `<div class="telemetry-cards">${lanes
-        .map(
-          (lane) => `<article class="telemetry-card ${lane.spike ? "slow" : ""}">
-            <header><b>${escapeHtml(lane.model)}</b><span>${escapeHtml(laneLabel(copy, lane.lane))}</span></header>
-            <div class="token-row">${tokenCells(copy, lane.tokens)}</div>
-            <div class="telemetry-meta">${escapeHtml(copy.ttft)} ${dash(lane.ttftMs)} · ${escapeHtml(copy.genRate)} ${dash(lane.tokensPerSec)}</div>
-            ${sparkline(lane.recent, "ttftMs")}
-          </article>`,
-        )
-        .join("")}<p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p></div>`
-    : "";
-  return `<div class="telemetry-bar"><div class="telemetry-desktop">${capsules}</div>${simple}${cards}</div>`;
-}
-
-function usagePage(copy: ShellCopy, snap: Snapshot): string {
-  const usage = snap.usage;
-  if (!usage) return "";
-  const range = usage.range;
-  const customKey = usageCustomFormKey(snap.focusedHostId);
-  const customPending = formOperations.pending.has(customKey);
-  const customDraft = usageCustomDraft?.hostId === snap.focusedHostId ? usageCustomDraft : {
-    hostId: snap.focusedHostId,
-    from: toLocalInput(usage.fromMs),
-    to: toLocalInput(usage.toMs),
-  };
-  const rangeBtn = (id: UsageRange, label: string) =>
-    `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
-  const optionList = (items: UsageOption[], selected: string | null | undefined) =>
-    `<option value="">${escapeHtml(copy.filterAll)}</option>${items
-      .map(
-        (item) =>
-          `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`,
-      )
-      .join("")}`;
-  const rows = usage.runs.length
-    ? usage.runs
-        .map(
-          (row) => `<article class="usage-row ${row.highlighted ? "sel" : ""}">
-            <header>
-              <div>
-                <b>${escapeHtml(row.projectName)}</b>
-                <span>${escapeHtml(row.agentName)}${row.models.length ? ` · ${escapeHtml(row.models.join(", "))}` : ""}</span>
-              </div>
-              <button type="button" data-act="open-run-usage" data-id="${escapeHtml(row.runId)}">${escapeHtml(copy.openThisRun)}</button>
-            </header>
-            <div class="token-row">${tokenCells(copy, row.tokens)}</div>
-          </article>`,
-        )
-        .join("")
-    : `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
-  const trend = `${usageTrend(copy.ttft, usage.buckets, "ttftMs")}${usageTrend(copy.genRate, usage.buckets, "tokensPerSec")}`;
-  const hit =
-    usage.cacheHitRate == null ? "—" : `${Math.round(usage.cacheHitRate * 1000) / 10}%`;
-  const panel = workbenchLayout.usage;
-  return `<div class="usage-page workbench-panel" data-workbench-panel="usage" data-floating="${panel.floating}" data-front="${frontWorkbenchPanel === "usage"}" style="${panelCssVariables("usage")}">
-    ${panelControls("usage")}
-    <div class="board-head">
-      <div class="board-head-row">
-        <div>
-          <h1>${escapeHtml(copy.usage)}</h1>
-          <p>${escapeHtml(copy.usageHint)}</p>
-        </div>
-        <button type="button" data-act="close-usage">${escapeHtml(copy.closeUsage)}</button>
-      </div>
-    </div>
-    <div class="choices usage-ranges">
-      ${rangeBtn("24-hours", copy.range24Hours)}
-      ${rangeBtn("today", copy.rangeToday)}
-      ${rangeBtn("7-days", copy.range7Days)}
-      ${rangeBtn("30-days", copy.range30Days)}
-      ${rangeBtn("custom", copy.rangeCustom)}
-    </div>
-    ${
-      range === "custom"
-        ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
-            <input type="datetime-local" name="from" required value="${escapeHtml(customDraft.from)}" ${customPending ? "disabled" : ""} />
-            <input type="datetime-local" name="to" required value="${escapeHtml(customDraft.to)}" ${customPending ? "disabled" : ""} />
-            <button type="submit" ${customPending ? "disabled" : ""}>${escapeHtml(customPending ? copy.operationPending : copy.rangeCustom)}</button>
-          </form>${formFeedback(customKey)}`
-        : ""
-    }
-    <div class="usage-filters">
-      <label>${escapeHtml(copy.filterProject)}<select data-usage-filter="projectId">${optionList(usage.projects, usage.filter.projectId)}</select></label>
-      <label>${escapeHtml(copy.filterAgent)}<select data-usage-filter="agentId">${optionList(usage.agents, usage.filter.agentId)}</select></label>
-      <label>${escapeHtml(copy.filterModel)}<select data-usage-filter="model"><option value="">${escapeHtml(copy.filterAll)}</option>${usage.models
-        .map(
-          (model) =>
-            `<option value="${escapeHtml(model)}" ${model === usage.filter.model ? "selected" : ""}>${escapeHtml(model)}</option>`,
-        )
-        .join("")}</select></label>
-    </div>
-    <div class="token-row totals">${tokenCells(copy, usage.totals)}<span class="token-cell"><i>${escapeHtml(copy.cacheHit)}</i>${hit}</span></div>
-    ${trend}
-    <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
-    <div class="usage-list usage-full">${rows}</div>
-    <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
-    ${panelResizeHandle("usage")}
-  </div>`;
-}
-
-function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
-  if (overviewProjectId && !snap.projects.some((project) => project.id === overviewProjectId)) {
-    overviewProjectId = "";
-  }
-  const visibleProjects = snap.projects.filter(
-    (project) => !overviewProjectId || project.id === overviewProjectId,
-  );
-  const visibleRuns = (snap.runs ?? []).filter(
-    (run) => !overviewProjectId || run.projectId === overviewProjectId,
-  );
-  const groups: Array<[string, string, RunSummary[]]> = [
-    ["waiting", copy.runGroupWaiting, visibleRuns.filter((run) => run.status !== "ended" && Boolean(run.waitingForUser))],
-    ["running", copy.runGroupRunning, visibleRuns.filter((run) => run.status !== "ended" && !run.waitingForUser)],
-    ["stopped", copy.runGroupStopped, visibleRuns.filter((run) => run.status === "ended" && Boolean(run.endedReason) && run.endedReason !== "exited")],
-    ["ended", copy.runGroupEnded, visibleRuns.filter((run) => run.status === "ended" && (!run.endedReason || run.endedReason === "exited"))],
-  ];
-  const projectOptions = snap.projects
-    .map(
-      (project) => `<option value="${escapeHtml(project.id)}" ${project.id === overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
-    )
-    .join("");
-  const totalCounts = visibleProjects.reduce(
-    (total, project) => {
-      const counts = projectIssueCounts(project);
-      if (counts.dataAvailable) {
-        total.open += counts.open;
-        total.frontier += counts.frontier;
-        total.available += 1;
-      }
-      return total;
-    },
-    { open: 0, frontier: 0, available: 0 },
-  );
-  const allCountsAvailable = visibleProjects.length > 0 && totalCounts.available === visibleProjects.length;
-  const activeRuns = visibleRuns.filter((run) => run.status !== "ended").length;
-  return `<div class="overview-page">
-    <div class="board-head">
-      <div class="board-head-row">
-        <div><h1>${escapeHtml(copy.hostOverview)}</h1><p>${escapeHtml(copy.hostOverviewHint)}</p></div>
-        <button type="button" data-act="return-board">${escapeHtml(copy.returnToBoard)}</button>
-      </div>
-    </div>
-    <div class="overview-controls">
-      <label>${escapeHtml(copy.filterProject)}
-        <select data-overview-filter="project"><option value="">${escapeHtml(copy.filterAll)}</option>${projectOptions}</select>
-      </label>
-      <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
-    </div>
-    <div class="overview-stats">
-      <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
-      <div><b>${allCountsAvailable ? totalCounts.open : "—"}</b><span>Open Issue</span></div>
-      <div><b>${allCountsAvailable ? totalCounts.frontier : "—"}</b><span>Frontier</span></div>
-      <div><b>${activeRuns}</b><span>Run</span></div>
-    </div>
-    <section class="overview-project-section">
-      <div class="lane-hd">${escapeHtml(copy.projects)} <span>${visibleProjects.length}</span></div>
-      <div class="overview-projects">
-        ${visibleProjects.map((project) => overviewProjectCard(copy, project)).join("")}
-      </div>
-    </section>
-    <section class="overview-run-section">
-      <div class="lane-hd">Run <span>${visibleRuns.length}</span></div>
-      ${visibleRuns.length === 0
-        ? `<div class="overview-runs-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
-        : `<div class="overview-groups">
-          ${groups
-            .filter(([id]) => id !== "ended" || overviewShowEnded)
-            .map(
-              ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
-                <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
-                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
-              </section>`,
-            )
-            .join("")}
-        </div>`}
-    </section>
-  </div>`;
-}
-
-function projectIssueCounts(project: Project): ProjectIssueCounts {
-  return project.issueCounts ?? {
-    dataAvailable: false,
-    total: 0,
-    open: 0,
-    closed: 0,
-    blocked: 0,
-    frontier: 0,
-    inProgress: 0,
-  };
-}
-
-function overviewProjectCard(copy: ShellCopy, project: Project): string {
-  const counts = projectIssueCounts(project);
-  const metric = (label: string, value: number) =>
-    `<span><i>${escapeHtml(label)}</i><b>${counts.dataAvailable ? value : "—"}</b></span>`;
-  const connection = project.connection.status === "ready"
-    ? copy.connectionReady
-    : project.connection.status === "unreachable"
-      ? copy.connectionUnavailable
-      : copy.authFailed;
-  return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
-    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
-    <span class="overview-project-metrics">
-      ${metric("Open", counts.open)}
-      ${metric(copy.colBlocked, counts.blocked)}
-      ${metric(copy.colFrontier, counts.frontier)}
-      ${metric(copy.colInProgress, counts.inProgress)}
-      ${metric("Closed", counts.closed)}
-    </span>
-  </button>`;
-}
-
-function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
-  const project = snap.projects.find((item) => item.id === run.projectId);
-  const action = run.recentAction?.trim() || run.failure?.trim() || "";
-  return `<button type="button" class="run-thumbnail" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-    <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
-    <b>${escapeHtml(runIdentity(copy, run))}</b>
-    <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
-  </button>`;
-}
-
-function usageTrend(
-  label: string,
-  buckets: UsageBucket[],
-  field: "ttftMs" | "tokensPerSec",
-): string {
-  const max = Math.max(...buckets.map((bucket) => bucket[field] ?? 0), 1);
-  return `<div class="usage-trend-block"><span class="tiny">${escapeHtml(label)}</span><div class="usage-trend">${buckets
-    .map((bucket) => {
-      const height = Math.max(4, Math.round(((bucket[field] ?? 0) / max) * 48));
-      return `<i class="${bucket.slow ? "slow" : ""}" style="height:${height}px" title="${dash(bucket[field])}"></i>`;
-    })
-    .join("")}</div></div>`;
-}
-
-function usageCompact(copy: ShellCopy, usage: UsagePage): string {
-  const byProject = new Map<string, { name: string; tokens: TokenCounts }>();
-  for (const row of usage.runs) {
-    const current = byProject.get(row.projectId);
-    if (!current) {
-      byProject.set(row.projectId, { name: row.projectName, tokens: row.tokens });
-    } else {
-      current.tokens = {
-        input: addOpt(current.tokens.input, row.tokens.input),
-        output: addOpt(current.tokens.output, row.tokens.output),
-        cacheRead: addOpt(current.tokens.cacheRead, row.tokens.cacheRead),
-        cacheWrite: addOpt(current.tokens.cacheWrite, row.tokens.cacheWrite),
-        reasoning: addOpt(current.tokens.reasoning, row.tokens.reasoning),
-        total: addOpt(current.tokens.total, row.tokens.total),
-      };
-    }
-  }
-  const lines = [...byProject.values()].slice(0, 3);
-  if (!lines.length) return `<p class="board-empty">${escapeHtml(copy.usageEmpty)}</p>`;
-  return lines
-    .map(
-      (line) =>
-        `<article class="usage-row"><header><b>${escapeHtml(line.name)}</b></header><div class="token-row">${tokenCells(copy, line.tokens)}</div></article>`,
-    )
-    .join("");
-}
-
-function injectRunForm(copy: ShellCopy, run: RunSummary): string {
-  const key = injectFormKey(run.id);
-  const pending = formOperations.pending.has(key);
-  return `<form class="inject-row" data-act="inject-run" data-id="${escapeHtml(run.id)}" aria-busy="${pending ? "true" : "false"}">
-    <input name="text" maxlength="4000" value="${escapeHtml(terminalInputDrafts.get(run.id) ?? "")}" placeholder="${escapeHtml(copy.injectPlaceholder)}" ${pending ? "disabled" : ""} />
-    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.injectLine)}</button>
-    ${formFeedback(key)}
-  </form>`;
-}
-
-function runControls(copy: ShellCopy, run: RunSummary): string {
-  return `<div class="actions">
-    <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
-    ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>`}
-    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
-  </div>`;
-}
-
-function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
-  const identity = runIdentity(copy, run);
-  const panel = workbenchLayout.terminal;
-  return `<div class="${className} workbench-panel" data-workbench-panel="terminal" data-floating="${panel.floating}" data-front="${frontWorkbenchPanel === "terminal"}" style="${panelCssVariables("terminal")}">
-    ${panelControls("terminal")}
-    <header class="run-dock-hd">
-      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
-      ${runControls(copy, run)}
-    </header>
-    ${telemetryBar(copy, run)}
-    ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
-    ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
-    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
-    <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
-    ${panelResizeHandle("terminal")}
-  </div>`;
-}
-
-function runDock(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!terminalPanelVisible || !run || run.status === "ended") return "";
-  const selectedIssueId = snap.board?.selected?.id;
-  if (!run.unbound && run.issueId !== selectedIssueId) return "";
-  return terminalPanel(copy, run, "run-dock");
-}
-
-function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!run) return projectMain(copy, snap);
-  const inspectorOpen = issueDetailVisible && Boolean(snap.board?.selected);
-  const inspectorFloating = panelIsFloating("inspector");
-  const inspectorWidth = panelWidth("inspector");
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
-    ${terminalPanelVisible ? terminalPanel(copy, run, "lifted-terminal") : projectMain(copy, snap)}
-    ${inspectorOpen && snap.board ? workbenchIssuePanel(copy, snap.board) : ""}
-  </section>`;
-}
-
-function viewChangesPanel(copy: ShellCopy): string {
-  const view = changesView;
-  const scope = view?.scope ?? changesScope;
-  return `<div class="overlay modal" data-act="close-changes">
-    <div class="sheet form-sheet changes-sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.viewChanges)}</h2>
-      <div class="choices">
-        <button type="button" class="${scope === "this-round" ? "active" : ""}" data-act="changes-scope" data-id="this-round">${escapeHtml(copy.thisRound)}</button>
-        <button type="button" class="${scope === "uncommitted" ? "active" : ""}" data-act="changes-scope" data-id="uncommitted">${escapeHtml(copy.uncommitted)}</button>
-      </div>
-      ${
-        !view
-          ? `<p class="notice">${escapeHtml(copy.viewChanges)}</p>`
-          : !view.available
-            ? `<p class="notice bad">${escapeHtml(view.unavailableReason || copy.viewChanges)}</p>`
-            : view.repos
-                .map((repo) => changeRepoBlock(copy, view, repo))
-                .join("")
-      }
-      <div class="actions">
-        <button type="button" data-act="close-changes">${escapeHtml(copy.cancel)}</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function changeRepoBlock(copy: ShellCopy, view: ViewChanges, repo: ChangeRepo): string {
-  const title = repo.displayPath === "." ? view.workingDirectory : repo.displayPath;
-  if (!repo.available) {
-    return `<section class="change-repo">
-      <h3>${escapeHtml(title)}</h3>
-      <p class="notice">${escapeHtml(repo.unavailableReason || copy.viewChanges)}</p>
-    </section>`;
-  }
-  if (!repo.files.length) {
-    return `<section class="change-repo">
-      <h3>${escapeHtml(title)}</h3>
-      <p class="muted">${escapeHtml(copy.noItems)}</p>
-    </section>`;
-  }
-  return `<section class="change-repo">
-    <h3>${escapeHtml(title)}</h3>
-    ${repo.files.map((file) => changeFileBlock(copy, view, repo, file)).join("")}
-  </section>`;
-}
-
-function changeFileBlock(
-  copy: ShellCopy,
-  view: ViewChanges,
-  repo: ChangeRepo,
-  file: ChangeFile,
-): string {
-  return `<article class="change-file">
-    <h4>${escapeHtml(file.path)}</h4>
-    ${file.hunks
-      .map(
-        (hunk) => `<div class="diff">${hunk.lines
-          .map((line) => changeLineRow(copy, view, repo, file, line))
-          .join("")}</div>`,
-      )
-      .join("")}
-  </article>`;
-}
-
-function changeLineRow(
-  copy: ShellCopy,
-  view: ViewChanges,
-  repo: ChangeRepo,
-  file: ChangeFile,
-  line: ChangeLine,
-): string {
-  const mark = line.kind === "add" ? "+" : line.kind === "delete" ? "-" : " ";
-  const number = line.newLine ?? line.oldLine ?? 0;
-  const notes = view.notes.filter(
-    (note) => note.repo === repo.displayPath && note.path === file.path && note.line === number,
-  );
-  const canNote = line.kind !== "delete" && line.newLine;
-  const active =
-    noteTarget &&
-    noteTarget.repo === repo.displayPath &&
-    noteTarget.path === file.path &&
-    noteTarget.line === line.newLine;
-  const noteKey = changeNoteFormKey(view.runId);
-  const notePending = formOperations.pending.has(noteKey);
-  const noteForm = active
-    ? `<form class="note-form" data-act="write-note" aria-busy="${notePending ? "true" : "false"}">
-        <input name="text" maxlength="400" value="${escapeHtml(noteDraft)}" placeholder="${escapeHtml(copy.changeNotePlaceholder)}" ${notePending ? "disabled" : ""} />
-        <button type="submit" ${notePending ? "disabled" : ""}>${escapeHtml(notePending ? copy.operationPending : copy.addChangeNote)}</button>
-        ${formFeedback(noteKey)}
-      </form>`
-    : "";
-  const noteList = notes
-    .map(
-      (note) =>
-        `<div class="change-note">${escapeHtml(note.text)} <button type="button" data-act="delete-note" data-id="${escapeHtml(note.id)}">${escapeHtml(copy.deleteChangeNote)}</button></div>`,
-    )
-    .join("");
-  const attrs = canNote
-    ? ` data-act="note-line" data-repo="${escapeHtml(repo.displayPath)}" data-path="${escapeHtml(file.path)}" data-line="${line.newLine}"`
-    : "";
-  return `<span class="diff-line ${line.kind}"${attrs}><span class="diff-no">${number || ""}</span><span class="diff-mark">${mark}</span><span class="diff-text">${escapeHtml(line.text)}</span></span>${noteForm}${noteList}`;
-}
-
-function quitOfferDialog(copy: ShellCopy): string {
-  return `<div class="overlay modal" data-act="cancel-quit">
-    <div class="sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.quitActiveTitle)}</h2>
-      <p class="notice">${escapeHtml(copy.quitActiveBody)}</p>
-      <div class="actions">
-        <button type="button" data-act="cancel-quit">${escapeHtml(copy.quitReturn)}</button>
-        <button type="button" class="danger primary" data-act="confirm-quit">${escapeHtml(copy.quitStopAll)}</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function launchEnvironmentStatus(copy: StartupCopy): string {
-  const state = launchEnvironmentState;
-  const text = state.status === "ready"
-    ? copy.launchEnvironmentReady
-    : state.status === "failed"
-      ? copy.launchEnvironmentFailed
-      : copy.launchEnvironmentIdle;
-  const detail = launchEnvironmentError || state.message || "";
-  return `<p class="hint ${state.status === "failed" || detail ? "notice bad" : ""}" data-launch-environment-status="${state.status}">${escapeHtml(text)}${detail ? `<br>${escapeHtml(detail)}` : ""}</p>`;
-}
-
-function startupSettings(copy: StartupCopy, snap: Snapshot): string {
-  if (!desktopShellAvailable()) {
-    return `<div class="field startup-settings"><div class="label">${escapeHtml(copy.hostStartup)}</div><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
-  }
-  return `<div class="field startup-settings">
-    <div class="label">${escapeHtml(copy.hostStartup)}</div>
-    <div class="choices">
-      <button type="button" class="${snap.hostMode === "host-and-client" ? "active" : ""}" data-act="host-mode" data-id="host-and-client">${escapeHtml(copy.hostAndClient)}</button>
-      <button type="button" class="${snap.hostMode === "client-only" ? "active" : ""}" data-act="host-mode" data-id="client-only">${escapeHtml(copy.clientOnly)}</button>
-    </div>
-    <p class="hint">${escapeHtml(copy.hostModeHelp)} ${escapeHtml(copy.restartToApply)}</p>
-    <label class="graph-opt">
-      <input type="checkbox" data-field="startAtLogin" ${startAtLogin ? "checked" : ""} ${startAtLogin == null ? "disabled" : ""} />
-      ${escapeHtml(copy.startAtLogin)}
-    </label>
-    <p class="hint">${escapeHtml(copy.startAtLoginHelp)}</p>
-    ${startupSettingsError ? `<p class="notice bad">${escapeHtml(startupSettingsError)}</p>` : ""}
-  </div>`;
-}
-
-function updateSettings(copy: ShellCopy): string {
-  const status = updateState.kind === "checking"
-    ? copy.updateChecking
-    : updateState.kind === "current"
-      ? copy.updateCurrent
-      : updateState.kind === "failed"
-        ? `${copy.updateFailed} ${updateState.message}`.trim()
-        : updateState.kind === "blocked"
-          ? `${copy.updateActiveRuns} (${updateState.activeRunCount})`
-          : "";
-  return `<div class="field update-settings">
-    <div class="label">${escapeHtml(copy.updates)}</div>
-    ${desktopShellAvailable()
-      ? `<button type="button" data-act="check-updates" ${updateState.kind === "checking" || updateState.kind === "installing" ? "disabled" : ""}>${escapeHtml(updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates)}</button>`
-      : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
-    ${status ? `<p class="hint update-status">${escapeHtml(status)}</p>` : ""}
-  </div>`;
-}
-
-function updateDialog(copy: ShellCopy): string {
-  if (updateState.kind === "available") {
-    return `<div class="overlay modal update-dialog" data-act="update-later">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateAvailable)} ${escapeHtml(updateState.version)}</h2>
-        <p class="notice">${escapeHtml(copy.updateReady)}</p>
-        ${updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(updateState.notes)}</p></div>` : ""}
-        <div class="actions">
-          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
-          <button type="button" class="primary" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
-        </div>
-      </div>
-    </div>`;
-  }
-  if (updateState.kind === "blocked") {
-    return `<div class="overlay modal update-dialog" data-act="update-later">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateAvailable)}</h2>
-        <p class="notice bad">${escapeHtml(copy.updateActiveRuns)} (${updateState.activeRunCount})</p>
-        <div class="actions">
-          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
-          <button type="button" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
-        </div>
-      </div>
-    </div>`;
-  }
-  if (updateState.kind === "installing") {
-    const progress = updateState.progress == null ? "" : ` ${updateState.progress}%`;
-    return `<div class="overlay modal update-dialog">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateInstalling)}${progress}</h2>
-        ${updateState.progress == null ? "" : `<progress max="100" value="${updateState.progress}"></progress>`}
-      </div>
-    </div>`;
-  }
-  return "";
-}
-
-function keyboardHelpDialog(copy: ShellCopy): string {
-  return `<div class="overlay modal keyboard-help" data-act="close-keyboard-help">
-    <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true" aria-label="${escapeHtml(copy.keyboardHelp)}">
-      <h2>${escapeHtml(copy.keyboardHelp)}</h2>
-      <p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>
-      <div class="actions"><button type="button" data-act="close-keyboard-help">${escapeHtml(copy.gotIt)}</button></div>
-    </div>
-  </div>`;
-}
-
-function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
-  const project = currentProject(snap);
-  if (!project) return loopbackNotice(snap.loopbackPage);
-  return `<div class="project-board">
-    ${loopbackNotice(snap.loopbackPage)}
-    <div class="board-head">
-      <div class="board-head-row">
-        <div class="project-heading">
-          <h1>${escapeHtml(project.name)}</h1>
-          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
-        </div>
-        <div class="board-head-actions">
-          <button type="button" class="primary" data-act="new-issue" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.createIssue)}</button>
-        </div>
-      </div>
-    </div>
-    ${refreshBar(copy, snap.board)}
-    ${issueSearch(copy, snap)}
-    ${createIssueForm(copy, snap)}
-    ${pendingBar(copy, snap)}
-    ${connectionPanel(copy, project)}
-    ${boardView(copy, snap, reuseGraphCanvas)}
-  </div>`;
-}
-
-function issueSearch(copy: ShellCopy, snap: Snapshot): string {
-  const search = issueSearchDraft?.projectId === snap.focusedProjectId
-    ? issueSearchDraft
-    : snap.board?.search ?? { title: "", triageRole: null, state: "all" as const };
-  const key = issueSearchFormKey(snap.focusedProjectId);
-  const pending = formOperations.pending.has(key);
-  const triageRoles: TriageRole[] = [
-    "needs-triage",
-    "needs-info",
-    "ready-for-agent",
-    "ready-for-human",
-    "wontfix",
-  ];
-  return `<form class="issue-search" data-act="issue-search" aria-busy="${pending ? "true" : "false"}">
-    <label class="sr-only" for="issue-title-search">${escapeHtml(copy.searchTitle)}</label>
-    <input id="issue-title-search" name="title" type="search" value="${escapeHtml(search.title)}" placeholder="${escapeHtml(copy.searchPlaceholder)}" ${pending ? "disabled" : ""} />
-    <select name="triageRole" aria-label="${escapeHtml(copy.searchAllTriage)}" ${pending ? "disabled" : ""}>
-      <option value="">${escapeHtml(copy.searchAllTriage)}</option>
-      ${triageRoles.map((role) => `<option value="${role}" ${search.triageRole === role ? "selected" : ""}>${role}</option>`).join("")}
-    </select>
-    <select name="state" aria-label="${escapeHtml(copy.searchAllStates)}" ${pending ? "disabled" : ""}>
-      <option value="all" ${search.state === "all" ? "selected" : ""}>${escapeHtml(copy.searchAllStates)}</option>
-      <option value="open" ${search.state === "open" ? "selected" : ""}>${escapeHtml(copy.searchOpen)}</option>
-      <option value="closed" ${search.state === "closed" ? "selected" : ""}>${escapeHtml(copy.searchClosed)}</option>
-    </select>
-    <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.searchSubmit)}</button>
-    <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
-    ${formFeedback(key)}
-  </form>`;
-}
-
-function createIssueForm(copy: ShellCopy, snap: Snapshot): string {
-  if (!createIssueOpen || createIssueProjectId !== snap.focusedProjectId) return "";
-  const key = issueCreateFormKey(createIssueProjectId);
-  const pending = formOperations.pending.has(key);
-  return `<section class="issue-editor issue-create-editor">
-    <form data-act="issue-create" data-form="issue-create" aria-busy="${pending ? "true" : "false"}">
-      <div class="issue-editor-title"><h2>${escapeHtml(copy.createIssue)}</h2></div>
-      <label class="label" for="issue-create-title">${escapeHtml(copy.issueTitle)}</label>
-      <input id="issue-create-title" name="title" required maxlength="240" value="${escapeHtml(createIssueDraft.title)}" ${pending ? "disabled" : ""} />
-      <label class="label" for="issue-create-body">${escapeHtml(copy.issueBody)}</label>
-      <textarea id="issue-create-body" name="body" rows="5" ${pending ? "disabled" : ""}>${escapeHtml(createIssueDraft.body)}</textarea>
-      ${formFeedback(key)}
-      <div class="actions">
-        <button type="button" data-act="cancel-new-issue" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.createIssue)}</button>
-      </div>
-    </form>
-  </section>`;
-}
-
-function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
-  const board = snap.board;
-  if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
-    const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
-      ? board.refresh.detail
-      : null;
-    const message = board.empty === "tracker-error" ? copy.emptyTrackerError : copy.emptyIncomplete;
-    return `<div class="board-empty" data-empty="${board.empty}">
-      <b>${escapeHtml(message)}</b>
-      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
-    </div>`;
-  }
-  if (!board || board.empty === "no-data" || !board.columns) {
-    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
-  }
-  const onGraph = snap.centerView === "graph";
-  const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : "";
-  const inspectorOpen = issueDetailVisible && Boolean(board.selected);
-  const inspectorFloating = panelIsFloating("inspector");
-  const inspectorWidth = panelWidth("inspector");
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" data-center-view="${onGraph ? "graph" : "board"}" style="--issue-detail-width:${Math.round(inspectorWidth)}px;--inspector-panel-width:${Math.round(inspectorWidth)}px">
-    <div class="board-main">
-      ${hint || board.parentFilter
-        ? `<div class="board-hint">
-            ${escapeHtml(hint)}
-            ${board.parentFilter
-              ? `<button type="button" data-act="clear-filter">${escapeHtml(copy.clearFilter)}</button>`
-              : ""}
-          </div>`
-        : ""}
-      ${onGraph ? dependencyGraphView(copy, board, reuseGraphCanvas) : boardLanes(copy, board)}
-    </div>
-    ${inspectorOpen ? workbenchIssuePanel(copy, board) : ""}
-  </div>`;
-}
-
-function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
-  const desktop: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
-    ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
-    ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
-    ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
-    ["recentlyCompleted", copy.colRecent, board.columns?.recentlyCompleted ?? []],
-  ];
-  const cols = mobileClient()
-    ? [desktop[2], desktop[1], desktop[0], desktop[3]] as typeof desktop
-    : desktop;
-  return `<div class="lanes">
-    ${cols
-      .map(([key, name, items]) => {
-        const empty =
-          items.length > 0
-            ? ""
-            : key === "frontier"
-              ? frontierEmptyText(copy, board.frontierEmpty)
-              : key === "recentlyCompleted"
-                ? copy.noRecent
-                : copy.noItems;
-        return `<section class="lane" data-lane="${key}">
-          <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
-          ${items.map((issue) => issueCard(copy, issue, board.selected?.id, key)).join("")}
-          ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
-        </section>`;
-      })
-      .join("")}
-  </div>`;
-}
-
-function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuseCanvas: boolean): string {
-  const graph = board.graph;
-  if (!graph) {
-    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
-  }
-  const overview = graph.mode === "overview";
-  const legacyGraph = graph.mode == null && graph.centerId == null;
-  const canvasNodeLimit = overview ? graph.nodes.length : graphCanvasLimit;
-  const projectedNodes = [...graph.nodes]
-    .sort((a, b) =>
-      (a.distance ?? 0) - (b.distance ?? 0) ||
-      a.rank - b.rank ||
-      (overview ? b.number - a.number : a.number - b.number),
-    )
-    .slice(0, canvasNodeLimit);
-  const columns = new Map<number, GraphNode[]>();
-  for (const node of projectedNodes) {
-    const list = columns.get(node.rank) ?? [];
-    list.push(node);
-    columns.set(node.rank, list);
-  }
-  const ranks = [...columns.keys()].sort((a, b) => a - b);
-  const center = graph.nodes.find((node) => node.id === graph.centerId);
-  const totalCount = graph.totalCount ?? graph.nodes.length;
-  const centerLabel = copy.graphCenter.replace(
-    "{issue}",
-    center ? `#${center.number} ${center.title}` : graph.centerId ?? "—",
-  );
-  const completeLabel = copy.graphShowComplete.replace("{count}", String(totalCount));
-  const canvasLimit = copy.graphCanvasLimit
-    .replace("{shown}", String(projectedNodes.length))
-    .replace("{total}", String(graph.nodes.length));
-  const truncated = copy.graphTruncated
-    .replace("{shown}", String(graph.nodes.length))
-    .replace("{total}", String(totalCount));
-  return `<div class="dep-graph">
-    ${legacyGraph
-      ? `<label class="graph-opt">
-          <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
-          ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
-        </label>`
-      : `<div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
-          <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
-          <div class="actions">
-            ${overview
-              ? ""
-              : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
-                ${graph.complete
-                  ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
-                  : totalCount > graph.nodes.length
-                    ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
-                    : ""}`}
-          </div>
-        </div>
-        ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
-        ${projectedNodes.length < graph.nodes.length
-          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
-          : ""}
-        ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}`}
-    ${reuseCanvas
-      ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
-      : `<div class="graph-canvas">
-      <svg class="graph-edges" aria-hidden="true"></svg>
-      <div class="graph-flow">
-        ${ranks
-          .map(
-            (rank) =>
-              `<div class="graph-col" data-rank="${rank}">${(columns.get(rank) ?? [])
-                .map((node) =>
-                  graphNode(
-                    copy,
-                    node,
-                    board.selected?.id,
-                    legacyGraph ? null : graph.centerId ?? null,
-                    overview,
-                  ),
-                )
-                .join("")}</div>`,
-          )
-          .join("")}
-      </div>
-    </div>`}
-    ${!legacyGraph && graph.complete ? dependencyGraphIndex(copy, graph) : ""}
-  </div>`;
-}
-
-function dependencyGraphIndex(copy: ShellCopy, graph: DependencyGraph): string {
-  const query = graphListQuery.trim().toLowerCase();
-  const matches = graph.nodes
-    .filter((node) =>
-      !query ||
-      node.title.toLowerCase().includes(query) ||
-      node.id.toLowerCase().includes(query) ||
-      `#${node.number}`.includes(query),
-    )
-    .sort((a, b) =>
-      graphRelationMeta(a.relation).order - graphRelationMeta(b.relation).order ||
-      (a.distance ?? 0) - (b.distance ?? 0) ||
-      a.number - b.number,
-    );
-  const visible = matches.slice(0, graphListLimit);
-  return `<details class="graph-index" open>
-    <summary>${escapeHtml(copy.graphCompleteList)} <span>${matches.length}</span></summary>
-    <input id="dependency-graph-search" type="search" data-field="graphSearch" value="${escapeHtml(graphListQuery)}" placeholder="${escapeHtml(copy.graphSearchPlaceholder)}" />
-    <div class="graph-index-list">
-      ${visible.map((node) => graphIndexRow(copy, node, graph.centerId ?? "")).join("")}
-    </div>
-    ${visible.length < matches.length
-      ? `<button type="button" class="graph-index-more" data-act="graph-list-more">${escapeHtml(copy.graphShowMore)}</button>`
-      : ""}
-  </details>`;
-}
-
-function graphRelationMeta(relation: GraphNode["relation"]): (typeof GRAPH_RELATION_META)["center"] {
-  return GRAPH_RELATION_META[relation ?? "center"];
-}
-
-function graphIndexRow(copy: ShellCopy, node: GraphNode, centerId: string): string {
-  return `<div class="graph-index-row ${node.open ? "" : "closed"}">
-    <button type="button" class="graph-index-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
-      <span class="graph-relation">${escapeHtml(graphRelationMeta(node.relation).label(copy))}</span>
-      <span class="issue-id">#${node.number}</span>
-      <span class="issue-title">${escapeHtml(node.title)}</span>
-    </button>
-    ${node.id === centerId ? "" : graphCenterButton(copy, node)}
-  </div>`;
-}
-
-function graphNode(
-  copy: ShellCopy,
-  node: GraphNode,
-  selectedId: string | undefined,
-  centerId: string | null,
-  overview = false,
-): string {
-  const selected = node.id === selectedId ? "sel" : "";
-  const closed = node.open ? "" : "closed";
-  const center = node.id === centerId ? "root" : "";
-  return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
-    <button type="button" class="graph-node-main" data-act="${overview ? "center-graph" : "focus-issue"}" data-id="${escapeHtml(node.id)}">
-      <div class="issue-id">#${node.number}</div>
-      <div class="issue-title">${escapeHtml(node.title)}</div>
-    </button>
-    ${center || centerId == null ? "" : graphCenterButton(copy, node)}
-  </article>`;
-}
-
-function graphCenterButton(copy: ShellCopy, node: GraphNode): string {
-  const label = `${copy.graphCenterHere} #${node.number}`;
-  return `<button type="button" class="graph-center-act" data-act="center-graph" data-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">
-    ${escapeHtml(copy.graphCenterHere)}
-  </button>`;
-}
-
-function issuePanelIcon(open: boolean): string {
-  const chevron = open ? "M13 9l3 3-3 3" : "M16 9l-3 3 3 3";
-  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-    <path d="M10 4v16"></path>
-    <path d="${chevron}"></path>
-  </svg>`;
-}
-
-function frontierEmptyText(
-  copy: ShellCopy,
-  reason: BoardSnapshot["frontierEmpty"],
-): string {
-  if (reason === "all-blocked") return copy.noFrontierBlocked;
-  if (reason === "all-claimed") return copy.noFrontierClaimed;
-  if (reason === "no-open") return copy.noFrontierEmpty;
-  return copy.noItems;
-}
-
-function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activity"]): string {
-  if (activity === "waiting") return copy.waiting;
-  if (activity === "execution-stopped") return copy.executionStopped;
-  if (activity === "running") return copy.running;
-  return "";
-}
-
-function issueMetadataTags(labels: string[] | undefined, includeStatus = true): string {
-  return (labels ?? [])
-    .filter((label) => label.startsWith("type:") || (includeStatus && label.startsWith("status:")))
-    .map((label) => {
-      const [kind, ...rest] = label.split(":");
-      return `<span class="tag">${escapeHtml(`${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`)}</span>`;
-    })
-    .join("");
-}
-
-function issueCard(
-  copy: ShellCopy,
-  issue: IssueCard,
-  selectedId: string | undefined,
-  lane: "blocked" | "frontier" | "inProgress" | "recentlyCompleted",
-): string {
-  const activity = issueActivityLabel(copy, issue.activity);
-  const tags = [
-    activity ? `<span class="tag">${escapeHtml(activity)}</span>` : "",
-    issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
-    issueMetadataTags(issue.labels),
-    issue.claimedBy.length
-      ? `<span class="tag">${escapeHtml(copy.claimed)} ${escapeHtml(issue.claimedBy.join(", "))}</span>`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("");
-  const cardAction = "focus-issue";
-  const actionTargetId = issue.id;
-  const actions = lane === "frontier"
-    ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
-    : lane === "inProgress" && issue.runId
-      ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
-         <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>
-         ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>`}`
-      : lane === "recentlyCompleted"
-        ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
-           <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
-        : "";
-  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
-    <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
-      <div class="issue-id">#${issue.number}</div>
-      <div class="issue-title">${escapeHtml(issue.title)}</div>
-      ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
-    </button>
-    ${actions ? `<div class="issue-card-actions">${actions}</div>` : ""}
-  </article>`;
-}
-
-function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
-  const issue = board.selected;
-  if (!issue) {
-    return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
-  }
-  const claim = issue.claimedBy.length
-    ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
-    : "";
-  const hasActive = Boolean(issue.activeRunId) || (snapshot?.runs ?? []).some(
-    (run) => run.issueId === issue.id && run.status !== "ended",
-  );
-  const actions = hasActive
-    ? ""
-    : issue.executionStopped
-      ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
-         <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
-      : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
-  const canWrite = board.refresh.kind === "ready"
-    && (!board.issueOptions.length || board.issueOptions.some((option) => option.id === issue.id));
-  const canEdit = canWrite && issue.document.kind === "ready";
-  const openKey = issueOpenFormKey(issue.id);
-  const openPending = formOperations.pending.has(openKey);
-  const editOpen = issueEditOpenId === issue.id;
-  return `
-    <header class="detail-sticky">
-      <div class="detail-title-row">
-        <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
-      </div>
-      <div class="detail-meta">
-        ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-        ${issueMetadataTags(issue.labels, false)}
-        ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
-        ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
-        ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
-        ${actions}
-        ${canEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
-        ${canWrite ? `
-          <button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
-        <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
-      </div>
-      ${canWrite ? formFeedback(openKey) : ""}
-    </header>
-    <div class="detail-scroll">
-      ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
-      ${editOpen && canEdit ? issueEditForm(copy, issue) : ""}
-      <section class="detail-block">
-      <h4>${escapeHtml(copy.family)}</h4>
-      <div class="tiny">${escapeHtml(copy.parent)}</div>
-      ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
-      <div class="tiny">${escapeHtml(copy.children)}</div>
-      ${
-        issue.children.length
-          ? issue.children.map((child) => issueLink(copy, child)).join("")
-          : `<span class="muted">${escapeHtml(copy.noKids)}</span>`
-      }
-      ${
-        issue.children.length
-          ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>`
-          : ""
-      }
-      </section>
-      <section class="detail-block">
-      <h4>${escapeHtml(copy.deps)}</h4>
-      ${mobileClient() ? "" : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`}
-      <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
-      ${
-        issue.blockedBy.length
-          ? issue.blockedBy.map((link) => issueLink(copy, link)).join("")
-          : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`
-      }
-      <div class="tiny">${escapeHtml(copy.blocking)}</div>
-      ${
-        issue.blocking.length
-          ? issue.blocking.map((link) => issueLink(copy, link)).join("")
-          : `<span class="muted">${escapeHtml(copy.none)}</span>`
-      }
-      </section>
-      ${canWrite
-        ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${issueMaintenanceOpen.has(issue.id) ? "open" : ""}>
-            <summary>${escapeHtml(copy.issueUpdates)}</summary>
-            ${issueCommentForm(copy, issue)}
-            ${issueRelationsForm(copy, board, issue)}
-          </details>`
-        : ""}
-    </div>`;
-}
-
-function issueEditForm(copy: ShellCopy, issue: IssueDetail): string {
-  const key = issueEditFormKey(issue.id);
-  const draft = editableIssueDraft(issue);
-  const pending = formOperations.pending.has(key);
-  return `<section class="detail-block issue-editor issue-edit-editor">
-    <form data-act="issue-edit" data-form="issue-edit" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
-      <h4>${escapeHtml(copy.editIssue)}</h4>
-      <label class="label" for="issue-edit-title">${escapeHtml(copy.issueTitle)}</label>
-      <input id="issue-edit-title" name="title" required maxlength="240" value="${escapeHtml(draft.title)}" ${pending ? "disabled" : ""} />
-      <label class="label" for="issue-edit-body">${escapeHtml(copy.issueBody)}</label>
-      <textarea id="issue-edit-body" name="body" rows="8" ${pending ? "disabled" : ""}>${escapeHtml(draft.body)}</textarea>
-      ${formFeedback(key)}
-      <div class="actions">
-        <button type="button" data-act="cancel-edit-issue" data-id="${escapeHtml(issue.id)}" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.saveIssue)}</button>
-      </div>
-    </form>
-  </section>`;
-}
-
-function issueCommentForm(copy: ShellCopy, issue: IssueDetail): string {
-  const key = issueCommentFormKey(issue.id);
-  const pending = formOperations.pending.has(key);
-  return `<section class="detail-block issue-editor issue-comment-editor">
-    <form data-act="issue-comment" data-form="issue-comment" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
-      <h4>${escapeHtml(copy.addComment)}</h4>
-      <textarea name="body" rows="4" required maxlength="10000" placeholder="${escapeHtml(copy.commentPlaceholder)}" ${pending ? "disabled" : ""}>${escapeHtml(issueCommentDrafts.get(issue.id) ?? "")}</textarea>
-      ${formFeedback(key)}
-      <div class="actions">
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.addComment)}</button>
-      </div>
-    </form>
-  </section>`;
-}
-
-function issueRelationsForm(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
-  const parentKey = issueParentFormKey(issue.id);
-  const blockersKey = issueBlockersFormKey(issue.id);
-  const draft = editableIssueRelations(issue);
-  const parentPending = formOperations.pending.has(parentKey);
-  const blockersPending = formOperations.pending.has(blockersKey);
-  const options = issueOptionList(board, issue);
-  const parentOptions = options
-    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.parent === option.id ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
-    .join("");
-  const blockerOptions = options
-    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.blockedBy.includes(option.id) ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
-    .join("");
-  return `<section class="detail-block issue-editor issue-relations-editor">
-    <h4>${escapeHtml(copy.family)} / ${escapeHtml(copy.deps)}</h4>
-    <form data-act="issue-parent" data-form="issue-parent" data-id="${escapeHtml(issue.id)}" aria-busy="${parentPending ? "true" : "false"}">
-      <label class="label" for="issue-parent">${escapeHtml(copy.parentIssue)}</label>
-      <select id="issue-parent" name="parent" ${parentPending ? "disabled" : ""}>
-        <option value="">${escapeHtml(copy.none)}</option>
-        ${parentOptions}
-      </select>
-      ${formFeedback(parentKey)}
-      <div class="actions">
-        <button type="submit" class="primary" ${parentPending ? "disabled" : ""}>${escapeHtml(parentPending ? copy.operationPending : copy.saveRelations)}</button>
-      </div>
-    </form>
-    <form data-act="issue-blockers" data-form="issue-blockers" data-id="${escapeHtml(issue.id)}" aria-busy="${blockersPending ? "true" : "false"}">
-      <label class="label" for="issue-blocked-by">${escapeHtml(copy.dependencyBlockers)}</label>
-      <select id="issue-blocked-by" name="blockedBy" multiple size="${Math.min(6, Math.max(3, options.length))}" ${blockersPending ? "disabled" : ""}>
-        ${blockerOptions}
-      </select>
-      ${formFeedback(blockersKey)}
-      <div class="actions">
-        <button type="button" data-act="clear-issue-blockers" data-id="${escapeHtml(issue.id)}" ${blockersPending ? "disabled" : ""}>${escapeHtml(copy.clearDependency)}</button>
-        <button type="submit" class="primary" ${blockersPending ? "disabled" : ""}>${escapeHtml(blockersPending ? copy.operationPending : copy.saveRelations)}</button>
-      </div>
-    </form>
-  </section>`;
-}
-
-function issueDocument(copy: ShellCopy, state: IssueDocumentState, issueUrl: string): string {
-  if (state.kind === "unloaded" || state.kind === "loading") {
-    const previous = state.kind === "loading" && state.body != null
-      ? `<div class="issue-markdown is-stale">${renderMarkdown(state.body, issueUrl)}</div>`
-      : "";
-    const asOf = state.kind === "loading" && state.fetchedAtMs != null
-      ? ` · ${escapeHtml(copy.refreshAsOf)} ${escapeHtml(formatTime(state.fetchedAtMs))}`
-      : "";
-    return `<section class="issue-document" data-document-state="${state.kind}" aria-busy="true">
-      <div class="document-loading document-status" role="status" aria-live="polite">
-        <span class="document-loading-dot" aria-hidden="true"></span>
-        <span>${escapeHtml(copy.issueDocumentLoading)}</span>${asOf ? `<span class="document-loading-as-of">${asOf}</span>` : ""}
-      </div>
-      <div class="document-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
-      ${previous}
-    </section>`;
-  }
-  if (state.kind === "failed") {
-    return `<section class="issue-document" data-document-state="failed">
-      <p class="notice bad">${escapeHtml(copy.issueDocumentFailed)} ${escapeHtml(state.failure.message)}</p>
-      <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>
-    </section>`;
-  }
-  const stale = state.kind === "stale";
-  return `<section class="issue-document" data-document-state="${state.kind}">
-    ${stale
-      ? `<p class="document-status stale">${escapeHtml(copy.issueDocumentStale)} ${escapeHtml(formatTime(state.fetchedAtMs))}. ${escapeHtml(state.failure.message)}</p>
-         <button type="button" data-act="retry-issue-document">${escapeHtml(copy.issueDocumentRetry)}</button>`
-      : ""}
-    <div class="issue-markdown ${stale ? "is-stale" : ""}">${renderMarkdown(state.body, issueUrl)}</div>
-  </section>`;
-}
-
-function issueLink(copy: ShellCopy, link: IssueLink): string {
-  if (!link.visible) {
-    return `<span class="muted">${escapeHtml(copy.unclearIssue)}</span>`;
-  }
-  const label = `#${link.number ?? "?"} ${link.title}`.trim();
-  return `<button type="button" class="name-btn" data-act="focus-issue" data-id="${escapeHtml(link.id)}">${escapeHtml(label)}</button>`;
-}
-
-function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
-  const status = board?.refresh ?? { kind: "never-fetched" as const };
-  const kind = refreshing ? "refreshing" : status.kind;
-  const parts: string[] = [];
-  if (kind === "refreshing") {
-    parts.push(copy.refreshRefreshing);
-  } else if (status.kind === "never-fetched") {
-    parts.push(copy.refreshNever);
-  } else if (status.kind === "offline") {
-    parts.push(`${copy.refreshOffline} · ${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    parts.push(copy.refreshOfflineRecovery);
-    if (status.nextRefreshInMs != null) {
-      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
-    }
-  } else if (status.kind === "rate-limited") {
-    parts.push(copy.refreshRateLimited);
-    if (status.retryAtMs) {
-      parts.push(`${copy.refreshRetry} ${formatTime(status.retryAtMs)}`);
-    } else {
-      parts.push(copy.refreshPaused);
-    }
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
-  } else if (status.kind === "auth-failed") {
-    parts.push(copy.refreshAuth);
-    parts.push(copy.refreshAuthRecovery);
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
-  } else if (status.kind === "incomplete" || status.kind === "tracker-error") {
-    parts.push(status.kind === "tracker-error" ? copy.refreshTrackerError : copy.refreshIncomplete);
-    if (status.detail) {
-      parts.push(status.detail);
-    }
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
-    if (status.nextRefreshInMs != null) {
-      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
-    }
-  } else if (status.kind === "ready") {
-    parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    if (status.nextRefreshInMs != null) {
-      parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
-    }
-  }
-  return `<div class="refresh-bar" data-kind="${escapeHtml(kind)}">
-    <span>${escapeHtml(parts.join(" · "))}</span>
-    <button type="button" data-act="refresh">${escapeHtml(copy.refreshNow)}</button>
-  </div>`;
-}
-
-function renderStatusBarsOnly(): void {
-  if (!snapshot) return;
+export function renderStatusBarsOnly(): void {
+  if (!ui.snapshot) return;
   const appearance = mobileClient()
-    ? { ...snapshot.appearance, ...ensureMobileAppearance() }
-    : snapshot.appearance;
-  const copy = mobileClient() && appearance.language !== snapshot.appearance.language
-    ? clientCopy(appearance.language, snapshot.copy)
-    : snapshot.copy;
-  const current = app?.querySelector<HTMLElement>(".project-board > .refresh-bar");
-  if (current) current.outerHTML = refreshBar(copy, snapshot.board);
-  const pending = app?.querySelector<HTMLElement>('.project-board > .refresh-bar[data-kind="pending"]');
-  if (pending) pending.outerHTML = pendingBar(copy, snapshot);
+    ? { ...ui.snapshot.appearance, ...ensureMobileAppearance() }
+    : ui.snapshot.appearance;
+  const copy = mobileClient() && appearance.language !== ui.snapshot.appearance.language
+    ? clientCopy(appearance.language, ui.snapshot.copy)
+    : ui.snapshot.copy;
+  const current = ui.app?.querySelector<HTMLElement>(".project-board > .refresh-bar");
+  if (current) current.outerHTML = refreshBar(copy, ui.snapshot.board);
+  const pending = ui.app?.querySelector<HTMLElement>('.project-board > .refresh-bar[data-kind="pending"]');
+  if (pending) pending.outerHTML = pendingBar(copy, ui.snapshot);
 }
 
-function eventsNeedFullRender(events: HostEvent[]): boolean {
+export function eventsNeedFullRender(events: HostEvent[]): boolean {
   return events.some((event) => {
     if (event.type !== "refresh-status-changed") return true;
     return event.status.kind !== "refreshing" && event.status.kind !== "ready";
   });
 }
 
-function pendingBar(copy: ShellCopy, snap: Snapshot): string {
+export function pendingBar(copy: ShellCopy, snap: Snapshot): string {
   const pending = snap.pendingConfirmation;
   if (!pending) return "";
   return `<div class="refresh-bar" data-kind="pending">
@@ -4153,7 +365,7 @@ function pendingBar(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
-function connectionPanel(copy: ShellCopy, project: Project): string {
+export function connectionPanel(copy: ShellCopy, project: Project): string {
   if (project.connection.status === "ready") {
     return "";
   }
@@ -4176,266 +388,7 @@ function connectionPanel(copy: ShellCopy, project: Project): string {
   </div>`;
 }
 
-function launchForm(copy: ShellCopy, snap: Snapshot): string {
-  const form = snap.launchForm;
-  if (!form) return "";
-  if (!form.skipAgentPicker) {
-    const selected = form.agents.find((agent) => agent.id === launchPickerAgentId);
-    const selection = selected
-      ? `${copy.pickAgent}：${selected.name}`
-      : copy.noAgentSelected;
-    return `<div class="overlay modal" data-act="close-launch">
-      <div class="sheet form-sheet launch-sheet" data-act="form-noop">
-        <h2>${escapeHtml(copy.pickAgent)}</h2>
-        <div class="choices agent-picks">
-          ${form.agents
-            .map(
-              (agent) =>
-                `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
-                  <button type="button" class="${agent.id === launchPickerAgentId ? "active" : ""}" aria-pressed="${agent.id === launchPickerAgentId ? "true" : "false"}" data-act="select-agent" data-id="${escapeHtml(agent.id)}" ${agent.installed ? "" : "disabled"}>${escapeHtml(agent.name)}</button>
-                  ${agent.installed || !agent.unavailableReason ? "" : `<p class="notice bad">${escapeHtml(agent.unavailableReason)}</p>`}
-                </div>`,
-            )
-            .join("")}
-        </div>
-        <p class="hint agent-selection" aria-live="polite">${escapeHtml(selection)}</p>
-        <div class="actions">
-          <button type="button" data-act="close-launch">${escapeHtml(copy.cancel)}</button>
-          <button type="button" class="primary" data-act="next-agent" ${selected?.installed ? "" : "disabled"}>${escapeHtml(copy.nextStep)}</button>
-        </div>
-      </div>
-    </div>`;
-  }
-  if (!launchDraft) return "";
-  const draft = launchDraft;
-  const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
-  const folded = form.fields.filter((field) => field.folded);
-  const intentActive = draft.custom ? "" : draft.intentId;
-  const key = launchFormKey(form.projectId);
-  const pending = formOperations.pending.has(key);
-  const error = formOperations.errors.get(key) || form.error || "";
-  return `<div class="overlay modal" data-act="close-launch">
-    <form class="sheet form-sheet launch-sheet" data-act="form-noop" data-form="launch" aria-busy="${pending ? "true" : "false"}">
-      <h2>${escapeHtml(copy.launchTitle)}</h2>
-      <fieldset class="launch-fields" ${pending ? "disabled" : ""}>
-      <div class="launch-agent">
-        <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
-        <button type="button" data-act="switch-agent">${escapeHtml(copy.switchAgent)}</button>
-      </div>
-      <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
-      <div class="field">
-        <div class="label">${escapeHtml(copy.runIntent)}</div>
-        <div class="choices">
-          <button type="button" class="${intentActive === "" && !draft.custom ? "active" : ""}" data-act="intent" data-id="">${escapeHtml(copy.intentNone)}</button>
-          ${form.intents
-            .map(
-              (intent) =>
-                `<button type="button" class="${intentActive === intent.id ? "active" : ""}" data-act="intent" data-id="${escapeHtml(intent.id)}">${escapeHtml(intent.label)}</button>`,
-            )
-            .join("")}
-          <button type="button" class="active" data-act="intent-custom" ${draft.custom ? "" : "hidden"}>${escapeHtml(copy.intentCustom)}</button>
-        </div>
-      </div>
-      <div class="field">
-        <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
-        <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
-      </div>
-      ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
-      <div class="field">
-        <div class="label">${escapeHtml(copy.workingDirectory)}</div>
-        <input value="${escapeHtml(form.workingDirectory)}" readonly />
-      </div>
-      <label class="graph-opt ${form.isolationSupported ? "" : "isolation-off"}">
-        <input type="checkbox" data-launch="isolation" ${draft.values.isolation === "true" ? "checked" : ""} ${form.isolationSupported ? "" : "disabled"} />
-        ${escapeHtml(copy.isolation)}
-      </label>
-      <p class="hint">${escapeHtml(copy.isolationHint)}</p>
-      ${
-        form.isolationSupported
-          ? ""
-          : `<details class="isolation-why"><summary>${escapeHtml(copy.isolationOffReason)}</summary><p class="hint">${escapeHtml(form.isolationReason)}</p></details>`
-      }
-      <details class="folded" ${launchFolded ? "open" : ""}>
-        <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
-        ${
-          snap.showCommandPreview
-            ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload launch-command-preview">${escapeHtml(form.commandPreview)}</pre></div>`
-            : ""
-        }
-      </details>
-      <p class="notice launch-warnings" ${form.warnings?.length ? "" : "hidden"}>${escapeHtml((form.warnings ?? []).join(" "))}</p>
-      ${form.optionDiscoveryError ? `<p class="notice">${escapeHtml(form.optionDiscoveryError)}</p>` : ""}
-      ${error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : ""}
-      <div class="actions">
-        <button type="button" data-act="close-launch" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.startRunPending : copy.startRun)}</button>
-      </div>
-      </fieldset>
-    </form>
-  </div>`;
-}
-
-function launchField(field: AgentField, value: string, values: Record<string, string>): string {
-  const id = `launch-${field.id}`;
-  if (field.kind === "boolean") {
-    return `<label class="graph-opt">
-      <input type="checkbox" data-launch="${escapeHtml(field.id)}" ${value === "true" ? "checked" : ""} />
-      ${escapeHtml(field.label)}
-    </label>`;
-  }
-  if (field.kind === "select") {
-    const options = launchFieldOptions(field, values);
-    if (!options.length) {
-      return `<div class="field">
-        <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-        <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-      </div>`;
-    }
-    const known = options.includes(value);
-    const customValue = known ? "" : value;
-    return `<div class="field">
-      <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-      <select id="${id}" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
-        ${launchSelectOptions(options, value)}
-      </select>
-      <input class="launch-custom-value" data-launch-custom="${escapeHtml(field.id)}" value="${escapeHtml(customValue)}" ${customValue ? "" : "hidden"} placeholder="${escapeHtml(customOptionLabel())}" ${customValue && field.required ? "required" : ""} />
-    </div>`;
-  }
-  if (field.kind === "multiline") {
-    return `<div class="field">
-      <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-      <textarea id="${id}" data-launch="${escapeHtml(field.id)}" rows="3">${escapeHtml(value)}</textarea>
-    </div>`;
-  }
-  return `<div class="field">
-    <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-    <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-  </div>`;
-}
-
-function customOptionLabel(): string {
-  return effectiveClientLanguage() === "zh-CN" ? "自定义值" : "Custom value";
-}
-
-function launchSelectOptions(options: string[], value: string): string {
-  const selectedValue = options.includes(value) ? value : value ? "__custom__" : "";
-  const placeholder = value ? "" : `<option value="" disabled selected>${escapeHtml(selectPlaceholderLabel())}</option>`;
-  return `${placeholder}${options
-    .map((option) => `<option value="${escapeHtml(option)}" ${option === selectedValue ? "selected" : ""}>${escapeHtml(option)}</option>`)
-    .join("")}<option value="__custom__" ${selectedValue === "__custom__" ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
-}
-
-function selectPlaceholderLabel(): string {
-  return effectiveClientLanguage() === "zh-CN" ? "请选择" : "Select a value";
-}
-
-function launchFieldOptions(field: AgentField, values: Record<string, string>): string[] {
-  const filter = field.optionFilter;
-  if (!filter) return field.options ?? [];
-  return filter.optionsByValue[values[filter.fieldId] ?? ""] ?? field.options ?? [];
-}
-
-function projectForm(copy: ShellCopy): string {
-  const editing = formOpen === "edit";
-  const activeRun = Boolean(
-    snapshot?.projects.find((project) => project.id === formProjectId)?.hasActiveRun,
-  );
-  const lockedRegistration = editing && activeRun;
-  const saving = projectOperation === "save";
-  const inferenceCandidate = projectInference.status === "candidate" ? projectInference.candidate : null;
-  const inferenceMessage = projectInference.status === "failed" ? projectInference.message : "";
-  return `<div class="overlay modal" data-act="close-form">
-    <form class="sheet form-sheet" data-act="form-noop" data-form="project">
-      <h2>${escapeHtml(editing ? copy.editProjectTitle : copy.registerProjectTitle)}</h2>
-      <p class="hint">${escapeHtml(focusedHostIsLocal() ? copy.inferenceHint : copy.remoteProjectHint)}</p>
-      ${lockedRegistration ? `<p class="notice">${escapeHtml(copy.activeProjectEditHint)}</p>` : ""}
-      <div class="field">
-        <label class="label" for="project-name">${escapeHtml(copy.displayName)}</label>
-        <input id="project-name" data-field="name" ${saving ? "disabled" : "required"} value="${escapeHtml(formDraft.name)}" />
-      </div>
-      <div class="field">
-        <label class="label" for="project-path">${escapeHtml(copy.localDirectory)}</label>
-        <div class="path-picker">
-          <input id="project-path" class="path-input" data-field="localPath" ${lockedRegistration || saving ? "disabled" : "required"} value="${escapeHtml(formDraft.localPath)}" title="${escapeHtml(formDraft.localPath)}" dir="ltr" />
-          ${focusedHostIsLocal() && !lockedRegistration
-            ? `<button type="button" data-act="choose-project-directory" ${saving ? "disabled" : ""}>${escapeHtml(copy.chooseDirectory)}</button>`
-            : ""}
-        </div>
-      </div>
-      <div class="field">
-        <label class="label" for="project-host">${escapeHtml(copy.githubHost)}</label>
-        <input id="project-host" data-field="githubHost" ${lockedRegistration || saving ? "disabled" : ""} value="${escapeHtml(formDraft.githubHost)}" />
-      </div>
-      <div class="field">
-        <label class="label" for="project-repo">${escapeHtml(copy.repository)}</label>
-        <input id="project-repo" data-field="repository" ${lockedRegistration || saving ? "disabled" : "required"} placeholder="owner/repo" value="${escapeHtml(formDraft.repository)}" />
-      </div>
-      ${!lockedRegistration && projectInference.status !== "idle"
-        ? `<div class="inference">
-            ${projectInference.status === "pending"
-              ? `<p class="hint" data-inference="pending">${escapeHtml(copy.inferringFromDirectory)}</p>`
-              : ""}
-            ${inferenceCandidate
-              ? `<div class="notice ok inference-candidate" data-inference="candidate">
-                  <div><b>${escapeHtml(inferenceCandidate.name)}</b></div>
-                  <div>${escapeHtml(inferenceCandidate.githubHost)}/${escapeHtml(inferenceCandidate.repository)}</div>
-                  <div class="actions">
-                    <button type="button" data-act="apply-infer">${escapeHtml(copy.useInference)}</button>
-                  </div>
-                </div>`
-              : ""}
-            ${inferenceMessage
-              ? `<div class="notice bad" data-inference="failed">
-                  <div>${escapeHtml(inferenceMessage)}</div>
-                  <div class="actions">
-                    <button type="button" data-act="retry-infer">${escapeHtml(copy.retryInference)}</button>
-                  </div>
-                </div>`
-              : ""}
-          </div>`
-        : ""}
-      ${formError ? `<p class="notice bad">${escapeHtml(formError)}</p>` : ""}
-      <div class="actions">
-        <button type="button" data-act="close-form" ${saving ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${saving ? "disabled" : ""}>${escapeHtml(saving ? copy.operationPending : editing ? copy.saveRegistration : copy.addProject)}</button>
-      </div>
-    </form>
-  </div>`;
-}
-
-function removeDialog(copy: ShellCopy, project: Project): string {
-  if (project.hasActiveRun) {
-    return `<div class="overlay modal" data-act="close-remove">
-      <div class="sheet" data-act="form-noop">
-        <h2>${escapeHtml(copy.cannotRemoveActiveRun)} ${escapeHtml(project.name)}</h2>
-        <p class="notice bad">${escapeHtml(copy.cannotRemoveActiveRunBody)}</p>
-        <div class="actions">
-          <button type="button" class="primary" data-act="close-remove">${escapeHtml(copy.gotIt)}</button>
-        </div>
-      </div>
-    </div>`;
-  }
-  return `<div class="overlay modal" data-act="close-remove">
-    <div class="sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.removeConfirmTitle)}</h2>
-      <p class="notice">${escapeHtml(copy.removeConfirmBody)}</p>
-      ${project.hasExecutionStopped ? `<p class="notice">${escapeHtml(copy.removeKeepClaimsBody)}</p>` : ""}
-      ${removeError ? `<p class="notice bad">${escapeHtml(removeError)}</p>` : ""}
-      <div class="actions">
-        <button type="button" data-act="close-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="button" class="danger primary" data-act="confirm-remove" ${projectOperation === "remove" ? "disabled" : ""}>${escapeHtml(projectOperation === "remove" ? copy.removalPending : copy.removeConfirm)}</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-function loopbackNotice(page: LoopbackPage): string {
-  if (page.status === "serving") return "";
-  return `<p class="notice">${escapeHtml(page.reason)}</p>`;
-}
-
-function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
+export function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
   if (theme === "plain-night") {
     return {
       cursorBlink: true,
@@ -4450,90 +403,90 @@ function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
   };
 }
 
-function ensureTerminal(theme: Theme): void {
-  if (term && termHost && fitAddon) return;
-  fitAddon = new FitAddon();
-  term = new Terminal(termTheme(theme));
-  term.loadAddon(fitAddon);
-  termHost = document.createElement("div");
-  termHost.className = "pty-host";
-  term.open(termHost);
-  term.onData((data) => {
-    const runId = snapshot?.focusedRunId;
+export function ensureTerminal(theme: Theme): void {
+  if (ui.term && ui.termHost && ui.fitAddon) return;
+  ui.fitAddon = new FitAddon();
+  ui.term = new Terminal(termTheme(theme));
+  ui.term.loadAddon(ui.fitAddon);
+  ui.termHost = document.createElement("div");
+  ui.termHost.className = "pty-host";
+  ui.term.open(ui.termHost);
+  ui.term.onData((data) => {
+    const runId = ui.snapshot?.focusedRunId;
     if (!runId) return;
     void sendPtyInput(runId, data);
   });
 }
 
-function attachTerminal(snap: Snapshot): void {
+export function attachTerminal(snap: Snapshot): void {
   const run = focusedRun(snap);
-  const slot = app?.querySelector<HTMLElement>(".pty-slot");
+  const slot = ui.app?.querySelector<HTMLElement>(".pty-slot");
   if (!run || !slot) {
-    ptyPumping = false;
+    ui.ptyPumping = false;
     return;
   }
   ensureTerminal(snap.appearance.theme);
-  if (termHost && termHost.parentElement !== slot) {
-    slot.appendChild(termHost);
+  if (ui.termHost && ui.termHost.parentElement !== slot) {
+    slot.appendChild(ui.termHost);
   }
-  fitAddon?.fit();
+  ui.fitAddon?.fit();
   void sendPtyResize(run.id);
-  if (ptyRunId !== run.id) {
-    ptyRunId = run.id;
-    ptyOffset = 0;
-    term?.reset();
+  if (ui.ptyRunId !== run.id) {
+    ui.ptyRunId = run.id;
+    ui.ptyOffset = 0;
+    ui.term?.reset();
   }
   if (run.status === "ended") {
-    ptyPumping = false;
+    ui.ptyPumping = false;
     return;
   }
-  if (!ptyPumping) {
-    ptyPumping = true;
+  if (!ui.ptyPumping) {
+    ui.ptyPumping = true;
     void pumpPty();
   }
 }
 
-async function pumpMobileOutput(snap: Snapshot): Promise<void> {
-  const run = mobileView === "run" ? focusedRun(snap) : undefined;
-  if (!run || run.status === "ended" || mobileLiveTerminal) {
+export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
+  const run = ui.mobileView === "run" ? focusedRun(snap) : undefined;
+  if (!run || run.status === "ended" || ui.mobileLiveTerminal) {
     if (run?.status === "ended" && run.recentOutput) {
-      mobilePtyText.set(run.id, run.recentOutput);
+      ui.mobilePtyText.set(run.id, run.recentOutput);
     }
-    mobilePtyPumping = false;
+    ui.mobilePtyPumping = false;
     return;
   }
-  if (mobilePtyRunId !== run.id) {
-    mobilePtyRunId = run.id;
-    mobilePtyOffset = 0;
+  if (ui.mobilePtyRunId !== run.id) {
+    ui.mobilePtyRunId = run.id;
+    ui.mobilePtyOffset = 0;
   }
-  if (mobilePtyPumping) return;
-  mobilePtyPumping = true;
+  if (ui.mobilePtyPumping) return;
+  ui.mobilePtyPumping = true;
   const runId = run.id;
   try {
     while (
       mobileClient()
-      && mobileView === "run"
-      && !mobileLiveTerminal
-      && snapshot?.focusedRunId === runId
+      && ui.mobileView === "run"
+      && !ui.mobileLiveTerminal
+      && ui.snapshot?.focusedRunId === runId
     ) {
       const response = await fetch(
-        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${mobilePtyOffset}`,
+        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.mobilePtyOffset}`,
       );
-      if (!response.ok || mobilePtyRunId !== runId) break;
+      if (!response.ok || ui.mobilePtyRunId !== runId) break;
       const json = (await response.json()) as { offset: number; data: string; exited: number | null };
       if (json.data) {
         const raw = atob(json.data);
         const bytes = Uint8Array.from(raw, (byte) => byte.charCodeAt(0));
         const text = new TextDecoder().decode(bytes);
-        const recent = `${mobilePtyText.get(runId) ?? ""}${text}`.slice(-16_000);
-        mobilePtyText.set(runId, recent);
-        const output = app?.querySelector<HTMLElement>(`.mobile-run-output[data-run="${CSS.escape(runId)}"]`);
+        const recent = `${ui.mobilePtyText.get(runId) ?? ""}${text}`.slice(-16_000);
+        ui.mobilePtyText.set(runId, recent);
+        const output = ui.app?.querySelector<HTMLElement>(`.mobile-run-output[data-run="${CSS.escape(runId)}"]`);
         if (output) {
           output.textContent = recent;
           output.scrollTop = output.scrollHeight;
         }
       }
-      mobilePtyOffset = json.offset;
+      ui.mobilePtyOffset = json.offset;
       if (json.exited != null) {
         await rpc("snapshot");
         render();
@@ -4543,11 +496,11 @@ async function pumpMobileOutput(snap: Snapshot): Promise<void> {
   } catch {
     // Keep the last readable output when the Run or Host disconnects.
   } finally {
-    mobilePtyPumping = false;
+    ui.mobilePtyPumping = false;
   }
 }
 
-async function sendPtyInput(runId: string, data: string): Promise<void> {
+export async function sendPtyInput(runId: string, data: string): Promise<void> {
   try {
     await fetch(`${await protocolBase()}/runs/${encodeURIComponent(runId)}/input`, {
       method: "POST",
@@ -4559,9 +512,9 @@ async function sendPtyInput(runId: string, data: string): Promise<void> {
   }
 }
 
-async function sendPtyResize(runId: string): Promise<void> {
-  const cols = term?.cols ?? 80;
-  const rows = term?.rows ?? 24;
+export async function sendPtyResize(runId: string): Promise<void> {
+  const cols = ui.term?.cols ?? 80;
+  const rows = ui.term?.rows ?? 24;
   try {
     await fetch(`${await protocolBase()}/runs/${encodeURIComponent(runId)}/resize`, {
       method: "POST",
@@ -4573,12 +526,12 @@ async function sendPtyResize(runId: string): Promise<void> {
   }
 }
 
-async function pumpPty(): Promise<void> {
-  while (ptyPumping && snapshot?.focusedRunId && ptyRunId === snapshot.focusedRunId) {
-    const runId = ptyRunId;
+export async function pumpPty(): Promise<void> {
+  while (ui.ptyPumping && ui.snapshot?.focusedRunId && ui.ptyRunId === ui.snapshot.focusedRunId) {
+    const runId = ui.ptyRunId;
     try {
       const response = await fetch(
-        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ptyOffset}`,
+        `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.ptyOffset}`,
       );
       if (response.ok) {
         const json = (await response.json()) as {
@@ -4586,16 +539,16 @@ async function pumpPty(): Promise<void> {
           data: string;
           exited: number | null;
         };
-        if (ptyRunId !== runId || snapshot?.focusedRunId !== runId) {
+        if (ui.ptyRunId !== runId || ui.snapshot?.focusedRunId !== runId) {
           break;
         }
         if (json.data) {
           const raw = atob(json.data);
           const bytes = new Uint8Array(raw.length);
           for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-          term?.write(bytes);
+          ui.term?.write(bytes);
         }
-        ptyOffset = json.offset;
+        ui.ptyOffset = json.offset;
         if (json.exited != null) {
           await rpc("snapshot");
           render();
@@ -4606,10 +559,10 @@ async function pumpPty(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
   }
-  ptyPumping = false;
+  ui.ptyPumping = false;
 }
 
-app.addEventListener("pointerdown", (event) => {
+ui.app.addEventListener("pointerdown", (event) => {
   if (mobileClient()) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-panel-drag], [data-panel-resize]");
   if (!target) return;
@@ -4622,17 +575,17 @@ app.addEventListener("pointerdown", (event) => {
   const kind = target.dataset.panelDrag ? "drag" : "resize";
   let rerendered = false;
   if (kind === "drag" && !panelIsFloating(panelId)) {
-    workbenchLayout[panelId] = withPanelFloating(panelId, floatingOrigin(panelId, panel), true);
+    ui.workbenchLayout[panelId] = withPanelFloating(panelId, floatingOrigin(panelId, panel), true);
     saveWorkbenchLayout();
     render();
     rerendered = true;
-    panel = app.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
+    panel = ui.app.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
     if (!panel) return;
   }
   const rect = panel.getBoundingClientRect();
   const container = panelContainer(panel).getBoundingClientRect();
-  workbenchLayout[panelId] = {
-    ...workbenchLayout[panelId],
+  ui.workbenchLayout[panelId] = {
+    ...ui.workbenchLayout[panelId],
     width: rect.width,
     height: rect.height,
     x: rect.left - container.left,
@@ -4641,22 +594,22 @@ app.addEventListener("pointerdown", (event) => {
       ? { dockedWidth: rect.width }
       : {}),
   };
-  panelPointerInteraction = {
+  ui.panelPointerInteraction = {
     pointerId: event.pointerId,
     panelId,
     kind,
     startClientX: event.clientX,
     startClientY: event.clientY,
-    start: { ...clonePanelGeometry(workbenchLayout[panelId]), floating: panelIsFloating(panelId) },
+    start: { ...clonePanelGeometry(ui.workbenchLayout[panelId]), floating: panelIsFloating(panelId) },
   };
   if (!rerendered) target.setPointerCapture?.(event.pointerId);
 });
 
 document.addEventListener("pointermove", (event) => {
-  const interaction = panelPointerInteraction;
+  const interaction = ui.panelPointerInteraction;
   if (!interaction || interaction.pointerId !== event.pointerId) return;
   event.preventDefault();
-  const panel = app?.querySelector<HTMLElement>(`[data-workbench-panel="${interaction.panelId}"]`);
+  const panel = ui.app?.querySelector<HTMLElement>(`[data-workbench-panel="${interaction.panelId}"]`);
   if (!panel) return;
   const container = panelContainer(panel).getBoundingClientRect();
   const dx = event.clientX - interaction.startClientX;
@@ -4676,1359 +629,38 @@ document.addEventListener("pointermove", (event) => {
     next.width = clamp(interaction.start.width + dx, 280, container.width - interaction.start.x - 8);
     next.height = clamp(interaction.start.height + dy, 180, container.height - interaction.start.y - 8);
   }
-  workbenchLayout[interaction.panelId] = next;
+  ui.workbenchLayout[interaction.panelId] = next;
   updatePanelNode(interaction.panelId);
 }, true);
 
 window.addEventListener("pointerup", (event) => finishPanelPointer(event.pointerId));
 window.addEventListener("pointercancel", (event) => finishPanelPointer(event.pointerId));
 
-app.addEventListener("click", async (event) => {
-  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
-  if (!target || !snapshot) return;
-  if (target.dataset.stop) event.stopPropagation();
-  const act = target.dataset.act;
-  if (act === "mobile-scope") {
-    mobileScopeOpen = true;
-    render();
-    return;
-  }
-  if (act === "close-mobile-scope" && event.target === target) {
-    mobileScopeOpen = false;
-    render();
-    return;
-  }
-  if (act === "mobile-board") {
-    mobileView = "board";
-    mobileLiveTerminal = false;
-    render();
-    return;
-  }
-  if (act === "mobile-issue") {
-    mobileView = "issue";
-    mobileLiveTerminal = false;
-    render();
-    return;
-  }
-  if (act === "mobile-run") {
-    if (focusedRun(snapshot)) mobileView = "run";
-    render();
-    return;
-  }
-  if (act === "mobile-live-terminal") {
-    mobileLiveTerminal = true;
-    render();
-    return;
-  }
-  if (act === "close-settings" && event.target === target) {
-    settingsOpen = false;
-    render();
-    return;
-  }
-  if (act === "toggle-sidebar") {
-    sidebarVisible = !sidebarVisible;
-    render();
-    return;
-  }
-  if (act === "toggle-issue") {
-    issueDetailVisible = !issueDetailVisible;
-    if (issueDetailVisible) {
-      frontWorkbenchPanel = "inspector";
-    } else if (snapshot.workspaceView === "run") {
-      frontWorkbenchPanel = "terminal";
-    }
-    render();
-    return;
-  }
-  if (act === "panel-mode") {
-    const panelId = workbenchPanelId(target.dataset.id);
-    if (panelId) setPanelFloating(panelId, !panelIsFloating(panelId));
-    return;
-  }
-  if (act === "hide-terminal") {
-    terminalPanelVisible = false;
-    if (snapshot.workspaceView === "run") {
-      sidebarVisible = sidebarBeforeLift;
-      await rpc("returnToBoard");
-    }
-    render();
-    return;
-  }
-  if (act === "show-terminal") {
-    terminalPanelVisible = true;
-    frontWorkbenchPanel = "terminal";
-    render();
-    return;
-  }
-  if (act === "open-overview") {
-    sidebarVisible = true;
-    await rpc("openHostOverview");
-    render();
-    return;
-  }
-  if (act === "return-board") {
-    sidebarVisible = sidebarBeforeLift;
-    terminalPanelVisible = true;
-    await rpc("returnToBoard");
-    render();
-    return;
-  }
-  if (act === "settings") {
-    settingsOpen = true;
-    await loadStartupSettings();
-    pairingOpen = false;
-    formOpen = null;
-    removeProject = null;
-    projectMenuId = "";
-    render();
-    return;
-  }
-  if (act === "host-mode" && target.dataset.id) {
-    const mode = target.dataset.id as Snapshot["hostMode"];
-    if (mode !== snapshot.hostMode) {
-      await setHostMode(mode);
-    }
-    render();
-    return;
-  }
-  if (act === "refresh-launch-environment") {
-    launchEnvironmentError = "";
-    try {
-      const result = await rpc("refreshLaunchEnvironment");
-      launchEnvironmentState = result.launchEnvironment ?? launchEnvironmentState;
-    } catch (error) {
-      launchEnvironmentState = {
-        status: "failed",
-        refreshedDirectories: 0,
-      };
-      launchEnvironmentError = error instanceof Error ? error.message : String(error);
-    }
-    render();
-    return;
-  }
-  if (act === "check-updates") {
-    await checkForUpdates(true);
-    return;
-  }
-  if (act === "install-update") {
-    await installPendingUpdate();
-    return;
-  }
-  if (act === "update-later") {
-    if (event.target !== target && target.closest(".sheet")) return;
-    updateState = { kind: "idle" };
-    render();
-    return;
-  }
-  if (act === "pairing-noop") {
-    return;
-  }
-  if (act === "close-pairing" && event.target === target) {
-    pairingOpen = false;
-    pairingError = "";
-    render();
-    return;
-  }
-  if (act === "pair") {
-    mobileScopeOpen = false;
-    pairingOpen = true;
-    settingsOpen = false;
-    hostPickerOpen = false;
-    formOpen = null;
-    removeProject = null;
-    projectMenuId = "";
-    pairingError = "";
-    render();
-    return;
-  }
-  if (act === "register") {
-    mobileScopeOpen = false;
-    formOpen = "register";
-    formProjectId = "";
-    formDraft = emptyDraft();
-    autoFilledProjectName = "";
-    supersedeProjectInference();
-    formError = "";
-    removeError = "";
-    projectMenuId = "";
-    pairingOpen = false;
-    settingsOpen = false;
-    removeProject = null;
-    render();
-    return;
-  }
-  if (act === "new-issue" && target.dataset.id) {
-    createIssueProjectId = target.dataset.id;
-    createIssueDraft = { title: "", body: "" };
-    createIssueOpen = true;
-    clearFormOperation(issueCreateFormKey(createIssueProjectId));
-    issueEditOpenId = null;
-    render();
-    app.querySelector<HTMLInputElement>("#issue-create-title")?.focus();
-    return;
-  }
-  if (act === "cancel-new-issue") {
-    if (createIssueProjectId && formOperations.pending.has(issueCreateFormKey(createIssueProjectId))) return;
-    createIssueOpen = false;
-    createIssueProjectId = "";
-    createIssueDraft = { title: "", body: "" };
-    render();
-    return;
-  }
-  if (act === "form-noop") {
-    return;
-  }
-  if (act === "keyboard-help") {
-    keyboardHelpOpen = true;
-    render();
-    return;
-  }
-  if (act === "close-keyboard-help") {
-    keyboardHelpOpen = false;
-    render();
-    return;
-  }
-  if (act === "open-issue" && target.dataset.url) {
-    await openExternalUrl(target.dataset.url);
-    return;
-  }
-  if (act === "open-external" && target.dataset.url) {
-    event.preventDefault();
-    const url = safeHttpUrl(target.dataset.url);
-    if (url) await openExternalUrl(url);
-    return;
-  }
-  if (act === "retry-issue-document") {
-    await loadSelectedIssueDocument(true);
-    render();
-    return;
-  }
-  if (act === "edit-issue" && target.dataset.id) {
-    const issue = snapshot.board?.selected?.id === target.dataset.id
-      ? snapshot.board.selected
-      : null;
-    if (!issue) return;
-    if (issue.document.kind === "unloaded") {
-      await loadSelectedIssueDocument();
-    }
-    const current = snapshot.board?.selected?.id === issue.id ? snapshot.board.selected : issue;
-    if (current.document.kind !== "ready") return;
-    issueEditDrafts.set(issue.id, { title: current.title, body: editableIssueBody(current) });
-    issueEditOpenId = issue.id;
-    clearFormOperation(issueEditFormKey(issue.id));
-    render();
-    app.querySelector<HTMLInputElement>("#issue-edit-title")?.focus();
-    return;
-  }
-  if (act === "cancel-edit-issue" && target.dataset.id) {
-    if (formOperations.pending.has(issueEditFormKey(target.dataset.id))) return;
-    issueEditOpenId = null;
-    render();
-    return;
-  }
-  if (act === "clear-issue-blockers" && target.dataset.id) {
-    const issue = snapshot.board?.selected?.id === target.dataset.id ? snapshot.board.selected : null;
-    if (!issue || formOperations.pending.has(issueBlockersFormKey(issue.id))) return;
-    const current = editableIssueRelations(issue);
-    issueRelationDrafts.set(issue.id, { ...current, blockedBy: [] });
-    render();
-    return;
-  }
-  if (act === "toggle-issue-open" && target.dataset.id) {
-    const issue = snapshot.board?.selected?.id === target.dataset.id ? snapshot.board.selected : null;
-    if (!issue) return;
-    const key = issueOpenFormKey(issue.id);
-    await runFormOperation(key, async () => {
-      await rpc("setIssueOpen", { issueId: issue.id, open: !issue.open });
-    });
-    return;
-  }
-  if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
-    if (projectOperation) return;
-    if (target.tagName !== "BUTTON") return;
-    formOpen = null;
-    supersedeProjectInference();
-    formError = "";
-    render();
-    return;
-  }
-  if (act === "project-menu" && target.dataset.id) {
-    projectMenuId = projectMenuId === target.dataset.id ? "" : target.dataset.id;
-    render();
-    return;
-  }
-  if (act === "focus-project" && target.dataset.id) {
-    projectMenuId = "";
-    mobileScopeOpen = false;
-    mobileView = "board";
-    sidebarVisible = true;
-    await rpc("focusProject", { projectId: target.dataset.id });
-    await reportClientView();
-    render();
-    return;
-  }
-  if (act === "new-run" && target.dataset.id) {
-    projectMenuId = "";
-    settingsOpen = false;
-    pairingOpen = false;
-    formOpen = null;
-    launchDraft = null;
-    await rpc("prepareRunLaunch", {
-      projectId: target.dataset.id,
-      language: effectiveClientLanguage(),
-    });
-    render();
-    return;
-  }
-  if (act === "execute-run" && target.dataset.id && snapshot.focusedProjectId) {
-    settingsOpen = false;
-    pairingOpen = false;
-    formOpen = null;
-    launchDraft = null;
-    await rpc("focusIssue", { issueId: target.dataset.id });
-    await rpc("prepareRunLaunch", {
-      projectId: snapshot.focusedProjectId,
-      issueId: target.dataset.id,
-      language: effectiveClientLanguage(),
-    });
-    render();
-    return;
-  }
-  if (act === "continue-run" && target.dataset.id) {
-    await rpc("continueRun", { issueId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "release-claim" && target.dataset.id) {
-    await rpc("releaseIssue", { issueId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
-    await rpc("cancelRunLaunch");
-    launchDraft = null;
-    launchPickerProjectId = "";
-    launchPickerAgentId = "";
-    launchPreviewSequence += 1;
-    if (launchPreviewTimer != null) window.clearTimeout(launchPreviewTimer);
-    render();
-    return;
-  }
-  if (act === "switch-agent") {
-    const form = snapshot.launchForm;
-    if (!form) return;
-    launchDraft = null;
-    await rpc("prepareRunLaunch", {
-      projectId: form.projectId,
-      issueId: form.issueId,
-      pickAgent: true,
-      language: effectiveClientLanguage(),
-    });
-    render();
-    return;
-  }
-  if (act === "select-agent" && target.dataset.id) {
-    launchPickerAgentId = target.dataset.id;
-    render();
-    return;
-  }
-  if (act === "next-agent" && launchPickerAgentId) {
-    const form = snapshot.launchForm;
-    if (!form) return;
-    launchDraft = null;
-    await rpc("prepareRunLaunch", {
-      projectId: form.projectId,
-      issueId: form.issueId,
-      agentId: launchPickerAgentId,
-      language: effectiveClientLanguage(),
-    });
-    render();
-    return;
-  }
-  if (act === "intent") {
-    if (!launchDraft || !snapshot.launchForm) return;
-    const intentId = target.dataset.id ?? "";
-    launchDraft.intentId = intentId;
-    launchDraft.custom = false;
-    launchDraft.openingText = expectedOpening(snapshot.launchForm, launchDraft);
-    render();
-    return;
-  }
-  if (act === "intent-custom") {
-    return;
-  }
-  if (act === "toggle-folded") {
-    launchFolded = !launchFolded;
-    return;
-  }
-  if (act === "focus-run" && target.dataset.id) {
-    sidebarBeforeLift = sidebarVisible;
-    issueDetailVisible = true;
-    terminalPanelVisible = true;
-    frontWorkbenchPanel = "terminal";
-    await rpc("focusRun", { runId: target.dataset.id });
-    await loadSelectedIssueDocument();
-    if (mobileClient()) {
-      mobileView = "run";
-      mobileLiveTerminal = false;
-    } else {
-      sidebarVisible = false;
-    }
-    render();
-    return;
-  }
-  if (act === "open-usage") {
-    mobileScopeOpen = false;
-    settingsOpen = false;
-    pairingOpen = false;
-    formOpen = null;
-    frontWorkbenchPanel = "usage";
-    await rpc("openUsage");
-    render();
-    return;
-  }
-  if (act === "close-usage") {
-    await rpc("closeUsage");
-    render();
-    return;
-  }
-  if (act === "usage-range" && target.dataset.id) {
-    usageCustomDraft = null;
-    clearFormOperation(usageCustomFormKey(snapshot.focusedHostId));
-    await rpc("setUsageRange", { range: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "open-usage-run" && target.dataset.id) {
-    await rpc("openUsageForRun", { runId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "open-run-usage" && target.dataset.id) {
-    terminalPanelVisible = true;
-    frontWorkbenchPanel = "terminal";
-    await rpc("openRunFromUsage", { runId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "toggle-telemetry") {
-    telemetryExpanded = !telemetryExpanded;
-    render();
-    return;
-  }
-  if (act === "stop-run" && target.dataset.id) {
-    await rpc("stopRun", { runId: target.dataset.id });
-    if (mobileClient()) {
-      mobileView = "board";
-      mobileLiveTerminal = false;
-    }
-    render();
-    return;
-  }
-  if (act === "view-changes" && target.dataset.id) {
-    changesOpen = true;
-    changesScope = "this-round";
-    noteTarget = null;
-    noteDraft = "";
-    await loadViewChanges(target.dataset.id, changesScope);
-    render();
-    return;
-  }
-  if (act === "close-changes") {
-    changesOpen = false;
-    changesView = null;
-    noteTarget = null;
-    noteDraft = "";
-    render();
-    return;
-  }
-  if (act === "changes-scope" && target.dataset.id) {
-    const scope = target.dataset.id === "uncommitted" ? "uncommitted" : "this-round";
-    changesScope = scope;
-    const runId = changesView?.runId ?? snapshot.focusedRunId;
-    if (runId) await loadViewChanges(runId, scope);
-    render();
-    return;
-  }
-  if (act === "note-line" && target.dataset.repo && target.dataset.path && target.dataset.line) {
-    noteTarget = {
-      repo: target.dataset.repo,
-      path: target.dataset.path,
-      line: Number(target.dataset.line),
-    };
-    noteDraft = "";
-    render();
-    const input = app.querySelector<HTMLInputElement>(".note-form input");
-    input?.focus();
-    return;
-  }
-  if (act === "delete-note" && target.dataset.id) {
-    await rpc("deleteChangeNote", { noteId: target.dataset.id });
-    const runId = changesView?.runId ?? snapshot.focusedRunId;
-    if (runId) await loadViewChanges(runId, changesScope);
-    render();
-    return;
-  }
-  if (act === "cancel-quit") {
-    await rpc("cancelQuit");
-    render();
-    return;
-  }
-  if (act === "confirm-quit") {
-    await rpc("confirmQuitStopAll");
-    render();
-    return;
-  }
-  if (act === "refresh") {
-    refreshing = true;
-    renderStatusBarsOnly();
-    let result: RpcResult | null = null;
-    try {
-      result = await rpcDetached("refresh", { projectId: snapshot.focusedProjectId });
-    } finally {
-      refreshing = false;
-    }
-    if (eventsNeedFullRender(result?.events ?? [])) render();
-    else renderStatusBarsOnly();
-    return;
-  }
-  if (act === "edit-project" && target.dataset.id) {
-    mobileScopeOpen = false;
-    const project = snapshot.projects.find((item) => item.id === target.dataset.id);
-    if (!project) return;
-    formOpen = "edit";
-    formProjectId = project.id;
-    formDraft = {
-      name: project.name,
-      localPath: project.localPath,
-      githubHost: project.githubHost,
-      repository: project.repository,
-    };
-    autoFilledProjectName = "";
-    supersedeProjectInference();
-    formError = "";
-    removeError = "";
-    projectMenuId = "";
-    render();
-    return;
-  }
-  if (act === "remove-project" && target.dataset.id) {
-    mobileScopeOpen = false;
-    removeProject = snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
-    removeError = "";
-    projectMenuId = "";
-    render();
-    return;
-  }
-  if (act === "close-remove" && (event.target === target || target.tagName === "BUTTON")) {
-    if (projectOperation) return;
-    removeProject = null;
-    removeError = "";
-    render();
-    return;
-  }
-  if (act === "confirm-remove" && removeProject) {
-    if (projectOperation) return;
-    removeError = "";
-    projectOperation = "remove";
-    render();
-    try {
-      await rpc("removeProject", { projectId: removeProject.id });
-      removeProject = null;
-    } catch (error) {
-      removeError = error instanceof Error ? error.message : String(error);
-    } finally {
-      projectOperation = null;
-    }
-    render();
-    return;
-  }
-  if (act === "choose-project-directory") {
-    event.preventDefault();
-    event.stopPropagation();
-    await chooseProjectDirectory();
-    return;
-  }
-  if (act === "apply-infer" && projectInference.status === "candidate") {
-    const candidate = projectInference.candidate;
-    const useCandidateName = !formDraft.name.trim() || formDraft.name.trim() === autoFilledProjectName;
-    formDraft = {
-      name: useCandidateName ? candidate.name : formDraft.name,
-      localPath: candidate.localPath,
-      githubHost: candidate.githubHost,
-      repository: candidate.repository,
-    };
-    autoFilledProjectName = useCandidateName ? candidate.name : "";
-    projectInference = { status: "idle", requestId: projectInference.requestId };
-    render();
-    return;
-  }
-  if (act === "retry-infer") {
-    await inferFromLocalPath(formDraft.localPath);
-    return;
-  }
-  if (act === "toggle-hosts") {
-    hostPickerOpen = snapshot.hosts.length > 1 ? !hostPickerOpen : false;
-    render();
-    return;
-  }
-  if (act === "focus-host" && target.dataset.id) {
-    await reportClientView(false);
-    await rpc("focusHost", { hostId: target.dataset.id });
-    hostPickerOpen = false;
-    await reportClientView();
-    render();
-    return;
-  }
-  if (act === "show-offer") {
-    pairingError = "";
-    const addressInput = app.querySelector<HTMLInputElement>("[data-field='address']");
-    pairingAddress = addressInput?.value ?? pairingAddress;
-    try {
-      await rpc("beginPairingOffer", { address: pairingAddress });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
-    return;
-  }
-  if (act === "copy-offer" && snapshot.pairingOffer) {
-    await navigator.clipboard.writeText(snapshot.pairingOffer.text);
-    return;
-  }
-  if (act === "revoke" && target.dataset.id) {
-    pairingError = "";
-    try {
-      await rpc("revokeClient", { clientId: target.dataset.id });
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
-    return;
-  }
-  if (act === "connect-host") {
-    pairingError = "";
-    const pasteInput = app.querySelector<HTMLTextAreaElement>("[data-field='paste']");
-    pairingPaste = pasteInput?.value ?? pairingPaste;
-    const parsed = parsePairingPayload(pairingPaste);
-    if (!parsed) {
-      pairingError = snapshot.copy.pairingPaste;
-      render();
-      return;
-    }
-    try {
-      await rpc("pairRemoteHost", parsed);
-      pairingPaste = "";
-      pairingOpen = false;
-    } catch (error) {
-      pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
-    return;
-  }
-  if (act === "language" && target.dataset.id) {
-    if (mobileClient()) {
-      const appearance = ensureMobileAppearance();
-      saveMobileAppearance({ ...appearance, language: target.dataset.id as Language });
-    } else {
-      await rpc("setLanguage", { language: target.dataset.id });
-    }
-    render();
-    return;
-  }
-  if (act === "theme" && target.dataset.id) {
-    if (mobileClient()) {
-      const appearance = ensureMobileAppearance();
-      const theme = target.dataset.id as Theme;
-      saveMobileAppearance({
-        ...appearance,
-        theme,
-        lastLightTheme: theme === "plain-night" ? appearance.lastLightTheme : theme,
-      });
-    } else {
-      await rpc("setTheme", { theme: target.dataset.id });
-    }
-    render();
-    return;
-  }
-  if (act === "shade") {
-    const current = mobileClient() ? ensureMobileAppearance() : snapshot.appearance;
-    const next = target.dataset.id === "dark" ? "plain-night" : current.lastLightTheme;
-    if (mobileClient()) {
-      saveMobileAppearance({ ...current, theme: next });
-    } else {
-      await rpc("setTheme", { theme: next });
-    }
-    render();
-    return;
-  }
-  if (act === "quit") {
-    settingsOpen = false;
-    await rpc("quitHost");
-    render();
-    return;
-  }
-  if (act === "veto-advance" && target.dataset.id) {
-    await rpc("vetoPendingConfirmation", { projectId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "center-view" && target.dataset.id) {
-    const view = target.dataset.id as CenterView;
-    pendingCenterView = view;
-    snapshot.centerView = view;
-    if (view === "graph") {
-      resetGraphUiState();
-    }
-    render();
-    try {
-      await rpc("setCenterView", { view });
-    } finally {
-      pendingCenterView = null;
-    }
-    render();
-    return;
-  }
-  if (act === "center-graph" && target.dataset.id) {
-    const graphAnchor = captureGraphAnchor(target.dataset.id);
-    pendingGraphAnchor = graphAnchor;
-    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
-    render();
-    await loadSelectedIssueDocument();
-    render();
-    if (graphAnchor) {
-      const canvas = app?.querySelector<HTMLElement>(".graph-canvas");
-      if (canvas && restoreGraphAnchor(canvas, graphAnchor)) paintGraphEdges();
-    }
-    return;
-  }
-  if (act === "graph-overview") {
-    pendingGraphAnchor = null;
-    resetGraphUiState();
-    await rpc("showDependencyGraphOverview");
-    render();
-    return;
-  }
-  if (act === "view-dependencies" && target.dataset.id) {
-    pendingGraphAnchor = null;
-    resetGraphUiState();
-    issueDetailVisible = true;
-    await rpc("setCenterView", { view: "graph" });
-    await rpc("centerDependencyGraph", { issueId: target.dataset.id });
-    render();
-    await loadSelectedIssueDocument();
-    render();
-    return;
-  }
-  if (act === "graph-complete") {
-    resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: true });
-    render();
-    return;
-  }
-  if (act === "graph-neighborhood") {
-    resetGraphUiState();
-    await rpc("setDependencyGraphComplete", { complete: false });
-    render();
-    return;
-  }
-  if (act === "graph-more") {
-    graphCanvasLimit += 48;
-    render();
-    return;
-  }
-  if (act === "graph-list-more") {
-    graphListLimit += 50;
-    render();
-    return;
-  }
-  if (act === "focus-issue" && target.dataset.id) {
-    issueDetailVisible = true;
-    inspectorAnchorIssueId = target.dataset.id;
-    await rpc("focusIssue", { issueId: target.dataset.id });
-    render();
-    await loadSelectedIssueDocument();
-    if (mobileClient()) {
-      mobileView = "issue";
-      mobileLiveTerminal = false;
-    } else if (target.closest(".issue-card") && snapshot.focusedRunId) {
-      sidebarBeforeLift = sidebarVisible;
-      await rpc("focusRun", { runId: snapshot.focusedRunId });
-      sidebarVisible = false;
-    }
-    render();
-    positionInspectorAwayFromCard(inspectorAnchorForIssue(inspectorAnchorIssueId));
-    return;
-  }
-  if (act === "filter-parent" && target.dataset.id) {
-    await rpc("filterParent", { issueId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "clear-filter") {
-    await rpc("clearParentFilter");
-    render();
-  }
-});
-
-app.addEventListener("submit", async (event) => {
-  const create = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-create']");
-  if (create && snapshot) {
-    event.preventDefault();
-    const projectId = createIssueProjectId || snapshot.focusedProjectId;
-    if (!projectId) return;
-    const data = new FormData(create);
-    const draft = {
-      title: String(data.get("title") ?? ""),
-      body: String(data.get("body") ?? ""),
-    };
-    createIssueDraft = draft;
-    if (!draft.title.trim()) return;
-    const success = await runFormOperation(issueCreateFormKey(projectId), async () => {
-      await rpc("createIssue", {
-        projectId,
-        title: draft.title,
-        body: draft.body,
-      });
-    });
-    if (success) {
-      createIssueOpen = false;
-      createIssueProjectId = "";
-      createIssueDraft = { title: "", body: "" };
-      render();
-    }
-    return;
-  }
-  const edit = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-edit']");
-  if (edit && snapshot) {
-    event.preventDefault();
-    const issueId = edit.dataset.id;
-    if (!issueId) return;
-    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
-    if (issue?.document.kind !== "ready") return;
-    const data = new FormData(edit);
-    const draft = {
-      title: String(data.get("title") ?? ""),
-      body: String(data.get("body") ?? ""),
-    };
-    issueEditDrafts.set(issueId, draft);
-    if (!draft.title.trim()) return;
-    const success = await runFormOperation(issueEditFormKey(issueId), async () => {
-      await rpc("updateIssue", { issueId, title: draft.title, body: draft.body });
-      await loadSelectedIssueDocument(true);
-    });
-    if (success) {
-      issueEditDrafts.delete(issueId);
-      issueEditOpenId = null;
-      render();
-    }
-    return;
-  }
-  const comment = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-comment']");
-  if (comment && snapshot) {
-    event.preventDefault();
-    const issueId = comment.dataset.id;
-    if (!issueId) return;
-    const body = String(new FormData(comment).get("body") ?? "");
-    issueCommentDrafts.set(issueId, body);
-    if (!body.trim()) return;
-    const success = await runFormOperation(issueCommentFormKey(issueId), async () => {
-      await rpc("addIssueComment", { issueId, body });
-      await loadSelectedIssueDocument(true);
-    });
-    if (success) {
-      issueCommentDrafts.delete(issueId);
-      render();
-    }
-    return;
-  }
-  const parentForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-parent']");
-  if (parentForm && snapshot) {
-    event.preventDefault();
-    const issueId = parentForm.dataset.id;
-    if (!issueId) return;
-    const parent = String(new FormData(parentForm).get("parent") ?? "");
-    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
-    if (!issue) return;
-    const current = editableIssueRelations(issue);
-    issueRelationDrafts.set(issueId, { ...current, parent });
-    const success = await runFormOperation(issueParentFormKey(issueId), async () => {
-      await rpc("setIssueParent", { issueId, parent });
-    });
-    if (success) {
-      render();
-    }
-    return;
-  }
-  const blockersForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-blockers']");
-  if (blockersForm && snapshot) {
-    event.preventDefault();
-    const issueId = blockersForm.dataset.id;
-    if (!issueId) return;
-    const data = new FormData(blockersForm);
-    const blockedBy = data.getAll("blockedBy").map((value) => String(value));
-    const issue = snapshot.board?.selected?.id === issueId ? snapshot.board.selected : null;
-    if (!issue) return;
-    const current = editableIssueRelations(issue);
-    issueRelationDrafts.set(issueId, { ...current, blockedBy });
-    const success = await runFormOperation(issueBlockersFormKey(issueId), async () => {
-      await rpc("setIssueBlockedBy", { issueId, blockedBy });
-    });
-    if (success) {
-      render();
-    }
-    return;
-  }
-  const search = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='issue-search']");
-  if (search && snapshot) {
-    event.preventDefault();
-    const data = new FormData(search);
-    const draft = {
-      projectId: snapshot.focusedProjectId,
-      title: String(data.get("title") ?? ""),
-      triageRole: String(data.get("triageRole") ?? ""),
-      state: String(data.get("state") ?? "all"),
-    };
-    issueSearchDraft = draft;
-    const projectId = snapshot.focusedProjectId;
-    const key = issueSearchFormKey(projectId);
-    const success = await runFormOperation(key, async () => {
-      await rpc("searchIssues", {
-        projectId,
-        title: draft.title,
-        triageRole: draft.triageRole,
-        state: draft.state,
-      });
-    });
-    if (success) {
-      issueSearchDraft = null;
-      keyboardCursorIssueId = "";
-      render();
-    }
-    return;
-  }
-  const inject = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='inject-run']");
-  if (inject && snapshot) {
-    event.preventDefault();
-    const runId = inject.dataset.id;
-    const input = inject.querySelector<HTMLInputElement>("input[name='text']");
-    const text = input?.value ?? "";
-    if (!runId || !text.trim()) return;
-    terminalInputDrafts.set(runId, text);
-    const success = await runFormOperation(injectFormKey(runId), async () => {
-      await rpc("injectRunInput", { runId, text });
-    });
-    if (success) {
-      terminalInputDrafts.delete(runId);
-      render();
-    }
-    return;
-  }
-  const noteForm = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("form[data-act='write-note']");
-  if (!noteForm || !snapshot || !noteTarget || !changesView) return;
-  event.preventDefault();
-  const input = noteForm.querySelector<HTMLInputElement>("input[name='text']");
-  const text = input?.value ?? noteDraft;
-  if (!text.trim()) return;
-  noteDraft = text;
-  const target = { ...noteTarget };
-  const runId = changesView.runId;
-  const success = await runFormOperation(changeNoteFormKey(runId), async () => {
-    await rpc("writeChangeNote", {
-      runId,
-      repo: target.repo,
-      path: target.path,
-      line: target.line,
-      text,
-    });
-    await loadViewChanges(runId, changesScope);
-  });
-  if (success) {
-    noteDraft = "";
-    noteTarget = null;
-    render();
-  }
-});
-
-app.addEventListener("input", (event) => {
-  const target = event.target as HTMLInputElement | null;
-  if (!target) return;
-  const createForm = target.closest<HTMLFormElement>("form[data-form='issue-create']");
-  if (createForm && (target.name === "title" || target.name === "body")) {
-    createIssueDraft = { ...createIssueDraft, [target.name]: target.value };
-    return;
-  }
-  const editForm = target.closest<HTMLFormElement>("form[data-form='issue-edit']");
-  if (editForm && editForm.dataset.id && (target.name === "title" || target.name === "body")) {
-    const current = issueEditDrafts.get(editForm.dataset.id) ?? { title: "", body: "" };
-    issueEditDrafts.set(editForm.dataset.id, { ...current, [target.name]: target.value });
-    return;
-  }
-  const commentForm = target.closest<HTMLFormElement>("form[data-form='issue-comment']");
-  if (commentForm?.dataset.id && target.name === "body") {
-    issueCommentDrafts.set(commentForm.dataset.id, target.value);
-    return;
-  }
-  const injectForm = target.closest<HTMLFormElement>("form[data-act='inject-run']");
-  if (injectForm?.dataset.id && target.name === "text") {
-    terminalInputDrafts.set(injectForm.dataset.id, target.value);
-    return;
-  }
-  const usageForm = target.closest<HTMLFormElement>("form[data-act='usage-custom']");
-  if (usageForm && (target.name === "from" || target.name === "to")) {
-    const usage = snapshot?.usage;
-    if (usage && usageCustomDraft?.hostId !== snapshot?.focusedHostId) {
-      usageCustomDraft = {
-        hostId: snapshot?.focusedHostId ?? "",
-        from: toLocalInput(usage.fromMs),
-        to: toLocalInput(usage.toMs),
-      };
-    }
-    if (usageCustomDraft) {
-      usageCustomDraft[target.name] = target.value;
-    }
-    return;
-  }
-  const searchForm = target.closest<HTMLFormElement>("form[data-act='issue-search']");
-  if (searchForm && target.name === "title") {
-    editableIssueSearchDraft(snapshot?.focusedProjectId ?? "").title = target.value;
-    return;
-  }
-  if (target.getAttribute("data-field") === "graphSearch") {
-    graphListQuery = target.value;
-    graphListLimit = 50;
-    render();
-    return;
-  }
-  if (!formOpen) return;
-  const field = target.getAttribute("data-field");
-  if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
-    formDraft = { ...formDraft, [field]: target.value };
-    if (field === "name") autoFilledProjectName = "";
-    if (field === "localPath") target.title = target.value;
-  }
-});
-
-app.addEventListener("toggle", (event) => {
-  const details = event.target;
-  if (!(details instanceof HTMLDetailsElement)) return;
-  if (details.dataset.section !== "issue-maintenance" || !details.dataset.id) return;
-  if (details.open) issueMaintenanceOpen.add(details.dataset.id);
-  else issueMaintenanceOpen.delete(details.dataset.id);
-}, true);
-
-app.addEventListener("change", async (event) => {
-  const target = event.target as HTMLElement | null;
-  if (!target || !snapshot) return;
-  const issueParent = target.closest<HTMLFormElement>("form[data-form='issue-parent']");
-  if (issueParent?.dataset.id && target instanceof HTMLSelectElement && target.name === "parent") {
-    const issue = snapshot.board?.selected?.id === issueParent.dataset.id ? snapshot.board.selected : null;
-    if (issue) {
-      const current = editableIssueRelations(issue);
-      issueRelationDrafts.set(issue.id, { ...current, parent: target.value });
-    }
-    return;
-  }
-  const issueBlockers = target.closest<HTMLFormElement>("form[data-form='issue-blockers']");
-  if (issueBlockers?.dataset.id && target instanceof HTMLSelectElement && target.name === "blockedBy") {
-    const issue = snapshot.board?.selected?.id === issueBlockers.dataset.id ? snapshot.board.selected : null;
-    if (issue) {
-      const current = editableIssueRelations(issue);
-      issueRelationDrafts.set(issue.id, { ...current, blockedBy: [...target.selectedOptions].map((option) => option.value) });
-    }
-    return;
-  }
-  if (target.getAttribute("data-field") === "localPath" && "value" in target) {
-    applyLocalPath((target as HTMLInputElement).value, true);
-    return;
-  }
-  if (target.getAttribute("data-field") === "startAtLogin" && "checked" in target) {
-    await setStartAtLogin((target as HTMLInputElement).checked);
-    render();
-  }
-  if (target.getAttribute("data-field") === "refreshInterval" && "value" in target) {
-    const seconds = Number((target as HTMLInputElement).value);
-    if (!Number.isFinite(seconds)) return;
-    await rpc("setRefreshInterval", { intervalMs: Math.max(0, seconds) * 1000 });
-    render();
-  }
-  if (target.getAttribute("data-field") === "recentLimit" && "value" in target) {
-    const limit = Number((target as HTMLInputElement).value);
-    if (!Number.isFinite(limit)) return;
-    await rpc("setRecentCompletedLimit", { limit });
-    render();
-  }
-  if (target.getAttribute("data-field") === "showEndedRuns" && "checked" in target) {
-    overviewShowEnded = (target as HTMLInputElement).checked;
-    render();
-  }
-  if (target.getAttribute("data-field") === "closedContext" && "checked" in target) {
-    await rpc("setShowClosedGraphContext", {
-      show: (target as HTMLInputElement).checked,
-    });
-    render();
-  }
-  if (target.getAttribute("data-field") === "commandPreview" && "checked" in target) {
-    await rpc("setShowCommandPreview", {
-      show: (target as HTMLInputElement).checked,
-    });
-    render();
-  }
-  if (
-    (target.getAttribute("data-field") === "notifyDesktop" ||
-      target.getAttribute("data-field") === "notifySound") &&
-    "checked" in target
-  ) {
-    const desktop =
-      target.getAttribute("data-field") === "notifyDesktop"
-        ? (target as HTMLInputElement).checked
-        : Boolean(snapshot.notifyDesktop);
-    const sound =
-      target.getAttribute("data-field") === "notifySound"
-        ? (target as HTMLInputElement).checked
-        : Boolean(snapshot.notifySound);
-    if (desktop && typeof Notification !== "undefined" && Notification.permission === "default") {
-      await Notification.requestPermission();
-    }
-    await rpc("setNotificationPrefs", { desktop, sound });
-    render();
-  }
-  if (target.getAttribute("data-field") === "hostAutoAdvance" && "checked" in target) {
-    await rpc("setHostAutoAdvance", {
-      enabled: (target as HTMLInputElement).checked,
-    });
-    render();
-  }
-  if (target.getAttribute("data-field") === "projectAutoAdvance" && "checked" in target) {
-    const projectId = snapshot.focusedProjectId;
-    if (projectId) {
-      await rpc("setProjectAutoAdvance", {
-        projectId,
-        enabled: (target as HTMLInputElement).checked,
-      });
-      render();
-    }
-  }
-  if (target.getAttribute("data-field") === "restoreAutoAdvance" && "checked" in target) {
-    const projectId = snapshot.focusedProjectId;
-    if (projectId) {
-      await rpc("setProjectRestoreAutoAdvance", {
-        projectId,
-        enabled: (target as HTMLInputElement).checked,
-      });
-      render();
-    }
-  }
-  if (target.getAttribute("data-field") === "restoreDelay" && "value" in target) {
-    const projectId = snapshot.focusedProjectId;
-    const seconds = Number((target as HTMLInputElement).value);
-    if (projectId && Number.isFinite(seconds)) {
-      await rpc("setProjectRestoreDelay", {
-        projectId,
-        delayMs: Math.max(0, seconds) * 1000,
-      });
-      render();
-    }
-  }
-  const launchId = target.getAttribute("data-launch");
-  if (launchId && launchDraft) {
-    if (target instanceof HTMLInputElement && target.type === "checkbox") {
-      launchDraft.values[launchId] = target.checked ? "true" : "false";
-    } else if ("value" in target) {
-      launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
-    }
-    refreshLaunchWarnings();
-    refreshLaunchFieldOptions();
-    scheduleLaunchPreview();
-  }
-});
-
-app.addEventListener("input", (event) => {
-  const target = event.target as HTMLElement | null;
-  if (!target) return;
-  const field = target.getAttribute("data-field");
-  if (field === "address" && "value" in target) {
-    pairingAddress = (target as HTMLInputElement).value;
-  }
-  if (field === "paste" && "value" in target) {
-    pairingPaste = (target as HTMLTextAreaElement).value;
-  }
-  if (target.closest(".note-form") && "value" in target) {
-    noteDraft = (target as HTMLInputElement).value;
-  }
-  if (
-    (field === "name" || field === "githubHost" || field === "repository") &&
-    "value" in target
-  ) {
-    formDraft = { ...formDraft, [field]: (target as HTMLInputElement).value };
-  }
-  if (field === "openingText" && launchDraft && "value" in target) {
-    launchDraft.openingText = (target as HTMLTextAreaElement).value;
-    if (!launchDraft.intentId) {
-      launchDraft.values["initial-instruction"] = launchDraft.openingText;
-      launchDraft.custom = false;
-    } else if (snapshot?.launchForm) {
-      launchDraft.custom =
-        launchDraft.openingText.trim() !== expectedOpening(snapshot.launchForm, launchDraft).trim();
-      refreshIntentChoices();
-    }
-  }
-  const customLaunchId = target.getAttribute("data-launch-custom");
-  if (customLaunchId && launchDraft && "value" in target) {
-    launchDraft.values[customLaunchId] = (target as HTMLInputElement).value;
-    refreshLaunchWarnings();
-    scheduleLaunchPreview();
-  }
-  const launchId = target.getAttribute("data-launch");
-  if (launchId && launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
-    launchDraft.values[launchId] = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
-    refreshLaunchWarnings();
-    refreshLaunchFieldOptions();
-    scheduleLaunchPreview();
-  }
-});
-
-app.addEventListener("change", async (event) => {
-  const target = event.target as HTMLElement | null;
-  const launchSelectId = target?.getAttribute("data-launch-select");
-  if (launchSelectId && launchDraft && target instanceof HTMLSelectElement) {
-    if (target.value === "__custom__") {
-      const field = snapshot?.launchForm?.fields.find((candidate) => candidate.id === launchSelectId);
-      const options = field ? launchFieldOptions(field, launchDraft.values) : [];
-      if (options.includes(launchDraft.values[launchSelectId] ?? "")) {
-        launchDraft.values[launchSelectId] = "";
-      }
-      const custom = app?.querySelector<HTMLInputElement>(
-        `[data-launch-custom="${CSS.escape(launchSelectId)}"]`,
-      );
-      if (custom) {
-        custom.hidden = false;
-        custom.required = Boolean(snapshot?.launchForm?.fields.find(
-          (field) => field.id === launchSelectId,
-        )?.required);
-        custom.focus();
-      }
-    } else {
-      launchDraft.values[launchSelectId] = target.value;
-      refreshLaunchFieldOptions();
-    }
-    refreshLaunchWarnings();
-    scheduleLaunchPreview();
-    return;
-  }
-  if (target instanceof HTMLSelectElement && target.closest("form[data-act='issue-search']")) {
-    const draft = editableIssueSearchDraft(snapshot?.focusedProjectId ?? "");
-    if (target.name === "triageRole") draft.triageRole = target.value;
-    if (target.name === "state") draft.state = target.value;
-    return;
-  }
-  if (target?.getAttribute("data-overview-filter") === "project" && target instanceof HTMLSelectElement) {
-    overviewProjectId = target.value;
-    render();
-    return;
-  }
-  const filter = target?.getAttribute("data-usage-filter");
-  if (!filter || !snapshot?.usage || !(target instanceof HTMLSelectElement)) return;
-  const next = {
-    projectId: snapshot.usage.filter.projectId ?? "",
-    agentId: snapshot.usage.filter.agentId ?? "",
-    model: snapshot.usage.filter.model ?? "",
-  };
-  if (filter === "projectId") next.projectId = target.value;
-  if (filter === "agentId") next.agentId = target.value;
-  if (filter === "model") next.model = target.value;
-  await rpc("setUsageFilter", next);
-  render();
-});
-
-app.addEventListener("submit", async (event) => {
-  const custom = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-act='usage-custom']");
-  if (custom) {
-    event.preventDefault();
-    const data = new FormData(custom);
-    const draft = {
-      hostId: snapshot?.focusedHostId ?? "",
-      from: String(data.get("from") ?? ""),
-      to: String(data.get("to") ?? ""),
-    };
-    const from = Date.parse(draft.from);
-    const to = Date.parse(draft.to);
-    if (Number.isNaN(from) || Number.isNaN(to)) return;
-    usageCustomDraft = draft;
-    const key = usageCustomFormKey(snapshot?.focusedHostId ?? "");
-    const success = await runFormOperation(key, async () => {
-      await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
-    });
-    if (success) {
-      usageCustomDraft = null;
-      render();
-    }
-    return;
-  }
-  const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
-  if (launch && snapshot && launchDraft) {
-    event.preventDefault();
-    const draft = {
-      projectId: launchDraft.projectId,
-      issueId: launchDraft.issueId,
-      agentId: launchDraft.agentId,
-      values: { ...launchDraft.values },
-      openingText: launchDraft.openingText,
-    };
-    await runFormOperation(launchFormKey(draft.projectId), async () => {
-      await rpc("startUnboundRun", draft);
-      terminalPanelVisible = true;
-    });
-    return;
-  }
-  const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");
-  if (!form || !snapshot) return;
-  event.preventDefault();
-  if (projectOperation) return;
-  supersedeProjectInference();
-  formError = "";
-  projectOperation = "save";
-  render();
-  try {
-    if (formOpen === "edit") {
-      await rpc("editProject", { projectId: formProjectId, ...formDraft });
-    } else {
-      await rpc("registerProject", formDraft);
-    }
-    formOpen = null;
-  } catch (error) {
-    formError = error instanceof Error ? error.message : String(error);
-  } finally {
-    projectOperation = null;
-  }
-  render();
-});
-
-function shouldReportClientView(): boolean {
+export function shouldReportClientView(): boolean {
   return true;
 }
 
 let hostWindowVisible = true;
 let lastReportedView = { projectId: "", visible: false };
 
-function clientIsVisible(): boolean {
+export function clientIsVisible(): boolean {
   return hostWindowVisible && document.visibilityState === "visible";
 }
 
-async function reportClientView(
+export async function reportClientView(
   visible = clientIsVisible(),
 ): Promise<{ changed: boolean; result: RpcResult | null }> {
   if (!shouldReportClientView()) return { changed: false, result: null };
-  const projectId = visible ? snapshot?.focusedProjectId ?? "" : "";
+  const projectId = visible ? ui.snapshot?.focusedProjectId ?? "" : "";
   const changed = visible !== lastReportedView.visible || projectId !== lastReportedView.projectId;
   lastReportedView = { projectId, visible };
-  const result = await rpc("setClientView", { clientId, projectId, visible });
+  const result = await rpc("setClientView", { clientId: ui.clientId, projectId, visible });
   return { changed, result };
 }
 
 let foregroundRefresh: Promise<void> | null = null;
 
-function onClientForegroundOrHidden(): void {
+export function onClientForegroundOrHidden(): void {
   if (!shouldReportClientView()) return;
   if (!clientIsVisible()) {
     void reportClientView(false).then(render).catch(() => {});
@@ -6044,7 +676,7 @@ function onClientForegroundOrHidden(): void {
       }
       const result = reported.changed
         ? reported.result
-        : await rpcDetached("refresh", { projectId: snapshot?.focusedProjectId ?? "" });
+        : await rpcDetached("refresh", { projectId: ui.snapshot?.focusedProjectId ?? "" });
       if (eventsNeedFullRender(result?.events ?? [])) render();
       else renderStatusBarsOnly();
     } finally {
@@ -6054,13 +686,13 @@ function onClientForegroundOrHidden(): void {
   void foregroundRefresh.catch(() => {});
 }
 
-function ensureTick(): void {
-  if (tickTimer != null) return;
-  tickTimer = window.setInterval(() => {
+export function ensureTick(): void {
+  if (ui.tickTimer != null) return;
+  ui.tickTimer = window.setInterval(() => {
     const extra = shouldReportClientView()
       ? {
-          clientId,
-          projectId: snapshot?.focusedProjectId ?? "",
+          clientId: ui.clientId,
+          projectId: ui.snapshot?.focusedProjectId ?? "",
           visible: clientIsVisible(),
         }
       : {};
@@ -6070,13 +702,13 @@ function ensureTick(): void {
   }, 1000);
 }
 
-async function renderAfterTick(fullRender: boolean): Promise<void> {
-  if (activePointers.size > 0) {
-    tickRenderPending = true;
-    tickFullRenderPending ||= fullRender;
+export async function renderAfterTick(fullRender: boolean): Promise<void> {
+  if (ui.activePointers.size > 0) {
+    ui.tickRenderPending = true;
+    ui.tickFullRenderPending ||= fullRender;
     return;
   }
-  if (snapshot?.board?.selected?.document.kind === "unloaded") {
+  if (ui.snapshot?.board?.selected?.document.kind === "unloaded") {
     await loadSelectedIssueDocument();
     fullRender = true;
   }
@@ -6084,21 +716,21 @@ async function renderAfterTick(fullRender: boolean): Promise<void> {
   else renderStatusBarsOnly();
 }
 
-function finishPointerInteraction(pointerId: number): void {
-  activePointers.delete(pointerId);
-  if (activePointers.size > 0 || !tickRenderPending) return;
+export function finishPointerInteraction(pointerId: number): void {
+  ui.activePointers.delete(pointerId);
+  if (ui.activePointers.size > 0 || !ui.tickRenderPending) return;
   window.setTimeout(() => {
-    if (activePointers.size > 0 || !tickRenderPending) return;
-    tickRenderPending = false;
-    const fullRender = tickFullRenderPending;
-    tickFullRenderPending = false;
+    if (ui.activePointers.size > 0 || !ui.tickRenderPending) return;
+    ui.tickRenderPending = false;
+    const fullRender = ui.tickFullRenderPending;
+    ui.tickFullRenderPending = false;
     void renderAfterTick(fullRender).catch(() => {});
   }, 0);
 }
 
-document.addEventListener("pointerdown", (event) => activePointers.add(event.pointerId), true);
+document.addEventListener("pointerdown", (event) => ui.activePointers.add(event.pointerId), true);
 document.addEventListener("pointerdown", (event) => {
-  if (mobileClient() || !snapshot) return;
+  if (mobileClient() || !ui.snapshot) return;
   const target = event.target as HTMLElement | null;
   const panel = target?.closest<HTMLElement>(
     '[data-workbench-panel="inspector"][data-floating="true"]',
@@ -6113,7 +745,7 @@ document.addEventListener("pointerdown", (event) => {
     return;
   }
   const card = issueCardAtPoint(event.clientX, event.clientY);
-  if (!card || card.dataset.issueId === snapshot.board?.selected?.id) return;
+  if (!card || card.dataset.issueId === ui.snapshot.board?.selected?.id) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   card.click();
@@ -6121,63 +753,63 @@ document.addEventListener("pointerdown", (event) => {
 document.addEventListener("pointerup", (event) => finishPointerInteraction(event.pointerId), true);
 document.addEventListener("pointercancel", (event) => finishPointerInteraction(event.pointerId), true);
 window.addEventListener("blur", () => {
-  for (const pointerId of activePointers) finishPointerInteraction(pointerId);
+  for (const pointerId of ui.activePointers) finishPointerInteraction(pointerId);
 });
 
 document.addEventListener("visibilitychange", onClientForegroundOrHidden);
 
-function terminalHasFocus(): boolean {
+export function terminalHasFocus(): boolean {
   const active = document.activeElement as HTMLElement | null;
   return Boolean(active?.closest(".pty-host"));
 }
 
-function typingTarget(target: EventTarget | null): boolean {
+export function typingTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   return Boolean(element?.closest("input, textarea, select, [contenteditable='true']"));
 }
 
 document.addEventListener("keydown", (event) => {
-  if (!snapshot || terminalHasFocus()) return;
+  if (!ui.snapshot || terminalHasFocus()) return;
   if (event.key === "?" && !typingTarget(event.target)) {
     event.preventDefault();
-    keyboardHelpOpen = !keyboardHelpOpen;
+    ui.keyboardHelpOpen = !ui.keyboardHelpOpen;
     render();
     return;
   }
   if (event.key === "Escape") {
-    if (keyboardHelpOpen) {
-      keyboardHelpOpen = false;
+    if (ui.keyboardHelpOpen) {
+      ui.keyboardHelpOpen = false;
       render();
     }
     return;
   }
   if (event.key === "/" && !typingTarget(event.target)) {
     event.preventDefault();
-    app.querySelector<HTMLInputElement>("#issue-title-search")?.focus();
+    ui.app.querySelector<HTMLInputElement>("#issue-title-search")?.focus();
     return;
   }
   if (
     typingTarget(event.target)
-    || keyboardHelpOpen
-    || settingsOpen
-    || pairingOpen
-    || formOpen
-    || Boolean(removeProject)
-    || Boolean(snapshot.launchForm)
-    || Boolean(snapshot.quitOffer)
-    || changesOpen
+    || ui.keyboardHelpOpen
+    || ui.settingsOpen
+    || ui.pairingOpen
+    || ui.formOpen
+    || Boolean(ui.removeProject)
+    || Boolean(ui.snapshot.launchForm)
+    || Boolean(ui.snapshot.quitOffer)
+    || ui.changesOpen
   ) return;
-  const cards = [...app.querySelectorAll<HTMLButtonElement>(".issue-card-main")];
+  const cards = [...ui.app.querySelectorAll<HTMLButtonElement>(".issue-card-main")];
   if (!cards.length) return;
   if (["j", "J", "ArrowDown", "k", "K", "ArrowUp"].includes(event.key)) {
     event.preventDefault();
     const direction = ["k", "K", "ArrowUp"].includes(event.key) ? -1 : 1;
     const focusedIndex = cards.findIndex((card) => card === document.activeElement);
-    const rememberedIndex = cards.findIndex((card) => card.dataset.issueId === keyboardCursorIssueId);
+    const rememberedIndex = cards.findIndex((card) => card.dataset.issueId === ui.keyboardCursorIssueId);
     const currentIndex = focusedIndex >= 0 ? focusedIndex : rememberedIndex;
     const nextIndex = (currentIndex + direction + cards.length) % cards.length;
     const nextCard = cards[nextIndex];
-    keyboardCursorIssueId = nextCard?.dataset.issueId ?? "";
+    ui.keyboardCursorIssueId = nextCard?.dataset.issueId ?? "";
     nextCard?.focus();
     return;
   }
@@ -6213,16 +845,16 @@ window.addEventListener("agent-taskboard:check-update", () => {
 let wasMobileClient = mobileClient();
 
 window.addEventListener("resize", () => {
-  if (!snapshot) return;
+  if (!ui.snapshot) return;
   const isMobile = mobileClient();
   if (isMobile !== wasMobileClient) {
     wasMobileClient = isMobile;
-    mobileLiveTerminal = false;
+    ui.mobileLiveTerminal = false;
     render();
   }
-  fitAddon?.fit();
-  const runId = snapshot.focusedRunId;
-  if (runId && (!isMobile || mobileLiveTerminal)) void sendPtyResize(runId);
+  ui.fitAddon?.fit();
+  const runId = ui.snapshot.focusedRunId;
+  if (runId && (!isMobile || ui.mobileLiveTerminal)) void sendPtyResize(runId);
 });
 
 rpc("snapshot")
@@ -6231,15 +863,20 @@ rpc("snapshot")
     ensureTick();
     await reportClientView();
     render();
-    if (desktopShellAvailable() && !startupUpdateChecked && snapshot?.windowVisible) {
-      startupUpdateChecked = true;
+    if (desktopShellAvailable() && !ui.startupUpdateChecked && ui.snapshot?.windowVisible) {
+      ui.startupUpdateChecked = true;
       window.setTimeout(() => {
-        if (updateState.kind === "idle") void checkForUpdates(false);
+        if (ui.updateState.kind === "idle") void checkForUpdates(false);
       }, 250);
     }
   })
   .catch((error: unknown) => {
-    if (app) {
-      app.textContent = error instanceof Error ? error.message : String(error);
+    if (ui.app) {
+      ui.app.textContent = error instanceof Error ? error.message : String(error);
     }
   });
+
+ui.app.addEventListener("click", (event) => {
+  void handleAppClick(event);
+});
+bindFormEvents();
