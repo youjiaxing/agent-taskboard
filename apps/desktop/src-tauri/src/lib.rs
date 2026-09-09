@@ -1,3 +1,4 @@
+mod signal;
 mod startup;
 
 use std::fs;
@@ -53,6 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![set_host_mode])
         .setup(|app| {
+            signal::spawn_ctrl_c_handler(app.handle().clone());
             let startup_settings_path = startup_settings_path(app.handle())?;
             let host_mode = startup::requested_host_mode(&startup_settings_path, std::env::args());
             let kernel = boot_kernel(app.handle(), host_mode)?;
@@ -132,11 +134,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Agent Taskboard")
         .run(|app, event| match event {
-            tauri::RunEvent::ExitRequested { api, code, .. } => {
-                if code.is_none() {
-                    api.prevent_exit();
-                }
-            }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 show_main(app);
