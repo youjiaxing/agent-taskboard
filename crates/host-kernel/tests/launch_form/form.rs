@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn deferred_discovery_returns_the_launch_form_without_running_cli_discovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    grok.set_discovery_error("discovery should be deferred");
+    let mut h = harness_with(tmp.path(), vec![Arc::clone(&grok)]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "deferDiscovery": true,
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+
+    assert!(form.fields.iter().any(|field| field.id == "model"));
+    assert_eq!(form.values["model"], "grok-4.6");
+    assert_eq!(grok.discovery_count(), 0);
+    assert!(form
+        .option_discovery_error
+        .as_deref()
+        .is_some_and(|message| message.contains("稍后")));
+}
+
+#[test]
 fn prepare_form_uses_cli_seed_concrete_values() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

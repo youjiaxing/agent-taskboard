@@ -219,9 +219,17 @@ impl HostKernel {
                 issue_id,
                 agent_id,
                 pick_agent,
+                defer_discovery,
                 language,
             } => {
-                self.prepare_run_launch(&project_id, issue_id, agent_id, pick_agent, language)?;
+                self.prepare_run_launch(
+                    &project_id,
+                    issue_id,
+                    agent_id,
+                    pick_agent,
+                    defer_discovery,
+                    language,
+                )?;
             }
             Command::UpdateRunLaunch {
                 project_id,

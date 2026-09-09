@@ -1,7 +1,7 @@
 import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
 import { effectiveClientLanguage, resetGraphUiState } from "../view-helpers";
 import type { CenterView, Language, RpcResult, Snapshot, Theme } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { ensureMobileAppearance, focusedRun, mobileClient, saveMobileAppearance } from "../view-helpers";
 import { inspectorAnchorForIssue, panelIsFloating, positionInspectorAwayFromCard, setPanelFloating, workbenchPanelId } from "../workbench";
@@ -9,6 +9,44 @@ import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "..
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
+
+let deferredLaunchDiscoverySequence = 0;
+
+async function completeDeferredLaunchDiscovery(
+  projectId: string,
+  issueId: string,
+  agentId: string,
+): Promise<void> {
+  const sequence = ++deferredLaunchDiscoverySequence;
+  try {
+    const result = await rpcDetached("prepareRunLaunch", {
+      projectId,
+      issueId,
+      agentId,
+      language: effectiveClientLanguage(),
+    }, false);
+    if (
+      sequence !== deferredLaunchDiscoverySequence
+      || ui.snapshot?.launchForm?.projectId !== projectId
+      || ui.snapshot.launchForm.issueId !== issueId
+      || ui.snapshot.launchForm.selectedAgentId !== agentId
+    ) {
+      return;
+    }
+    const draft = ui.launchDraft;
+    const previousValues = draft?.values ?? {};
+    const previousOpening = draft?.openingText;
+    ui.snapshot = { ...ui.snapshot, launchForm: result.snapshot.launchForm };
+    syncLaunchDraft(ui.snapshot);
+    if (ui.launchDraft) {
+      ui.launchDraft.values = { ...ui.launchDraft.values, ...previousValues };
+      ui.launchDraft.openingText = previousOpening ?? ui.launchDraft.openingText;
+    }
+    render();
+  } catch {
+    // The static launch form remains usable when option discovery fails.
+  }
+}
 
 export async function handleAppClick(event: MouseEvent): Promise<void> {
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
@@ -316,9 +354,18 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     await rpc("prepareRunLaunch", {
       projectId: ui.snapshot.focusedProjectId,
       issueId: target.dataset.id,
+      deferDiscovery: true,
       language: effectiveClientLanguage(),
     });
     render();
+    const selectedAgentId = ui.snapshot.launchForm?.selectedAgentId;
+    if (selectedAgentId) {
+      void completeDeferredLaunchDiscovery(
+        ui.snapshot.focusedProjectId,
+        target.dataset.id,
+        selectedAgentId,
+      );
+    }
     return;
   }
   if (act === "continue-run" && target.dataset.id) {

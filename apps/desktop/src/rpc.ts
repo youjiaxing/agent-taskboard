@@ -79,8 +79,12 @@ export async function rpc(op: string, extra: Record<string, unknown> = {}): Prom
   return request;
 }
 
-export function rpcDetached(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  return executeRpc(op, extra);
+export function rpcDetached(
+  op: string,
+  extra: Record<string, unknown> = {},
+  commit = true,
+): Promise<RpcResult> {
+  return executeRpc(op, extra, commit);
 }
 
 export async function loadViewChanges(runId: string, scope: ChangeScope): Promise<void> {

@@ -184,6 +184,13 @@ pub fn unknown_enum_warnings(
     warnings
 }
 
+pub fn option_discovery_pending(language: Language) -> String {
+    match language {
+        Language::ZhCn => "正在读取 CLI 可用项，稍后会更新。".into(),
+        Language::En => "Reading CLI options; the form will update shortly.".into(),
+    }
+}
+
 pub fn option_discovery_failure(error: &str, language: Language) -> String {
     match language {
         Language::ZhCn => format!("读取 CLI 可用项失败：{error}。仍可手动输入。"),

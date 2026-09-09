@@ -166,6 +166,7 @@ impl HostKernel {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        defer_discovery: bool,
         language: Language,
     ) -> Result<(), KernelError> {
         let project = self
@@ -211,8 +212,17 @@ impl HostKernel {
             .find(|agent| agent.id() == selected)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
-        let (discovery, option_discovery_error) =
-            self.agent_config_for(&project.local_path, agent.as_ref(), language);
+        let (discovery, option_discovery_error) = if defer_discovery {
+            (
+                AgentConfigDiscovery {
+                    fields: agent.config_fields(),
+                    seed: agent.seed_config(),
+                },
+                Some(launch::option_discovery_pending(language)),
+            )
+        } else {
+            self.agent_config_for(&project.local_path, agent.as_ref(), language)
+        };
         let current = self
             .launch_defaults
             .get(project_id)

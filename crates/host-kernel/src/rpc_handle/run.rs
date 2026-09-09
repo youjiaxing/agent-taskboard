@@ -75,6 +75,10 @@ impl HostKernel {
                         .get("pickAgent")
                         .and_then(|value| value.as_bool())
                         .unwrap_or(false),
+                    defer_discovery: request
+                        .get("deferDiscovery")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
                     language: request_language(&request).unwrap_or(self.appearance.language),
                 })
             }

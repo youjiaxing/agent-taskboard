@@ -201,6 +201,7 @@ pub enum Command {
         issue_id: Option<String>,
         agent_id: Option<String>,
         pick_agent: bool,
+        defer_discovery: bool,
         language: Language,
     },
     UpdateRunLaunch {
