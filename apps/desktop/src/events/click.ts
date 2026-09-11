@@ -14,7 +14,7 @@ let deferredLaunchDiscoverySequence = 0;
 
 async function completeDeferredLaunchDiscovery(
   projectId: string,
-  issueId: string,
+  issueId: string | undefined,
   agentId: string,
 ): Promise<void> {
   const sequence = ++deferredLaunchDiscoverySequence;
@@ -333,16 +333,22 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "new-run" && target.dataset.id) {
+    const projectId = target.dataset.id;
     ui.projectMenuId = "";
     ui.settingsOpen = false;
     ui.pairingOpen = false;
     ui.formOpen = null;
     ui.launchDraft = null;
     await rpc("prepareRunLaunch", {
-      projectId: target.dataset.id,
+      projectId,
+      deferDiscovery: true,
       language: effectiveClientLanguage(),
     });
     render();
+    const selectedAgentId = ui.snapshot.launchForm?.selectedAgentId;
+    if (selectedAgentId) {
+      void completeDeferredLaunchDiscovery(projectId, undefined, selectedAgentId);
+    }
     return;
   }
   if (act === "execute-run" && target.dataset.id && ui.snapshot.focusedProjectId) {
@@ -409,14 +415,18 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "next-agent" && ui.launchPickerAgentId) {
     const form = ui.snapshot.launchForm;
     if (!form) return;
+    const agentId = ui.launchPickerAgentId;
+    const issueId = form.issueId ?? undefined;
     ui.launchDraft = null;
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
-      issueId: form.issueId,
-      agentId: ui.launchPickerAgentId,
+      issueId,
+      agentId,
+      deferDiscovery: true,
       language: effectiveClientLanguage(),
     });
     render();
+    void completeDeferredLaunchDiscovery(form.projectId, issueId, agentId);
     return;
   }
   if (act === "intent") {
