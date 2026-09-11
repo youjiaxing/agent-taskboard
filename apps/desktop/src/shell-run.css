@@ -1,8 +1,24 @@
-.launch-sheet {
-  width: min(900px, calc(100% - 24px));
-  max-height: calc(100vh - 48px);
-  overflow: auto;
-  overflow-wrap: normal;
+.launch-sheet .launch-fields {
+  min-width: 0;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.launch-sheet .graph-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 4px 0 8px;
+  white-space: nowrap;
+}
+
+.launch-sheet .payload {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .launch-agent {

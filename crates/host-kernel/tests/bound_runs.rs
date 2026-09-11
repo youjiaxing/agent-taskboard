@@ -4,7 +4,7 @@ use std::sync::Arc;
 use host_kernel::{
     BootRequest, HostKernel, IssueRecord, KernelError, KernelPorts, MemoryAgent, MemoryLaunchEnv,
     MemorySessionFactory, MemoryTracker, RunEndedReason, RunStatus, SystemAppearance,
-    WorkspaceView,
+    WorkspaceView, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
 
 fn boot_req(root: &Path) -> BootRequest {
@@ -190,8 +190,31 @@ fn start_bound_run_command_does_not_choose_an_agent_implicitly() {
     assert_eq!(h.sessions.spawn_count(), 0);
 }
 
+fn bound_opening(skill: &str, url: &str, title: &str) -> String {
+    format!("{skill} {url}\nIssue Title: {title}")
+}
+
+fn prepare_opening(
+    host: &mut HostKernel,
+    project_id: &str,
+    issue_id: &str,
+    agent_id: &str,
+) -> String {
+    host.handle(serde_json::json!({
+        "op": "prepareRunLaunch",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": agent_id,
+    }))
+    .unwrap()
+    .snapshot
+    .launch_form
+    .unwrap()
+    .opening_text
+}
+
 #[test]
-fn bound_opening_is_title_and_stable_url() {
+fn bound_opening_without_wayfinder_type_uses_implement_skill() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path());
@@ -208,15 +231,137 @@ fn bound_opening_is_title_and_stable_url() {
         .snapshot
         .launch_form
         .unwrap();
-    assert_eq!(
-        form.opening_text,
-        "ready work\nhttps://github.com/you/garden/issues/1"
+    let expected = bound_opening(
+        "/implement",
+        "https://github.com/you/garden/issues/1",
+        "ready work",
     );
+    assert_eq!(form.opening_text, expected);
     assert_eq!(
         form.values.get("initial-instruction").map(String::as_str),
-        Some("ready work\nhttps://github.com/you/garden/issues/1")
+        Some(expected.as_str())
     );
-    assert!(!form.opening_text.contains("##"));
+}
+
+#[test]
+fn bound_opening_uses_wayfinder_skill_for_research() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.tracker
+        .add_issue(IssueRecord::open("you/garden", 2, "research work").label("wayfinder:research"));
+    let project_id = register(&mut h.host, &dir);
+    assert_eq!(
+        prepare_opening(&mut h.host, &project_id, "you/garden#2", "grok-build"),
+        bound_opening(
+            "/wayfinder",
+            "https://github.com/you/garden/issues/2",
+            "research work",
+        )
+    );
+}
+
+#[test]
+fn bound_opening_uses_legacy_type_label_for_local_markdown_compatibility() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.tracker
+        .add_issue(IssueRecord::open("you/garden", 5, "legacy prototype").label("type:prototype"));
+    let project_id = register(&mut h.host, &dir);
+    assert_eq!(
+        prepare_opening(&mut h.host, &project_id, "you/garden#5", "grok-build"),
+        bound_opening(
+            "/wayfinder",
+            "https://github.com/you/garden/issues/5",
+            "legacy prototype",
+        )
+    );
+}
+
+#[test]
+fn bound_opening_uses_wayfinder_skill_for_each_ticket_type() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    for (number, kind) in [(2, "prototype"), (3, "grilling"), (4, "task")] {
+        h.tracker.add_issue(
+            IssueRecord::open("you/garden", number, format!("{kind} work"))
+                .label(format!("wayfinder:{kind}")),
+        );
+    }
+    let project_id = register(&mut h.host, &dir);
+    for (number, kind) in [(2, "prototype"), (3, "grilling"), (4, "task")] {
+        assert_eq!(
+            prepare_opening(
+                &mut h.host,
+                &project_id,
+                &format!("you/garden#{number}"),
+                "grok-build",
+            ),
+            bound_opening(
+                "/wayfinder",
+                &format!("https://github.com/you/garden/issues/{number}"),
+                &format!("{kind} work"),
+            )
+        );
+    }
+}
+
+#[test]
+fn bound_opening_uses_wayfinder_skill_for_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.tracker
+        .add_issue(IssueRecord::open("you/garden", 97, "Map: recovery").label("wayfinder:map"));
+    let project_id = register(&mut h.host, &dir);
+    assert_eq!(
+        prepare_opening(&mut h.host, &project_id, "you/garden#97", "grok-build"),
+        bound_opening(
+            "/wayfinder",
+            "https://github.com/you/garden/issues/97",
+            "Map: recovery",
+        )
+    );
+}
+
+#[test]
+fn bound_opening_uses_codex_dollar_skill_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "ready work"));
+    tracker.add_issue(IssueRecord::open("you/garden", 97, "Map: recovery").label("wayfinder:map"));
+    let agent = Arc::new(MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN));
+    let sessions = MemorySessionFactory::new();
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker: Arc::clone(&tracker) as _,
+            agents: vec![Arc::clone(&agent) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    let project_id = register(&mut host, &dir);
+    assert_eq!(
+        prepare_opening(&mut host, &project_id, "you/garden#1", CODEX_ID),
+        bound_opening(
+            "$implement",
+            "https://github.com/you/garden/issues/1",
+            "ready work",
+        )
+    );
+    assert_eq!(
+        prepare_opening(&mut host, &project_id, "you/garden#97", CODEX_ID),
+        bound_opening(
+            "$wayfinder",
+            "https://github.com/you/garden/issues/97",
+            "Map: recovery",
+        )
+    );
 }
 
 #[test]

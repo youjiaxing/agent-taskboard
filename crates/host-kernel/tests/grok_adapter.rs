@@ -85,12 +85,14 @@ fn grok_adapter_declares_first_layer_fields() {
         .unwrap()
         .options
         .is_empty());
-    assert!(fields
-        .iter()
-        .find(|field| field.id == "sandbox")
-        .unwrap()
-        .options
-        .is_empty());
+    assert_eq!(
+        fields
+            .iter()
+            .find(|field| field.id == "sandbox")
+            .unwrap()
+            .options,
+        vec!["off", "workspace", "devbox", "read-only", "strict"]
+    );
     assert_eq!(GrokAdapter.seed_config()["permission-mode"], "default");
 }
 
@@ -100,7 +102,13 @@ fn grok_adapter_discovers_models_and_enums_from_the_cli() {
     let executable = make_discoverable_grok(tmp.path());
     let env = LaunchEnvironment::from_vars(
         tmp.path().to_path_buf(),
-        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+        BTreeMap::from([
+            ("PATH".into(), tmp.path().to_string_lossy().into_owned()),
+            (
+                "HOME".into(),
+                tmp.path().join("empty-home").to_string_lossy().into_owned(),
+            ),
+        ]),
     );
     let discovery = GrokAdapter
         .discover_config(&executable, &env)
@@ -128,12 +136,119 @@ fn grok_adapter_discovers_models_and_enums_from_the_cli() {
             "plan"
         ]
     );
+    assert_eq!(
+        field("sandbox").options,
+        vec!["off", "workspace", "devbox", "read-only", "strict"]
+    );
     assert_eq!(discovery.seed["model"], "grok-current");
+}
+
+#[test]
+fn grok_adapter_discovers_model_specific_efforts_from_cache_and_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let grok_home = home.join(".grok");
+    std::fs::create_dir_all(&grok_home).unwrap();
+    std::fs::write(
+        grok_home.join("models_cache.json"),
+        r#"{
+            "models": {
+                "grok-fast": {
+                    "info": {
+                        "reasoning_effort": "low",
+                        "reasoning_efforts": [
+                            {"value": "low", "default": true},
+                            {"value": "medium"}
+                        ]
+                    }
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        grok_home.join("config.toml"),
+        r#"
+[models]
+default_reasoning_effort = "medium"
+
+[model.custom-max]
+supports_reasoning_effort = true
+reasoning_effort = "max"
+
+[[model.custom-max.reasoning_efforts]]
+id = "max"
+value = "max"
+default = true
+
+[[model.custom-max.reasoning_efforts]]
+id = "high"
+value = "high"
+"#,
+    )
+    .unwrap();
+    let bin_dir = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let executable = bin_dir.join("grok");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ "$1" = "models" ]; then
+  printf '%s\n' 'Default model: grok-fast' 'Available models:' '  * grok-fast (default)' '  - custom-max'
+  exit 0
+fi
+if [ "$1" = "--help" ]; then
+  printf '%s\n' '      --reasoning-effort <EFFORT>' '          [possible values: low, medium, high, xhigh]'
+  exit 0
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([
+            ("PATH".into(), bin_dir.to_string_lossy().into_owned()),
+            ("HOME".into(), home.to_string_lossy().into_owned()),
+        ]),
+    );
+
+    let discovery = GrokAdapter
+        .discover_config(&executable, &env)
+        .expect("Grok CLI discovery");
+    let effort = discovery
+        .fields
+        .iter()
+        .find(|field| field.id == "effort")
+        .unwrap();
+    let filter = effort
+        .option_filter
+        .as_ref()
+        .expect("model-specific effort filter");
+    assert_eq!(filter.field_id, "model");
+    assert_eq!(filter.options_by_value["grok-fast"], vec!["low", "medium"]);
+    assert_eq!(filter.options_by_value["custom-max"], vec!["max", "high"]);
+    assert_eq!(filter.defaults_by_value["grok-fast"], "low");
+    assert_eq!(filter.defaults_by_value["custom-max"], "max");
+    assert!(effort.options.contains(&"max".to_string()));
+    assert_eq!(discovery.seed["model"], "grok-fast");
+    assert_eq!(discovery.seed["effort"], "low");
 }
 
 #[test]
 fn grok_adapter_declares_native_isolation() {
     assert!(GrokAdapter.native_isolation());
+}
+
+#[test]
+fn grok_adapter_invokes_skills_with_slash() {
+    assert_eq!(GrokAdapter.skill_invocation("wayfinder"), "/wayfinder");
+    assert_eq!(GrokAdapter.skill_invocation("implement"), "/implement");
 }
 
 #[test]

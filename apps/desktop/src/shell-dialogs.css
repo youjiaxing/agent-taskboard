@@ -4,7 +4,15 @@
   overflow: auto;
 }
 
-.form-sheet input, .form-sheet textarea, .form-sheet select {
+.form-sheet.launch-sheet {
+  width: min(900px, calc(100% - 24px));
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.form-sheet input:not([type="checkbox"]), .form-sheet textarea, .form-sheet select {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -13,6 +21,24 @@
   border-radius: var(--r);
   padding: 8px 10px;
   margin: 4px 0 8px;
+}
+
+.form-sheet input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.form-sheet .graph-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 4px 0 8px;
+  white-space: nowrap;
 }
 
 .form-sheet textarea { resize: vertical; min-height: 88px; }

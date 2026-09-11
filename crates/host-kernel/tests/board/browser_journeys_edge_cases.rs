@@ -16,6 +16,7 @@ fn browser_supplements_issue_115_launch_form_behavior() {
     let fields = vec![
         field("model", AgentFieldKind::Select, &["fast", "deep"], false),
         field("effort", AgentFieldKind::Select, &["low", "high"], false),
+        field("always-approve", AgentFieldKind::Boolean, &[], false),
         field("initial-instruction", AgentFieldKind::Multiline, &[], false),
         field("profile", AgentFieldKind::Text, &[], false),
         field(
@@ -24,12 +25,7 @@ fn browser_supplements_issue_115_launch_form_behavior() {
             &["on-request", "never"],
             false,
         ),
-        field(
-            "sandbox",
-            AgentFieldKind::Select,
-            &["workspace-write", "read-only"],
-            false,
-        ),
+        field("sandbox", AgentFieldKind::Select, &[], false),
         field("agent", AgentFieldKind::Text, &[], false),
         field("add-dir", AgentFieldKind::Text, &[], false),
         field("additional-args", AgentFieldKind::Text, &[], true),
@@ -37,10 +33,11 @@ fn browser_supplements_issue_115_launch_form_behavior() {
     let seed = BTreeMap::from([
         ("model".into(), "fast".into()),
         ("effort".into(), "low".into()),
+        ("always-approve".into(), "false".into()),
         ("initial-instruction".into(), String::new()),
         ("profile".into(), String::new()),
         ("approval".into(), "on-request".into()),
-        ("sandbox".into(), "workspace-write".into()),
+        ("sandbox".into(), "off".into()),
         ("agent".into(), String::new()),
         ("add-dir".into(), String::new()),
         ("additional-args".into(), String::new()),

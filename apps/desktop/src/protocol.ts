@@ -615,6 +615,7 @@ export type AgentField = {
   optionFilter?: {
     fieldId: string;
     optionsByValue: Record<string, string[]>;
+    defaultsByValue?: Record<string, string>;
   } | null;
   required: boolean;
   folded: boolean;

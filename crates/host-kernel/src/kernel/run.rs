@@ -232,7 +232,7 @@ impl HostKernel {
         let mut opening_text = String::new();
         if let Some(issue_id) = issue_id.as_deref() {
             if let Some(issue) = self.issue_by_id(issue_id) {
-                let instruction = format!("{}\n{}", issue.title, issue.url);
+                let instruction = launch::bound_opening(&issue, agent.as_ref());
                 values.insert(launch::INITIAL_INSTRUCTION.into(), instruction.clone());
                 opening_text = instruction;
             }
@@ -242,6 +242,7 @@ impl HostKernel {
         opening_text = changes::append_notes(&opening_text, &pending);
         let fields = launch::localize_fields(discovery.fields, language);
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
+        launch::apply_option_defaults(&fields, &mut values);
         let (isolation_supported, isolation_reason) =
             launch::isolation_availability(agent.as_ref(), &project.local_path, language);
         let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
@@ -805,7 +806,7 @@ impl HostKernel {
             .and_then(|agents| agents.get(agent.id()))
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
-        let opening = format!("{}\n{}", issue.title, issue.url);
+        let opening = launch::bound_opening(&issue, agent.as_ref());
         values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
         self.start_unbound_run(
             &project_id,

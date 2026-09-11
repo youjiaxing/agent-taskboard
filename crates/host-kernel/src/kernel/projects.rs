@@ -22,7 +22,7 @@ impl HostKernel {
             .and_then(|agents| agents.get(agent.id()))
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
-        let opening = format!("{}\n{}", issue.title, issue.url);
+        let opening = launch::bound_opening(&issue, agent.as_ref());
         values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
         self.start_unbound_run(
             &project_id,

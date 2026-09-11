@@ -45,6 +45,8 @@ fn codex_adapter_declares_interactive_tui_contract() {
     assert_eq!(adapter.name(), CODEX_NAME);
     assert_eq!(adapter.bin(), CODEX_BIN);
     assert!(!adapter.native_isolation());
+    assert_eq!(adapter.skill_invocation("wayfinder"), "$wayfinder");
+    assert_eq!(adapter.skill_invocation("implement"), "$implement");
     assert!(adapter
         .isolation_unavailable_reason(Language::ZhCn)
         .contains("--worktree"));
@@ -106,6 +108,8 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
         filter.options_by_value["gpt-deep"],
         vec!["high", "xhigh", "max"]
     );
+    assert_eq!(filter.defaults_by_value["gpt-fast"], "low");
+    assert_eq!(filter.defaults_by_value["gpt-deep"], "high");
     assert_eq!(discovery.seed["model"], "gpt-fast");
     assert_eq!(discovery.seed["effort"], "low");
     assert_eq!(

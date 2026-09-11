@@ -27,6 +27,46 @@ if (!(await page.locator("button[data-act='select-agent'][data-id='grok-build']"
 await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
+const sheet = page.locator(".launch-sheet");
+const sheetBox = await sheet.boundingBox();
+if (!sheetBox || sheetBox.width < 700) {
+  throw new Error(`launch sheet is too narrow: ${sheetBox?.width}`);
+}
+const checkboxMetrics = async (id) => {
+  const input = page.locator(`.launch-sheet input[type='checkbox'][data-launch='${id}']`);
+  return input.evaluate((node) => {
+    const label = node.closest("label");
+    if (!(node instanceof HTMLInputElement) || !label) throw new Error("checkbox label missing");
+    const inputBox = node.getBoundingClientRect();
+    const labelBox = label.getBoundingClientRect();
+    return { inputWidth: inputBox.width, labelHeight: labelBox.height, labelWidth: labelBox.width };
+  });
+};
+const isolationMetrics = await checkboxMetrics("isolation");
+if (isolationMetrics.inputWidth > 40) {
+  throw new Error(`isolation checkbox is stretched: ${isolationMetrics.inputWidth}`);
+}
+if (isolationMetrics.labelHeight > 40) {
+  throw new Error(`isolation label is stacked vertically: ${isolationMetrics.labelHeight}`);
+}
+const alwaysApproveMetrics = await checkboxMetrics("always-approve");
+if (alwaysApproveMetrics.inputWidth > 40) {
+  throw new Error(`alwaysApprove checkbox is stretched: ${alwaysApproveMetrics.inputWidth}`);
+}
+if (alwaysApproveMetrics.labelWidth > alwaysApproveMetrics.inputWidth + 180) {
+  throw new Error(`alwaysApprove label is stretched across the form: ${alwaysApproveMetrics.labelWidth}`);
+}
+if (!(await page.locator("select[data-launch-select='sandbox']").count())) {
+  throw new Error("sandbox should render as a select");
+}
+await page.click(".launch-sheet summary[data-act='toggle-folded']");
+const overflow = await sheet.evaluate((node) => ({
+  scrollWidth: node.scrollWidth,
+  clientWidth: node.clientWidth,
+}));
+if (overflow.scrollWidth > overflow.clientWidth + 2) {
+  throw new Error(`launch sheet requires horizontal scrolling: ${overflow.scrollWidth} > ${overflow.clientWidth}`);
+}
 const setLaunchValue = async (id, value) => {
   const select = page.locator(`select[data-launch-select='${id}']`);
   if (await select.count()) {
@@ -52,7 +92,6 @@ if (await effortSelect.count()) {
 }
 await page.waitForFunction(({ model, effort }) => document.querySelector(".launch-command-preview")?.textContent?.includes(`--model ${model} --effort ${effort}`), { model: selectedModel, effort: selectedEffort });
 
-const sheet = page.locator(".launch-sheet");
 await sheet.evaluate((node) => {
   node.scrollTop = node.scrollHeight;
 });

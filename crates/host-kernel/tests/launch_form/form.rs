@@ -575,6 +575,7 @@ fn draft_update_keeps_preview_warnings_and_final_argv_in_sync() {
             ("fast".into(), vec!["low".into()]),
             ("deep".into(), vec!["high".into()]),
         ]),
+        defaults_by_value: BTreeMap::new(),
     });
     grok.set_discovery_result(AgentConfigDiscovery {
         fields: vec![model, effort, field("initial-instruction", false)],
@@ -630,6 +631,78 @@ fn draft_update_keeps_preview_warnings_and_final_argv_in_sync() {
         spawn.argv,
         vec!["/mem/grok", "--model", "deep", "--effort", "low"]
     );
+}
+
+#[test]
+fn prepare_form_replaces_remembered_effort_invalid_for_selected_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let grok = Arc::new(MemoryAgent::installed_grok());
+    let mut model = field("model", false);
+    model.kind = AgentFieldKind::Select;
+    model.options = vec!["fast".into(), "deep".into()];
+    model.required = true;
+    let mut effort = field("effort", false);
+    effort.kind = AgentFieldKind::Select;
+    effort.options = vec!["low".into(), "high".into()];
+    effort.required = true;
+    effort.option_filter = Some(AgentFieldOptionFilter {
+        field_id: "model".into(),
+        options_by_value: BTreeMap::from([
+            ("fast".into(), vec!["low".into()]),
+            ("deep".into(), vec!["high".into()]),
+        ]),
+        defaults_by_value: BTreeMap::from([
+            ("fast".into(), "low".into()),
+            ("deep".into(), "high".into()),
+        ]),
+    });
+    grok.set_discovery_result(AgentConfigDiscovery {
+        fields: vec![model, effort, field("initial-instruction", false)],
+        seed: BTreeMap::from([
+            ("model".into(), "fast".into()),
+            ("effort".into(), "low".into()),
+            ("initial-instruction".into(), String::new()),
+        ]),
+    });
+    let mut h = harness_with(tmp.path(), vec![grok]);
+    let project_id = register(&mut h.host, &dir, "garden", "you/garden");
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap();
+    h.host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "deep",
+                "effort": "low",
+                "initial-instruction": "",
+                "isolation": "false"
+            },
+            "openingText": "remember invalid effort",
+        }))
+        .unwrap();
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert_eq!(form.values.get("model").map(String::as_str), Some("deep"));
+    assert_eq!(form.values.get("effort").map(String::as_str), Some("high"));
+    assert!(!form.warnings.iter().any(|warning| warning.contains("low")));
 }
 
 #[test]

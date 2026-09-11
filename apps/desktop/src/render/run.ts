@@ -115,12 +115,6 @@ export function launchField(field: AgentField, value: string, values: Record<str
   }
   if (field.kind === "select") {
     const options = launchFieldOptions(field, values);
-    if (!options.length) {
-      return `<div class="field">
-        <label class="label" for="${id}">${escapeHtml(field.label)}</label>
-        <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
-      </div>`;
-    }
     const known = options.includes(value);
     const customValue = known ? "" : value;
     return `<div class="field">
@@ -163,6 +157,14 @@ export function launchFieldOptions(field: AgentField, values: Record<string, str
   const filter = field.optionFilter;
   if (!filter) return field.options ?? [];
   return filter.optionsByValue[values[filter.fieldId] ?? ""] ?? field.options ?? [];
+}
+
+export function launchFieldDefault(field: AgentField, values: Record<string, string>): string | undefined {
+  const filter = field.optionFilter;
+  if (!filter) return undefined;
+  const options = launchFieldOptions(field, values);
+  const value = filter.defaultsByValue?.[values[filter.fieldId] ?? ""];
+  return value && options.includes(value) ? value : undefined;
 }
 
 export function projectForm(copy: ShellCopy): string {

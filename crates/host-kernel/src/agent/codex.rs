@@ -46,6 +46,10 @@ impl AgentPort for CodexAdapter {
         vec![executable.to_string_lossy().into_owned()]
     }
 
+    fn skill_invocation(&self, skill: &str) -> String {
+        format!("${skill}")
+    }
+
     fn config_fields(&self) -> Vec<AgentField> {
         vec![
             text_field("model", "model", true, false),
@@ -97,6 +101,7 @@ impl AgentPort for CodexAdapter {
         let mut seed = self.seed_config();
         let mut model_options = Vec::new();
         let mut efforts_by_model = BTreeMap::new();
+        let mut defaults_by_model = BTreeMap::new();
         let mut default_model = None;
         let mut default_effort = None;
         for model in models {
@@ -119,6 +124,13 @@ impl AgentPort for CodexAdapter {
             if !efforts.is_empty() {
                 efforts_by_model.insert(id.to_string(), efforts);
             }
+            if let Some(effort) = model
+                .get("defaultReasoningEffort")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                defaults_by_model.insert(id.to_string(), effort.to_string());
+            }
             if model
                 .get("isDefault")
                 .and_then(Value::as_bool)
@@ -135,7 +147,13 @@ impl AgentPort for CodexAdapter {
             return Err("Codex CLI model/list returned an empty model list".into());
         }
         discovery::set_options(&mut fields, "model", model_options);
-        discovery::set_option_filter(&mut fields, "effort", "model", efforts_by_model);
+        discovery::set_option_filter_with_defaults(
+            &mut fields,
+            "effort",
+            "model",
+            efforts_by_model,
+            defaults_by_model,
+        );
         discovery::set_options_if_found(
             &mut fields,
             "approval",

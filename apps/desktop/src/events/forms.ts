@@ -1,4 +1,4 @@
-import { applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
+import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
 import { changeNoteFormKey, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc } from "../rpc";
@@ -371,7 +371,9 @@ ui.app.addEventListener("change", async (event) => {
     if (target instanceof HTMLInputElement && target.type === "checkbox") {
       ui.launchDraft.values[launchId] = target.checked ? "true" : "false";
     } else if ("value" in target) {
-      ui.launchDraft.values[launchId] = (target as HTMLInputElement | HTMLSelectElement).value;
+      const next = (target as HTMLInputElement | HTMLSelectElement).value;
+      ui.launchDraft.values[launchId] = next;
+      if (next !== "__custom__") applyLaunchDependentDefaults(launchId);
     }
     refreshLaunchWarnings();
     refreshLaunchFieldOptions();
@@ -412,12 +414,16 @@ ui.app.addEventListener("input", (event) => {
   const customLaunchId = target.getAttribute("data-launch-custom");
   if (customLaunchId && ui.launchDraft && "value" in target) {
     ui.launchDraft.values[customLaunchId] = (target as HTMLInputElement).value;
+    applyLaunchDependentDefaults(customLaunchId);
     refreshLaunchWarnings();
+    refreshLaunchFieldOptions();
     scheduleLaunchPreview();
   }
   const launchId = target.getAttribute("data-launch");
   if (launchId && ui.launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
-    ui.launchDraft.values[launchId] = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
+    const next = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
+    ui.launchDraft.values[launchId] = next;
+    if (next !== "__custom__") applyLaunchDependentDefaults(launchId);
     refreshLaunchWarnings();
     refreshLaunchFieldOptions();
     scheduleLaunchPreview();
@@ -446,6 +452,7 @@ ui.app.addEventListener("change", async (event) => {
       }
     } else {
       ui.launchDraft.values[launchSelectId] = target.value;
+      applyLaunchDependentDefaults(launchSelectId);
       refreshLaunchFieldOptions();
     }
     refreshLaunchWarnings();

@@ -38,6 +38,8 @@ fn antigravity_adapter_only_uses_agy() {
     assert_eq!(adapter.name(), ANTIGRAVITY_NAME);
     assert_eq!(adapter.bin(), ANTIGRAVITY_BIN);
     assert_eq!(adapter.bin(), "agy");
+    assert_eq!(adapter.skill_invocation("wayfinder"), "/wayfinder");
+    assert_eq!(adapter.skill_invocation("implement"), "/implement");
     assert!(!adapter.native_isolation());
     assert!(adapter
         .isolation_unavailable_reason(Language::ZhCn)

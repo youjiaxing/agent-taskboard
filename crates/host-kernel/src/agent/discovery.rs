@@ -27,6 +27,16 @@ pub(super) fn set_option_filter(
     field_id: &str,
     options_by_value: BTreeMap<String, Vec<String>>,
 ) {
+    set_option_filter_with_defaults(fields, id, field_id, options_by_value, BTreeMap::new());
+}
+
+pub(super) fn set_option_filter_with_defaults(
+    fields: &mut [AgentField],
+    id: &str,
+    field_id: &str,
+    options_by_value: BTreeMap<String, Vec<String>>,
+    defaults_by_value: BTreeMap<String, String>,
+) {
     if options_by_value.is_empty() {
         return;
     }
@@ -34,6 +44,7 @@ pub(super) fn set_option_filter(
         field.option_filter = Some(AgentFieldOptionFilter {
             field_id: field_id.to_string(),
             options_by_value,
+            defaults_by_value,
         });
     }
 }

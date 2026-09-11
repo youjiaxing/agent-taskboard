@@ -7,7 +7,7 @@ use crate::agent::{
     intent_prefix, AgentField, AgentFieldKind, AgentPort, AgentSummary, IntentOption,
     PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
 };
-use crate::{Language, LaunchEnvPort};
+use crate::{IssueRecord, Language, LaunchEnvPort};
 
 pub const INITIAL_INSTRUCTION: &str = "initial-instruction";
 pub const ISOLATION_FIELD: &str = "isolation";
@@ -49,6 +49,66 @@ fn overlay(values: &mut BTreeMap<String, String>, remembered: &BTreeMap<String, 
     }
 }
 
+pub fn filtered_options<'a>(
+    field: &'a AgentField,
+    values: &BTreeMap<String, String>,
+) -> Option<&'a [String]> {
+    field
+        .option_filter
+        .as_ref()
+        .and_then(|filter| {
+            values
+                .get(&filter.field_id)
+                .and_then(|value| filter.options_by_value.get(value))
+        })
+        .map(Vec::as_slice)
+        .or(Some(field.options.as_slice()))
+}
+
+pub fn apply_option_defaults(fields: &[AgentField], values: &mut BTreeMap<String, String>) {
+    for field in fields {
+        if field.kind != AgentFieldKind::Select {
+            continue;
+        }
+        let Some(options) = filtered_options(field, values).filter(|options| !options.is_empty())
+        else {
+            continue;
+        };
+        let current = values
+            .get(&field.id)
+            .map(|value| value.trim())
+            .unwrap_or("");
+        if options.iter().any(|option| option == current) {
+            continue;
+        }
+        let custom = !current.is_empty()
+            && !field.options.iter().any(|option| option == current)
+            && field.option_filter.as_ref().is_none_or(|filter| {
+                !filter
+                    .options_by_value
+                    .values()
+                    .any(|options| options.iter().any(|option| option == current))
+            });
+        if custom {
+            continue;
+        }
+        let default = field
+            .option_filter
+            .as_ref()
+            .and_then(|filter| {
+                values
+                    .get(&filter.field_id)
+                    .and_then(|value| filter.defaults_by_value.get(value))
+            })
+            .filter(|value| options.iter().any(|option| option == *value))
+            .cloned()
+            .or_else(|| options.first().cloned());
+        if let Some(default) = default {
+            values.insert(field.id.clone(), default);
+        }
+    }
+}
+
 pub fn other_project_memory<'a>(
     defaults: &'a BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
     project_id: &str,
@@ -61,6 +121,20 @@ pub fn other_project_memory<'a>(
             agents.get(agent_id).filter(|map| !map.is_empty())
         }
     })
+}
+
+pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
+    let skill = if issue.wayfinder_type().is_some() {
+        "wayfinder"
+    } else {
+        "implement"
+    };
+    format!(
+        "{} {}\nIssue Title: {}",
+        agent.skill_invocation(skill),
+        issue.url,
+        issue.title
+    )
 }
 
 pub fn intent_options(language: Language) -> Vec<IntentOption> {
@@ -151,15 +225,9 @@ pub fn unknown_enum_warnings(
         if field.kind != AgentFieldKind::Select {
             continue;
         }
-        let options = field
-            .option_filter
-            .as_ref()
-            .and_then(|filter| {
-                values
-                    .get(&filter.field_id)
-                    .and_then(|value| filter.options_by_value.get(value))
-            })
-            .unwrap_or(&field.options);
+        let Some(options) = filtered_options(field, values) else {
+            continue;
+        };
         if options.is_empty() {
             continue;
         }

@@ -2,7 +2,7 @@ import { effectiveClientLanguage } from "./view-helpers";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { startupCopy } from "./startup-copy";
 import type { LaunchDraft, RunLaunchForm, ShellCopy, Snapshot, UpdateInstallGate } from "./protocol";
-import { launchFieldOptions, launchSelectOptions } from "./render/run";
+import { launchFieldDefault, launchFieldOptions, launchSelectOptions } from "./render/run";
 import { render } from "./render/app";
 import { rpc } from "./rpc";
 import { ui } from "./ui";
@@ -47,6 +47,7 @@ export function syncLaunchDraft(snap: Snapshot): void {
       intentId: "",
       custom: false,
     };
+    coerceLaunchFieldValues();
   }
 }
 
@@ -54,6 +55,35 @@ export function prefillHint(copy: ShellCopy, source: RunLaunchForm["prefillSourc
   if (source === "current-project") return copy.prefillCurrent;
   if (source === "other-project") return copy.prefillOther;
   return copy.prefillSeed;
+}
+
+export function applyLaunchDependentDefaults(changedId: string): void {
+  if (!ui.snapshot?.launchForm || !ui.launchDraft) return;
+  const parentValue = ui.launchDraft.values[changedId] ?? "";
+  if (!parentValue || parentValue === "__custom__") return;
+  for (const field of ui.snapshot.launchForm.fields) {
+    const filter = field.optionFilter;
+    if (!filter || filter.fieldId !== changedId) continue;
+    const options = launchFieldOptions(field, ui.launchDraft.values);
+    const defaultValue = launchFieldDefault(field, ui.launchDraft.values);
+    if (defaultValue) {
+      ui.launchDraft.values[field.id] = defaultValue;
+    } else if (!options.includes(ui.launchDraft.values[field.id] ?? "")) {
+      ui.launchDraft.values[field.id] = options[0] ?? "";
+    }
+  }
+}
+
+export function coerceLaunchFieldValues(): void {
+  if (!ui.snapshot?.launchForm || !ui.launchDraft) return;
+  for (const field of ui.snapshot.launchForm.fields) {
+    if (field.kind !== "select" || !field.optionFilter) continue;
+    const options = launchFieldOptions(field, ui.launchDraft.values);
+    const current = ui.launchDraft.values[field.id] ?? "";
+    if (!current || options.includes(current) || options.length === 0) continue;
+    if (!(field.options ?? []).includes(current)) continue;
+    ui.launchDraft.values[field.id] = launchFieldDefault(field, ui.launchDraft.values) ?? options[0] ?? current;
+  }
 }
 
 export function refreshLaunchFieldOptions(): void {
