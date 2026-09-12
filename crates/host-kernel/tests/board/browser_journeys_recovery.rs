@@ -126,7 +126,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     sessions
         .last_session()
         .expect("stopped Run session")
-        .push_output(b"ended recent output\n");
+        .push_output(b"\x1b[2J\x1b[Hended recent output\r\n");
     let stopped = host
         .handle(serde_json::json!({
             "op": "stopRun",
@@ -140,7 +140,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
         .find(|run| run.id == stopped_run_id)
         .expect("stopped Run")
         .recent_output
-        .ends_with("ended recent output\n"));
+        .ends_with("ended recent output"));
     let tools_dir = make_dir(tmp.path(), "work/tools");
     tracker.add_issue(IssueRecord::open("you/tools", 1, "tool ready"));
     host.handle(serde_json::json!({

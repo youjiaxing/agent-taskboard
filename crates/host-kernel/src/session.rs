@@ -27,6 +27,10 @@ pub trait AgentSession: Send + Sync {
     fn stop(&self);
     fn exit_code(&self) -> Option<i32>;
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk;
+    /// Read-only text for lightweight clients; control sequences stay in the PTY stream.
+    fn recent_output(&self) -> String {
+        readable_pty_output(&self.read_after(0, Duration::ZERO).data)
+    }
     fn was_stopped(&self) -> bool {
         false
     }
@@ -36,6 +40,16 @@ pub trait AgentSession: Send + Sync {
     fn completion_signals(&self) -> crate::agent::CompletionSignals {
         crate::agent::CompletionSignals::default()
     }
+}
+
+pub(crate) fn readable_pty_output(bytes: &[u8]) -> String {
+    let mut parser = vt100::Parser::new(
+        crate::run::DEFAULT_PTY_ROWS,
+        crate::run::DEFAULT_PTY_COLS,
+        0,
+    );
+    parser.process(bytes);
+    parser.screen().contents()
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -232,6 +246,7 @@ impl SessionFactory for PtySessionFactory {
 
 struct PtyLive {
     output: Arc<Mutex<Vec<u8>>>,
+    screen: Arc<Mutex<vt100::Parser>>,
     exit: Arc<Mutex<Option<i32>>>,
     pulse: Arc<Condvar>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -278,10 +293,16 @@ impl PtyLive {
             .map_err(|err| err.to_string())?;
         let writer = pair.master.take_writer().map_err(|err| err.to_string())?;
         let output = Arc::new(Mutex::new(Vec::new()));
+        let screen = Arc::new(Mutex::new(vt100::Parser::new(
+            request.rows.max(2),
+            request.cols.max(2),
+            0,
+        )));
         let exit = Arc::new(Mutex::new(None));
         let pulse = Arc::new(Condvar::new());
         let session = Arc::new(Self {
             output: Arc::clone(&output),
+            screen: Arc::clone(&screen),
             exit: Arc::clone(&exit),
             pulse: Arc::clone(&pulse),
             writer: Mutex::new(writer),
@@ -299,6 +320,7 @@ impl PtyLive {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            screen.lock().expect("pty screen").process(&buf[..n]);
                             reader_out
                                 .lock()
                                 .expect("pty output")
@@ -344,13 +366,26 @@ impl AgentSession for PtyLive {
 
     fn resize(&self, cols: u16, rows: u16) {
         if let Ok(master) = self.master.lock() {
-            let _ = master.resize(portable_pty::PtySize {
-                rows: rows.max(2),
-                cols: cols.max(2),
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            if master
+                .resize(portable_pty::PtySize {
+                    rows: rows.max(2),
+                    cols: cols.max(2),
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .is_ok()
+            {
+                self.screen
+                    .lock()
+                    .expect("pty screen")
+                    .screen_mut()
+                    .set_size(rows.max(2), cols.max(2));
+            }
         }
+    }
+
+    fn recent_output(&self) -> String {
+        self.screen.lock().expect("pty screen").screen().contents()
     }
 
     fn stop(&self) {

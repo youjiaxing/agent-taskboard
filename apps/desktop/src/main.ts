@@ -448,15 +448,17 @@ export function attachTerminal(snap: Snapshot): void {
 
 export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
   const run = ui.mobileView === "run" ? focusedRun(snap) : undefined;
+  const hostId = snap.focusedHostId;
+  const outputKey = JSON.stringify([hostId, run?.id]);
   if (!run || run.status === "ended" || ui.mobileLiveTerminal) {
     if (run?.status === "ended" && run.recentOutput) {
-      ui.mobilePtyText.set(run.id, run.recentOutput);
+      ui.mobilePtyText.set(outputKey, run.recentOutput);
     }
     ui.mobilePtyPumping = false;
     return;
   }
-  if (ui.mobilePtyRunId !== run.id) {
-    ui.mobilePtyRunId = run.id;
+  if (ui.mobilePtyRunId !== outputKey) {
+    ui.mobilePtyRunId = outputKey;
     ui.mobilePtyOffset = 0;
   }
   if (ui.mobilePtyPumping) return;
@@ -467,19 +469,18 @@ export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
       mobileClient()
       && ui.mobileView === "run"
       && !ui.mobileLiveTerminal
+      && ui.snapshot?.focusedHostId === hostId
       && ui.snapshot?.focusedRunId === runId
     ) {
       const response = await fetch(
         `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.mobilePtyOffset}`,
       );
-      if (!response.ok || ui.mobilePtyRunId !== runId) break;
-      const json = (await response.json()) as { offset: number; data: string; exited: number | null };
-      if (json.data) {
-        const raw = atob(json.data);
-        const bytes = Uint8Array.from(raw, (byte) => byte.charCodeAt(0));
-        const text = new TextDecoder().decode(bytes);
-        const recent = `${ui.mobilePtyText.get(runId) ?? ""}${text}`.slice(-16_000);
-        ui.mobilePtyText.set(runId, recent);
+      if (!response.ok) break;
+      const json = (await response.json()) as { offset: number; recentOutput?: string; exited: number | null };
+      if (ui.mobilePtyRunId !== outputKey || ui.snapshot?.focusedHostId !== hostId || ui.snapshot?.focusedRunId !== runId) break;
+      if (typeof json.recentOutput === "string") {
+        const recent = json.recentOutput;
+        ui.mobilePtyText.set(outputKey, recent);
         const output = ui.app?.querySelector<HTMLElement>(`.mobile-run-output[data-run="${CSS.escape(runId)}"]`);
         if (output) {
           output.textContent = recent;

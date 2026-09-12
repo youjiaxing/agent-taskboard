@@ -381,6 +381,7 @@ pub(super) fn serve_run_io(
             let body = serde_json::json!({
                 "offset": chunk.offset,
                 "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &chunk.data),
+                "recentOutput": session.recent_output(),
                 "exited": chunk.exit_code,
             });
             write_json(stream, 200, origin, &body.to_string())?;

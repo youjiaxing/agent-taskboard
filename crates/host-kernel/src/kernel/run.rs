@@ -437,17 +437,7 @@ impl HostKernel {
 
     pub(crate) fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
         self.harvest_run_signals(run_id);
-        let recent_output = self.live.get(run_id).map(|session| {
-            let chunk = session.read_after(0, Duration::ZERO);
-            String::from_utf8_lossy(&chunk.data)
-                .chars()
-                .rev()
-                .take(16_000)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>()
-        });
+        let recent_output = self.live.get(run_id).map(|session| session.recent_output());
         let mut issue_id = None;
         let mut project_id = None;
         let mut newly_ended = false;
@@ -876,6 +866,9 @@ impl HostKernel {
         };
         let mut crashed_ids = Vec::new();
         for run in &mut runs {
+            if run.recent_output.contains('\x1b') {
+                run.recent_output = session::readable_pty_output(run.recent_output.as_bytes());
+            }
             if run.is_active() {
                 run.status = RunStatus::Ended;
                 run.waiting_for_user = false;

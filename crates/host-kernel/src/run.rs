@@ -14,6 +14,15 @@ use crate::{Language, LaunchEnvPort};
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 24;
 
+pub(crate) fn submitted_input(text: &str) -> Vec<u8> {
+    // Keep Enter outside the paste so interactive TUIs do not absorb it into
+    // their paste-burst buffer. Raw Embedded Terminal keystrokes bypass this.
+    let mut bytes = b"\x1b[200~".to_vec();
+    bytes.extend_from_slice(text.trim_end_matches(['\r', '\n']).as_bytes());
+    bytes.extend_from_slice(b"\x1b[201~\r");
+    bytes
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunStatus {
@@ -222,8 +231,7 @@ pub fn start_unbound(
             match sessions.spawn(request) {
                 Ok(session) => {
                     if !config.opening_text.trim().is_empty() {
-                        let mut opening = config.opening_text.trim().as_bytes().to_vec();
-                        opening.push(b'\r');
+                        let opening = submitted_input(config.opening_text.trim());
                         if let Err(err) = session.write(&opening) {
                             session.stop();
                             record.status = RunStatus::Ended;

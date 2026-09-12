@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn browser_mobile_output_reads_terminal_text_while_running_and_after_stop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/mobile", 1, "mobile terminal output"));
+    let sessions = MemorySessionFactory::new();
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker,
+            agents: vec![Arc::new(MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    register(
+        &mut host,
+        "mobile-output",
+        &make_dir(tmp.path(), "work/mobile"),
+        "you/mobile",
+    );
+    let emitted = AtomicBool::new(false);
+    run_browser_e2e_with_outcome(host, "mobile-terminal-output.mjs", &[], move |outcome| {
+        if outcome.snapshot.runs.iter().any(|run| run.is_active())
+            && !emitted.swap(true, Ordering::SeqCst)
+        {
+            sessions.last_session().unwrap().push_output(
+                "\x1b[2J\x1b[HLoading...\r\x1b[2K\x1b[32m成功 TASKBOARD_OUTPUT_OK\x1b[0m\r\n\x1b]0;private terminal title\x07".as_bytes(),
+            );
+        }
+    });
+}
+
+#[test]
 fn browser_keeps_same_issue_drafts_separate_between_projects() {
     let tmp = tempfile::tempdir().unwrap();
     let tracker = Arc::new(SeamTracker::new());

@@ -338,8 +338,8 @@ impl HostKernel {
             run.self_check = true;
             run.self_check_attempted = true;
         }
-        let text = format!("{}\n", advance::self_check_text(self.appearance.language));
-        if self.write_pty(run_id, text.as_bytes()).is_ok() {
+        let text = run::submitted_input(&advance::self_check_text(self.appearance.language));
+        if self.write_pty(run_id, &text).is_ok() {
             return;
         }
         let previous = self

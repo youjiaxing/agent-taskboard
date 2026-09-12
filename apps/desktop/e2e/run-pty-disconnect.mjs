@@ -34,11 +34,11 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
   );
   await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
   await tickResponse;
-  const stopped = await page.evaluate(() => {
-    const card = [...document.querySelectorAll('[data-lane="inProgress"] .issue-card')]
-      .find((node) => node.textContent?.includes("PTY disconnect issue"));
-    return card?.classList.contains("execution-stopped") === true;
-  });
+  // The HTTP response can arrive before the Client applies and paints it.
+  // Wait for the visible result instead of exhausting every tick in that gap.
+  const stopped = await page.locator('[data-lane="inProgress"] .issue-card.execution-stopped', {
+    hasText: "PTY disconnect issue",
+  }).waitFor({ state: "visible", timeout: 250 }).then(() => true, () => false);
   if (stopped) break;
   if (attempt === 39) throw new Error("timed out waiting for disconnected PTY to become execution-stopped");
 }

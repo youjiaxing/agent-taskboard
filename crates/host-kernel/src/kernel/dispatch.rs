@@ -323,11 +323,7 @@ impl HostKernel {
                 self.workspace_view = WorkspaceView::Project;
             }
             Command::InjectRunInput { run_id, text } => {
-                let mut data = text.into_bytes();
-                if !data.ends_with(&[b'\n']) {
-                    data.push(b'\n');
-                }
-                self.write_pty(&run_id, &data)?;
+                self.write_pty(&run_id, &run::submitted_input(&text))?;
             }
             Command::CancelQuit => {
                 self.quit_offer = None;
