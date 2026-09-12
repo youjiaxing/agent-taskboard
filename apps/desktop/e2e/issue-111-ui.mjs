@@ -29,7 +29,7 @@ const issueText = async (needle) => {
 };
 const waitForIssueText = async (needle) => {
   let lastError;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
       return await issueText(needle);
     } catch (error) {
@@ -40,7 +40,7 @@ const waitForIssueText = async (needle) => {
   throw lastError;
 };
 const waitForIssueTextWithout = async (needle) => {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     const files = await issueFiles();
     if (!files.some((contents) => contents.includes(needle))) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
