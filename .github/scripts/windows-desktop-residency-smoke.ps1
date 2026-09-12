@@ -101,6 +101,38 @@ function Click-Element($Element, [bool]$Right = $false) {
   [AgentTaskboardNativeUi]::Click($x, $y, $Right)
 }
 
+function Invoke-Element($Element) {
+  $pattern = $null
+  if ($Element.TryGetCurrentPattern(
+      [System.Windows.Automation.InvokePattern]::Pattern,
+      [ref]$pattern
+  )) {
+    $pattern.Invoke()
+  } else {
+    Click-Element $Element
+  }
+}
+
+function Toggle-Element($Element) {
+  $pattern = $null
+  if (-not $Element.TryGetCurrentPattern(
+      [System.Windows.Automation.TogglePattern]::Pattern,
+      [ref]$pattern
+  )) {
+    throw "element '$($Element.Current.Name)' does not expose TogglePattern"
+  }
+  $pattern.Toggle()
+}
+
+function Has-AgentTaskboard-StartupEntry {
+  $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+  if (-not (Test-Path $path)) { return $false }
+  $properties = (Get-ItemProperty $path).PSObject.Properties
+  return [bool]($properties | Where-Object {
+    $_.Name -notmatch '^PS' -and [string]$_.Value -match 'agent-taskboard\.exe'
+  })
+}
+
 $process = Get-Process -Id $ProcessId
 Wait-Until {
   $process.Refresh()
@@ -108,6 +140,22 @@ Wait-Until {
     [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)
 } "Agent Taskboard did not expose a visible native window"
 Save-Screen "01-launched.png"
+
+$settings = Find-Visible-Element '^Settings$'
+if (-not $settings) { throw "Settings button was not exposed to UI Automation" }
+Invoke-Element $settings
+Wait-Until { (Find-Visible-Element '^Start at login$') -ne $null } "Start at login setting did not appear"
+$startAtLogin = Find-Visible-Element '^Start at login$'
+Toggle-Element $startAtLogin
+Wait-Until { Has-AgentTaskboard-StartupEntry } "enabling Start at login did not create a real HKCU Run entry"
+Save-Screen "01a-start-at-login-enabled.png"
+Toggle-Element $startAtLogin
+Wait-Until { -not (Has-AgentTaskboard-StartupEntry) } "disabling Start at login did not remove the real HKCU Run entry"
+Save-Screen "01b-start-at-login-disabled.png"
+$process.Refresh()
+$windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle).Current.BoundingRectangle
+[AgentTaskboardNativeUi]::Click([int]($windowBounds.Left + 20), [int]($windowBounds.Top + 140), $false)
+Wait-Until { (Find-Visible-Element '^Start at login$') -eq $null } "Settings overlay did not close"
 
 $process.Refresh()
 if (-not [AgentTaskboardNativeUi]::PostMessage($process.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
