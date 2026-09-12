@@ -4,7 +4,7 @@
 
 ### M. 刷新、上次数据、离线与写边界（110–124）
 
-- **#110** 打开/切 Project/回前台/手动刷新立即拉：`refresh.rs::opening_focusing_foreground_and_manual_refresh_pull_immediately`。状态：通过。
+- **#110** 打开/回前台/手动刷新立即拉；切 Project 时先显示上次数据，最近一次刷新尝试仍在刷新周期内则不重复读取，超过周期或从未取得 Tracker 读取结果才后台刷新；限流等到 `retry_at`，鉴权失败等待凭据修复或手动动作：`refresh.rs::opening_foreground_and_manual_refresh_pull_while_fresh_focus_reuses_cache`、`polling::project_focus_uses_fresh_cached_board_without_full_refresh`、`polling::project_focus_does_not_retry_a_recent_failure_when_cached_board_exists`、`polling::project_focus_returns_cached_board_before_one_background_refresh_finishes`、`polling::project_focus_without_cached_data_returns_loading_before_the_tracker_finishes`、`refresh.rs::rate_limit_pauses_auto_refresh_and_is_not_offline`、`refresh.rs::auth_failure_is_project_degraded_not_offline`。状态：通过。
 - **#111** 可见 Client 时默认每 5 分钟刷新并见倒计时：`refresh.rs::visible_project_polls_every_five_minutes_and_hidden_does_not`；倒计时在壳层刷新状态栏（e2e 断言状态栏存在）。状态：通过。
 - **#112** 无人看时不轮询：同上（hidden 不轮询）。状态：通过。
 - **#113** 绑该 Project 的 Run 结束立即刷新：`refresh.rs::run_end_refreshes_even_when_nobody_is_watching`。状态：通过。

@@ -693,6 +693,7 @@ pub(crate) struct ClientView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefreshTrigger {
     Immediate,
+    ProjectViewed,
     Action,
     Interval,
     RunEnded,

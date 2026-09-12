@@ -262,7 +262,7 @@ impl HostKernel {
         self.graph_center_issue_id = None;
         self.complete_dependency_graph = false;
         self.parent_filter = None;
-        self.refresh_project(project_id, RefreshTrigger::Immediate);
+        self.refresh_project(project_id, RefreshTrigger::ProjectViewed);
         self.persist_host_settings()
     }
 

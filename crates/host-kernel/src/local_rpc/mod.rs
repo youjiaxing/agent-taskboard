@@ -296,6 +296,20 @@ mod tests {
         DEFAULT_REFRESH_INTERVAL_MS,
     };
 
+    fn advance_past_refresh_interval_while_hidden(host: &mut HostKernel) {
+        let fetched_at_ms = match host.snapshot().board.unwrap().refresh {
+            RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+            other => panic!("expected ready, got {other:?}"),
+        };
+        host.handle(serde_json::json!({ "op": "hideWindow" }))
+            .unwrap();
+        host.handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": fetched_at_ms + DEFAULT_REFRESH_INTERVAL_MS,
+        }))
+        .unwrap();
+    }
+
     #[test]
     fn background_ticks_keep_board_updates_until_a_client_receives_them() {
         let tmp = tempfile::tempdir().unwrap();
@@ -414,6 +428,7 @@ mod tests {
             .unwrap()
             .snapshot
             .focused_project_id;
+        advance_past_refresh_interval_while_hidden(&mut host);
 
         host.begin_deferred_refreshes();
         host.handle(serde_json::json!({
@@ -466,6 +481,7 @@ mod tests {
             .unwrap()
             .snapshot
             .focused_project_id;
+        advance_past_refresh_interval_while_hidden(&mut host);
 
         host.begin_deferred_refreshes();
         host.handle(serde_json::json!({

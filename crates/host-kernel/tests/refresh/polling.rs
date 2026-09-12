@@ -401,6 +401,86 @@ fn tauri_client_viewing_remote_host_keeps_that_project_watched() {
 }
 
 #[test]
+fn project_focus_uses_fresh_cached_board_without_full_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden = make_dir(tmp.path(), "work/garden");
+    let notes = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "garden issue"));
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut host, "garden", &garden, "you/garden");
+    register(&mut host, "notes", &notes, "you/notes");
+    let baseline = tracker.read_count("you/garden");
+
+    let focused = host
+        .handle(serde_json::json!({
+            "op": "focusProject",
+            "clientInstanceId": "desktop",
+            "projectId": garden_id,
+        }))
+        .unwrap();
+    assert_eq!(focused.snapshot.focused_project_id, garden_id);
+    assert_eq!(
+        focused.snapshot.board.unwrap().columns.unwrap().frontier[0].title,
+        "garden issue"
+    );
+    host.handle(serde_json::json!({
+        "op": "setClientView",
+        "clientId": "browser",
+        "projectId": garden_id,
+        "visible": true,
+    }))
+    .unwrap();
+
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        baseline,
+        "fresh cached Project focus and visibility must not read the full Tracker"
+    );
+}
+
+#[test]
+fn project_focus_does_not_retry_a_recent_failure_when_cached_board_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden = make_dir(tmp.path(), "work/garden");
+    let notes = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "cached garden issue"));
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut host, "garden", &garden, "you/garden");
+    register(&mut host, "notes", &notes, "you/notes");
+
+    tracker.set_read_mode("you/garden", ReadMode::Offline);
+    host.handle(serde_json::json!({
+        "op": "refresh",
+        "projectId": garden_id,
+    }))
+    .unwrap();
+    let baseline = tracker.read_count("you/garden");
+    tracker.set_read_mode("you/garden", ReadMode::Complete);
+
+    let focused = host
+        .handle(serde_json::json!({
+            "op": "focusProject",
+            "clientInstanceId": "desktop",
+            "projectId": garden_id,
+        }))
+        .unwrap();
+
+    assert_eq!(tracker.read_count("you/garden"), baseline);
+    assert_eq!(
+        focused.snapshot.board.as_ref().unwrap().refresh.kind(),
+        "offline"
+    );
+    assert_eq!(
+        focused.snapshot.board.unwrap().columns.unwrap().frontier[0].title,
+        "cached garden issue"
+    );
+}
+
+#[test]
 fn project_focus_returns_cached_board_before_one_background_refresh_finishes() {
     let tmp = tempfile::tempdir().unwrap();
     let garden = make_dir(tmp.path(), "work/garden");
@@ -410,6 +490,10 @@ fn project_focus_returns_cached_board_before_one_background_refresh_finishes() {
     tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
     let garden_id = register(&mut kernel, "garden", &garden, "you/garden");
+    let garden_fetched_at = match refresh_status(&kernel) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready garden cache, got {other:?}"),
+    };
     let notes_id = register(&mut kernel, "notes", &notes, "you/notes");
     kernel
         .handle(serde_json::json!({
@@ -417,6 +501,12 @@ fn project_focus_returns_cached_board_before_one_background_refresh_finishes() {
             "clientId": "desktop",
             "projectId": notes_id,
             "visible": true,
+        }))
+        .unwrap();
+    kernel
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": garden_fetched_at + DEFAULT_REFRESH_INTERVAL_MS,
         }))
         .unwrap();
 
@@ -488,6 +578,19 @@ fn rapid_project_focus_keeps_the_last_client_focus_after_older_refreshes_finish(
         let project_id = register(&mut kernel, name, &directory, &repository);
         projects.push((repository, project_id));
     }
+    let fetched_at = match refresh_status(&kernel) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready Project caches, got {other:?}"),
+    };
+    kernel
+        .handle(serde_json::json!({ "op": "hideWindow" }))
+        .unwrap();
+    kernel
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": fetched_at + DEFAULT_REFRESH_INTERVAL_MS,
+        }))
+        .unwrap();
     let baseline: Vec<_> = projects
         .iter()
         .map(|(repository, _)| tracker.read_count(repository))
@@ -524,7 +627,7 @@ fn rapid_project_focus_keeps_the_last_client_focus_after_older_refreshes_finish(
         assert_eq!(
             tracker.read_count(repository),
             count + 1,
-            "each Project switch must start exactly one refresh"
+            "each stale Project switch must start exactly one refresh"
         );
     }
     let latest = post_rpc(

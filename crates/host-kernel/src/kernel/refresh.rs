@@ -284,26 +284,57 @@ impl HostKernel {
             .retain(|(pending_project, _), _| pending_project != project_id);
     }
 
+    fn refresh_due(&self, state: &ProjectRefreshState) -> bool {
+        match state.kind {
+            StoredRefreshKind::RateLimited => state
+                .retry_at_ms
+                .is_some_and(|retry_at| self.now_ms >= retry_at),
+            StoredRefreshKind::AuthFailed => false,
+            StoredRefreshKind::Ready
+            | StoredRefreshKind::Offline
+            | StoredRefreshKind::Incomplete
+            | StoredRefreshKind::TrackerError
+            | StoredRefreshKind::NeverFetched => {
+                self.now_ms
+                    >= state
+                        .last_attempt_ms
+                        .saturating_add(self.refresh_interval_ms)
+            }
+        }
+    }
+
+    fn should_refresh_when_viewed(&self, project_id: &str) -> bool {
+        let Some(state) = self.refresh.get(project_id) else {
+            return true;
+        };
+        if state.fetched_at_ms.is_none()
+            && !matches!(
+                state.kind,
+                StoredRefreshKind::RateLimited | StoredRefreshKind::AuthFailed
+            )
+        {
+            return true;
+        }
+        self.refresh_due(state)
+    }
+
     pub(crate) fn should_attempt_refresh(&self, project_id: &str, trigger: RefreshTrigger) -> bool {
         if self.refresh_in_flight.contains_key(project_id) && trigger != RefreshTrigger::Action {
             return false;
         }
-        let Some(state) = self.refresh.get(project_id) else {
-            return true;
-        };
-        match state.kind {
-            StoredRefreshKind::RateLimited => match trigger {
-                RefreshTrigger::Immediate | RefreshTrigger::Action | RefreshTrigger::RunEnded => {
-                    true
-                }
-                RefreshTrigger::Interval => state
-                    .retry_at_ms
-                    .is_some_and(|retry_at| self.now_ms >= retry_at),
-            },
-            StoredRefreshKind::AuthFailed => {
-                matches!(trigger, RefreshTrigger::Immediate | RefreshTrigger::Action)
-            }
-            _ => true,
+        match trigger {
+            RefreshTrigger::ProjectViewed => self.should_refresh_when_viewed(project_id),
+            RefreshTrigger::Immediate | RefreshTrigger::Action => true,
+            RefreshTrigger::Interval => self
+                .refresh
+                .get(project_id)
+                .map(|state| self.refresh_due(state))
+                .unwrap_or(true),
+            RefreshTrigger::RunEnded => self
+                .refresh
+                .get(project_id)
+                .map(|state| state.kind != StoredRefreshKind::AuthFailed)
+                .unwrap_or(true),
         }
     }
 
@@ -321,22 +352,7 @@ impl HostKernel {
         let Some(state) = self.refresh.get(project_id) else {
             return true;
         };
-        match state.kind {
-            StoredRefreshKind::RateLimited => state
-                .retry_at_ms
-                .is_some_and(|retry_at| self.now_ms >= retry_at),
-            StoredRefreshKind::AuthFailed => false,
-            StoredRefreshKind::Ready
-            | StoredRefreshKind::Offline
-            | StoredRefreshKind::Incomplete
-            | StoredRefreshKind::TrackerError
-            | StoredRefreshKind::NeverFetched => {
-                self.now_ms
-                    >= state
-                        .last_attempt_ms
-                        .saturating_add(self.refresh_interval_ms)
-            }
-        }
+        self.refresh_due(state)
     }
 
     pub(crate) fn project_watched(&self, project_id: &str) -> bool {
@@ -467,7 +483,7 @@ impl HostKernel {
             .map(|view| !view.visible || view.project_id != project_id)
             .unwrap_or(true);
         if changed {
-            self.refresh_project(project_id, RefreshTrigger::Immediate);
+            self.refresh_project(project_id, RefreshTrigger::ProjectViewed);
         }
     }
 

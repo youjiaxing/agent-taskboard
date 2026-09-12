@@ -120,7 +120,7 @@ fn refresh_emits_refreshing_then_a_terminal_status() {
 }
 
 #[test]
-fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
+fn opening_foreground_and_manual_refresh_pull_while_fresh_focus_reuses_cache() {
     let tmp = tempfile::tempdir().unwrap();
     let garden = make_dir(tmp.path(), "work/garden");
     let notes = make_dir(tmp.path(), "work/notes");
@@ -155,13 +155,13 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
         "projectId": garden_id,
     }))
     .unwrap();
-    assert_eq!(tracker.read_count("you/garden"), after_register_garden + 1);
+    assert_eq!(tracker.read_count("you/garden"), after_register_garden);
 
     host.handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
     host.handle(serde_json::json!({ "op": "showWindow" }))
         .unwrap();
-    assert_eq!(tracker.read_count("you/garden"), after_register_garden + 2);
+    assert_eq!(tracker.read_count("you/garden"), after_register_garden + 1);
 
     host.handle(serde_json::json!({
         "op": "refresh",
@@ -169,7 +169,7 @@ fn opening_focusing_foreground_and_manual_refresh_pull_immediately() {
     }))
     .unwrap();
     assert_eq!(tracker.read_count("you/notes"), after_register_notes + 1);
-    assert_eq!(tracker.read_count("you/garden"), after_register_garden + 2);
+    assert_eq!(tracker.read_count("you/garden"), after_register_garden + 1);
 }
 
 #[test]
@@ -461,6 +461,17 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
         .iter()
         .any(|card| card.id == "you/garden#1"));
     let after_limit = tracker.read_count("you/garden");
+    let project_id = host.snapshot().focused_project_id;
+    host.handle(serde_json::json!({
+        "op": "focusProject",
+        "projectId": project_id,
+    }))
+    .unwrap();
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        after_limit,
+        "Project focus must wait for retry-at instead of retrying a rate limit early"
+    );
     host.handle(serde_json::json!({
         "op": "tick",
         "nowMs": fetched + 60_000,
@@ -528,6 +539,22 @@ fn auth_failure_is_project_degraded_not_offline() {
         host_kernel::ProjectConnection::AuthFailed { .. }
     ));
     assert_eq!(frontier_ids(&host), vec!["you/garden#1"]);
+    let after_auth = tracker.read_count("you/garden");
+    let project_id = host.snapshot().focused_project_id;
+    host.handle(serde_json::json!({
+        "op": "focusProject",
+        "projectId": project_id,
+    }))
+    .unwrap();
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        after_auth,
+        "Project focus must wait for credential repair instead of retrying auth"
+    );
+    assert!(matches!(
+        refresh_status(&host),
+        RefreshStatus::AuthFailed { .. }
+    ));
     host.handle(serde_json::json!({
         "op": "claimIssue",
         "issueId": "you/garden#1",
@@ -542,6 +569,9 @@ fn auth_failure_is_project_degraded_not_offline() {
         .in_progress
         .iter()
         .any(|card| card.id == "you/garden#1"));
+    tracker.clear_read_script("you/garden");
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    assert!(matches!(refresh_status(&host), RefreshStatus::Ready { .. }));
 }
 
 #[test]
