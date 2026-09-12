@@ -31,7 +31,9 @@ jobs:
       - run: npx --prefix apps/desktop playwright install chromium
       - run: npm --prefix apps/desktop run verify:release
       - run: npm --prefix apps/desktop run build
-      - run: cargo test
+      # Browser journeys launch real Chromium processes and share constrained runner CPU.
+      # Keep the release gate deterministic instead of weakening interaction/timing assertions.
+      - run: cargo test -- --test-threads=1
 
   publish:
     name: ${{ matrix.name }}
