@@ -1,7 +1,7 @@
 import { completeDependencyGraphLabel, connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, ShellCopy, Snapshot, TriageRole } from "../protocol";
 import { currentProject, mobileClient } from "../view-helpers";
-import { editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
+import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
 import { panelIsFloating, panelWidth, workbenchIssuePanel } from "../workbench";
@@ -402,8 +402,8 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
-  const editOpen = ui.issueEditOpenId === issue.id;
-  const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issue.id));
+  const editOpen = ui.issueEditOpenIds.has(issueDraftKey(issue.id));
+  const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issueDraftKey(issue.id)));
   return `
     <header class="detail-sticky">
       <div class="detail-title-row">
@@ -460,7 +460,7 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
       }
       </section>
       ${canWrite
-        ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${ui.issueMaintenanceOpen.has(issue.id) ? "open" : ""}>
+        ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${ui.issueMaintenanceOpen.has(issueDraftKey(issue.id)) ? "open" : ""}>
             <summary>${escapeHtml(copy.issueUpdates)}</summary>
             ${issueCommentForm(copy, issue)}
             ${issueRelationsForm(copy, board, issue)}
@@ -526,7 +526,7 @@ export function issueCommentForm(copy: ShellCopy, issue: IssueDetail): string {
   return `<section class="detail-block issue-editor issue-comment-editor">
     <form data-act="issue-comment" data-form="issue-comment" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
       <h4>${escapeHtml(copy.addComment)}</h4>
-      <textarea name="body" rows="4" required maxlength="10000" placeholder="${escapeHtml(copy.commentPlaceholder)}" ${pending ? "disabled" : ""}>${escapeHtml(ui.issueCommentDrafts.get(issue.id) ?? "")}</textarea>
+      <textarea name="body" rows="4" required maxlength="10000" placeholder="${escapeHtml(copy.commentPlaceholder)}" ${pending ? "disabled" : ""}>${escapeHtml(ui.issueCommentDrafts.get(issueDraftKey(issue.id)) ?? "")}</textarea>
       ${formFeedback(key)}
       <div class="actions">
         <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.addComment)}</button>

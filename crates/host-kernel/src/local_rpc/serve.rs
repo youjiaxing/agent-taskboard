@@ -160,10 +160,11 @@ pub(super) fn serve_connection(
         let defer_refreshes = request_defers_refreshes(&value);
         let defer_issue_document = request_defers_issue_document(&value);
         let defer_issue_write = request_defers_issue_write(&value);
-        let (initial, refreshes, issue_documents, issue_writes) = {
+        let (initial, refreshes, issue_documents, issue_writes, remote_calls) = {
             let mut host = kernel
                 .lock()
                 .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+            host.begin_deferred_remote_calls(&value);
             if defer_refreshes {
                 host.begin_deferred_refreshes();
             }
@@ -174,6 +175,7 @@ pub(super) fn serve_connection(
                 host.begin_deferred_issue_writes();
             }
             let result = host.handle(value.clone());
+            let remote_calls = host.take_deferred_remote_calls();
             let refreshes = if defer_refreshes {
                 host.take_deferred_refreshes()
             } else {
@@ -193,10 +195,47 @@ pub(super) fn serve_connection(
                 host.cancel_prepared_refreshes(&refreshes);
                 host.cancel_prepared_issue_documents(&issue_documents);
             }
-            (result, refreshes, issue_documents, issue_writes)
+            (
+                result,
+                refreshes,
+                issue_documents,
+                issue_writes,
+                remote_calls,
+            )
         };
         match initial {
             Ok(mut outcome) => {
+                for call in remote_calls {
+                    let mut events = std::mem::take(&mut outcome.events);
+                    let (prepared, response) = call.execute();
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            let (status, body) = kernel_error_response(&error);
+                            write_json(&mut stream, status, response_origin, &body)?;
+                            return Ok(None);
+                        }
+                    };
+                    let mut host = kernel
+                        .lock()
+                        .map_err(|_| io::Error::other("kernel lock poisoned"))?;
+                    let applied = host
+                        .finish_remote_call(prepared, &response)
+                        .map_err(|error| io::Error::other(error.to_string()))?;
+                    outcome = host.handle(serde_json::json!({
+                        "op": "snapshot", "clientInstanceId": value.get("clientInstanceId").and_then(|value| value.as_str()).unwrap_or_default(),
+                    })).map_err(|error| io::Error::other(error.to_string()))?;
+                    events.append(&mut outcome.events);
+                    outcome.events = events;
+                    if applied {
+                        if let Some(inference) = response.get("inference").cloned() {
+                            outcome.inference = serde_json::from_value(inference).ok();
+                        }
+                        if let Some(view) = response.get("viewChanges").cloned() {
+                            outcome.view_changes = serde_json::from_value(view).ok();
+                        }
+                    }
+                }
                 if background_refreshes && !refreshes.is_empty() {
                     let body = serde_json::to_string(&outcome.to_json())?;
                     write_json(&mut stream, 200, response_origin, &body)?;

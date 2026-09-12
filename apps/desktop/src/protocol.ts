@@ -401,6 +401,7 @@ export class RpcHttpError extends Error {
 }
 
 export type FormKey =
+  | "pairing"
   | `issue-search:${string}`
   | `issue-create:${string}`
   | `issue-edit:${string}`

@@ -28,7 +28,12 @@ await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
 const sheet = page.locator(".launch-sheet");
-const sheetBox = await sheet.boundingBox();
+// A preview response can replace the sheet between locating it and reading layout.
+// Read attached geometry in one browser task, retaining the actual width assertion.
+const sheetBox = await page.waitForFunction(() => {
+  const rect = document.querySelector(".launch-sheet")?.getBoundingClientRect();
+  return rect?.width ? { width: rect.width, height: rect.height } : null;
+}, undefined, { timeout: 2000 }).then((handle) => handle.jsonValue());
 if (!sheetBox || sheetBox.width < 700) {
   throw new Error(`launch sheet is too narrow: ${sheetBox?.width}`);
 }

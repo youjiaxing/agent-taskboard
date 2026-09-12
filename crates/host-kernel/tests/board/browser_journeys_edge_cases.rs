@@ -1,6 +1,62 @@
 use super::*;
 
 #[test]
+fn browser_keeps_same_issue_drafts_separate_between_projects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/shared", 1, "shared issue"));
+    tracker.set_issue_body("you/shared#1", "original body");
+    let mut host = boot_seam(tmp.path(), tracker);
+    let first = register(
+        &mut host,
+        "first",
+        &make_dir(tmp.path(), "work/first"),
+        "you/shared",
+    );
+    let second = register(
+        &mut host,
+        "second",
+        &make_dir(tmp.path(), "work/second"),
+        "you/shared",
+    );
+    run_browser_e2e(
+        host,
+        "issue-draft-isolation.mjs",
+        &[
+            ("FIRST_PROJECT_ID", Path::new(&first)),
+            ("SECOND_PROJECT_ID", Path::new(&second)),
+        ],
+    );
+}
+
+#[test]
+fn browser_pairing_forms_dedupe_preserve_drafts_and_retry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = boot(tmp.path(), Arc::new(MemoryTracker::new()));
+    let offer = host
+        .handle(
+            serde_json::json!({ "op": "beginPairingOffer", "address": "http://127.0.0.1:10529" }),
+        )
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "redeemPairing", "code": offer.code, "clientName": "fixture client" })).unwrap();
+    let remote_tmp = tempfile::tempdir().unwrap();
+    let remote = Arc::new(Mutex::new(boot(
+        remote_tmp.path(),
+        Arc::new(MemoryTracker::new()),
+    )));
+    let remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
+    let offer = remote.lock().unwrap().handle(serde_json::json!({ "op": "beginPairingOffer", "address": remote_server.protocol_url() })).unwrap().snapshot.pairing_offer.unwrap();
+    run_browser_e2e(
+        host,
+        "pairing-resilience.mjs",
+        &[("PAIRING_PAYLOAD", Path::new(&offer.text))],
+    );
+}
+
+#[test]
 fn browser_supplements_issue_115_launch_form_behavior() {
     let tmp = tempfile::tempdir().unwrap();
     let project = make_dir(tmp.path(), "work/issue-115-ui");

@@ -112,7 +112,7 @@ export const ui = {
   createIssueOpen: false,
   createIssueProjectId: "",
   createIssueDraft: { title: "", body: "" },
-  issueEditOpenId: null as string | null,
+  issueEditOpenIds: new Set<string>(),
   issueEditDrafts: new Map<string, IssueContentDraft>(),
   issueCommentDrafts: new Map<string, string>(),
   terminalInputDrafts: new Map<string, string>(),

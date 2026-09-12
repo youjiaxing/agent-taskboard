@@ -1,6 +1,161 @@
 use super::*;
 
 #[test]
+fn slow_remote_refresh_does_not_block_local_clients_or_restore_a_previous_host() {
+    let remote_tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/remote", 1, "remote issue"));
+    let mut remote = boot_seam(remote_tmp.path(), Arc::clone(&tracker));
+    let remote_project = register(
+        &mut remote,
+        "remote",
+        &make_dir(remote_tmp.path(), "work"),
+        "you/remote",
+    );
+    let remote = Arc::new(Mutex::new(remote));
+    let remote_server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&remote),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let offer = remote.lock().unwrap().handle(serde_json::json!({ "op": "beginPairingOffer", "address": remote_server.protocol_url() })).unwrap().snapshot.pairing_offer.unwrap();
+
+    let local_tmp = tempfile::tempdir().unwrap();
+    let mut local = boot(local_tmp.path(), Arc::new(MemoryTracker::new()));
+    let local_project = register(
+        &mut local,
+        "local project",
+        &make_dir(local_tmp.path(), "work"),
+        "you/local",
+    );
+    local.handle(serde_json::json!({ "op": "pairRemoteHost", "address": remote_server.protocol_url(), "code": offer.code })).unwrap();
+    let remote_id = local
+        .snapshot()
+        .hosts
+        .iter()
+        .find(|host| !host.local)
+        .unwrap()
+        .id
+        .clone();
+    let local = Arc::new(Mutex::new(local));
+    let server = LoopbackServer::attach_without_host_tick(
+        local,
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let protocol = server.protocol_url().to_string();
+    post_rpc(
+        &protocol,
+        serde_json::json!({ "op": "focusHost", "hostId": remote_id, "clientInstanceId": "browser" }),
+    );
+    post_rpc(
+        &protocol,
+        serde_json::json!({ "op": "focusHost", "hostId": "local", "clientInstanceId": "desktop" }),
+    );
+    let baseline = tracker.read_start_count("you/remote");
+    tracker.set_read_delay_ms(1000);
+    let refreshing = std::thread::spawn({
+        let protocol = protocol.clone();
+        move || {
+            post_rpc(
+                &protocol,
+                serde_json::json!({ "op": "refresh", "projectId": remote_project, "clientInstanceId": "browser" }),
+            )
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while tracker.read_start_count("you/remote") == baseline {
+        assert!(Instant::now() < deadline, "remote refresh did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let started = Instant::now();
+    let snapshot = post_rpc(
+        &protocol,
+        serde_json::json!({ "op": "snapshot", "clientInstanceId": "desktop" }),
+    );
+    let latency = started.elapsed();
+    post_rpc(
+        &protocol,
+        serde_json::json!({ "op": "focusHost", "hostId": "local", "clientInstanceId": "browser" }),
+    );
+    let completed = refreshing.join().unwrap();
+    assert!(
+        latency < Duration::from_millis(250),
+        "local Snapshot waited for remote Tracker: {latency:?}"
+    );
+    assert_eq!(snapshot["snapshot"]["focusedProjectId"], local_project);
+    assert_eq!(
+        completed["snapshot"]["focusedHostId"], "local",
+        "the earlier remote response must respect the newer Host selection"
+    );
+}
+
+#[test]
+fn older_issue_document_cannot_undo_a_successful_issue_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "original title"));
+    tracker.set_issue_body("you/garden#1", "original body");
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    register(&mut kernel, "garden", &dir, "you/garden");
+    let kernel = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_without_host_tick(
+        Arc::clone(&kernel),
+        0,
+        host_kernel::LoopbackAssets::Builtin,
+        |_| {},
+    )
+    .unwrap();
+    let protocol = server.protocol_url().to_string();
+    post_rpc(
+        &protocol,
+        serde_json::json!({ "op": "focusIssue", "issueId": "you/garden#1" }),
+    );
+
+    for write in [
+        serde_json::json!({ "op": "setIssueOpen", "issueId": "you/garden#1", "open": false }),
+        serde_json::json!({ "op": "updateIssue", "issueId": "you/garden#1", "title": "new title", "body": "new body" }),
+    ] {
+        let (captured, release) = tracker.hold_next_document_response();
+        let loading = std::thread::spawn({
+            let protocol = protocol.clone();
+            move || {
+                post_rpc(
+                    &protocol,
+                    serde_json::json!({ "op": "loadIssueDocument", "issueId": "you/garden#1" }),
+                )
+            }
+        });
+        captured.recv_timeout(Duration::from_secs(5)).unwrap();
+        let written = post_rpc(&protocol, write);
+        release.send(()).unwrap();
+        loading.join().unwrap();
+        let final_state = post_rpc(&protocol, serde_json::json!({ "op": "snapshot" }));
+        let selected = &final_state["snapshot"]["board"]["selected"];
+        assert_eq!(
+            selected["open"], false,
+            "an old document must not reopen the Issue"
+        );
+        assert_eq!(
+            selected["title"],
+            written["snapshot"]["board"]["selected"]["title"]
+        );
+        assert_ne!(
+            selected["document"]["kind"], "loading",
+            "a discarded read must not leave the document stuck loading"
+        );
+        if selected["title"] == "new title" {
+            assert_eq!(selected["document"]["body"], "new body");
+        }
+    }
+}
+
+#[test]
 fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

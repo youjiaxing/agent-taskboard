@@ -9,6 +9,7 @@ import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
 import { panelUiText, refreshPanelSizeFeedback } from "../workbench";
 import { ui } from "../ui";
+import { formFeedback } from "../form-keys";
 
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
@@ -292,6 +293,7 @@ export function render(): void {
             <div class="sheet pairing-sheet" data-act="pairing-noop">
               <h2>${escapeHtml(copy.pairingTitle)}</h2>
               <p class="hint">${escapeHtml(copy.pairingSamePayload)}</p>
+              <fieldset class="pairing-fields" ${ui.formOperations.pending.has("pairing") ? 'disabled aria-busy="true"' : ""}>
               <div class="field">
                 <div class="label">${escapeHtml(copy.pairingThisHost)}</div>
                 <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
@@ -329,6 +331,9 @@ export function render(): void {
                   <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
                 </div>
               </div>
+              </fieldset>
+              ${ui.formOperations.pending.has("pairing") ? `<p role="status">${escapeHtml(copy.operationPending)}</p>` : ""}
+              ${formFeedback("pairing")}
               ${ui.pairingError ? `<p class="notice">${escapeHtml(ui.pairingError)}</p>` : ""}
             </div>
           </div>`

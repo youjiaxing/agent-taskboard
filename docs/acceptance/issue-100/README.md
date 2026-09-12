@@ -1,12 +1,14 @@
 # Issue #100 核心用户路径验收
 
-验收日期：2026-08-31。
+验收日期：2026-09-12；本轮从 `8eac70b` 继续验证并修复。
 
 ## 结论
 
-自动化结果：**PASS**。九条 Required user task 都有从产品入口出发、通过真实 `HostKernel` loopback 与 Playwright 驱动的场景；断言最终可见结果和 Tracker 认领 / Run / Project 等关键副作用。2026-08-28 真人验收提出的四项缺陷也已补回归覆盖并修复。
+自动化结果：**PASS**。九条 Required user task 都有从产品入口出发、通过真实 `HostKernel` loopback 与 Playwright 驱动的场景；断言最终可见结果和 Tracker 认领 / Run / Project 等关键副作用。2026-08-28 真人验收反馈的回归持续执行；本轮另复现并修复了旧正文响应覆盖写入、同名 Issue 草稿与写入目标串用、配对重复提交和远端刷新占用本地锁。
 
 Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟脚本，在真实产品壳和真实 GitHub Project 上完成一次连续任务并明确接受。在此之前 Issue #100 与 PR 保持 OPEN，不把 fixture 或逻辑测试升级成提出者验收。
+
+本轮验证：`cargo test --workspace --all-targets` **356 项独立测试通过，0 失败**（含 37 项 Board 浏览器测试；日志另含一个测试子进程的重复结果）。Client build、workspace/all-targets check、release contract 和 diff check 均通过。Standards review 无剩余问题；Spec review 的代码问题已修复，提出者验收仍为 BLOCKED。详见[执行记录](validation-2026-09-12.txt)。
 
 ## Required user task 结果
 
@@ -35,10 +37,21 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 
 | 真人反馈 | 结果 | 修复与回归证据 |
 | --- | --- | --- |
-| 浏览器操作会同步改变桌面 App 当前界面 | PASS | Client 以独立 ID 在本地持有 Host / Project / Issue / Run、看板/依赖图、搜索、父过滤和图模式；每次 RPC 冻结调用当下的 `clientView`。`multi-client-navigation.mjs` 用两个独立浏览器 Client 选择不同 Issue，跨多个 tick 后互不抢焦点；本机与远程 Host Snapshot 都按显式 Client 视图生成。不完整读取会合并保留上次已知 Issue，只有后续成功完整刷新确认 Issue 不存在时，当前 Client 才清理自己的悬空选择。 |
+| 浏览器操作会同步改变桌面 App 当前界面 | PASS | Client 以独立 `clientInstanceId` 调用 Host；Host 按该 ID 分别保存导航。`client-isolation-refresh.mjs` 由 Rust 测试真实执行，使用桌面尺寸、电脑浏览器和 390×844 三个 Client，分别选择不同 Project / Issue，在慢刷新、切换视图和编辑表单后仍互不抢焦点。不完整读取会合并保留上次已知 Issue，只有后续成功完整刷新确认 Issue 不存在时，当前 Client 才清理自己的悬空选择。 |
 | 依赖图只看到一张 Issue | PASS | 顶栏直达进入最多 200 张 open Issue 的概览；Dependency 参与者优先保留，超限显示总数、展示数与截断提示。点击节点进入一跳上下游，可展开完整闭包；看板卡片有「查看依赖」，单 Issue 模式有「返回依赖概览」，无 Dependency 有明确说明。节点每 50ms 原地追加一批，不重建 toolbar 与 canvas。 |
-| 看板 / 依赖图切换延迟数秒 | PASS | Client 导航只发 Snapshot，不触发 Tracker 刷新；刷新、tick 和正文读取在 Host 短锁内创建任务，Tracker 读取在线程中执行，完成后再短锁应用。阻塞 Tracker 时，第二个 Snapshot 的自动化硬门为 250ms；图首批绘制 48 节点，其余每 50ms 自动补齐。 |
+| 看板 / 依赖图切换延迟数秒 | PASS | Client 导航只发 Snapshot，不触发 Tracker 刷新；刷新、tick 和正文读取在 Host 短锁内创建任务，Tracker 读取在线程中执行，完成后再短锁应用。正文慢读时切票、慢写时导航，以及本轮远端慢刷新时本地 Snapshot 的 RPC 硬门为 250ms；图首批绘制 48 节点，其余每 50ms 自动补齐。 |
 | Issue 详情松开鼠标后回到顶部 | PASS | 仅倒计时变化的 tick 跳过全量 DOM 重建；确需重绘时按同一 Issue 恢复 `.detail-scroll`，并按稳定字段定位恢复 Terminal、Usage、搜索与设置表单的焦点、选区和输入内滚动。E2E 将详情滚到 240px，按住鼠标跨两个 tick，松开后仍保持 240px；另强制业务 snapshot 重绘并断言 Usage 时间输入仍聚焦。 |
+
+## 2026-09-12 复核与修复
+
+| 复现的问题 | 本轮结果与可运行证据 |
+| --- | --- |
+| 先读正文、后成功写入，旧响应最后返回会重新打开 Issue 或覆盖新标题/正文 | PASS：`refresh::documents::older_issue_document_cannot_undo_a_successful_issue_write` 在旧代码上断言失败，修复后通过；旧读不能覆盖成功写入，正文不会卡在 loading。 |
+| 两个 Project 中同一个 `owner/repo#number` 串用编辑/评论草稿，且写入可能落到另一 Project | PASS：`issue-draft-isolation.mjs` 从侧栏和 Issue 入口复现，现按 Host / Project / Issue 保存草稿、编辑展开状态和提交反馈；返回原 Project 恢复原草稿，关闭 Issue 也只更新目标 Project。 |
+| 配对生成、撤销和连接可重复点击，失败时无提交状态 | PASS：`pairing-resilience.mjs` 对三个入口逐个延迟首次请求并返回 503，检查整表禁用、一次 RPC、原草稿和错误；显式重试后验证真实 fixture Host 的成功响应。 |
+| 远端 Tracker 慢刷新拖住本地 Host 的所有 RPC | PASS：两个 loopback Host 与延迟 Tracker 复现修复前本地 Snapshot 等待约 1 秒；修复后通过 250ms 门槛。刷新途中切回本地，旧响应不恢复上一 Host。 |
+
+以上新增用例均在 fixture 边界内，不是新一轮提出者验收，也没有执行真实 GitHub 写入。旧 `multi-client-navigation.mjs` 已被执行中的 `client-isolation-refresh.mjs` 替代；删除了失效场景和旧命令引用。
 
 ## 截图
 
@@ -50,12 +63,14 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 - [Terminal 与完整 Issue 保持同一身份](issue-100-terminal-and-issue-1280x840.png)
 - [运行中查看真实工作树改动](issue-100-view-changes-1280x840.png)
 - [Run 结束不伪装成 Issue 完成](issue-100-run-ended-issue-open-1280x840.png)
-- [390×844 手机票页](../../../apps/desktop/e2e/baselines/issue-99-mobile-390x844.png)
+- [本轮 390×844 手机票页](issue-100-mobile-390x844.png)
+- [配对失败保留草稿和显式重试](issue-100-pairing-retry-1280x840.png)
+- [同名 Issue 在两个 Project 中分别保留草稿](issue-100-draft-isolation-1280x840.png)
 
 ## 真实 / fixture 边界
 
-- 自动化使用真实产品 `dist`、真实 Client 代码、真实 `HostKernel`、loopback HTTP/RPC、真实 PTY 合同与真实 git 工作树读取。
-- Tracker 使用 `MemoryTracker` / `SeamTracker` fixture；只验证 Taskboard 的认领 / 释放认领写边界，不把它称为真实 GitHub 写操作证据。
+- 自动化使用真实产品 `dist`、真实 Client 代码、真实 `HostKernel`、loopback HTTP/RPC、PTY 合同（浏览器场景使用 MemorySession fixture）与真实 git 工作树读取。
+- Tracker 使用 `MemoryTracker` / `SeamTracker` fixture；Run 场景验证认领 / 释放认领。人工 Issue 编辑与开关票回归使用 #111 / ADR 0019 已有入口，不增加 Tracker 写能力，也不作为真实 GitHub 写操作证据。
 - Playwright 同一套 Client 代码覆盖桌面浏览器与 390×844 手机；Tauri 系统目录选择、系统通知、自启和 updater 仍属于真实平台边界。
 - 截图中的仓库、Issue 和 Run 为 deterministic fixture，不代表真实 GitHub #100 已被认领或关闭。
 - 250ms 响应门使用阻塞 `TrackerSeam` fixture，证明慢 Tracker 读取不会占住 Host Snapshot 锁；不把该 fixture 称为真实 GitHub 网络延迟数据。
@@ -63,7 +78,7 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 
 ## #90 壳层 PARTIAL 重新判定
 
-| #90 项 | 2026-08-29 判定 | 当前证据 |
+| #90 项 | 2026-09-12 判定 | 本轮重新执行的证据 |
 | --- | --- | --- |
 | #5 系统自启 | BLOCKED | 设置壳与 Host mode 合同存在；真实登录后自启必须由 macOS/Windows 平台验收，且 #100 明确不做安装/自启。 |
 | #20 桌面 Project 行尾编辑/移除 | PASS | `project-management.mjs` 从已有 Project 的侧栏新增 Project，并从行尾菜单完成编辑、活跃 Run 阻止、执行已停警告、移除与回退。 |
@@ -84,8 +99,8 @@ Completion gate：**BLOCKED**。仍需提出者按本文最后的 ≤15 分钟�
 npm --prefix apps/desktop run build
 cargo test -p host-kernel --test board -- --nocapture
 cargo test -p host-kernel --test refresh --test host_kernel -- --nocapture
+cargo check --workspace --all-targets
 cargo test --workspace --all-targets
-cargo test --workspace --all-targets -- --test-threads=1
 npm --prefix apps/desktop run verify:release
 ```
 
@@ -99,10 +114,13 @@ cargo test -p host-kernel --test board browser_explains_why_an_agent_is_unavaila
 cargo test -p host-kernel --test board browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions -- --nocapture
 cargo test -p host-kernel --test board browser_recovers_when_a_bound_pty_disconnects_mid_journey -- --nocapture
 cargo test -p host-kernel --test bound_runs pty_disconnect_is_execution_stopped_and_can_continue -- --nocapture
-cargo test -p host-kernel --test board browser_clients_keep_independent_issue_navigation -- --nocapture
-cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_tracker_refresh_is_blocked -- --nocapture
-cargo test -p host-kernel --test refresh loopback_snapshot_stays_responsive_while_issue_document_load_is_blocked -- --nocapture
-cargo test -p host-kernel --test refresh autonomous_host_tick_does_not_follow_a_persisted_remote_focus -- --nocapture
+cargo test -p host-kernel --test board browser_clients_keep_navigation_and_forms_responsive_during_a_slow_tracker_read -- --nocapture
+cargo test -p host-kernel --test board browser_keeps_same_issue_drafts_separate_between_projects -- --nocapture
+cargo test -p host-kernel --test board browser_pairing_forms_dedupe_preserve_drafts_and_retry -- --nocapture
+cargo test -p host-kernel --test refresh slow_refresh_does_not_hold_the_kernel_lock_against_other_client_rpc -- --nocapture
+cargo test -p host-kernel --test refresh slow_issue_document_read_does_not_block_switching_to_another_issue -- --nocapture
+cargo test -p host-kernel --test refresh slow_remote_refresh_does_not_block_local_clients_or_restore_a_previous_host -- --nocapture
+cargo test -p host-kernel --test refresh older_issue_document_cannot_undo_a_successful_issue_write -- --nocapture
 cargo test -p host-kernel --test tracker_seam incomplete_refresh_keeps_a_missing_selection_until_a_complete_read_confirms_deletion -- --nocapture
 cargo test -p host-kernel --test host_kernel remote_host_snapshots_honor_each_clients_explicit_issue_navigation -- --nocapture
 cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_port_without_disabling_the_client -- --nocapture
@@ -110,12 +128,16 @@ cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_por
 
 ## 提出者 ≤15 分钟真实验收脚本
 
-1. 在本分支运行 `npm --prefix apps/desktop run tauri -- dev`，打开真实产品壳；不要使用一次性原型或已安装旧版本。
+构建完成后预计 10–15 分钟；首次构建等待不计入操作时间。
+
+2026-09-12 准备状态：本分支开发版已启动，浏览器 Client 的 `http://127.0.0.1:10529/` 已从侧栏进入真实 `agent-taskboard` Project 并显示 #100 完整正文。这只计只读 smoke；#100 当前是「执行已停、已认领」，尚未执行本轮真实 Run / GitHub 写入验收。
+
+1. 在本分支运行 `npm run dev`，打开真实产品壳；不要使用一次性原型或已安装旧版本。
 2. 若 Host 为空，登记本仓 Project；否则选择本仓。选择目录后检查推断候选和手工值，点击确认后才采纳候选，然后等到真实 GitHub Issue 出现或看到明确可重试错误。
-3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮自动刷新，确认两边不会互相抢 Project、Issue、Run 或视图焦点。
+3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮界面轮询（约 2–3 秒），确认两边不会互相抢 Project、Issue、Run 或视图焦点。
 4. 在任一 Client 顶栏直接打开依赖图，确认先看到未关闭 Issue 概览；点击 Issue 进入其 Dependency 上下游，再用「返回依赖概览」退出。回看板后通过卡片「查看依赖」再次进入单 Issue 模式。
-5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两个刷新倒计时后松开，确认滚动位置不跳顶。
-6. 点击「执行」，查看 Agent、model / effort 可选项、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写一条可安全停止的指令后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
+5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两次秒级倒计时更新后松开，确认滚动位置不跳顶。
+6. 若 #100 仍显示上次「执行已停、已认领」，先从详情「释放认领」回到 Frontier（这会移除真实 GitHub 上的当前认领）。点击「执行」，查看 Agent、model / effort 可选项、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写「只读当前目录并报告仓库名称，然后等待；不要修改文件、提交或操作 Tracker」后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
 7. 进入 Terminal，确认右侧仍是 Issue #100；向 Run 注入一行；打开「查看改动」，然后停止 Run 或返回看板。
 8. 确认 Run 停止没有把 Issue #100 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
 9. 在本 PR 留言明确 `ACCEPTED` 或列出失败步骤、截图和期望。只有明确接受后才 merge PR 并由 `Closes #100` 关闭 Issue。

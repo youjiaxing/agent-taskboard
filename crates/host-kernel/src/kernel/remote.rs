@@ -1,5 +1,108 @@
 use super::super::*;
 
+pub(crate) struct RemoteCallBatch {
+    client_id: String,
+    calls: Vec<PreparedRemoteCall>,
+}
+
+pub(crate) struct PreparedRemoteCall {
+    remote: pairing::RemoteHost,
+    request: serde_json::Value,
+    client_id: String,
+    generation: u64,
+}
+
+impl PreparedRemoteCall {
+    pub(crate) fn execute(self) -> (Self, Result<serde_json::Value, KernelError>) {
+        let result = pairing::post_rpc(
+            &self.remote.address,
+            Some(&self.remote.token),
+            &self.request,
+        );
+        (self, result)
+    }
+}
+
+impl HostKernel {
+    pub(crate) fn begin_deferred_remote_calls(&mut self, request: &serde_json::Value) {
+        debug_assert!(self.deferred_remote_calls.is_none());
+        self.deferred_remote_calls = Some(RemoteCallBatch {
+            client_id: request
+                .get("clientInstanceId")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            calls: Vec::new(),
+        });
+    }
+
+    pub(crate) fn take_deferred_remote_calls(&mut self) -> Vec<PreparedRemoteCall> {
+        self.deferred_remote_calls
+            .take()
+            .map(|batch| batch.calls)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn defer_remote_call(
+        &mut self,
+        remote: &pairing::RemoteHost,
+        request: &serde_json::Value,
+    ) -> bool {
+        let Some(batch) = self.deferred_remote_calls.as_mut() else {
+            return false;
+        };
+        let mut request = request.clone();
+        if !batch.client_id.is_empty() {
+            request["clientInstanceId"] = serde_json::Value::String(batch.client_id.clone());
+        }
+        self.next_remote_call_generation = self.next_remote_call_generation.saturating_add(1);
+        let generation = self.next_remote_call_generation;
+        self.remote_call_generations
+            .insert((batch.client_id.clone(), remote.id.clone()), generation);
+        batch.calls.push(PreparedRemoteCall {
+            remote: remote.clone(),
+            request,
+            client_id: batch.client_id.clone(),
+            generation,
+        });
+        true
+    }
+
+    pub(crate) fn finish_remote_call(
+        &mut self,
+        prepared: PreparedRemoteCall,
+        response: &serde_json::Value,
+    ) -> Result<bool, KernelError> {
+        let key = (prepared.client_id.clone(), prepared.remote.id.clone());
+        if self.remote_call_generations.get(&key) != Some(&prepared.generation) {
+            return Ok(false);
+        }
+        self.remote_call_generations.remove(&key);
+        if prepared.client_id.is_empty() {
+            if self.focused_host_id != prepared.remote.id {
+                return Ok(false);
+            }
+            self.apply_remote_view(&prepared.remote.id, response)?;
+            return Ok(true);
+        }
+        let Some(current) = self.client_navigation.get(&prepared.client_id).cloned() else {
+            return Ok(false);
+        };
+        if current.focused_host_id != prepared.remote.id {
+            return Ok(false);
+        }
+        let previous = self.capture_client_navigation();
+        self.apply_client_navigation(current);
+        let result = self.apply_remote_view(&prepared.remote.id, response);
+        if result.is_ok() {
+            self.client_navigation
+                .insert(prepared.client_id, self.capture_client_navigation());
+        }
+        self.apply_client_navigation(previous);
+        result.map(|_| true)
+    }
+}
+
 impl HostKernel {
     pub(crate) fn capture_client_navigation(&self) -> ClientNavigationState {
         ClientNavigationState {
@@ -137,6 +240,13 @@ impl HostKernel {
             self.remote_view = None;
             return Ok(());
         }
+        if self
+            .remote_view
+            .as_ref()
+            .is_some_and(|view| view.host_id != host_id)
+        {
+            self.remote_view = None;
+        }
         let remote = self
             .remote_hosts
             .iter()
@@ -146,6 +256,9 @@ impl HostKernel {
         let mut request = serde_json::json!({ "op": "snapshot" });
         if let Some(client_instance_id) = client_instance_id {
             request["clientInstanceId"] = serde_json::Value::String(client_instance_id.into());
+        }
+        if self.defer_remote_call(&remote, &request) {
+            return Ok(());
         }
         let response =
             pairing::post_rpc(&remote.address, Some(&remote.token), &request).map_err(|err| {

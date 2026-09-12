@@ -109,3 +109,4 @@
 }
 
 .pairing-sheet textarea { resize: vertical; min-height: 88px; }
+.pairing-fields { border: 0; margin: 0; padding: 0; min-width: 0; }

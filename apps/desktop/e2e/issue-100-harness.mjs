@@ -12,7 +12,7 @@ export async function openIssue100Browser({ screenshotDir = process.env.ISSUE_10
   const page = await context.newPage();
   if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
   const capture = async (name) => {
-    if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false });
+    if (screenshotDir) await page.screenshot({ path: join(screenshotDir, name), fullPage: false, animations: "disabled", caret: "hide" });
   };
 
   await installDeterministicHostProtocol(page, url);

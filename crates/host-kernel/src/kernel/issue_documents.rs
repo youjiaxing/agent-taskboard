@@ -14,6 +14,7 @@ pub(crate) struct PreparedIssueDocument {
     previous_body: Option<(String, u64)>,
     now_ms: u64,
     pub(crate) generation: u64,
+    write_generation: u64,
 }
 
 pub(crate) struct CompletedIssueDocument {
@@ -106,6 +107,11 @@ impl HostKernel {
         self.issue_document_in_flight
             .insert((project_id.clone(), issue_id.to_string()), generation);
         let pat = read_github_pat(&self.data.host_secrets_path, &project.github_host);
+        let write_generation = self
+            .issue_write_generations
+            .get(&project_id)
+            .copied()
+            .unwrap_or(0);
         Ok(PreparedIssueDocument {
             tracker: Arc::clone(&self.tracker),
             project_id,
@@ -118,6 +124,7 @@ impl HostKernel {
             previous_body,
             now_ms: self.now_ms,
             generation,
+            write_generation,
         })
     }
 
@@ -147,9 +154,31 @@ impl HostKernel {
             return false;
         }
         self.issue_document_in_flight.remove(&key);
+        let writes_changed = self
+            .issue_write_generations
+            .get(&prepared.project_id)
+            .copied()
+            .unwrap_or(0)
+            != prepared.write_generation;
+        // A successful content write already supplies the newer body. Do not replace it
+        // with a document response (or read failure) that began before the write.
+        if writes_changed
+            && matches!(
+                self.issue_documents
+                    .get(&prepared.project_id)
+                    .and_then(|documents| documents.get(&prepared.issue_id)),
+                Some(IssueDocumentState::Ready { .. })
+            )
+        {
+            return false;
+        }
         let state = match result {
             Ok(document) => {
-                if let Some(issues) = self.loaded_issues.get_mut(&prepared.project_id) {
+                if let Some(issues) = self
+                    .loaded_issues
+                    .get_mut(&prepared.project_id)
+                    .filter(|_| !writes_changed)
+                {
                     if let Some(existing) = issues
                         .iter_mut()
                         .find(|issue| issue.id() == prepared.issue_id)
@@ -395,6 +424,30 @@ impl HostKernel {
             .entry(prepared.project_id.clone())
             .or_default();
         *generation = generation.saturating_add(1);
+        if let tracker_seam::TrackerWriteOp::UpdateIssue { body, .. } = &prepared.op {
+            // Keep the confirmed editable body while any older read is still in flight.
+            // Local Markdown contains tracker-owned headers and must be read back.
+            if prepared.tracker_kind != TrackerKind::LocalMarkdown {
+                self.issue_documents
+                    .entry(prepared.project_id.clone())
+                    .or_default()
+                    .insert(
+                        updated.id(),
+                        IssueDocumentState::Ready {
+                            body: body.clone(),
+                            editable_body: Some(body.clone()),
+                            fetched_at_ms: self.now_ms,
+                        },
+                    );
+            } else {
+                self.issue_document_in_flight
+                    .remove(&(prepared.project_id.clone(), updated.id()));
+                self.issue_documents
+                    .entry(prepared.project_id.clone())
+                    .or_default()
+                    .insert(updated.id(), IssueDocumentState::Unloaded);
+            }
+        }
         self.merge_issue(&prepared.project_id, updated, &prepared.op);
         Ok(returned)
     }

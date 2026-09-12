@@ -2,9 +2,10 @@ use super::super::*;
 
 impl HostKernel {
     pub(crate) fn issue_by_id(&self, issue_id: &str) -> Option<IssueRecord> {
+        let project_id = self.project_id_for_issue(issue_id).ok()?;
         self.loaded_issues
-            .values()
-            .flat_map(|issues| issues.iter())
+            .get(&project_id)?
+            .iter()
             .find(|issue| issue.id() == issue_id)
             .cloned()
     }
@@ -230,7 +231,13 @@ impl HostKernel {
             github_host: project.github_host,
             repository: project.repository,
             tracker_kind: project.tracker,
-            current_issue: issue_id.and_then(|id| self.issue_by_id(id)),
+            current_issue: issue_id.and_then(|id| {
+                self.loaded_issues
+                    .get(project_id)?
+                    .iter()
+                    .find(|issue| issue.id() == id)
+                    .cloned()
+            }),
             expectation,
             overwrite_conflict,
             secrets_pat: pat,
@@ -316,14 +323,32 @@ impl HostKernel {
 
     /// 记录一次成功读取（完整或不完整）的结果并持久化快照。
     pub(crate) fn project_id_for_issue(&self, issue_id: &str) -> Result<String, KernelError> {
-        self.loaded_issues
+        if let Some(project_id) = &self.focused_project_id {
+            if self
+                .loaded_issues
+                .get(project_id)
+                .is_some_and(|issues| issues.iter().any(|issue| issue.id() == issue_id))
+            {
+                return Ok(project_id.clone());
+            }
+        }
+        let mut matches = self
+            .loaded_issues
             .iter()
-            .find_map(|(project_id, issues)| {
+            .filter_map(|(project_id, issues)| {
                 issues
                     .iter()
                     .any(|issue| issue.id() == issue_id)
                     .then(|| project_id.clone())
-            })
-            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))
+            });
+        let project_id = matches
+            .next()
+            .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
+        if matches.next().is_some() {
+            return Err(KernelError::Protocol(
+                "select the Project before operating on this Issue".into(),
+            ));
+        }
+        Ok(project_id)
     }
 }

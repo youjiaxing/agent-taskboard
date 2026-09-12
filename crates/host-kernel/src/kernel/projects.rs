@@ -50,6 +50,9 @@ impl HostKernel {
             .find(|host| host.id == self.focused_host_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown host".into()))?;
+        if self.defer_remote_call(&remote, request) {
+            return Ok(Some(self.outcome()));
+        }
         let response =
             pairing::post_rpc(&remote.address, Some(&remote.token), request).map_err(|err| {
                 match err {

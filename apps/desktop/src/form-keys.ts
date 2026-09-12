@@ -3,28 +3,32 @@ import { escapeHtml } from "./client-utils";
 import { render } from "./render/app";
 import { ui } from "./ui";
 
+export function issueDraftKey(issueId: string): string {
+  return JSON.stringify([ui.snapshot?.focusedHostId, ui.snapshot?.focusedProjectId, issueId]);
+}
+
 export function issueCreateFormKey(projectId: string): FormKey {
   return `issue-create:${projectId}`;
 }
 
 export function issueEditFormKey(issueId: string): FormKey {
-  return `issue-edit:${issueId}`;
+  return `issue-edit:${issueDraftKey(issueId)}`;
 }
 
 export function issueCommentFormKey(issueId: string): FormKey {
-  return `issue-comment:${issueId}`;
+  return `issue-comment:${issueDraftKey(issueId)}`;
 }
 
 export function issueParentFormKey(issueId: string): FormKey {
-  return `issue-parent:${issueId}`;
+  return `issue-parent:${issueDraftKey(issueId)}`;
 }
 
 export function issueBlockersFormKey(issueId: string): FormKey {
-  return `issue-blockers:${issueId}`;
+  return `issue-blockers:${issueDraftKey(issueId)}`;
 }
 
 export function issueOpenFormKey(issueId: string): FormKey {
-  return `issue-open:${issueId}`;
+  return `issue-open:${issueDraftKey(issueId)}`;
 }
 
 export function issueSearchFormKey(projectId: string): FormKey {
@@ -72,17 +76,17 @@ export function editableIssueBody(issue: IssueDetail): string {
 }
 
 export function editableIssueDraft(issue: IssueDetail): IssueContentDraft {
-  const existing = ui.issueEditDrafts.get(issue.id);
+  const existing = ui.issueEditDrafts.get(issueDraftKey(issue.id));
   if (existing) return existing;
   const title = issue.title;
   const body = editableIssueBody(issue);
   const draft = { title, body, baseTitle: title, baseBody: body };
-  ui.issueEditDrafts.set(issue.id, draft);
+  ui.issueEditDrafts.set(issueDraftKey(issue.id), draft);
   return draft;
 }
 
 export function editableIssueRelations(issue: IssueDetail): IssueRelationDraft {
-  const existing = ui.issueRelationDrafts.get(issue.id);
+  const existing = ui.issueRelationDrafts.get(issueDraftKey(issue.id));
   if (existing) return existing;
   const parent = issue.parent?.id ?? "";
   const blockedBy = issue.blockedBy.map((link) => link.id);
@@ -92,7 +96,7 @@ export function editableIssueRelations(issue: IssueDetail): IssueRelationDraft {
     baseParent: parent,
     baseBlockedBy: [...blockedBy],
   };
-  ui.issueRelationDrafts.set(issue.id, draft);
+  ui.issueRelationDrafts.set(issueDraftKey(issue.id), draft);
   return draft;
 }
 
@@ -125,6 +129,7 @@ export function clearFormOperation(key: FormKey): void {
 
 export async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
   if (ui.formOperations.pending.has(key)) return false;
+  const originScope = issueDraftKey("");
   const active = document.activeElement;
   const activeField = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
     ? {
@@ -154,7 +159,7 @@ export async function runFormOperation(key: FormKey, operation: () => Promise<vo
   } finally {
     ui.formOperations.pending.delete(key);
     render();
-    if (!succeeded && activeField?.id) {
+    if (!succeeded && activeField?.id && originScope === issueDraftKey("")) {
       const detailScroll = ui.app.querySelector<HTMLElement>(".detail-scroll");
       const detailScrollPosition = detailScroll
         ? { top: detailScroll.scrollTop, left: detailScroll.scrollLeft }

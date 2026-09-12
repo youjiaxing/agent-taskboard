@@ -1,5 +1,5 @@
 import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
-import { changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { render } from "../render/app";
@@ -40,9 +40,10 @@ ui.app.addEventListener("submit", async (event) => {
     event.preventDefault();
     const issueId = edit.dataset.id;
     if (!issueId) return;
+    const draftKey = issueDraftKey(issueId);
     const issue = ui.snapshot.board?.selected?.id === issueId ? ui.snapshot.board.selected : null;
     if (!issue) return;
-    const storedDraft = ui.issueEditDrafts.get(issueId);
+    const storedDraft = ui.issueEditDrafts.get(draftKey);
     if (issue.document.kind !== "ready" && !storedDraft) return;
     const data = new FormData(edit);
     const existing = storedDraft ?? editableIssueDraft(issue);
@@ -51,7 +52,7 @@ ui.app.addEventListener("submit", async (event) => {
       title: String(data.get("title") ?? ""),
       body: String(data.get("body") ?? ""),
     };
-    ui.issueEditDrafts.set(issueId, draft);
+    ui.issueEditDrafts.set(draftKey, draft);
     if (!draft.title.trim()) return;
     const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
       && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
@@ -66,8 +67,8 @@ ui.app.addEventListener("submit", async (event) => {
       await loadSelectedIssueDocument(true);
     });
     if (success) {
-      ui.issueEditDrafts.delete(issueId);
-      ui.issueEditOpenId = null;
+      ui.issueEditDrafts.delete(draftKey);
+      ui.issueEditOpenIds.delete(draftKey);
       render();
     }
     return;
@@ -77,15 +78,16 @@ ui.app.addEventListener("submit", async (event) => {
     event.preventDefault();
     const issueId = comment.dataset.id;
     if (!issueId) return;
+    const draftKey = issueDraftKey(issueId);
     const body = String(new FormData(comment).get("body") ?? "");
-    ui.issueCommentDrafts.set(issueId, body);
+    ui.issueCommentDrafts.set(draftKey, body);
     if (!body.trim()) return;
     const success = await runFormOperation(issueCommentFormKey(issueId), async () => {
       await rpcDetached("addIssueComment", { issueId, body });
       await loadSelectedIssueDocument(true);
     });
     if (success) {
-      ui.issueCommentDrafts.delete(issueId);
+      ui.issueCommentDrafts.delete(draftKey);
       render();
     }
     return;
@@ -95,11 +97,12 @@ ui.app.addEventListener("submit", async (event) => {
     event.preventDefault();
     const issueId = parentForm.dataset.id;
     if (!issueId) return;
+    const draftKey = issueDraftKey(issueId);
     const parent = String(new FormData(parentForm).get("parent") ?? "");
     const issue = ui.snapshot.board?.selected?.id === issueId ? ui.snapshot.board.selected : null;
     if (!issue) return;
     const current = editableIssueRelations(issue);
-    ui.issueRelationDrafts.set(issueId, { ...current, parent });
+    ui.issueRelationDrafts.set(draftKey, { ...current, parent });
     const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
       && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
     const success = await runFormOperation(issueParentFormKey(issueId), async () => {
@@ -111,7 +114,7 @@ ui.app.addEventListener("submit", async (event) => {
       });
     });
     if (success) {
-      ui.issueRelationDrafts.delete(issueId);
+      ui.issueRelationDrafts.delete(draftKey);
       render();
     }
     return;
@@ -121,12 +124,13 @@ ui.app.addEventListener("submit", async (event) => {
     event.preventDefault();
     const issueId = blockersForm.dataset.id;
     if (!issueId) return;
+    const draftKey = issueDraftKey(issueId);
     const data = new FormData(blockersForm);
     const blockedBy = data.getAll("blockedBy").map((value) => String(value));
     const issue = ui.snapshot.board?.selected?.id === issueId ? ui.snapshot.board.selected : null;
     if (!issue) return;
     const current = editableIssueRelations(issue);
-    ui.issueRelationDrafts.set(issueId, { ...current, blockedBy });
+    ui.issueRelationDrafts.set(draftKey, { ...current, blockedBy });
     const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
       && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
     const success = await runFormOperation(issueBlockersFormKey(issueId), async () => {
@@ -138,7 +142,7 @@ ui.app.addEventListener("submit", async (event) => {
       });
     });
     if (success) {
-      ui.issueRelationDrafts.delete(issueId);
+      ui.issueRelationDrafts.delete(draftKey);
       render();
     }
     return;
@@ -224,18 +228,18 @@ ui.app.addEventListener("input", (event) => {
   }
   const editForm = target.closest<HTMLFormElement>("form[data-form='issue-edit']");
   if (editForm && editForm.dataset.id && (target.name === "title" || target.name === "body")) {
-    const current = ui.issueEditDrafts.get(editForm.dataset.id) ?? {
+    const current = ui.issueEditDrafts.get(issueDraftKey(editForm.dataset.id)) ?? {
       title: "",
       body: "",
       baseTitle: "",
       baseBody: "",
     };
-    ui.issueEditDrafts.set(editForm.dataset.id, { ...current, [target.name]: target.value });
+    ui.issueEditDrafts.set(issueDraftKey(editForm.dataset.id), { ...current, [target.name]: target.value });
     return;
   }
   const commentForm = target.closest<HTMLFormElement>("form[data-form='issue-comment']");
   if (commentForm?.dataset.id && target.name === "body") {
-    ui.issueCommentDrafts.set(commentForm.dataset.id, target.value);
+    ui.issueCommentDrafts.set(issueDraftKey(commentForm.dataset.id), target.value);
     return;
   }
   const injectForm = target.closest<HTMLFormElement>("form[data-act='inject-run']");
@@ -282,8 +286,8 @@ ui.app.addEventListener("toggle", (event) => {
   const details = event.target;
   if (!(details instanceof HTMLDetailsElement)) return;
   if (details.dataset.section !== "issue-maintenance" || !details.dataset.id) return;
-  if (details.open) ui.issueMaintenanceOpen.add(details.dataset.id);
-  else ui.issueMaintenanceOpen.delete(details.dataset.id);
+  if (details.open) ui.issueMaintenanceOpen.add(issueDraftKey(details.dataset.id));
+  else ui.issueMaintenanceOpen.delete(issueDraftKey(details.dataset.id));
 }, true);
 
 ui.app.addEventListener("change", async (event) => {
@@ -294,7 +298,7 @@ ui.app.addEventListener("change", async (event) => {
     const issue = ui.snapshot.board?.selected?.id === issueParent.dataset.id ? ui.snapshot.board.selected : null;
     if (issue) {
       const current = editableIssueRelations(issue);
-      ui.issueRelationDrafts.set(issue.id, { ...current, parent: target.value });
+      ui.issueRelationDrafts.set(issueDraftKey(issue.id), { ...current, parent: target.value });
     }
     return;
   }
@@ -303,7 +307,7 @@ ui.app.addEventListener("change", async (event) => {
     const issue = ui.snapshot.board?.selected?.id === issueBlockers.dataset.id ? ui.snapshot.board.selected : null;
     if (issue) {
       const current = editableIssueRelations(issue);
-      ui.issueRelationDrafts.set(issue.id, { ...current, blockedBy: [...target.selectedOptions].map((option) => option.value) });
+      ui.issueRelationDrafts.set(issueDraftKey(issue.id), { ...current, blockedBy: [...target.selectedOptions].map((option) => option.value) });
     }
     return;
   }

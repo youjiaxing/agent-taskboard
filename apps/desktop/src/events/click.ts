@@ -2,7 +2,7 @@ import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatus
 import { effectiveClientLanguage, resetGraphUiState } from "../view-helpers";
 import type { CenterView, FormKey, Language, RpcResult, Snapshot, Theme } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
-import { clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { ensureMobileAppearance, focusedRun, mobileClient, saveMobileAppearance } from "../view-helpers";
 import { inspectorAnchorForIssue, panelIsFloating, positionInspectorAwayFromCard, setPanelFloating, workbenchPanelId } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
@@ -189,6 +189,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "close-pairing" && event.target === target) {
+    if (ui.formOperations.pending.has("pairing")) return;
     ui.pairingOpen = false;
     ui.pairingError = "";
     render();
@@ -227,7 +228,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.createIssueDraft = { title: "", body: "" };
     ui.createIssueOpen = true;
     clearFormOperation(issueCreateFormKey(ui.createIssueProjectId));
-    ui.issueEditOpenId = null;
+    ui.issueEditOpenIds.delete(issueDraftKey(ui.snapshot.board?.selected?.id ?? ""));
     render();
     ui.app.querySelector<HTMLInputElement>("#issue-create-title")?.focus();
     return;
@@ -273,9 +274,9 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     const conflict = ui.formOperations.conflicts.get(key);
     if (!conflict) return;
     if (key.startsWith("issue-edit:")) {
-      const draft = ui.issueEditDrafts.get(conflict.issueId);
+      const draft = ui.issueEditDrafts.get(issueDraftKey(conflict.issueId));
       if (draft) {
-        ui.issueEditDrafts.set(conflict.issueId, {
+        ui.issueEditDrafts.set(issueDraftKey(conflict.issueId), {
           ...draft,
           title: conflict.fields.includes("title") ? conflict.latest.title ?? draft.title : draft.title,
           body: conflict.fields.includes("body") ? conflict.latest.body ?? draft.body : draft.body,
@@ -288,20 +289,20 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
         });
       }
     } else if (key.startsWith("issue-parent:")) {
-      const draft = ui.issueRelationDrafts.get(conflict.issueId);
+      const draft = ui.issueRelationDrafts.get(issueDraftKey(conflict.issueId));
       if (draft) {
         const parent = conflict.latest.parent ?? "";
-        ui.issueRelationDrafts.set(conflict.issueId, {
+        ui.issueRelationDrafts.set(issueDraftKey(conflict.issueId), {
           ...draft,
           parent,
           baseParent: parent,
         });
       }
     } else if (key.startsWith("issue-blockers:")) {
-      const draft = ui.issueRelationDrafts.get(conflict.issueId);
+      const draft = ui.issueRelationDrafts.get(issueDraftKey(conflict.issueId));
       if (draft) {
         const blockedBy = conflict.latest.blockedBy ?? [];
-        ui.issueRelationDrafts.set(conflict.issueId, {
+        ui.issueRelationDrafts.set(issueDraftKey(conflict.issueId), {
           ...draft,
           blockedBy: [...blockedBy],
           baseBlockedBy: [...blockedBy],
@@ -324,13 +325,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (current.document.kind !== "ready") return;
     const title = current.title;
     const body = editableIssueBody(current);
-    ui.issueEditDrafts.set(issue.id, {
+    ui.issueEditDrafts.set(issueDraftKey(issue.id), {
       title,
       body,
       baseTitle: title,
       baseBody: body,
     });
-    ui.issueEditOpenId = issue.id;
+    ui.issueEditOpenIds.add(issueDraftKey(issue.id));
     clearFormOperation(issueEditFormKey(issue.id));
     render();
     ui.app.querySelector<HTMLInputElement>("#issue-edit-title")?.focus();
@@ -338,7 +339,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "cancel-edit-issue" && target.dataset.id) {
     if (ui.formOperations.pending.has(issueEditFormKey(target.dataset.id))) return;
-    ui.issueEditOpenId = null;
+    ui.issueEditOpenIds.delete(issueDraftKey(target.dataset.id ?? ui.snapshot.board?.selected?.id ?? ""));
     render();
     return;
   }
@@ -346,7 +347,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     const issue = ui.snapshot.board?.selected?.id === target.dataset.id ? ui.snapshot.board.selected : null;
     if (!issue || ui.formOperations.pending.has(issueBlockersFormKey(issue.id))) return;
     const current = editableIssueRelations(issue);
-    ui.issueRelationDrafts.set(issue.id, { ...current, blockedBy: [] });
+    ui.issueRelationDrafts.set(issueDraftKey(issue.id), { ...current, blockedBy: [] });
     render();
     return;
   }
@@ -715,15 +716,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "show-offer") {
+    if (ui.formOperations.pending.has("pairing")) return;
     ui.pairingError = "";
     const addressInput = ui.app.querySelector<HTMLInputElement>("[data-field='address']");
     ui.pairingAddress = addressInput?.value ?? ui.pairingAddress;
-    try {
+    await runFormOperation("pairing", async () => {
       await rpc("beginPairingOffer", { address: ui.pairingAddress });
-    } catch (error) {
-      ui.pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "copy-offer" && ui.snapshot.pairingOffer) {
@@ -732,15 +731,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "revoke" && target.dataset.id) {
     ui.pairingError = "";
-    try {
+    await runFormOperation("pairing", async () => {
       await rpc("revokeClient", { clientId: target.dataset.id });
-    } catch (error) {
-      ui.pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "connect-host") {
+    if (ui.formOperations.pending.has("pairing")) return;
     ui.pairingError = "";
     const pasteInput = ui.app.querySelector<HTMLTextAreaElement>("[data-field='paste']");
     ui.pairingPaste = pasteInput?.value ?? ui.pairingPaste;
@@ -750,14 +747,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       render();
       return;
     }
-    try {
+    await runFormOperation("pairing", async () => {
       await rpc("pairRemoteHost", parsed);
       ui.pairingPaste = "";
       ui.pairingOpen = false;
-    } catch (error) {
-      ui.pairingError = error instanceof Error ? error.message : String(error);
-    }
-    render();
+    });
     return;
   }
   if (act === "language" && target.dataset.id) {

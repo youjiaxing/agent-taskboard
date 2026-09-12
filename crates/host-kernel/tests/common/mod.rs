@@ -127,6 +127,8 @@ pub struct SeamTracker {
     read_starts: Mutex<BTreeMap<String, u64>>,
     read_delay_ms: AtomicU64,
     read_document_delay_ms: AtomicU64,
+    document_response_gate:
+        Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     relation_reads: AtomicU64,
     write_delay_ms: AtomicU64,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
@@ -205,6 +207,15 @@ impl SeamTracker {
 
     pub fn set_write_delay_ms(&self, delay_ms: u64) {
         self.write_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn hold_next_document_response(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self.document_response_gate.lock().unwrap() = Some((captured_tx, release_rx));
+        (captured_rx, release_tx)
     }
 
     pub fn relation_read_count(&self) -> u64 {
@@ -429,7 +440,7 @@ impl TrackerSeam for SeamTracker {
             .ok_or_else(|| TrackerReadError::Failed {
                 detail: Some("unknown issue".into()),
             })?;
-        Ok(IssueDocument {
+        let document = IssueDocument {
             issue,
             body: self
                 .bodies
@@ -438,7 +449,13 @@ impl TrackerSeam for SeamTracker {
                 .get(issue_id)
                 .cloned()
                 .unwrap_or_default(),
-        })
+        };
+        let gate = self.document_response_gate.lock().unwrap().take();
+        if let Some((captured, release)) = gate {
+            captured.send(()).unwrap();
+            release.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        Ok(document)
     }
 
     fn read_issue_relations(
