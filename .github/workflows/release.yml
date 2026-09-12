@@ -163,3 +163,30 @@ jobs:
         with:
           name: Windows-native-desktop-evidence
           path: ${{ runner.temp }}/windows-desktop-evidence/*.png
+
+  finalize-updater:
+    name: 固定 updater 下载地址
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: 将 latest.json 指向公开 Release 下载地址
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$REPOSITORY" --pattern latest.json --output latest.json --clobber
+          jq --arg tag "$TAG" --arg repository "$REPOSITORY" '
+            (.version) as $version |
+            .platforms |= with_entries(
+              .value.url = ("https://github.com/" + $repository + "/releases/download/" + $tag + "/" +
+                (if (.key | startswith("darwin-aarch64")) then "Agent.Taskboard_" + $version + "_darwin_aarch64.app.tar.gz"
+                 elif (.key | startswith("darwin-x86_64")) then "Agent.Taskboard_" + $version + "_darwin_x64.app.tar.gz"
+                 elif (.key | startswith("windows-x86_64")) then "Agent.Taskboard_" + $version + "_windows_x64-setup.exe"
+                 else error("unsupported updater platform: " + .key)
+                 end))
+            )' latest.json > latest.json.tmp
+          mv latest.json.tmp latest.json
+          gh release upload "$TAG" latest.json --repo "$REPOSITORY" --clobber
