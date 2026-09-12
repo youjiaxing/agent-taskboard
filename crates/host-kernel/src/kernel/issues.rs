@@ -10,12 +10,10 @@ impl HostKernel {
     }
 
     pub(crate) fn claim_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
-        self.require_live_tracker_for_issue(issue_id)?;
         self.write_claim(issue_id, true)
     }
 
     pub(crate) fn release_issue(&mut self, issue_id: &str) -> Result<(), KernelError> {
-        self.require_live_tracker_for_issue(issue_id)?;
         self.write_claim(issue_id, false)
     }
 
@@ -43,17 +41,11 @@ impl HostKernel {
         if !self.projects.iter().any(|project| project.id == project_id) {
             return Err(KernelError::Protocol("unknown project".into()));
         }
-        self.require_live_tracker(project_id)?;
         let op = tracker_seam::TrackerWriteOp::CreateIssue {
             title: title.to_string(),
             body: body.to_string(),
         };
-        if self.defer_issue_writes {
-            self.deferred_issue_writes
-                .push(self.prepare_issue_write(project_id, None, op)?);
-        } else {
-            self.write_issue_op(project_id, None, op)?;
-        }
+        self.write_issue_op(project_id, None, op)?;
         Ok(())
     }
 
@@ -62,25 +54,40 @@ impl HostKernel {
         issue_id: &str,
         title: &str,
         body: &str,
+        base_title: Option<String>,
+        base_body: Option<String>,
+        overwrite_conflict: bool,
     ) -> Result<(), KernelError> {
         let title = title.trim();
         if title.is_empty() {
             return Err(KernelError::Protocol("missing title".into()));
         }
-        self.require_live_tracker_for_issue(issue_id)?;
-        self.write_issue_op(
-            &self.project_id_for_issue(issue_id)?,
-            Some(issue_id),
-            tracker_seam::TrackerWriteOp::UpdateIssue {
-                title: title.to_string(),
-                body: body.to_string(),
-            },
-        )?;
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let op = tracker_seam::TrackerWriteOp::UpdateIssue {
+            title: title.to_string(),
+            body: body.to_string(),
+        };
+        match (base_title, base_body) {
+            (Some(base_title), Some(base_body)) => {
+                self.write_issue_op_checked(
+                    &project_id,
+                    issue_id,
+                    op,
+                    kernel::issue_documents::IssueWriteExpectation::Content {
+                        title: base_title,
+                        body: base_body,
+                    },
+                    overwrite_conflict,
+                )?;
+            }
+            _ => {
+                self.write_issue_op(&project_id, Some(issue_id), op)?;
+            }
+        }
         Ok(())
     }
 
     pub(crate) fn set_issue_open(&mut self, issue_id: &str, open: bool) -> Result<(), KernelError> {
-        self.require_live_tracker_for_issue(issue_id)?;
         self.write_issue_op(
             &self.project_id_for_issue(issue_id)?,
             Some(issue_id),
@@ -98,7 +105,6 @@ impl HostKernel {
         if body.is_empty() {
             return Err(KernelError::Protocol("missing body".into()));
         }
-        self.require_live_tracker_for_issue(issue_id)?;
         self.write_issue_op(
             &self.project_id_for_issue(issue_id)?,
             Some(issue_id),
@@ -113,14 +119,25 @@ impl HostKernel {
         &mut self,
         issue_id: &str,
         parent: Option<&str>,
+        base_parent: Option<Option<String>>,
+        overwrite_conflict: bool,
     ) -> Result<(), KernelError> {
-        self.require_live_tracker_for_issue(issue_id)?;
         let parent = parent.map(parse_issue_ref).transpose()?;
-        self.write_issue_op(
-            &self.project_id_for_issue(issue_id)?,
-            Some(issue_id),
-            tracker_seam::TrackerWriteOp::SetParent { parent },
-        )?;
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let op = tracker_seam::TrackerWriteOp::SetParent { parent };
+        if let Some(base_parent) = base_parent {
+            self.write_issue_op_checked(
+                &project_id,
+                issue_id,
+                op,
+                kernel::issue_documents::IssueWriteExpectation::Parent {
+                    parent: base_parent,
+                },
+                overwrite_conflict,
+            )?;
+        } else {
+            self.write_issue_op(&project_id, Some(issue_id), op)?;
+        }
         Ok(())
     }
 
@@ -128,17 +145,28 @@ impl HostKernel {
         &mut self,
         issue_id: &str,
         blocked_by: &[String],
+        base_blocked_by: Option<Vec<String>>,
+        overwrite_conflict: bool,
     ) -> Result<(), KernelError> {
-        self.require_live_tracker_for_issue(issue_id)?;
         let blocked_by = blocked_by
             .iter()
             .map(|id| parse_issue_ref(id))
             .collect::<Result<Vec<_>, _>>()?;
-        self.write_issue_op(
-            &self.project_id_for_issue(issue_id)?,
-            Some(issue_id),
-            tracker_seam::TrackerWriteOp::SetBlockedBy { blocked_by },
-        )?;
+        let project_id = self.project_id_for_issue(issue_id)?;
+        let op = tracker_seam::TrackerWriteOp::SetBlockedBy { blocked_by };
+        if let Some(base_blocked_by) = base_blocked_by {
+            self.write_issue_op_checked(
+                &project_id,
+                issue_id,
+                op,
+                kernel::issue_documents::IssueWriteExpectation::BlockedBy {
+                    blocked_by: base_blocked_by,
+                },
+                overwrite_conflict,
+            )?;
+        } else {
+            self.write_issue_op(&project_id, Some(issue_id), op)?;
+        }
         Ok(())
     }
 
@@ -147,10 +175,37 @@ impl HostKernel {
         project_id: &str,
         issue_id: Option<&str>,
         op: tracker_seam::TrackerWriteOp,
-    ) -> Result<IssueRecord, KernelError> {
-        let prepared = self.prepare_issue_write(project_id, issue_id, op)?;
+    ) -> Result<(), KernelError> {
+        let prepared = self.prepare_issue_write(project_id, issue_id, op, None, false)?;
+        if self.defer_issue_writes {
+            self.deferred_issue_writes.push(prepared);
+            return Ok(());
+        }
         let completed = Self::execute_prepared_issue_write(prepared);
-        self.finish_prepared_issue_write(completed)
+        self.finish_prepared_issue_write(completed).map(drop)
+    }
+
+    pub(crate) fn write_issue_op_checked(
+        &mut self,
+        project_id: &str,
+        issue_id: &str,
+        op: tracker_seam::TrackerWriteOp,
+        expectation: kernel::issue_documents::IssueWriteExpectation,
+        overwrite_conflict: bool,
+    ) -> Result<(), KernelError> {
+        let prepared = self.prepare_issue_write(
+            project_id,
+            Some(issue_id),
+            op,
+            Some(expectation),
+            overwrite_conflict,
+        )?;
+        if self.defer_issue_writes {
+            self.deferred_issue_writes.push(prepared);
+            return Ok(());
+        }
+        let completed = Self::execute_prepared_issue_write(prepared);
+        self.finish_prepared_issue_write(completed).map(drop)
     }
 
     pub(crate) fn prepare_issue_write(
@@ -158,6 +213,8 @@ impl HostKernel {
         project_id: &str,
         issue_id: Option<&str>,
         op: tracker_seam::TrackerWriteOp,
+        expectation: Option<kernel::issue_documents::IssueWriteExpectation>,
+        overwrite_conflict: bool,
     ) -> Result<kernel::issue_documents::PreparedIssueWrite, KernelError> {
         let project = self
             .projects
@@ -173,6 +230,9 @@ impl HostKernel {
             github_host: project.github_host,
             repository: project.repository,
             tracker_kind: project.tracker,
+            current_issue: issue_id.and_then(|id| self.issue_by_id(id)),
+            expectation,
+            overwrite_conflict,
             secrets_pat: pat,
             secrets_path: self.data.host_secrets_path.clone(),
             op,

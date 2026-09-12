@@ -248,6 +248,41 @@ fn browser_clients_keep_navigation_and_forms_responsive_during_a_slow_tracker_re
     );
 }
 
+#[test]
+fn browser_keeps_navigation_responsive_during_a_slow_issue_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden_dir = make_dir(tmp.path(), "work/garden");
+    let notes_dir = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "garden issue"));
+    tracker.set_issue_body("you/garden#1", "garden body");
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    tracker.set_issue_body("you/notes#1", "notes body");
+    let mut host = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut host, "garden", &garden_dir, "you/garden");
+    let notes_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "notes",
+            "localPath": notes_dir,
+            "repository": "you/notes",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_project_id
+        .clone();
+    tracker.set_write_delay_ms(1_200);
+
+    run_browser_e2e(
+        host,
+        "slow-issue-write-navigation.mjs",
+        &[
+            ("GARDEN_PROJECT_ID", Path::new(&garden_id)),
+            ("NOTES_PROJECT_ID", Path::new(&notes_id)),
+        ],
+    );
+}
+
 fn run_degraded_shell_edge_state(
     state: &str,
     repository: &str,

@@ -1,5 +1,5 @@
 import { completeDependencyGraphLabel, connectionPanel, pendingBar } from "../main";
-import type { BoardSnapshot, DependencyGraph, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, ShellCopy, Snapshot, TriageRole } from "../protocol";
+import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, ShellCopy, Snapshot, TriageRole } from "../protocol";
 import { currentProject, mobileClient } from "../view-helpers";
 import { editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
@@ -397,12 +397,13 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
       ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
          <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
       : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
-  const canWrite = board.refresh.kind === "ready"
-    && (!board.issueOptions.length || board.issueOptions.some((option) => option.id === issue.id));
-  const canEdit = canWrite && issue.document.kind === "ready";
+  const canWrite = !board.issueOptions.length
+    || board.issueOptions.some((option) => option.id === issue.id);
+  const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
   const editOpen = ui.issueEditOpenId === issue.id;
+  const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issue.id));
   return `
     <header class="detail-sticky">
       <div class="detail-title-row">
@@ -416,7 +417,7 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
         ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
         ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
         ${actions}
-        ${canEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
+        ${canStartEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
         ${canWrite ? `
           <button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
         <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
@@ -425,7 +426,7 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
     </header>
     <div class="detail-scroll">
       ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
-      ${editOpen && canEdit ? issueEditForm(copy, issue) : ""}
+      ${showEditForm ? issueEditForm(copy, issue) : ""}
       <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
@@ -468,6 +469,36 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelTogg
     </div>`;
 }
 
+function issueConflictFieldLabel(copy: ShellCopy, field: string): string {
+  const labels: Record<string, string> = {
+    title: copy.issueTitle,
+    body: copy.issueBody,
+    parent: copy.parentIssue,
+    blockedBy: copy.dependencyBlockers,
+  };
+  return labels[field] ?? field;
+}
+
+function issueConflictFeedback(copy: ShellCopy, key: FormKey): string {
+  const conflict = ui.formOperations.conflicts.get(key);
+  if (!conflict) return "";
+  const latest = conflict.fields
+    .map((field) => {
+      const value = conflict.latest[field as keyof typeof conflict.latest];
+      const text = Array.isArray(value) ? value.join(", ") : value ?? copy.none;
+      return `<div><strong>${escapeHtml(issueConflictFieldLabel(copy, field))}</strong><pre>${escapeHtml(String(text))}</pre></div>`;
+    })
+    .join("");
+  return `<section class="notice bad issue-conflict" role="alert" data-form-key="${escapeHtml(key)}">
+    <p>${escapeHtml(copy.issueConflict)}</p>
+    <div class="issue-conflict-latest"><span class="tiny">${escapeHtml(copy.issueConflictLatest)}</span>${latest}</div>
+    <div class="actions">
+      <button type="button" data-act="use-latest-issue-conflict" data-form-key="${escapeHtml(key)}">${escapeHtml(copy.issueConflictUseLatest)}</button>
+      <button type="submit" data-conflict-policy="overwrite">${escapeHtml(copy.issueConflictOverwrite)}</button>
+    </div>
+  </section>`;
+}
+
 export function issueEditForm(copy: ShellCopy, issue: IssueDetail): string {
   const key = issueEditFormKey(issue.id);
   const draft = editableIssueDraft(issue);
@@ -480,6 +511,7 @@ export function issueEditForm(copy: ShellCopy, issue: IssueDetail): string {
       <label class="label" for="issue-edit-body">${escapeHtml(copy.issueBody)}</label>
       <textarea id="issue-edit-body" name="body" rows="8" ${pending ? "disabled" : ""}>${escapeHtml(draft.body)}</textarea>
       ${formFeedback(key)}
+      ${issueConflictFeedback(copy, key)}
       <div class="actions">
         <button type="button" data-act="cancel-edit-issue" data-id="${escapeHtml(issue.id)}" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
         <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.saveIssue)}</button>
@@ -525,6 +557,7 @@ export function issueRelationsForm(copy: ShellCopy, board: BoardSnapshot, issue:
         ${parentOptions}
       </select>
       ${formFeedback(parentKey)}
+      ${issueConflictFeedback(copy, parentKey)}
       <div class="actions">
         <button type="submit" class="primary" ${parentPending ? "disabled" : ""}>${escapeHtml(parentPending ? copy.operationPending : copy.saveRelations)}</button>
       </div>
@@ -535,6 +568,7 @@ export function issueRelationsForm(copy: ShellCopy, board: BoardSnapshot, issue:
         ${blockerOptions}
       </select>
       ${formFeedback(blockersKey)}
+      ${issueConflictFeedback(copy, blockersKey)}
       <div class="actions">
         <button type="button" data-act="clear-issue-blockers" data-id="${escapeHtml(issue.id)}" ${blockersPending ? "disabled" : ""}>${escapeHtml(copy.clearDependency)}</button>
         <button type="submit" class="primary" ${blockersPending ? "disabled" : ""}>${escapeHtml(blockersPending ? copy.operationPending : copy.saveRelations)}</button>

@@ -34,14 +34,41 @@ pub(crate) struct PreparedRefresh {
     secrets_pat: Option<String>,
     secrets_path: PathBuf,
     previous: Option<kernel::refresh::ProjectRefreshState>,
+    issues_at_prepare: Vec<IssueRecord>,
     local_revision_at_prepare: Option<u64>,
     now_ms: u64,
     generation: u64,
+    issue_write_generation: u64,
 }
 
 pub(crate) struct CompletedRefresh {
     prepared: PreparedRefresh,
     result: Result<tracker_seam::TrackerReadOutcome, tracker::TrackerReadError>,
+}
+
+fn preserve_written_issues(
+    issues_at_prepare: &[IssueRecord],
+    current_issues: &[IssueRecord],
+    mut refreshed_issues: Vec<IssueRecord>,
+) -> Vec<IssueRecord> {
+    for current in current_issues {
+        let changed_after_prepare = issues_at_prepare
+            .iter()
+            .find(|issue| issue.id() == current.id())
+            != Some(current);
+        if !changed_after_prepare {
+            continue;
+        }
+        if let Some(refreshed) = refreshed_issues
+            .iter_mut()
+            .find(|issue| issue.id() == current.id())
+        {
+            *refreshed = current.clone();
+        } else {
+            refreshed_issues.push(current.clone());
+        }
+    }
+    refreshed_issues
 }
 
 impl HostKernel {
@@ -115,9 +142,19 @@ impl HostKernel {
             secrets_pat: read_github_pat(&self.data.host_secrets_path, &github_host),
             secrets_path: self.data.host_secrets_path.clone(),
             previous,
+            issues_at_prepare: self
+                .loaded_issues
+                .get(project_id)
+                .cloned()
+                .unwrap_or_default(),
             local_revision_at_prepare,
             now_ms: self.now_ms,
             generation,
+            issue_write_generation: self
+                .issue_write_generations
+                .get(project_id)
+                .copied()
+                .unwrap_or(0),
         })
     }
 
@@ -614,6 +651,43 @@ impl HostKernel {
             return false;
         }
         self.refresh_in_flight.remove(&prepared.project_id);
+        let current_write_generation = self
+            .issue_write_generations
+            .get(&prepared.project_id)
+            .copied()
+            .unwrap_or(0);
+        let result = if current_write_generation != prepared.issue_write_generation {
+            match result {
+                Ok(tracker_seam::TrackerReadOutcome::Complete { issues }) => {
+                    Ok(tracker_seam::TrackerReadOutcome::Complete {
+                        issues: preserve_written_issues(
+                            &prepared.issues_at_prepare,
+                            self.loaded_issues
+                                .get(&prepared.project_id)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default(),
+                            issues,
+                        ),
+                    })
+                }
+                Ok(tracker_seam::TrackerReadOutcome::Incomplete { issues, detail }) => {
+                    Ok(tracker_seam::TrackerReadOutcome::Incomplete {
+                        issues: preserve_written_issues(
+                            &prepared.issues_at_prepare,
+                            self.loaded_issues
+                                .get(&prepared.project_id)
+                                .map(Vec::as_slice)
+                                .unwrap_or_default(),
+                            issues,
+                        ),
+                        detail,
+                    })
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            result
+        };
         let Some(index) = self.projects.iter().position(|project| {
             project.id == prepared.project_id
                 && project.tracker == prepared.tracker_kind

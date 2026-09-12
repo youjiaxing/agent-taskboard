@@ -293,5 +293,9 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 close_issue: "Close Issue".into(),
                 reopen_issue: "Reopen Issue".into(),
                 issue_updates: "Comments and relationships".into(),
+                issue_conflict: "The same content changed in the Tracker. Your input remains in the form.".into(),
+                issue_conflict_latest: "Latest Tracker value".into(),
+                issue_conflict_use_latest: "Use latest".into(),
+                issue_conflict_overwrite: "Overwrite anyway".into(),
     }
 }

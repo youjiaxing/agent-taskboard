@@ -689,6 +689,13 @@ impl HostKernel {
                 ));
             }
             if previous_run_id.is_none() {
+                if let Err(err) = self.require_live_tracker_for_issue(issue_id) {
+                    if let Some(form) = &mut self.launch_form {
+                        form.error = Some(err.to_string());
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
                 if let Err(err) = self.claim_issue(issue_id) {
                     if let Some(form) = &mut self.launch_form {
                         form.error = Some(err.to_string());

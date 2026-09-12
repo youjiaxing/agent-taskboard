@@ -1,7 +1,7 @@
 import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
-import { changeNoteFormKey, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { launchFieldOptions } from "../render/run";
-import { loadSelectedIssueDocument, loadViewChanges, rpc } from "../rpc";
+import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { render } from "../render/app";
 import { toLocalInput } from "../client-utils";
 import { ui } from "../ui";
@@ -21,7 +21,7 @@ ui.app.addEventListener("submit", async (event) => {
     ui.createIssueDraft = draft;
     if (!draft.title.trim()) return;
     const success = await runFormOperation(issueCreateFormKey(projectId), async () => {
-      await rpc("createIssue", {
+      await rpcDetached("createIssue", {
         projectId,
         title: draft.title,
         body: draft.body,
@@ -41,16 +41,28 @@ ui.app.addEventListener("submit", async (event) => {
     const issueId = edit.dataset.id;
     if (!issueId) return;
     const issue = ui.snapshot.board?.selected?.id === issueId ? ui.snapshot.board.selected : null;
-    if (issue?.document.kind !== "ready") return;
+    if (!issue) return;
+    const storedDraft = ui.issueEditDrafts.get(issueId);
+    if (issue.document.kind !== "ready" && !storedDraft) return;
     const data = new FormData(edit);
+    const existing = storedDraft ?? editableIssueDraft(issue);
     const draft = {
+      ...existing,
       title: String(data.get("title") ?? ""),
       body: String(data.get("body") ?? ""),
     };
     ui.issueEditDrafts.set(issueId, draft);
     if (!draft.title.trim()) return;
+    const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
+      && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
     const success = await runFormOperation(issueEditFormKey(issueId), async () => {
-      await rpc("updateIssue", { issueId, title: draft.title, body: draft.body });
+      await rpcDetached("updateIssue", {
+        issueId,
+        title: draft.title,
+        body: draft.body,
+        base: { title: draft.baseTitle, body: draft.baseBody },
+        conflictPolicy: overwriteConflict ? "overwrite" : undefined,
+      });
       await loadSelectedIssueDocument(true);
     });
     if (success) {
@@ -69,7 +81,7 @@ ui.app.addEventListener("submit", async (event) => {
     ui.issueCommentDrafts.set(issueId, body);
     if (!body.trim()) return;
     const success = await runFormOperation(issueCommentFormKey(issueId), async () => {
-      await rpc("addIssueComment", { issueId, body });
+      await rpcDetached("addIssueComment", { issueId, body });
       await loadSelectedIssueDocument(true);
     });
     if (success) {
@@ -88,10 +100,18 @@ ui.app.addEventListener("submit", async (event) => {
     if (!issue) return;
     const current = editableIssueRelations(issue);
     ui.issueRelationDrafts.set(issueId, { ...current, parent });
+    const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
+      && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
     const success = await runFormOperation(issueParentFormKey(issueId), async () => {
-      await rpc("setIssueParent", { issueId, parent });
+      await rpcDetached("setIssueParent", {
+        issueId,
+        parent,
+        base: { parent: current.baseParent || null },
+        conflictPolicy: overwriteConflict ? "overwrite" : undefined,
+      });
     });
     if (success) {
+      ui.issueRelationDrafts.delete(issueId);
       render();
     }
     return;
@@ -107,10 +127,18 @@ ui.app.addEventListener("submit", async (event) => {
     if (!issue) return;
     const current = editableIssueRelations(issue);
     ui.issueRelationDrafts.set(issueId, { ...current, blockedBy });
+    const overwriteConflict = (event as SubmitEvent).submitter instanceof HTMLButtonElement
+      && (event as SubmitEvent).submitter?.dataset.conflictPolicy === "overwrite";
     const success = await runFormOperation(issueBlockersFormKey(issueId), async () => {
-      await rpc("setIssueBlockedBy", { issueId, blockedBy });
+      await rpcDetached("setIssueBlockedBy", {
+        issueId,
+        blockedBy,
+        base: { blockedBy: current.baseBlockedBy },
+        conflictPolicy: overwriteConflict ? "overwrite" : undefined,
+      });
     });
     if (success) {
+      ui.issueRelationDrafts.delete(issueId);
       render();
     }
     return;
@@ -196,7 +224,12 @@ ui.app.addEventListener("input", (event) => {
   }
   const editForm = target.closest<HTMLFormElement>("form[data-form='issue-edit']");
   if (editForm && editForm.dataset.id && (target.name === "title" || target.name === "body")) {
-    const current = ui.issueEditDrafts.get(editForm.dataset.id) ?? { title: "", body: "" };
+    const current = ui.issueEditDrafts.get(editForm.dataset.id) ?? {
+      title: "",
+      body: "",
+      baseTitle: "",
+      baseBody: "",
+    };
     ui.issueEditDrafts.set(editForm.dataset.id, { ...current, [target.name]: target.value });
     return;
   }

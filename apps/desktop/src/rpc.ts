@@ -2,7 +2,7 @@ import { deliverHostEvents } from "./main";
 import { isLoopbackPage, syncLaunchDraft } from "./launch-session";
 import { render } from "./render/app";
 import { ui } from "./ui";
-import type { ChangeScope, RpcResult } from "./protocol";
+import { RpcHttpError, type ChangeScope, type IssueConflict, type RpcResult } from "./protocol";
 
 export async function protocolBase(): Promise<string> {
   if (window.__HOST_PROTOCOL__) {
@@ -47,13 +47,35 @@ export async function executeRpc(
   if (!response.ok) {
     const text = await response.text();
     let message = text || `Host protocol ${response.status}`;
+    let code = "";
+    let conflict: IssueConflict | null = null;
     try {
-      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      const parsed = JSON.parse(text) as {
+        error?: string;
+        message?: string;
+        issueId?: string;
+        fields?: string[];
+        latest?: IssueConflict["latest"];
+      };
       message = parsed.message || parsed.error || message;
+      code = parsed.error ?? "";
+      if (
+        response.status === 409 &&
+        code === "issue-conflict" &&
+        parsed.issueId &&
+        Array.isArray(parsed.fields) &&
+        parsed.latest
+      ) {
+        conflict = {
+          issueId: parsed.issueId,
+          fields: parsed.fields,
+          latest: parsed.latest,
+        };
+      }
     } catch {
       // keep raw body
     }
-    throw new Error(message);
+    throw new RpcHttpError(message, response.status, code, conflict);
   }
   const result = (await response.json()) as RpcResult;
   result.snapshot.runs = result.snapshot.runs ?? [];

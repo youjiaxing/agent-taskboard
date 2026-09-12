@@ -127,6 +127,7 @@ pub struct SeamTracker {
     read_starts: Mutex<BTreeMap<String, u64>>,
     read_delay_ms: AtomicU64,
     read_document_delay_ms: AtomicU64,
+    relation_reads: AtomicU64,
     write_delay_ms: AtomicU64,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
     bodies: Mutex<BTreeMap<String, String>>,
@@ -204,6 +205,10 @@ impl SeamTracker {
 
     pub fn set_write_delay_ms(&self, delay_ms: u64) {
         self.write_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn relation_read_count(&self) -> u64 {
+        self.relation_reads.load(Ordering::Relaxed)
     }
 
     pub fn comments(&self, repository: &str) -> Vec<String> {
@@ -436,9 +441,28 @@ impl TrackerSeam for SeamTracker {
         })
     }
 
+    fn read_issue_relations(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        self.relation_reads.fetch_add(1, Ordering::Relaxed);
+        self.issues
+            .lock()
+            .expect("seam tracker")
+            .values()
+            .flat_map(|issues| issues.iter())
+            .find(|issue| issue.id() == issue_id)
+            .cloned()
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })
+    }
+
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
+        _current_issue: Option<&IssueRecord>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {

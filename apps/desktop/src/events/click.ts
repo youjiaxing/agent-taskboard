@@ -1,6 +1,6 @@
 import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
 import { effectiveClientLanguage, resetGraphUiState } from "../view-helpers";
-import type { CenterView, Language, RpcResult, Snapshot, Theme } from "../protocol";
+import type { CenterView, FormKey, Language, RpcResult, Snapshot, Theme } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { ensureMobileAppearance, focusedRun, mobileClient, saveMobileAppearance } from "../view-helpers";
@@ -268,6 +268,50 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
+  if (act === "use-latest-issue-conflict" && target.dataset.formKey) {
+    const key = target.dataset.formKey as FormKey;
+    const conflict = ui.formOperations.conflicts.get(key);
+    if (!conflict) return;
+    if (key.startsWith("issue-edit:")) {
+      const draft = ui.issueEditDrafts.get(conflict.issueId);
+      if (draft) {
+        ui.issueEditDrafts.set(conflict.issueId, {
+          ...draft,
+          title: conflict.fields.includes("title") ? conflict.latest.title ?? draft.title : draft.title,
+          body: conflict.fields.includes("body") ? conflict.latest.body ?? draft.body : draft.body,
+          baseTitle: conflict.fields.includes("title")
+            ? conflict.latest.title ?? draft.baseTitle
+            : draft.baseTitle,
+          baseBody: conflict.fields.includes("body")
+            ? conflict.latest.body ?? draft.baseBody
+            : draft.baseBody,
+        });
+      }
+    } else if (key.startsWith("issue-parent:")) {
+      const draft = ui.issueRelationDrafts.get(conflict.issueId);
+      if (draft) {
+        const parent = conflict.latest.parent ?? "";
+        ui.issueRelationDrafts.set(conflict.issueId, {
+          ...draft,
+          parent,
+          baseParent: parent,
+        });
+      }
+    } else if (key.startsWith("issue-blockers:")) {
+      const draft = ui.issueRelationDrafts.get(conflict.issueId);
+      if (draft) {
+        const blockedBy = conflict.latest.blockedBy ?? [];
+        ui.issueRelationDrafts.set(conflict.issueId, {
+          ...draft,
+          blockedBy: [...blockedBy],
+          baseBlockedBy: [...blockedBy],
+        });
+      }
+    }
+    clearFormOperation(key);
+    render();
+    return;
+  }
   if (act === "edit-issue" && target.dataset.id) {
     const issue = ui.snapshot.board?.selected?.id === target.dataset.id
       ? ui.snapshot.board.selected
@@ -278,7 +322,14 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     }
     const current = ui.snapshot.board?.selected?.id === issue.id ? ui.snapshot.board.selected : issue;
     if (current.document.kind !== "ready") return;
-    ui.issueEditDrafts.set(issue.id, { title: current.title, body: editableIssueBody(current) });
+    const title = current.title;
+    const body = editableIssueBody(current);
+    ui.issueEditDrafts.set(issue.id, {
+      title,
+      body,
+      baseTitle: title,
+      baseBody: body,
+    });
     ui.issueEditOpenId = issue.id;
     clearFormOperation(issueEditFormKey(issue.id));
     render();
@@ -304,7 +355,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (!issue) return;
     const key = issueOpenFormKey(issue.id);
     await runFormOperation(key, async () => {
-      await rpc("setIssueOpen", { issueId: issue.id, open: !issue.open });
+      await rpcDetached("setIssueOpen", { issueId: issue.id, open: !issue.open });
     });
     return;
   }
@@ -328,7 +379,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.mobileView = "board";
     ui.sidebarVisible = true;
     await rpc("focusProject", { projectId: target.dataset.id });
-    await reportClientView();
     render();
     return;
   }
@@ -380,7 +430,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "release-claim" && target.dataset.id) {
-    await rpc("releaseIssue", { issueId: target.dataset.id });
+    await rpcDetached("releaseIssue", { issueId: target.dataset.id });
     render();
     return;
   }

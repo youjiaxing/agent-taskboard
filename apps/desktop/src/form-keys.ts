@@ -1,4 +1,4 @@
-import type { BoardSnapshot, FormKey, IssueContentDraft, IssueDetail, IssueLink, IssueRelationDraft, IssueSearchDraft } from "./protocol";
+import { RpcHttpError, type BoardSnapshot, type FormKey, type IssueContentDraft, type IssueDetail, type IssueLink, type IssueRelationDraft, type IssueSearchDraft } from "./protocol";
 import { escapeHtml } from "./client-utils";
 import { render } from "./render/app";
 import { ui } from "./ui";
@@ -68,23 +68,15 @@ export function issueDocumentBody(issue: IssueDetail): string {
 
 export function editableIssueBody(issue: IssueDetail): string {
   const raw = issueDocumentBody(issue);
-  const project = ui.snapshot?.projects.find((item) => item.id === ui.snapshot?.board?.projectId);
-  if (project?.tracker !== "local-markdown") return raw;
-  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
-  let start = 0;
-  while (start < lines.length && !/^\s*#\s+/.test(lines[start])) start += 1;
-  if (start < lines.length) start += 1;
-  const metadata = /^\s*\**(?:status|type|assignees?|part of|parent|blocked by|closed)\s*:/i;
-  while (start < lines.length && (lines[start].trim() === "" || metadata.test(lines[start]))) start += 1;
-  const body = lines.slice(start);
-  const comments = body.findIndex((line) => /^\s*##\s+comments\s*$/i.test(line));
-  return (comments >= 0 ? body.slice(0, comments) : body).join("\n").trim();
+  return issue.document.kind === "ready" ? issue.document.editableBody ?? raw : raw;
 }
 
 export function editableIssueDraft(issue: IssueDetail): IssueContentDraft {
   const existing = ui.issueEditDrafts.get(issue.id);
   if (existing) return existing;
-  const draft = { title: issue.title, body: editableIssueBody(issue) };
+  const title = issue.title;
+  const body = editableIssueBody(issue);
+  const draft = { title, body, baseTitle: title, baseBody: body };
   ui.issueEditDrafts.set(issue.id, draft);
   return draft;
 }
@@ -92,9 +84,13 @@ export function editableIssueDraft(issue: IssueDetail): IssueContentDraft {
 export function editableIssueRelations(issue: IssueDetail): IssueRelationDraft {
   const existing = ui.issueRelationDrafts.get(issue.id);
   if (existing) return existing;
+  const parent = issue.parent?.id ?? "";
+  const blockedBy = issue.blockedBy.map((link) => link.id);
   const draft = {
-    parent: issue.parent?.id ?? "",
-    blockedBy: issue.blockedBy.map((link) => link.id),
+    parent,
+    blockedBy,
+    baseParent: parent,
+    baseBlockedBy: [...blockedBy],
   };
   ui.issueRelationDrafts.set(issue.id, draft);
   return draft;
@@ -124,21 +120,58 @@ export function formFeedback(key: FormKey): string {
 
 export function clearFormOperation(key: FormKey): void {
   ui.formOperations.errors.delete(key);
+  ui.formOperations.conflicts.delete(key);
 }
 
 export async function runFormOperation(key: FormKey, operation: () => Promise<void>): Promise<boolean> {
   if (ui.formOperations.pending.has(key)) return false;
+  const active = document.activeElement;
+  const activeField = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+    ? {
+        id: active.id,
+        selectionStart: active.selectionStart,
+        selectionEnd: active.selectionEnd,
+      }
+    : active instanceof HTMLSelectElement
+      ? { id: active.id, selectionStart: null, selectionEnd: null }
+      : null;
+  let succeeded = false;
   ui.formOperations.pending.add(key);
   ui.formOperations.errors.delete(key);
+  ui.formOperations.conflicts.delete(key);
   render();
   try {
     await operation();
+    succeeded = true;
     return true;
   } catch (error) {
-    ui.formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
+    if (error instanceof RpcHttpError && error.conflict) {
+      ui.formOperations.conflicts.set(key, error.conflict);
+    } else {
+      ui.formOperations.errors.set(key, error instanceof Error ? error.message : String(error));
+    }
     return false;
   } finally {
     ui.formOperations.pending.delete(key);
     render();
+    if (!succeeded && activeField?.id) {
+      const detailScroll = ui.app.querySelector<HTMLElement>(".detail-scroll");
+      const detailScrollPosition = detailScroll
+        ? { top: detailScroll.scrollTop, left: detailScroll.scrollLeft }
+        : null;
+      const field = document.getElementById(activeField.id);
+      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+        field.focus();
+        if (activeField.selectionStart != null && activeField.selectionEnd != null) {
+          field.setSelectionRange(activeField.selectionStart, activeField.selectionEnd);
+        }
+      } else if (field instanceof HTMLSelectElement) {
+        field.focus();
+      }
+      if (detailScroll && detailScrollPosition) {
+        detailScroll.scrollTop = detailScrollPosition.top;
+        detailScroll.scrollLeft = detailScrollPosition.left;
+      }
+    }
   }
 }

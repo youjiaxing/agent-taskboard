@@ -17,9 +17,13 @@ const lanesIndex = mobileProjectOrder.findIndex((name) => name.includes("board-s
 if (refreshIndex < 0 || lanesIndex < 0 || refreshIndex > lanesIndex) {
   throw new Error(`mobile refresh status should precede work lanes, got ${JSON.stringify(mobileProjectOrder)}`);
 }
-const visibleMobileLanes = await session.page.$$eval(".lane", (nodes) =>
-  nodes.filter((node) => getComputedStyle(node).display !== "none").map((node) => node.getAttribute("data-lane")),
-);
+const visibleMobileLanes = await session.page.waitForFunction(() => {
+  if (!window.matchMedia("(max-width: 640px)").matches) return false;
+  const lanes = [...document.querySelectorAll(".lane")]
+    .filter((node) => getComputedStyle(node).display !== "none")
+    .map((node) => node.getAttribute("data-lane"));
+  return lanes.join("|") === "inProgress|frontier" ? lanes : false;
+}).then((handle) => handle.jsonValue());
 if (visibleMobileLanes.join("|") !== "inProgress|frontier") {
   throw new Error(`mobile board should prioritize in progress then Frontier, got ${JSON.stringify(visibleMobileLanes)}`);
 }

@@ -48,7 +48,7 @@ fn snapshot_path(host: &HostKernel, project_id: &str) -> std::path::PathBuf {
         .join("tracker-snapshot")
 }
 
-fn post_rpc(protocol_url: &str, body: serde_json::Value) -> serde_json::Value {
+fn post_rpc_response(protocol_url: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
     let address: SocketAddr = protocol_url
         .strip_prefix("http://")
         .expect("loopback protocol")
@@ -65,8 +65,19 @@ fn post_rpc(protocol_url: &str, body: serde_json::Value) -> serde_json::Value {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
-    assert!(head.starts_with("HTTP/1.1 200"), "{head}\n{body}");
-    serde_json::from_str(body).unwrap()
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    (status, serde_json::from_str(body).unwrap())
+}
+
+fn post_rpc(protocol_url: &str, body: serde_json::Value) -> serde_json::Value {
+    let (status, body) = post_rpc_response(protocol_url, body);
+    assert_eq!(status, 200, "{body}");
+    body
 }
 
 #[path = "refresh/documents.rs"]

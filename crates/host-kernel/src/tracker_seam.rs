@@ -13,6 +13,21 @@ pub trait TrackerPort: Send + Sync {
         _ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueDocument, TrackerReadError>;
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        self.read_issue_document(ctx, issue_id)
+    }
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        self.read_issue_document(ctx, issue_id)
+            .map(|document| document.issue)
+    }
     fn create_issue(
         &self,
         ctx: &ProbeContext<'_>,
@@ -135,9 +150,22 @@ pub trait TrackerSeam: Send + Sync {
         ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueDocument, TrackerReadError>;
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        self.read_issue_document(ctx, issue_id)
+    }
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError>;
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
+        current_issue: Option<&IssueRecord>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError>;
@@ -192,16 +220,47 @@ impl TrackerSeam for TrackerRouter {
         }
     }
 
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        if Self::local(ctx) {
+            TrackerPort::read_issue_content(&self.local, ctx, issue_id)
+        } else {
+            self.github.read_issue_content(ctx, issue_id)
+        }
+    }
+
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        if Self::local(ctx) {
+            TrackerPort::read_issue_relations(&self.local, ctx, issue_id)
+        } else {
+            self.github.read_issue_relations(ctx, issue_id)
+        }
+    }
+
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
+        current_issue: Option<&IssueRecord>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {
         if Self::local(ctx) {
-            <LocalMarkdownTracker as TrackerSeam>::write_issue(&self.local, ctx, issue_id, op)
+            <LocalMarkdownTracker as TrackerSeam>::write_issue(
+                &self.local,
+                ctx,
+                current_issue,
+                issue_id,
+                op,
+            )
         } else {
-            self.github.write_issue(ctx, issue_id, op)
+            self.github.write_issue(ctx, current_issue, issue_id, op)
         }
     }
 }
@@ -223,9 +282,26 @@ impl<T: TrackerPort> TrackerSeam for T {
         TrackerPort::read_issue_document(self, ctx, issue_id)
     }
 
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        TrackerPort::read_issue_content(self, ctx, issue_id)
+    }
+
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        TrackerPort::read_issue_relations(self, ctx, issue_id)
+    }
+
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
+        current_issue: Option<&IssueRecord>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {
@@ -248,18 +324,31 @@ impl<T: TrackerPort> TrackerSeam for T {
             TrackerWriteOp::AddComment { body } => {
                 let issue_id = required_issue_id(issue_id)?;
                 self.add_comment(ctx, issue_id, body)?;
-                read_issue(self, ctx, issue_id)
+                current_issue
+                    .cloned()
+                    .ok_or_else(|| TrackerWriteError::Failed {
+                        message: "current issue is required after adding a comment".into(),
+                    })
             }
             TrackerWriteOp::Claim => self.claim_issue(ctx, required_issue_id(issue_id)?),
             TrackerWriteOp::Release => self.release_issue(ctx, required_issue_id(issue_id)?),
             TrackerWriteOp::SetParent { parent } => {
                 let issue_id = required_issue_id(issue_id)?;
                 self.set_parent(ctx, issue_id, parent.as_ref().map(IssueRef::id).as_deref())?;
-                read_issue(self, ctx, issue_id)
+                let mut updated =
+                    current_issue
+                        .cloned()
+                        .ok_or_else(|| TrackerWriteError::Failed {
+                            message: "current issue is required after changing its parent".into(),
+                        })?;
+                updated.parent = parent.clone();
+                Ok(updated)
             }
             TrackerWriteOp::SetBlockedBy { blocked_by } => {
                 let issue_id = required_issue_id(issue_id)?;
-                let current = read_issue(self, ctx, issue_id)?;
+                let current = current_issue.ok_or_else(|| TrackerWriteError::Failed {
+                    message: "current issue is required before changing dependencies".into(),
+                })?;
                 let current_ids: Vec<String> = current
                     .blocked_by
                     .iter()
@@ -270,7 +359,13 @@ impl<T: TrackerPort> TrackerSeam for T {
                     .collect();
                 let wanted_ids: Vec<String> = blocked_by.iter().map(IssueRef::id).collect();
                 self.set_blocked_by(ctx, issue_id, &current_ids, &wanted_ids)?;
-                read_issue(self, ctx, issue_id)
+                let mut updated = current.clone();
+                updated.blocked_by = blocked_by
+                    .iter()
+                    .cloned()
+                    .map(DependencyRef::Known)
+                    .collect();
+                Ok(updated)
             }
         }
     }
@@ -280,50 +375,4 @@ fn required_issue_id(issue_id: Option<&str>) -> Result<&str, TrackerWriteError> 
     issue_id.ok_or_else(|| TrackerWriteError::Failed {
         message: "issue id is required for this operation".into(),
     })
-}
-
-fn read_issue<T: TrackerPort + ?Sized>(
-    tracker: &T,
-    ctx: &ProbeContext<'_>,
-    issue_id: &str,
-) -> Result<IssueRecord, TrackerWriteError> {
-    tracker
-        .read_issues(ctx)
-        .map_err(read_as_write_error)?
-        .into_iter()
-        .find(|issue| issue.id() == issue_id)
-        .ok_or_else(|| TrackerWriteError::Failed {
-            message: "tracker did not return the updated issue".into(),
-        })
-}
-
-fn read_as_write_error(error: TrackerReadError) -> TrackerWriteError {
-    match error {
-        TrackerReadError::Auth {
-            source,
-            kind,
-            cli_detected,
-            detail,
-        } => TrackerWriteError::Auth {
-            source,
-            kind,
-            cli_detected,
-            detail,
-        },
-        TrackerReadError::Offline {
-            source,
-            cli_detected,
-            detail,
-        } => TrackerWriteError::Offline {
-            source,
-            cli_detected,
-            detail,
-        },
-        TrackerReadError::RateLimited { retry_after_ms } => {
-            TrackerWriteError::RateLimited { retry_after_ms }
-        }
-        TrackerReadError::Failed { detail } => TrackerWriteError::Failed {
-            message: detail.unwrap_or_else(|| "tracker business error".into()),
-        },
-    }
 }

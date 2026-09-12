@@ -289,6 +289,39 @@ impl TrackerPort for LocalMarkdownTracker {
         Ok(IssueDocument { issue, body })
     }
 
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        let mut document = TrackerPort::read_issue_document(self, ctx, issue_id)?;
+        document.body = editable_body(&document.body);
+        Ok(document)
+    }
+
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        let issues = match TrackerPort::read_all(self, ctx)? {
+            crate::tracker_seam::TrackerReadOutcome::Complete { issues } => issues,
+            crate::tracker_seam::TrackerReadOutcome::Incomplete { detail, .. } => {
+                return Err(TrackerReadError::Failed {
+                    detail: Some(format!(
+                        "cannot validate Issue relations from incomplete data: {detail}"
+                    )),
+                });
+            }
+        };
+        issues
+            .into_iter()
+            .find(|issue| issue.id() == issue_id)
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })
+    }
+
     fn create_issue(
         &self,
         ctx: &ProbeContext<'_>,

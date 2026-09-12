@@ -193,6 +193,13 @@ pub(super) fn write_empty(
     stream.write_all(response.as_bytes())
 }
 
+pub(super) fn request_backgrounds_refreshes(request: &serde_json::Value) -> bool {
+    matches!(
+        request.get("op").and_then(|value| value.as_str()),
+        Some("focusProject" | "setClientView")
+    )
+}
+
 pub(super) fn request_defers_refreshes(request: &serde_json::Value) -> bool {
     matches!(
         request.get("op").and_then(|value| value.as_str()),
@@ -205,7 +212,19 @@ pub(super) fn request_defers_issue_document(request: &serde_json::Value) -> bool
 }
 
 pub(super) fn request_defers_issue_write(request: &serde_json::Value) -> bool {
-    request.get("op").and_then(|value| value.as_str()) == Some("createIssue")
+    matches!(
+        request.get("op").and_then(|value| value.as_str()),
+        Some(
+            "createIssue"
+                | "updateIssue"
+                | "setIssueOpen"
+                | "addIssueComment"
+                | "claimIssue"
+                | "releaseIssue"
+                | "setIssueParent"
+                | "setIssueBlockedBy"
+        )
+    )
 }
 
 pub(super) fn write_bytes(

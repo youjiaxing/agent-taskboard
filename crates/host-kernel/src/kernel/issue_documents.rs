@@ -21,6 +21,17 @@ pub(crate) struct CompletedIssueDocument {
     result: Result<tracker::IssueDocument, tracker::TrackerReadError>,
 }
 
+pub(crate) enum IssueWriteExpectation {
+    Content { title: String, body: String },
+    Parent { parent: Option<String> },
+    BlockedBy { blocked_by: Vec<String> },
+}
+
+pub(crate) enum IssueWriteFailure {
+    Tracker(tracker::TrackerWriteError),
+    Conflict(IssueConflict),
+}
+
 pub(crate) struct PreparedIssueWrite {
     pub(crate) tracker: Arc<dyn TrackerSeam>,
     pub(crate) project_id: String,
@@ -28,6 +39,9 @@ pub(crate) struct PreparedIssueWrite {
     pub(crate) github_host: String,
     pub(crate) repository: String,
     pub(crate) tracker_kind: TrackerKind,
+    pub(crate) current_issue: Option<IssueRecord>,
+    pub(crate) expectation: Option<IssueWriteExpectation>,
+    pub(crate) overwrite_conflict: bool,
     pub(crate) secrets_pat: Option<String>,
     pub(crate) secrets_path: PathBuf,
     pub(crate) op: tracker_seam::TrackerWriteOp,
@@ -35,7 +49,7 @@ pub(crate) struct PreparedIssueWrite {
 
 pub(crate) struct CompletedIssueWrite {
     pub(crate) prepared: PreparedIssueWrite,
-    pub(crate) result: Result<IssueRecord, tracker::TrackerWriteError>,
+    pub(crate) result: Result<IssueRecord, IssueWriteFailure>,
 }
 
 impl HostKernel {
@@ -150,8 +164,14 @@ impl HostKernel {
                         existing.labels = document.issue.labels;
                     }
                 }
+                let editable_body = if prepared.tracker_kind == TrackerKind::LocalMarkdown {
+                    tracker::editable_body(&document.body)
+                } else {
+                    document.body.clone()
+                };
                 IssueDocumentState::Ready {
                     body: document.body,
+                    editable_body: Some(editable_body),
                     fetched_at_ms: prepared.now_ms,
                 }
             }
@@ -219,19 +239,144 @@ impl HostKernel {
     }
 
     pub(crate) fn execute_prepared_issue_write(
-        prepared: kernel::issue_documents::PreparedIssueWrite,
+        mut prepared: kernel::issue_documents::PreparedIssueWrite,
     ) -> kernel::issue_documents::CompletedIssueWrite {
-        let result = prepared.tracker.write_issue(
-            &tracker::ProbeContext {
-                tracker: prepared.tracker_kind,
-                github_host: &prepared.github_host,
-                repository: &prepared.repository,
-                secrets_pat: prepared.secrets_pat.as_deref(),
-                secrets_path: &prepared.secrets_path,
-            },
-            prepared.issue_id.as_deref(),
-            &prepared.op,
-        );
+        let context = tracker::ProbeContext {
+            tracker: prepared.tracker_kind,
+            github_host: &prepared.github_host,
+            repository: &prepared.repository,
+            secrets_pat: prepared.secrets_pat.as_deref(),
+            secrets_path: &prepared.secrets_path,
+        };
+        let result = (|| {
+            if !prepared.overwrite_conflict {
+                if let Some(expectation) = prepared.expectation.as_ref() {
+                    let latest = match expectation {
+                        IssueWriteExpectation::Content { .. } => prepared
+                            .tracker
+                            .read_issue_content(
+                                &context,
+                                prepared.issue_id.as_deref().unwrap_or_default(),
+                            )
+                            .map_err(read_error_as_write_failure)?,
+                        IssueWriteExpectation::Parent { .. }
+                        | IssueWriteExpectation::BlockedBy { .. } => IssueDocument {
+                            issue: prepared
+                                .tracker
+                                .read_issue_relations(
+                                    &context,
+                                    prepared.issue_id.as_deref().unwrap_or_default(),
+                                )
+                                .map_err(read_error_as_write_failure)?,
+                            body: String::new(),
+                        },
+                    };
+                    let mut fields = Vec::new();
+                    let mut skip_write = false;
+                    match (expectation, &mut prepared.op) {
+                        (
+                            IssueWriteExpectation::Content { title, body },
+                            TrackerWriteOp::UpdateIssue {
+                                title: wanted_title,
+                                body: wanted_body,
+                            },
+                        ) => {
+                            if wanted_title == title {
+                                *wanted_title = latest.issue.title.clone();
+                            } else if latest.issue.title != *title
+                                && latest.issue.title != *wanted_title
+                            {
+                                fields.push("title".to_string());
+                            }
+                            if wanted_body == body {
+                                *wanted_body = latest.body.clone();
+                            } else if latest.body != *body && latest.body != *wanted_body {
+                                fields.push("body".to_string());
+                            }
+                        }
+                        (
+                            IssueWriteExpectation::Parent {
+                                parent: base_parent,
+                            },
+                            TrackerWriteOp::SetParent {
+                                parent: wanted_parent,
+                            },
+                        ) => {
+                            let latest_parent = latest.issue.parent.as_ref().map(IssueRef::id);
+                            let wanted_id = wanted_parent.as_ref().map(IssueRef::id);
+                            if wanted_id == *base_parent {
+                                *wanted_parent = latest.issue.parent.clone();
+                                skip_write = true;
+                            } else if latest_parent != *base_parent && latest_parent != wanted_id {
+                                fields.push("parent".to_string());
+                            }
+                        }
+                        (
+                            IssueWriteExpectation::BlockedBy {
+                                blocked_by: base_blocked_by,
+                            },
+                            TrackerWriteOp::SetBlockedBy {
+                                blocked_by: wanted_blocked_by,
+                            },
+                        ) => {
+                            let latest_ids = dependency_ids(&latest.issue);
+                            let wanted_ids =
+                                sorted_ids(wanted_blocked_by.iter().map(IssueRef::id).collect());
+                            let base_ids = sorted_ids(base_blocked_by.clone());
+                            if wanted_ids == base_ids {
+                                skip_write = true;
+                            } else if latest_ids != base_ids && latest_ids != wanted_ids {
+                                fields.push("blockedBy".to_string());
+                            }
+                        }
+                        _ => {
+                            return Err(IssueWriteFailure::Tracker(TrackerWriteError::Failed {
+                                message: "Issue write expectation does not match the operation"
+                                    .into(),
+                            }));
+                        }
+                    }
+                    if !fields.is_empty() {
+                        return Err(IssueWriteFailure::Conflict(IssueConflict {
+                            issue_id: prepared.issue_id.clone().unwrap_or_default(),
+                            fields,
+                            latest: IssueConflictLatest {
+                                title: Some(latest.issue.title.clone()),
+                                body: Some(latest.body),
+                                parent: latest.issue.parent.as_ref().map(IssueRef::id),
+                                blocked_by: Some(dependency_ids(&latest.issue)),
+                            },
+                        }));
+                    }
+                    prepared.current_issue = Some(latest.issue.clone());
+                    if skip_write {
+                        return Ok(latest.issue);
+                    }
+                }
+            }
+            if matches!(&prepared.op, TrackerWriteOp::SetBlockedBy { .. })
+                && (prepared.overwrite_conflict || prepared.expectation.is_none())
+            {
+                prepared.current_issue = Some(
+                    prepared
+                        .tracker
+                        .read_issue_relations(
+                            &context,
+                            prepared.issue_id.as_deref().unwrap_or_default(),
+                        )
+                        .map_err(read_error_as_write_failure)?,
+                );
+            }
+            prepared
+                .tracker
+                .write_issue(
+                    &context,
+                    prepared.current_issue.as_ref(),
+                    prepared.issue_id.as_deref(),
+                    &prepared.op,
+                )
+                .map_err(IssueWriteFailure::Tracker)
+        })();
         kernel::issue_documents::CompletedIssueWrite { prepared, result }
     }
 
@@ -240,11 +385,69 @@ impl HostKernel {
         completed: kernel::issue_documents::CompletedIssueWrite,
     ) -> Result<IssueRecord, KernelError> {
         let kernel::issue_documents::CompletedIssueWrite { prepared, result } = completed;
-        let updated = result.map_err(write_tracker_error)?;
+        let updated = result.map_err(|failure| match failure {
+            IssueWriteFailure::Tracker(error) => write_tracker_error(error),
+            IssueWriteFailure::Conflict(conflict) => KernelError::Conflict(conflict),
+        })?;
         let returned = updated.clone();
+        let generation = self
+            .issue_write_generations
+            .entry(prepared.project_id.clone())
+            .or_default();
+        *generation = generation.saturating_add(1);
         self.merge_issue(&prepared.project_id, updated, &prepared.op);
         Ok(returned)
     }
+}
+
+fn sorted_ids(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn dependency_ids(issue: &IssueRecord) -> Vec<String> {
+    sorted_ids(
+        issue
+            .blocked_by
+            .iter()
+            .filter_map(|dependency| match dependency {
+                DependencyRef::Known(reference) => Some(reference.id()),
+                DependencyRef::Unclear { .. } => None,
+            })
+            .collect(),
+    )
+}
+
+fn read_error_as_write_failure(error: TrackerReadError) -> IssueWriteFailure {
+    IssueWriteFailure::Tracker(match error {
+        TrackerReadError::Auth {
+            source,
+            kind,
+            cli_detected,
+            detail,
+        } => TrackerWriteError::Auth {
+            source,
+            kind,
+            cli_detected,
+            detail,
+        },
+        TrackerReadError::Offline {
+            source,
+            cli_detected,
+            detail,
+        } => TrackerWriteError::Offline {
+            source,
+            cli_detected,
+            detail,
+        },
+        TrackerReadError::RateLimited { retry_after_ms } => {
+            TrackerWriteError::RateLimited { retry_after_ms }
+        }
+        TrackerReadError::Failed { detail } => TrackerWriteError::Failed {
+            message: detail.unwrap_or_else(|| "tracker business error".into()),
+        },
+    })
 }
 
 pub(crate) fn issue_document_body(state: Option<&IssueDocumentState>) -> Option<(String, u64)> {
@@ -252,6 +455,7 @@ pub(crate) fn issue_document_body(state: Option<&IssueDocumentState>) -> Option<
         IssueDocumentState::Ready {
             body,
             fetched_at_ms,
+            ..
         }
         | IssueDocumentState::Stale {
             body,

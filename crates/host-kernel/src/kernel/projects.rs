@@ -193,6 +193,7 @@ impl HostKernel {
             self.issue_document_in_flight
                 .retain(|(pending_project, _), _| pending_project != project_id);
             self.refresh.remove(project_id);
+            self.issue_write_generations.remove(project_id);
             self.local_tracker_revisions.remove(project_id);
             refresh::remove_project_data(&self.data.host_dir, project_id)?;
             if self.focused_project_id.as_deref() == Some(project_id) {
@@ -253,18 +254,9 @@ impl HostKernel {
     }
 
     pub(crate) fn focus_project(&mut self, project_id: &str) -> Result<(), KernelError> {
-        let Some(index) = self
-            .projects
-            .iter()
-            .position(|project| project.id == project_id)
-        else {
+        if !self.projects.iter().any(|project| project.id == project_id) {
             return Err(KernelError::Protocol("unknown project".into()));
-        };
-        let host = self.projects[index].github_host.clone();
-        let repository = self.projects[index].repository.clone();
-        let tracker_kind = self.projects[index].tracker;
-        let connection = self.probe_tracker(tracker_kind, &host, &repository);
-        self.projects[index].connection = connection;
+        }
         self.focused_project_id = Some(project_id.to_string());
         self.selected_issue_id = None;
         self.graph_center_issue_id = None;

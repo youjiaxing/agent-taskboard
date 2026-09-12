@@ -121,8 +121,24 @@ impl GitHubApi for LiveGitHubApi {
         token: &str,
         number: u64,
     ) -> Result<Value, ProbeError> {
-        let url = format!("{}/issues/{number}", github_repo_url(host, repository));
-        github_json("GET", &url, token, None)
+        let Some((owner, name)) = repository.split_once('/') else {
+            return Err(ProbeError::Unreachable(
+                "repository must be owner/name".into(),
+            ));
+        };
+        let payload = graphql_post(
+            host,
+            token,
+            GITHUB_ISSUE_QUERY,
+            serde_json::json!({ "owner": owner, "name": name, "number": number }),
+        )?;
+        payload
+            .pointer("/data/repository/issue")
+            .cloned()
+            .filter(|issue| !issue.is_null())
+            .ok_or_else(|| ProbeError::GraphQl {
+                detail: "unknown issue".into(),
+            })
     }
 
     fn viewer_login(&self, host: &str, token: &str) -> Result<String, ProbeError> {
@@ -604,6 +620,29 @@ query($owner: String!, $name: String!, $after: String) {
         blocking(first: 100) { pageInfo { hasNextPage endCursor } nodes { number title state repository { nameWithOwner } } }
         subIssues(first: 100) { pageInfo { hasNextPage endCursor } nodes { number title state repository { nameWithOwner } } }
       }
+    }
+  }
+}
+"#;
+
+const GITHUB_ISSUE_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number
+      title
+      body
+      state
+      closedAt
+      url
+      repository { nameWithOwner }
+      parent { number title state repository { nameWithOwner } }
+      assignees(first: 10) { nodes { login } }
+      labels(first: 30) { nodes { name } }
+      issueDependenciesSummary { blockedBy }
+      blockedBy(first: 100) { pageInfo { hasNextPage endCursor } nodes { number title state repository { nameWithOwner } } }
+      blocking(first: 100) { pageInfo { hasNextPage endCursor } nodes { number title state repository { nameWithOwner } } }
+      subIssues(first: 100) { pageInfo { hasNextPage endCursor } nodes { number title state repository { nameWithOwner } } }
     }
   }
 }

@@ -295,6 +295,10 @@ export type ShellCopy = {
   closeIssue: string;
   reopenIssue: string;
   issueUpdates: string;
+  issueConflict: string;
+  issueConflictLatest: string;
+  issueConflictUseLatest: string;
+  issueConflictOverwrite: string;
 };
 
 export type CredentialSource = "app-env" | "secrets-file" | "cli" | "generic-env";
@@ -362,12 +366,39 @@ export type ProjectDraft = {
 export type IssueContentDraft = {
   title: string;
   body: string;
+  baseTitle: string;
+  baseBody: string;
 };
 
 export type IssueRelationDraft = {
   parent: string;
   blockedBy: string[];
+  baseParent: string;
+  baseBlockedBy: string[];
 };
+
+export type IssueConflict = {
+  issueId: string;
+  fields: string[];
+  latest: {
+    title?: string;
+    body?: string;
+    parent?: string;
+    blockedBy?: string[];
+  };
+};
+
+export class RpcHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code = "",
+    readonly conflict: IssueConflict | null = null,
+  ) {
+    super(message);
+    this.name = "RpcHttpError";
+  }
+}
 
 export type FormKey =
   | `issue-search:${string}`
@@ -398,6 +429,7 @@ export type UsageCustomDraft = {
 export type FormOperationState = {
   pending: Set<FormKey>;
   errors: Map<FormKey, string>;
+  conflicts: Map<FormKey, IssueConflict>;
 };
 
 export type ProjectInferenceState =
@@ -465,7 +497,7 @@ export type IssueDocumentFailure = {
 export type IssueDocumentState =
   | { kind: "unloaded" }
   | { kind: "loading"; body?: string | null; fetchedAtMs?: number | null }
-  | { kind: "ready"; body: string; fetchedAtMs: number }
+  | { kind: "ready"; body: string; editableBody?: string | null; fetchedAtMs: number }
   | { kind: "stale"; body: string; fetchedAtMs: number; failure: IssueDocumentFailure }
   | { kind: "failed"; failure: IssueDocumentFailure };
 

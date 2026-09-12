@@ -7,6 +7,8 @@ mod usage;
 
 impl HostKernel {
     pub fn handle(&mut self, request: serde_json::Value) -> Result<CommandOutcome, KernelError> {
+        let focuses_project =
+            request.get("op").and_then(|value| value.as_str()) == Some("focusProject");
         let client_instance_id = request
             .get("clientInstanceId")
             .and_then(|value| value.as_str())
@@ -27,6 +29,18 @@ impl HostKernel {
 
         let result = self.handle_active_request(request);
         let current = self.normalize_client_navigation(self.capture_client_navigation());
+        if focuses_project && result.is_ok() {
+            if let Some(project_id) = current.focused_project_id.clone() {
+                self.client_views.insert(
+                    client_instance_id.clone(),
+                    ClientView {
+                        project_id,
+                        visible: true,
+                        last_seen_ms: self.now_ms,
+                    },
+                );
+            }
+        }
         self.client_navigation.insert(client_instance_id, current);
         let previous = self.normalize_client_navigation(previous);
         self.apply_client_navigation(previous);

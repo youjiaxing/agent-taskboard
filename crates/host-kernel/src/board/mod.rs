@@ -102,6 +102,12 @@ pub enum IssueDocumentState {
     },
     Ready {
         body: String,
+        #[serde(
+            rename = "editableBody",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        editable_body: Option<String>,
         #[serde(rename = "fetchedAtMs")]
         fetched_at_ms: u64,
     },
@@ -240,15 +246,6 @@ impl RefreshStatus {
             Self::AuthFailed { fetched_at_ms } => *fetched_at_ms,
             Self::Incomplete { fetched_at_ms, .. } => *fetched_at_ms,
             Self::TrackerError { fetched_at_ms, .. } => *fetched_at_ms,
-        }
-    }
-
-    /// 当前数据能否当作全量数据使用；不完整时禁止计算 Frontier/依赖图。
-    pub fn complete(&self) -> bool {
-        match self {
-            Self::Incomplete { .. } => false,
-            Self::TrackerError { data_complete, .. } => *data_complete,
-            _ => true,
         }
     }
 }
@@ -412,19 +409,19 @@ pub fn clamp_recent_limit(limit: u32) -> u32 {
 
 pub fn project_issue_counts(
     loaded: Option<&[IssueRecord]>,
-    refresh: &RefreshStatus,
+    data_complete: bool,
 ) -> ProjectIssueCounts {
     let Some(issues) = loaded else {
         return ProjectIssueCounts::default();
     };
     let mut counts = ProjectIssueCounts {
-        data_available: refresh.complete(),
+        data_available: data_complete,
         total: issues.len(),
         open: issues.iter().filter(|issue| issue.open).count(),
         closed: issues.iter().filter(|issue| !issue.open).count(),
         ..ProjectIssueCounts::default()
     };
-    if !refresh.complete() {
+    if !data_complete {
         return counts;
     }
     for issue in issues.iter().filter(|issue| issue.open) {
@@ -440,6 +437,7 @@ pub fn project_issue_counts(
 pub fn project_board(
     project_id: &str,
     loaded: Option<&[IssueRecord]>,
+    data_complete: bool,
     parent_filter: Option<&str>,
     selected_id: Option<&str>,
     recent_limit: u32,
@@ -470,7 +468,7 @@ pub fn project_board(
     let mapping_active = label_mapping_active(issues);
     // 数据不完整时不能当作全量数据计算 Frontier 与依赖图：
     // 不画四列、不画图，但保留已知数据的详情与父过滤视图。
-    if !refresh.complete() {
+    if !data_complete {
         let empty = if matches!(refresh, RefreshStatus::TrackerError { .. }) {
             BoardEmptyReason::TrackerError
         } else {

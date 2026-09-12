@@ -293,5 +293,9 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 close_issue: "关闭 Issue".into(),
                 reopen_issue: "重新打开 Issue".into(),
                 issue_updates: "评论与关系".into(),
+                issue_conflict: "Tracker 中的同一内容已经变化。你的输入仍保留在表单中。".into(),
+                issue_conflict_latest: "Tracker 最新值".into(),
+                issue_conflict_use_latest: "载入最新值".into(),
+                issue_conflict_overwrite: "仍然覆盖".into(),
     }
 }

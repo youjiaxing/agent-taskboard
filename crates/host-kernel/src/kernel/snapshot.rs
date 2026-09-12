@@ -155,10 +155,11 @@ impl HostKernel {
     }
 
     pub(crate) fn project_issue_counts(&self, project_id: &str) -> ProjectIssueCounts {
-        let refresh = self.refresh_status_for(project_id);
         board::project_issue_counts(
             self.loaded_issues.get(project_id).map(Vec::as_slice),
-            &refresh,
+            self.refresh
+                .get(project_id)
+                .is_some_and(|state| state.complete),
         )
     }
 
@@ -204,6 +205,9 @@ impl HostKernel {
         let mut board = board::project_board(
             focused_project_id,
             loaded,
+            self.refresh
+                .get(focused_project_id)
+                .is_some_and(|state| state.complete),
             self.parent_filter.as_deref(),
             self.selected_issue_id.as_deref(),
             self.recent_limit,

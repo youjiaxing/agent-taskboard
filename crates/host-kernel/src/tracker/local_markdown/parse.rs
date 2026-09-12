@@ -58,6 +58,31 @@ pub(crate) fn header_fields(text: &str) -> BTreeMap<String, Vec<String>> {
     fields
 }
 
+pub(crate) fn editable_body(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("# "))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    while start < lines.len() {
+        let line = lines[start];
+        if line.trim().is_empty()
+            || parse_field_line(line).is_some_and(|(name, _)| is_local_metadata_field(&name))
+        {
+            start += 1;
+        } else {
+            break;
+        }
+    }
+    let end = lines[start..]
+        .iter()
+        .position(|line| normalize_metadata(line.trim()) == "## comments")
+        .map(|offset| start + offset)
+        .unwrap_or(lines.len());
+    lines[start..end].join("\n").trim().to_string()
+}
+
 pub(crate) fn section_lines(text: &str, heading: &str) -> Vec<String> {
     let wanted = normalize_metadata(heading);
     let mut in_section = false;

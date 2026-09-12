@@ -266,13 +266,7 @@ fn spawn_local_rpc_inner(
                         let _ = std::thread::Builder::new()
                             .name("host-local-rpc-conn".into())
                             .spawn(move || {
-                                match serve_connection(
-                                    stream,
-                                    &kernel,
-                                    &assets,
-                                    server_port,
-                                    Arc::clone(&kernel),
-                                ) {
+                                match serve_connection(stream, &kernel, &assets, server_port) {
                                     Ok(Some(outcome)) => {
                                         if outcome.process == ProcessIntent::Exit {
                                             stop.store(true, Ordering::Relaxed);
@@ -388,6 +382,127 @@ mod tests {
                 .frontier
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn failed_refresh_after_a_write_still_records_the_tracker_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("work/garden");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let tracker = Arc::new(MemoryTracker::new());
+        tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+        let tracker_seam: Arc<dyn crate::TrackerSeam> = tracker.clone();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "zh-Hans-CN".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Studio".into(),
+            },
+            tracker_seam,
+        )
+        .unwrap();
+        let project_id = host
+            .handle(serde_json::json!({
+                "op": "registerProject",
+                "name": "garden",
+                "localPath": project_dir,
+                "repository": "you/garden",
+            }))
+            .unwrap()
+            .snapshot
+            .focused_project_id;
+
+        host.begin_deferred_refreshes();
+        host.handle(serde_json::json!({
+            "op": "focusProject",
+            "projectId": project_id,
+        }))
+        .unwrap();
+        let refresh = host.take_deferred_refreshes().pop().expect("refresh");
+        tracker.fail_rate_limited("you/garden", Some(120_000));
+        let completed = HostKernel::execute_prepared_refresh(refresh);
+
+        host.handle(serde_json::json!({
+            "op": "claimIssue",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+        assert!(!host.finish_prepared_refresh(completed));
+        assert!(matches!(
+            host.snapshot().board.unwrap().refresh,
+            RefreshStatus::RateLimited { .. }
+        ));
+    }
+
+    #[test]
+    fn successful_issue_write_wins_over_an_older_background_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("work/garden");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let tracker = Arc::new(MemoryTracker::new());
+        tracker.add_issue(IssueRecord::open("you/garden", 1, "ready"));
+        let tracker_seam: Arc<dyn crate::TrackerSeam> = tracker.clone();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "zh-Hans-CN".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Studio".into(),
+            },
+            tracker_seam,
+        )
+        .unwrap();
+        let project_id = host
+            .handle(serde_json::json!({
+                "op": "registerProject",
+                "name": "garden",
+                "localPath": project_dir,
+                "repository": "you/garden",
+            }))
+            .unwrap()
+            .snapshot
+            .focused_project_id;
+
+        host.begin_deferred_refreshes();
+        host.handle(serde_json::json!({
+            "op": "focusProject",
+            "projectId": project_id,
+        }))
+        .unwrap();
+        let refresh = host.take_deferred_refreshes().pop().expect("refresh");
+        tracker.set_issues(
+            "you/garden",
+            vec![
+                IssueRecord::open("you/garden", 1, "ready"),
+                IssueRecord::open("you/garden", 2, "new remote issue"),
+            ],
+        );
+        let completed = HostKernel::execute_prepared_refresh(refresh);
+
+        host.handle(serde_json::json!({
+            "op": "claimIssue",
+            "issueId": "you/garden#1",
+        }))
+        .unwrap();
+        assert!(host.finish_prepared_refresh(completed));
+        let columns = host.snapshot().board.unwrap().columns.unwrap();
+        assert!(
+            columns
+                .in_progress
+                .iter()
+                .any(|card| card.id == "you/garden#1"),
+            "the older refresh must not overwrite the successful claim"
+        );
+        assert!(
+            columns
+                .frontier
+                .iter()
+                .any(|card| card.id == "you/garden#2"),
+            "remote changes to other Issues should survive the merge"
         );
     }
 }

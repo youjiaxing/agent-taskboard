@@ -28,6 +28,22 @@
 
 .issue-editor .actions { margin-top: 6px; }
 
+.issue-conflict { display: grid; gap: 8px; margin: 8px 0 0; }
+.issue-conflict p { margin: 0; }
+.issue-conflict-latest { display: grid; gap: 6px; }
+.issue-conflict-latest pre {
+  margin: 2px 0 0;
+  padding: 7px 9px;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--btn);
+  font: inherit;
+}
+
 .detail-block.issue-editor { border-top: 1px solid var(--line); border-bottom: 0; padding: 10px 0 0; margin-top: 12px; }
 
 .detail-block.issue-editor + .detail-block { margin-top: 12px; }

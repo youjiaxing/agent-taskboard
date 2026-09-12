@@ -401,20 +401,215 @@ fn tauri_client_viewing_remote_host_keeps_that_project_watched() {
 }
 
 #[test]
-fn claim_without_last_data_still_live_reads_the_focused_project() {
+fn project_focus_returns_cached_board_before_one_background_refresh_finishes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden = make_dir(tmp.path(), "work/garden");
+    let notes = make_dir(tmp.path(), "work/notes");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "garden issue"));
+    tracker.add_issue(IssueRecord::open("you/notes", 1, "notes issue"));
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let garden_id = register(&mut kernel, "garden", &garden, "you/garden");
+    let notes_id = register(&mut kernel, "notes", &notes, "you/notes");
+    kernel
+        .handle(serde_json::json!({
+            "op": "setClientView",
+            "clientId": "desktop",
+            "projectId": notes_id,
+            "visible": true,
+        }))
+        .unwrap();
+
+    let baseline = tracker.read_count("you/garden");
+    tracker.set_read_delay_ms(750);
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+
+    let focused_at = Instant::now();
+    let focused = post_rpc(
+        server.protocol_url(),
+        serde_json::json!({
+            "op": "focusProject",
+            "clientInstanceId": "desktop",
+            "projectId": garden_id,
+        }),
+    );
+    assert!(
+        focused_at.elapsed() < Duration::from_millis(250),
+        "Project focus waited for the Tracker: {:?}",
+        focused_at.elapsed()
+    );
+    assert_eq!(focused["snapshot"]["focusedProjectId"], garden_id);
+    assert_eq!(
+        focused["snapshot"]["board"]["columns"]["frontier"][0]["title"],
+        "garden issue"
+    );
+
+    let reported_at = Instant::now();
+    post_rpc(
+        server.protocol_url(),
+        serde_json::json!({
+            "op": "setClientView",
+            "clientInstanceId": "desktop",
+            "clientId": "desktop",
+            "projectId": garden_id,
+            "visible": true,
+        }),
+    );
+    assert!(
+        reported_at.elapsed() < Duration::from_millis(250),
+        "Client view report waited for the Tracker: {:?}",
+        reported_at.elapsed()
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while tracker.read_count("you/garden") == baseline && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        tracker.read_count("you/garden"),
+        baseline + 1,
+        "focusProject followed by setClientView must coalesce to one refresh"
+    );
+}
+
+#[test]
+fn rapid_project_focus_keeps_the_last_client_focus_after_older_refreshes_finish() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(SeamTracker::new());
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let mut projects = Vec::new();
+    for name in ["alpha", "beta", "gamma"] {
+        let repository = format!("you/{name}");
+        tracker.add_issue(IssueRecord::open(&repository, 1, format!("{name} issue")));
+        let directory = make_dir(tmp.path(), &format!("work/{name}"));
+        let project_id = register(&mut kernel, name, &directory, &repository);
+        projects.push((repository, project_id));
+    }
+    let baseline: Vec<_> = projects
+        .iter()
+        .map(|(repository, _)| tracker.read_count(repository))
+        .collect();
+    tracker.set_read_delay_ms(300);
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+
+    for (_, project_id) in &projects {
+        let started = Instant::now();
+        let focused = post_rpc(
+            server.protocol_url(),
+            serde_json::json!({
+                "op": "focusProject",
+                "clientInstanceId": "desktop",
+                "projectId": project_id,
+            }),
+        );
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(focused["snapshot"]["focusedProjectId"], *project_id);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while projects
+        .iter()
+        .zip(&baseline)
+        .any(|((repository, _), count)| tracker.read_count(repository) == *count)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    for ((repository, _), count) in projects.iter().zip(&baseline) {
+        assert_eq!(
+            tracker.read_count(repository),
+            count + 1,
+            "each Project switch must start exactly one refresh"
+        );
+    }
+    let latest = post_rpc(
+        server.protocol_url(),
+        serde_json::json!({ "op": "snapshot", "clientInstanceId": "desktop" }),
+    );
+    assert_eq!(latest["snapshot"]["focusedProjectId"], projects[2].1);
+    assert_eq!(
+        latest["snapshot"]["board"]["columns"]["frontier"][0]["title"],
+        "gamma issue"
+    );
+}
+
+#[test]
+fn project_focus_without_cached_data_returns_loading_before_the_tracker_finishes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/empty", 1, "loaded later"));
+    tracker.set_read_mode("you/empty", ReadMode::Offline);
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    let empty_dir = make_dir(tmp.path(), "work/empty");
+    let empty_id = register(&mut kernel, "empty", &empty_dir, "you/empty");
+    tracker.add_issue(IssueRecord::open("you/stable", 1, "stable issue"));
+    let stable_dir = make_dir(tmp.path(), "work/stable");
+    register(&mut kernel, "stable", &stable_dir, "you/stable");
+
+    tracker.set_read_mode("you/empty", ReadMode::Complete);
+    let baseline = tracker.read_count("you/empty");
+    tracker.set_read_delay_ms(750);
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(host, |_| {}).unwrap();
+
+    let started = Instant::now();
+    let focused = post_rpc(
+        server.protocol_url(),
+        serde_json::json!({
+            "op": "focusProject",
+            "clientInstanceId": "desktop",
+            "projectId": empty_id,
+        }),
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "uncached Project focus waited for the Tracker: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(focused["snapshot"]["focusedProjectId"], empty_id);
+    assert_eq!(focused["snapshot"]["board"]["empty"], "no-data");
+    assert!(focused["snapshot"]["board"]["columns"].is_null());
+    assert_eq!(
+        focused["snapshot"]["board"]["refresh"]["kind"],
+        "refreshing"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while tracker.read_count("you/empty") == baseline && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let loaded = post_rpc(
+        server.protocol_url(),
+        serde_json::json!({ "op": "snapshot", "clientInstanceId": "desktop" }),
+    );
+    assert_eq!(
+        loaded["snapshot"]["board"]["columns"]["frontier"][0]["title"],
+        "loaded later"
+    );
+}
+
+#[test]
+fn direct_claim_without_last_data_rejects_an_unknown_issue_without_refetching() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
     tracker.fail_read("you/garden");
-    let mut host = boot(tmp.path(), tracker);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
     register(&mut host, "garden", &dir, "you/garden");
+    let reads = tracker.read_count("you/garden");
     let err = host
         .handle(serde_json::json!({
             "op": "claimIssue",
             "issueId": "you/garden#1",
         }))
         .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("never-fetched")));
+    assert!(matches!(err, KernelError::Protocol(message) if message.contains("unknown issue")));
+    assert_eq!(tracker.read_count("you/garden"), reads);
 }
 
 #[test]

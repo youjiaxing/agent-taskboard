@@ -240,10 +240,23 @@ impl HostKernel {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
                 }
+                let base = request.get("base").and_then(|value| value.as_object());
                 self.dispatch(Command::UpdateIssue {
                     issue_id: required_string(&request, "issueId")?,
                     title: required_string(&request, "title")?,
                     body: optional_string(&request, "body"),
+                    base_title: base
+                        .and_then(|base| base.get("title"))
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned),
+                    base_body: base
+                        .and_then(|base| base.get("body"))
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned),
+                    overwrite_conflict: request
+                        .get("conflictPolicy")
+                        .and_then(|value| value.as_str())
+                        == Some("overwrite"),
                 })
             }
             "setIssueOpen" => {
@@ -279,9 +292,24 @@ impl HostKernel {
                 if let Some(id) = parent.as_deref() {
                     parse_issue_ref(id)?;
                 }
+                let base_parent = request
+                    .get("base")
+                    .and_then(|value| value.as_object())
+                    .filter(|base| base.contains_key("parent"))
+                    .map(|base| {
+                        base.get("parent")
+                            .and_then(|value| value.as_str())
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned)
+                    });
                 self.dispatch(Command::SetIssueParent {
                     issue_id: required_string(&request, "issueId")?,
                     parent,
+                    base_parent,
+                    overwrite_conflict: request
+                        .get("conflictPolicy")
+                        .and_then(|value| value.as_str())
+                        == Some("overwrite"),
                 })
             }
             "setIssueBlockedBy" => {
@@ -302,9 +330,25 @@ impl HostKernel {
                 for id in &blocked_by {
                     parse_issue_ref(id)?;
                 }
+                let base_blocked_by = request
+                    .get("base")
+                    .and_then(|value| value.as_object())
+                    .and_then(|base| base.get("blockedBy"))
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                            .collect()
+                    });
                 self.dispatch(Command::SetIssueBlockedBy {
                     issue_id: required_string(&request, "issueId")?,
                     blocked_by,
+                    base_blocked_by,
+                    overwrite_conflict: request
+                        .get("conflictPolicy")
+                        .and_then(|value| value.as_str())
+                        == Some("overwrite"),
                 })
             }
             other => Err(KernelError::Protocol(format!("unknown op {other}"))),

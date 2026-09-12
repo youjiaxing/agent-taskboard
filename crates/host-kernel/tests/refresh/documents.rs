@@ -211,3 +211,38 @@ fn slow_refresh_does_not_hold_the_kernel_lock_against_other_client_rpc() {
     let refreshed = refresh.join().unwrap();
     assert_eq!(refreshed["snapshot"]["board"]["refresh"]["kind"], "ready");
 }
+
+#[test]
+fn issue_conflict_uses_a_structured_http_409_response() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "original title"));
+    tracker.set_issue_body("you/garden#1", "original body");
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    register(&mut kernel, "garden", &dir, "you/garden");
+    tracker.set_issues(
+        "you/garden",
+        vec![IssueRecord::open("you/garden", 1, "remote title")],
+    );
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(host, |_| {}).unwrap();
+
+    let (status, body) = post_rpc_response(
+        server.protocol_url(),
+        serde_json::json!({
+            "op": "updateIssue",
+            "clientInstanceId": "desktop",
+            "issueId": "you/garden#1",
+            "title": "local title",
+            "body": "original body",
+            "base": { "title": "original title", "body": "original body" },
+        }),
+    );
+
+    assert_eq!(status, 409);
+    assert_eq!(body["error"], "issue-conflict");
+    assert_eq!(body["issueId"], "you/garden#1");
+    assert_eq!(body["fields"], serde_json::json!(["title"]));
+    assert_eq!(body["latest"]["title"], "remote title");
+}

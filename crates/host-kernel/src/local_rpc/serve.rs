@@ -10,12 +10,73 @@ use crate::{CommandOutcome, HostKernel, KernelError};
 use super::http::*;
 use super::*;
 
+fn kernel_error_response(error: &KernelError) -> (u16, String) {
+    match error {
+        KernelError::Conflict(conflict) => (
+            409,
+            serde_json::json!({
+                "error": "issue-conflict",
+                "issueId": conflict.issue_id,
+                "fields": conflict.fields,
+                "latest": conflict.latest,
+            })
+            .to_string(),
+        ),
+        KernelError::Protocol(_) | KernelError::Json(_) => (
+            400,
+            serde_json::json!({ "error": error.to_string() }).to_string(),
+        ),
+        KernelError::Denied(_) => (
+            403,
+            serde_json::json!({ "error": error.to_string() }).to_string(),
+        ),
+        KernelError::Io(_) => (
+            500,
+            serde_json::json!({ "error": error.to_string() }).to_string(),
+        ),
+    }
+}
+
+fn spawn_background_refreshes(
+    kernel: Arc<Mutex<HostKernel>>,
+    refreshes: Vec<crate::kernel::refresh::PreparedRefresh>,
+) {
+    let pending = Arc::new(Mutex::new(Some(refreshes)));
+    let worker_pending = Arc::clone(&pending);
+    let worker_kernel = Arc::clone(&kernel);
+    let spawned = std::thread::Builder::new()
+        .name("host-project-refresh".into())
+        .spawn(move || {
+            let refreshes = worker_pending
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.take())
+                .unwrap_or_default();
+            for refresh in refreshes {
+                let completed = HostKernel::execute_prepared_refresh(refresh);
+                let Ok(mut host) = worker_kernel.lock() else {
+                    return;
+                };
+                host.finish_prepared_refresh(completed);
+            }
+        });
+    if spawned.is_err() {
+        let refreshes = pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take())
+            .unwrap_or_default();
+        if let Ok(mut host) = kernel.lock() {
+            host.cancel_prepared_refreshes(&refreshes);
+        }
+    }
+}
+
 pub(super) fn serve_connection(
     mut stream: TcpStream,
-    kernel: &Mutex<HostKernel>,
+    kernel: &Arc<Mutex<HostKernel>>,
     assets: &LoopbackAssets,
     server_port: u16,
-    document_kernel: Arc<Mutex<HostKernel>>,
 ) -> io::Result<Option<CommandOutcome>> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -95,6 +156,7 @@ pub(super) fn serve_connection(
                 return Ok(None);
             }
         };
+        let background_refreshes = request_backgrounds_refreshes(&value);
         let defer_refreshes = request_defers_refreshes(&value);
         let defer_issue_document = request_defers_issue_document(&value);
         let defer_issue_write = request_defers_issue_write(&value);
@@ -135,6 +197,12 @@ pub(super) fn serve_connection(
         };
         match initial {
             Ok(mut outcome) => {
+                if background_refreshes && !refreshes.is_empty() {
+                    let body = serde_json::to_string(&outcome.to_json())?;
+                    write_json(&mut stream, 200, response_origin, &body)?;
+                    spawn_background_refreshes(Arc::clone(kernel), refreshes);
+                    return Ok(Some(outcome));
+                }
                 if !refreshes.is_empty() {
                     let mut events = std::mem::take(&mut outcome.events);
                     let completed: Vec<_> = refreshes
@@ -167,7 +235,7 @@ pub(super) fn serve_connection(
                         .into_iter()
                         .map(HostKernel::execute_prepared_issue_document)
                         .collect();
-                    let mut host = document_kernel
+                    let mut host = kernel
                         .lock()
                         .map_err(|_| io::Error::other("kernel lock poisoned"))?;
                     for document in completed {
@@ -192,25 +260,13 @@ pub(super) fn serve_connection(
                         .into_iter()
                         .map(HostKernel::execute_prepared_issue_write)
                         .collect();
-                    let mut host = document_kernel
+                    let mut host = kernel
                         .lock()
                         .map_err(|_| io::Error::other("kernel lock poisoned"))?;
                     for write in completed {
                         if let Err(error) = host.finish_prepared_issue_write(write) {
-                            let status = match &error {
-                                KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                                KernelError::Denied(_) => 403,
-                                KernelError::Io(_) => 500,
-                            };
-                            write_json(
-                                &mut stream,
-                                status,
-                                response_origin,
-                                &format!(
-                                    r#"{{"error":{}}}"#,
-                                    serde_json::to_string(&error.to_string()).unwrap()
-                                ),
-                            )?;
+                            let (status, body) = kernel_error_response(&error);
+                            write_json(&mut stream, status, response_origin, &body)?;
                             return Ok(None);
                         }
                     }
@@ -234,20 +290,8 @@ pub(super) fn serve_connection(
                 return Ok(Some(outcome));
             }
             Err(err) => {
-                let status = match err {
-                    KernelError::Protocol(_) | KernelError::Json(_) => 400,
-                    KernelError::Denied(_) => 403,
-                    KernelError::Io(_) => 500,
-                };
-                write_json(
-                    &mut stream,
-                    status,
-                    response_origin,
-                    &format!(
-                        r#"{{"error":{}}}"#,
-                        serde_json::to_string(&err.to_string()).unwrap()
-                    ),
-                )?;
+                let (status, body) = kernel_error_response(&err);
+                write_json(&mut stream, status, response_origin, &body)?;
                 return Ok(None);
             }
         }

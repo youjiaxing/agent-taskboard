@@ -15,6 +15,31 @@ fn never_fetched_project_does_not_draw_four_columns() {
 }
 
 #[test]
+fn direct_write_does_not_turn_never_complete_data_into_a_full_board() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.fail_rate_limited("you/garden", Some(120_000));
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
+
+    host.handle(serde_json::json!({
+        "op": "createIssue",
+        "projectId": project_id,
+        "title": "created while the first read is rate-limited",
+        "body": "body",
+    }))
+    .unwrap();
+
+    let snapshot = host.snapshot();
+    let board = snapshot.board.unwrap();
+    assert_eq!(board.empty, Some(BoardEmptyReason::IncompleteRead));
+    assert!(board.columns.is_none());
+    assert!(matches!(board.refresh, RefreshStatus::RateLimited { .. }));
+    assert!(!snapshot.projects[0].issue_counts.data_available);
+}
+
+#[test]
 fn successful_refresh_persists_last_data_and_keeps_it_when_offline() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
@@ -301,7 +326,7 @@ fn claim_close_check_and_auto_advance_only_refresh_the_involved_project() {
         "issueId": "you/garden#1",
     }))
     .unwrap();
-    assert_eq!(tracker.read_count("you/garden"), garden_reads + 1);
+    assert_eq!(tracker.read_count("you/garden"), garden_reads);
     assert_eq!(tracker.read_count("you/notes"), notes_reads);
     assert!(frontier_ids(&host).is_empty());
 
@@ -315,12 +340,12 @@ fn claim_close_check_and_auto_advance_only_refresh_the_involved_project() {
         "projectId": garden_id,
     }))
     .unwrap();
-    assert_eq!(tracker.read_count("you/garden"), garden_reads + 3);
+    assert_eq!(tracker.read_count("you/garden"), garden_reads + 2);
     assert_eq!(tracker.read_count("you/notes"), notes_reads);
 }
 
 #[test]
-fn last_data_is_not_used_to_claim_or_advance_when_read_fails() {
+fn failed_project_read_allows_direct_writes_but_not_advance_or_bound_runs() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
@@ -331,20 +356,16 @@ fn last_data_is_not_used_to_claim_or_advance_when_read_fails() {
     let before = std::fs::read(&path).unwrap();
     tracker.fail_read("you/garden");
 
-    let claim = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#1",
-        }))
-        .unwrap_err();
-    assert!(matches!(claim, KernelError::Denied(message) if message.contains("offline")));
-    let release = host
-        .handle(serde_json::json!({
-            "op": "releaseIssue",
-            "issueId": "you/garden#1",
-        }))
-        .unwrap_err();
-    assert!(matches!(release, KernelError::Denied(_)));
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "releaseIssue",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
     let advance = host
         .handle(serde_json::json!({
             "op": "autoAdvance",
@@ -425,13 +446,20 @@ fn rate_limit_pauses_auto_refresh_and_is_not_offline() {
         other => panic!("expected rate-limited, got {other:?}"),
     }
     assert_eq!(frontier_ids(&host), vec!["you/garden#1"]);
-    let claim = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#1",
-        }))
-        .unwrap_err();
-    assert!(matches!(claim, KernelError::Denied(message) if message.contains("rate-limited")));
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .in_progress
+        .iter()
+        .any(|card| card.id == "you/garden#1"));
     let after_limit = tracker.read_count("you/garden");
     host.handle(serde_json::json!({
         "op": "tick",
@@ -500,13 +528,20 @@ fn auth_failure_is_project_degraded_not_offline() {
         host_kernel::ProjectConnection::AuthFailed { .. }
     ));
     assert_eq!(frontier_ids(&host), vec!["you/garden#1"]);
-    let claim = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#1",
-        }))
-        .unwrap_err();
-    assert!(matches!(claim, KernelError::Denied(message) if message.contains("auth")));
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#1",
+    }))
+    .unwrap();
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .in_progress
+        .iter()
+        .any(|card| card.id == "you/garden#1"));
 }
 
 #[test]

@@ -183,8 +183,18 @@ impl HostKernel {
                 issue_id,
                 title,
                 body,
+                base_title,
+                base_body,
+                overwrite_conflict,
             } => {
-                self.update_issue(&issue_id, &title, &body)?;
+                self.update_issue(
+                    &issue_id,
+                    &title,
+                    &body,
+                    base_title,
+                    base_body,
+                    overwrite_conflict,
+                )?;
             }
             Command::SetIssueOpen { issue_id, open } => {
                 self.set_issue_open(&issue_id, open)?;
@@ -192,14 +202,31 @@ impl HostKernel {
             Command::AddIssueComment { issue_id, body } => {
                 self.add_issue_comment(&issue_id, &body)?;
             }
-            Command::SetIssueParent { issue_id, parent } => {
-                self.set_issue_parent(&issue_id, parent.as_deref())?;
+            Command::SetIssueParent {
+                issue_id,
+                parent,
+                base_parent,
+                overwrite_conflict,
+            } => {
+                self.set_issue_parent(
+                    &issue_id,
+                    parent.as_deref(),
+                    base_parent,
+                    overwrite_conflict,
+                )?;
             }
             Command::SetIssueBlockedBy {
                 issue_id,
                 blocked_by,
+                base_blocked_by,
+                overwrite_conflict,
             } => {
-                self.set_issue_blocked_by(&issue_id, &blocked_by)?;
+                self.set_issue_blocked_by(
+                    &issue_id,
+                    &blocked_by,
+                    base_blocked_by,
+                    overwrite_conflict,
+                )?;
             }
             Command::AutoAdvance { project_id } => {
                 self.require_live_tracker(&project_id)?;

@@ -452,6 +452,44 @@ impl GitHubTracker {
         }
         Ok(None)
     }
+
+    fn read_one_issue(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+        complete_relations: bool,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        let (token, source, cli_detected) = self.authorized_read(ctx)?;
+        let (repository, number) =
+            parse_issue_id(issue_id).ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })?;
+        let mut node = self
+            .api
+            .read_issue(ctx.github_host, &repository, &token, number)
+            .map_err(|err| probe_read_error(err, source, cli_detected))?;
+        if complete_relations {
+            if let Some(detail) =
+                self.complete_issue_edges(ctx, &token, source, cli_detected, &mut node)?
+            {
+                return Err(TrackerReadError::Failed {
+                    detail: Some(detail),
+                });
+            }
+        }
+        let issue =
+            map_github_issue_node(&node, &repository, ctx.github_host).ok_or_else(|| {
+                TrackerReadError::Failed {
+                    detail: Some("cannot map GitHub issue".into()),
+                }
+            })?;
+        let body = node
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Ok(IssueDocument { issue, body })
+    }
 }
 
 impl TrackerPort for GitHubTracker {
@@ -522,27 +560,24 @@ impl TrackerPort for GitHubTracker {
         ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueDocument, TrackerReadError> {
-        let (token, source, cli_detected) = self.authorized_read(ctx)?;
-        let (repository, number) =
-            parse_issue_id(issue_id).ok_or_else(|| TrackerReadError::Failed {
-                detail: Some("unknown issue".into()),
-            })?;
-        let node = self
-            .api
-            .read_issue(ctx.github_host, &repository, &token, number)
-            .map_err(|err| probe_read_error(err, source, cli_detected))?;
-        let issue =
-            map_github_issue_node(&node, &repository, ctx.github_host).ok_or_else(|| {
-                TrackerReadError::Failed {
-                    detail: Some("cannot map GitHub issue".into()),
-                }
-            })?;
-        let body = node
-            .get("body")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        Ok(IssueDocument { issue, body })
+        self.read_one_issue(ctx, issue_id, false)
+    }
+
+    fn read_issue_content(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueDocument, TrackerReadError> {
+        self.read_one_issue(ctx, issue_id, false)
+    }
+
+    fn read_issue_relations(
+        &self,
+        ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        self.read_one_issue(ctx, issue_id, true)
+            .map(|document| document.issue)
     }
 
     fn create_issue(

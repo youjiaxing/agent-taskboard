@@ -14,6 +14,7 @@ pub use github::{
     resolve_github_token, GitHubTracker, ScriptedGitHub, GITHUB_APP_ENV, GITHUB_GENERIC_ENV,
     GITHUB_SCOPE,
 };
+pub(crate) use local_markdown::editable_body;
 pub use local_markdown::LocalMarkdownTracker;
 pub use memory::{MemoryTracker, MEMORY_TRACKER_ACTOR};
 

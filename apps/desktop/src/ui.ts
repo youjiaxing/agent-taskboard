@@ -123,6 +123,7 @@ export const ui = {
   formOperations: {
     pending: new Set<FormKey>(),
     errors: new Map<FormKey, string>(),
+    conflicts: new Map(),
   } as FormOperationState,
   telemetryExpanded: false,
   keyboardHelpOpen: false,

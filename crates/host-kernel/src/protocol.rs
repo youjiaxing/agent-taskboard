@@ -164,6 +164,9 @@ pub enum Command {
         issue_id: String,
         title: String,
         body: String,
+        base_title: Option<String>,
+        base_body: Option<String>,
+        overwrite_conflict: bool,
     },
     SetIssueOpen {
         issue_id: String,
@@ -176,10 +179,14 @@ pub enum Command {
     SetIssueParent {
         issue_id: String,
         parent: Option<String>,
+        base_parent: Option<Option<String>>,
+        overwrite_conflict: bool,
     },
     SetIssueBlockedBy {
         issue_id: String,
         blocked_by: Vec<String>,
+        base_blocked_by: Option<Vec<String>>,
+        overwrite_conflict: bool,
     },
     AutoAdvance {
         project_id: String,
@@ -726,12 +733,34 @@ pub(crate) struct ClientNavigationState {
     pub(crate) usage_query: usage::UsageQuery,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueConflictLatest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueConflict {
+    pub issue_id: String,
+    pub fields: Vec<String>,
+    pub latest: IssueConflictLatest,
+}
+
 #[derive(Debug)]
 pub enum KernelError {
     Io(io::Error),
     Json(serde_json::Error),
     Protocol(String),
     Denied(String),
+    Conflict(IssueConflict),
 }
 
 pub(crate) fn write_tracker_error(err: TrackerWriteError) -> KernelError {
@@ -770,6 +799,12 @@ impl std::fmt::Display for KernelError {
             KernelError::Json(err) => write!(f, "{err}"),
             KernelError::Protocol(err) => write!(f, "{err}"),
             KernelError::Denied(err) => write!(f, "{err}"),
+            KernelError::Conflict(conflict) => write!(
+                f,
+                "Issue {} changed in Tracker: {}",
+                conflict.issue_id,
+                conflict.fields.join(", ")
+            ),
         }
     }
 }

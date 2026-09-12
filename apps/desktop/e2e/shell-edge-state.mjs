@@ -23,6 +23,22 @@ if (state === "empty-host") {
   if (await page.$(".project-row")) throw new Error("empty Host should not render a Project row");
 } else {
   await page.waitForSelector(".project-board");
+  if (["offline", "rate-limited", "auth-failed"].includes(state)) {
+    const refreshResponse = page.waitForResponse((response) => {
+      if (!response.url().includes("/rpc")) return false;
+      try {
+        return response.request().postDataJSON()?.op === "refresh";
+      } catch {
+        return false;
+      }
+    });
+    await page.click('.refresh-bar button[data-act="refresh"]');
+    const response = await refreshResponse;
+    if (!response.ok()) {
+      throw new Error(`manual refresh failed at the protocol boundary: ${response.status()}`);
+    }
+    await page.waitForSelector(`.refresh-bar[data-kind="${state}"]`);
+  }
   if (state === "single-project") {
     const projects = await page.$$(".project-row");
     if (projects.length !== 1) throw new Error(`single Project fixture rendered ${projects.length} Project rows`);
@@ -66,19 +82,6 @@ if (state === "empty-host") {
   } else {
     throw new Error(`unknown shell edge state ${state}`);
   }
-}
-
-if (["offline", "rate-limited", "auth-failed"].includes(state)) {
-  const refreshRequest = page.waitForRequest((request) => {
-    if (!request.url().includes("/rpc")) return false;
-    try {
-      return request.postDataJSON()?.op === "refresh";
-    } catch {
-      return false;
-    }
-  });
-  await page.click('.refresh-bar button[data-act="refresh"]');
-  await refreshRequest;
 }
 
 await assertShellRegionsDoNotOverlap(page);

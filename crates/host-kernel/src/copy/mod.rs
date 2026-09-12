@@ -301,6 +301,10 @@ pub struct ShellCopy {
     pub close_issue: String,
     pub reopen_issue: String,
     pub issue_updates: String,
+    pub issue_conflict: String,
+    pub issue_conflict_latest: String,
+    pub issue_conflict_use_latest: String,
+    pub issue_conflict_overwrite: String,
 }
 
 impl ShellCopy {
