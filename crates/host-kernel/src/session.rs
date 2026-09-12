@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+mod output;
+use output::{bounded_size, TerminalOutput};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnRequest {
     pub argv: Vec<String>,
@@ -43,13 +46,10 @@ pub trait AgentSession: Send + Sync {
 }
 
 pub(crate) fn readable_pty_output(bytes: &[u8]) -> String {
-    let mut parser = vt100::Parser::new(
-        crate::run::DEFAULT_PTY_ROWS,
-        crate::run::DEFAULT_PTY_COLS,
-        0,
-    );
+    let mut parser =
+        TerminalOutput::new(crate::run::DEFAULT_PTY_COLS, crate::run::DEFAULT_PTY_ROWS);
     parser.process(bytes);
-    parser.screen().contents()
+    parser.contents()
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -246,7 +246,7 @@ impl SessionFactory for PtySessionFactory {
 
 struct PtyLive {
     output: Arc<Mutex<Vec<u8>>>,
-    screen: Arc<Mutex<vt100::Parser>>,
+    screen: Arc<Mutex<TerminalOutput>>,
     exit: Arc<Mutex<Option<i32>>>,
     pulse: Arc<Condvar>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -257,6 +257,7 @@ struct PtyLive {
 
 impl PtyLive {
     fn spawn(request: SpawnRequest) -> Result<Arc<Self>, String> {
+        let (cols, rows) = bounded_size(request.cols, request.rows);
         let program = request
             .argv
             .first()
@@ -268,8 +269,8 @@ impl PtyLive {
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
-                rows: request.rows.max(2),
-                cols: request.cols.max(2),
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -293,11 +294,7 @@ impl PtyLive {
             .map_err(|err| err.to_string())?;
         let writer = pair.master.take_writer().map_err(|err| err.to_string())?;
         let output = Arc::new(Mutex::new(Vec::new()));
-        let screen = Arc::new(Mutex::new(vt100::Parser::new(
-            request.rows.max(2),
-            request.cols.max(2),
-            0,
-        )));
+        let screen = Arc::new(Mutex::new(TerminalOutput::new(cols, rows)));
         let exit = Arc::new(Mutex::new(None));
         let pulse = Arc::new(Condvar::new());
         let session = Arc::new(Self {
@@ -365,27 +362,24 @@ impl AgentSession for PtyLive {
     }
 
     fn resize(&self, cols: u16, rows: u16) {
+        let (cols, rows) = bounded_size(cols, rows);
         if let Ok(master) = self.master.lock() {
             if master
                 .resize(portable_pty::PtySize {
-                    rows: rows.max(2),
-                    cols: cols.max(2),
+                    rows,
+                    cols,
                     pixel_width: 0,
                     pixel_height: 0,
                 })
                 .is_ok()
             {
-                self.screen
-                    .lock()
-                    .expect("pty screen")
-                    .screen_mut()
-                    .set_size(rows.max(2), cols.max(2));
+                self.screen.lock().expect("pty screen").resize(cols, rows);
             }
         }
     }
 
     fn recent_output(&self) -> String {
-        self.screen.lock().expect("pty screen").screen().contents()
+        self.screen.lock().expect("pty screen").contents()
     }
 
     fn stop(&self) {

@@ -63,6 +63,21 @@ impl HostKernel {
         scope: ChangeScope,
     ) -> Result<ViewChanges, KernelError> {
         let run = self.run_for_changes(run_id, issue_id)?;
+        if self.isolation_directory_unconfirmed(run) {
+            return Ok(ViewChanges {
+                run_id: run.id.clone(),
+                issue_id: run.issue_id.clone(),
+                working_directory: run.working_directory.clone(),
+                isolated: run.isolated,
+                scope,
+                available: false,
+                unavailable_reason: Some(super::isolation::pending_directory_note(
+                    self.appearance.language,
+                )),
+                repos: Vec::new(),
+                notes: Vec::new(),
+            });
+        }
         Ok(changes::compute_view(
             run,
             scope,

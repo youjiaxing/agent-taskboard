@@ -355,6 +355,7 @@ impl HostKernel {
     }
 
     pub(crate) fn observe_live_runs(&mut self) {
+        self.discover_isolated_directories();
         self.ingest_telemetry();
         self.harvest_live_signals();
         let stop_failures = self
@@ -612,6 +613,15 @@ impl HostKernel {
         let mut isolation_note = None;
         let mut isolate = false;
         if let Some(previous) = &previous {
+            if self
+                .runs
+                .iter()
+                .any(|run| run.id == previous.id && self.isolation_directory_unconfirmed(run))
+            {
+                return Err(KernelError::Denied(
+                    super::isolation::pending_directory_note(language),
+                ));
+            }
             config.values.remove(launch::ISOLATION_FIELD);
             if previous.isolated {
                 let recorded = PathBuf::from(&previous.working_directory);
@@ -628,6 +638,20 @@ impl HostKernel {
                     .values
                     .insert(launch::ISOLATION_FIELD.into(), "false".into());
             }
+        }
+        if isolate
+            && self.runs.iter().any(|run| {
+                run.is_active()
+                    && run.isolation_pending.is_some()
+                    && self.projects.iter().any(|project| {
+                        project.id == run.project_id
+                            && launch::same_path(&project.local_path, &project_dir)
+                    })
+            })
+        {
+            return Err(KernelError::Denied(
+                super::isolation::pending_directory_note(language),
+            ));
         }
         let fields = self
             .launch_form
@@ -704,7 +728,7 @@ impl HostKernel {
         } else {
             Vec::new()
         };
-        let early_baselines = if isolate || !cwd.exists() {
+        let early_baselines = if !cwd.exists() {
             None
         } else {
             Some(changes::record_baselines(&cwd))
@@ -753,21 +777,27 @@ impl HostKernel {
             if let Some(tree) = agent
                 .isolation_tree_after_launch(&project_dir, &before)
                 .or_else(|| launch::new_git_worktree(&project_dir, &before))
+                .filter(|tree| !self.isolation_tree_conflicts(&result.record, tree))
             {
                 result.record.working_directory = tree.display().to_string();
+            } else {
+                result.record.isolation_pending = Some(before);
+                result.record.isolation_note =
+                    Some(super::isolation::pending_directory_note(language));
             }
         }
         result.record.started_at_ms = self.now_ms;
-        result.record.git_baselines = if isolate {
-            let recorded_cwd = PathBuf::from(&result.record.working_directory);
-            if recorded_cwd.exists() {
-                changes::record_baselines(&recorded_cwd)
-            } else {
-                Vec::new()
+        result.record.git_baselines = early_baselines.unwrap_or_default();
+        if isolate {
+            result
+                .record
+                .git_baselines
+                .retain(|baseline| launch::same_path(Path::new(&baseline.path), &project_dir));
+            for baseline in &mut result.record.git_baselines {
+                baseline.path = result.record.working_directory.clone();
+                baseline.display_path = result.record.working_directory.clone();
             }
-        } else {
-            early_baselines.unwrap_or_default()
-        };
+        }
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
             run_id: result.record.id.clone(),

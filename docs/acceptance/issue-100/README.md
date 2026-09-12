@@ -2,7 +2,13 @@
 
 验收日期：2026-09-12；本轮从 `8eac70b` 继续验证并修复。
 
-## 结论
+## 最新：用户授权的真实验收
+
+用户已委托 Agent 使用测试 Issue #124 和独立测试 Project 完成真实产品测试。原生 Tauri、实际 GitHub 认领/放领、官方 Codex CLI、真实 PTY 中断/继续、390×844 注入与改动查看均已执行；这轮发现的终端输出、提交按键和隔离目录问题已修复。Claude API 按用户要求跳过，不计 PASS。
+
+详见[真实验收报告与逐项结果](real-acceptance-2026-09-12.md)。下面保留此前自动化阶段的记录；其中“未执行真实 GitHub/PTY”及待人工操作的准备状态只描述此前阶段，已由新报告补充。Issue 的明确接受门槛尚未满足，PR 保持 OPEN。
+
+## 此前自动化阶段结论
 
 自动化结果：**PASS**。九条 Required user task 都有从产品入口出发、通过真实 `HostKernel` loopback 与 Playwright 驱动的场景；断言最终可见结果和 Tracker 认领 / Run / Project 等关键副作用。2026-08-28 真人验收反馈的回归持续执行；本轮另复现并修复了旧正文响应覆盖写入、同名 Issue 草稿与写入目标串用、配对重复提交和远端刷新占用本地锁。
 
@@ -136,8 +142,8 @@ cargo test -p host-kernel --test board browser_explains_an_occupied_loopback_por
 2. 若 Host 为空，登记本仓 Project；否则选择本仓。选择目录后检查推断候选和手工值，点击确认后才采纳候选，然后等到真实 GitHub Issue 出现或看到明确可重试错误。
 3. 同时保留桌面 App 和浏览器 Client：在两边分别打开不同 Issue，切换看板 / 依赖图并等待两轮界面轮询（约 2–3 秒），确认两边不会互相抢 Project、Issue、Run 或视图焦点。
 4. 在任一 Client 顶栏直接打开依赖图，确认先看到未关闭 Issue 概览；点击 Issue 进入其 Dependency 上下游，再用「返回依赖概览」退出。回看板后通过卡片「查看依赖」再次进入单 Issue 模式。
-5. 搜索并打开 Issue #100；阅读 Problem、Required user tasks、Acceptance criteria 与 Completion gate。把正文向下滚动，按住鼠标跨过至少两次秒级倒计时更新后松开，确认滚动位置不跳顶。
-6. 若 #100 仍显示上次「执行已停、已认领」，先从详情「释放认领」回到 Frontier（这会移除真实 GitHub 上的当前认领）。点击「执行」，查看 Agent、model / effort 可选项、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写「只读当前目录并报告仓库名称，然后等待；不要修改文件、提交或操作 Tracker」后点击「启动」。确认只有此时 GitHub #100 被认领并创建一条 Run。
-7. 进入 Terminal，确认右侧仍是 Issue #100；向 Run 注入一行；打开「查看改动」，然后停止 Run 或返回看板。
-8. 确认 Run 停止没有把 Issue #100 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
+5. 搜索并打开测试 Issue #124；阅读完整正文。把正文向下滚动，按住鼠标跨过至少两次秒级倒计时更新后松开，确认滚动位置不跳顶。
+6. 若测试 Issue #124 显示「执行已停、已认领」，先从详情「释放认领」回到 Frontier（这会移除测试 Issue #124 的当前认领）。点击「执行」，查看 Agent、model / effort 可选项、预填来源、工作目录、隔离说明和命令预览；选择已安装 Agent，填写「只读当前目录并报告仓库名称，然后等待；不要修改文件、提交或操作 Tracker」后点击「启动」。确认只有此时 GitHub #124 被认领并创建一条 Run。
+7. 进入 Terminal，确认右侧仍是 Issue #124；向 Run 注入一行；打开「查看改动」，然后停止 Run 或返回看板。
+8. 确认 Run 停止没有把 Issue #124 伪装成最近完成；如不继续本票，释放认领。检查 Project / Issue / Run 身份在侧栏、主区、详情与 Terminal 一致。
 9. 在本 PR 留言明确 `ACCEPTED` 或列出失败步骤、截图和期望。只有明确接受后才 merge PR 并由 `Closes #100` 关闭 Issue。

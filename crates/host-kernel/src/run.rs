@@ -84,6 +84,8 @@ pub struct RunSummary {
     #[serde(default)]
     pub isolated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_pending: Option<Vec<std::path::PathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_baselines: Vec<crate::changes::GitBaseline>,
@@ -164,6 +166,7 @@ pub fn start_unbound(
         ended_reason: None,
         working_directory: cwd.to_string_lossy().into_owned(),
         isolated: false,
+        isolation_pending: None,
         isolation_note: None,
         git_baselines: Vec::new(),
         hooks_attached: hooks.is_some(),

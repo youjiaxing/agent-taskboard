@@ -218,7 +218,7 @@ fn probe_and_start_share_one_launch_env_and_exec_absolute_path() {
             .unwrap()
             .read_after(0, Duration::ZERO)
             .data,
-        b"run lifecycle integration\r"
+        b"\x1b[200~run lifecycle integration\x1b[201~\r"
     );
 
     assert_eq!(h.launch_env.capture_count(), 3);
@@ -452,6 +452,31 @@ fn pty_bytes_round_trip_through_host() {
         .pty_output(&run_id, 0, Duration::from_millis(50))
         .unwrap();
     assert!(chunk.data.ends_with(b"hi"), "{:?}", chunk.data);
+}
+
+#[test]
+fn ended_run_keeps_the_final_alternate_screen_after_reboot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_unbound(&mut h.host, &project_id)
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .id
+        .clone();
+    h.sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"\x1b[2J\x1b[Hstartup prompt\x1b[?1049h\x1b[HFINAL ANSWER\x1b[?1049l");
+    h.host
+        .handle(serde_json::json!({ "op": "stopRun", "runId": run_id }))
+        .unwrap();
+    assert_eq!(h.host.snapshot().runs[0].recent_output, "FINAL ANSWER");
+    drop(h);
+    let h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    assert_eq!(h.host.snapshot().runs[0].recent_output, "FINAL ANSWER");
 }
 
 #[test]

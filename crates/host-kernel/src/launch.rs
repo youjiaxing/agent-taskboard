@@ -441,12 +441,14 @@ pub fn git_worktrees(project_dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn new_git_worktree(project_dir: &Path, before: &[PathBuf]) -> Option<PathBuf> {
-    git_worktrees(project_dir).into_iter().find(|path| {
+    let mut candidates = git_worktrees(project_dir).into_iter().filter(|path| {
         !same_path(path, project_dir) && !before.iter().any(|seen| same_path(seen, path))
-    })
+    });
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
 }
 
-fn same_path(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
