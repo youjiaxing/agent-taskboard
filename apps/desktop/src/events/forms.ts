@@ -315,7 +315,7 @@ ui.app.addEventListener("change", async (event) => {
     applyLocalPath((target as HTMLInputElement).value, true);
     return;
   }
-  if (target.getAttribute("data-field") === "ui.startAtLogin" && "checked" in target) {
+  if (target.getAttribute("data-field") === "startAtLogin" && "checked" in target) {
     await setStartAtLogin((target as HTMLInputElement).checked);
     render();
   }
