@@ -237,7 +237,9 @@ fn inject_writes_a_line_into_a_waiting_run() {
         .pty_output(&run_id, 0, Duration::from_millis(20))
         .unwrap();
     let text = String::from_utf8_lossy(&chunk.data);
-    assert!(text.contains("allow\n"), "{text:?}");
+    // A paste is one input event; Enter outside the paste submits it. Without
+    // these boundaries Codex's paste-burst handling absorbs the trailing Enter.
+    assert!(text.contains("\x1b[200~allow\x1b[201~\r"), "{text:?}");
     let snap = h.host.snapshot();
     let run = run_named(&snap, &run_id);
     assert_eq!(run.status, RunStatus::Running);

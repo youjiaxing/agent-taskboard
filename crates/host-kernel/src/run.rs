@@ -14,6 +14,15 @@ use crate::{Language, LaunchEnvPort};
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 24;
 
+pub(crate) fn submitted_input(text: &str) -> Vec<u8> {
+    // Keep Enter outside the paste so interactive TUIs do not absorb it into
+    // their paste-burst buffer. Raw Embedded Terminal keystrokes bypass this.
+    let mut bytes = b"\x1b[200~".to_vec();
+    bytes.extend_from_slice(text.trim_end_matches(['\r', '\n']).as_bytes());
+    bytes.extend_from_slice(b"\x1b[201~\r");
+    bytes
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RunStatus {
@@ -74,6 +83,8 @@ pub struct RunSummary {
     pub working_directory: String,
     #[serde(default)]
     pub isolated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_pending: Option<Vec<std::path::PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -155,6 +166,7 @@ pub fn start_unbound(
         ended_reason: None,
         working_directory: cwd.to_string_lossy().into_owned(),
         isolated: false,
+        isolation_pending: None,
         isolation_note: None,
         git_baselines: Vec::new(),
         hooks_attached: hooks.is_some(),
@@ -222,9 +234,8 @@ pub fn start_unbound(
             match sessions.spawn(request) {
                 Ok(session) => {
                     if !config.opening_text.trim().is_empty() {
-                        if let Err(err) =
-                            session.write(format!("{}\n", config.opening_text.trim()).as_bytes())
-                        {
+                        let opening = submitted_input(config.opening_text.trim());
+                        if let Err(err) = session.write(&opening) {
                             session.stop();
                             record.status = RunStatus::Ended;
                             record.ended_reason = Some(RunEndedReason::Abnormal);

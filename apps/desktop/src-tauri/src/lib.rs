@@ -1,3 +1,4 @@
+mod signal;
 mod startup;
 
 use std::fs;
@@ -21,7 +22,16 @@ struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
     protocol_url: String,
     startup_settings_path: PathBuf,
+    menu_signature: Mutex<Option<ShellMenuSignature>>,
     _loopback: LoopbackServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellMenuSignature {
+    app_name: String,
+    show_window: String,
+    quit_host: String,
+    edit_menu: String,
 }
 
 pub fn run() {
@@ -44,6 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![set_host_mode])
         .setup(|app| {
+            signal::spawn_ctrl_c_handler(app.handle().clone());
             let startup_settings_path = startup_settings_path(app.handle())?;
             let host_mode = startup::requested_host_mode(&startup_settings_path, std::env::args());
             let kernel = boot_kernel(app.handle(), host_mode)?;
@@ -84,6 +95,7 @@ pub fn run() {
                 kernel,
                 protocol_url: protocol_url.clone(),
                 startup_settings_path,
+                menu_signature: Mutex::new(None),
                 _loopback: loopback,
             });
             build_tray(app.handle())?;
@@ -122,11 +134,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Agent Taskboard")
         .run(|app, event| match event {
-            tauri::RunEvent::ExitRequested { api, code, .. } => {
-                if code.is_none() {
-                    api.prevent_exit();
-                }
-            }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
                 show_main(app);
@@ -264,8 +271,25 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String> {
+    let signature = ShellMenuSignature {
+        app_name: snapshot.copy.app_name.clone(),
+        show_window: snapshot.copy.show_window.clone(),
+        quit_host: snapshot.copy.quit_host.clone(),
+        edit_menu: snapshot.copy.edit_menu.clone(),
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        let cached = state.menu_signature.lock().map_err(|err| err.to_string())?;
+        if cached.as_ref() == Some(&signature) {
+            return Ok(());
+        }
+    }
     rebuild_tray_menu(app, snapshot).map_err(|err| err.to_string())?;
-    rebuild_app_menu(app, snapshot).map_err(|err| err.to_string())
+    rebuild_app_menu(app, snapshot).map_err(|err| err.to_string())?;
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut cached = state.menu_signature.lock().map_err(|err| err.to_string())?;
+        *cached = Some(signature);
+    }
+    Ok(())
 }
 
 fn resident_items(

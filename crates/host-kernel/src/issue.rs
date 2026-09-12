@@ -188,6 +188,19 @@ impl IssueRecord {
     pub fn triage_role(&self) -> Option<TriageRole> {
         triage_role_from_labels(&self.labels)
     }
+
+    pub fn wayfinder_type(&self) -> Option<&str> {
+        self.labels.iter().find_map(|label| {
+            let value = label
+                .strip_prefix("wayfinder:")
+                .or_else(|| label.strip_prefix("type:"))?;
+            matches!(
+                value,
+                "map" | "research" | "prototype" | "grilling" | "task"
+            )
+            .then_some(value)
+        })
+    }
 }
 
 pub fn issue_id(repository: &str, number: u64) -> String {

@@ -96,11 +96,13 @@ fn start_run(host: &mut HostKernel, project_id: &str) -> String {
 }
 
 fn snapshot(host: &mut HostKernel) -> host_kernel::CommandOutcome {
-    host.handle(serde_json::json!({ "op": "snapshot" })).unwrap()
+    host.handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap()
 }
 
 fn open_usage(host: &mut HostKernel) -> host_kernel::CommandOutcome {
-    host.handle(serde_json::json!({ "op": "openUsage" })).unwrap()
+    host.handle(serde_json::json!({ "op": "openUsage" }))
+        .unwrap()
 }
 
 fn feed(
@@ -409,11 +411,11 @@ fn usage_and_run_observation_jump_both_ways() {
         Some(run_id.as_str())
     );
     assert!(to_usage.snapshot.usage.runs[0].highlighted);
-    assert_eq!(to_usage.snapshot.copy.open_host_usage.contains("用量"), true);
     assert_eq!(
-        to_usage.snapshot.copy.open_this_run.contains("Run"),
+        to_usage.snapshot.copy.open_host_usage.contains("用量"),
         true
     );
+    assert_eq!(to_usage.snapshot.copy.open_this_run.contains("Run"), true);
 
     let back = h
         .host

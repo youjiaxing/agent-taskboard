@@ -46,6 +46,10 @@ impl AgentPort for CodexAdapter {
         vec![executable.to_string_lossy().into_owned()]
     }
 
+    fn skill_invocation(&self, skill: &str) -> String {
+        format!("${skill}")
+    }
+
     fn config_fields(&self) -> Vec<AgentField> {
         vec![
             text_field("model", "model", true, false),
@@ -97,6 +101,7 @@ impl AgentPort for CodexAdapter {
         let mut seed = self.seed_config();
         let mut model_options = Vec::new();
         let mut efforts_by_model = BTreeMap::new();
+        let mut defaults_by_model = BTreeMap::new();
         let mut default_model = None;
         let mut default_effort = None;
         for model in models {
@@ -119,6 +124,13 @@ impl AgentPort for CodexAdapter {
             if !efforts.is_empty() {
                 efforts_by_model.insert(id.to_string(), efforts);
             }
+            if let Some(effort) = model
+                .get("defaultReasoningEffort")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                defaults_by_model.insert(id.to_string(), effort.to_string());
+            }
             if model
                 .get("isDefault")
                 .and_then(Value::as_bool)
@@ -135,7 +147,13 @@ impl AgentPort for CodexAdapter {
             return Err("Codex CLI model/list returned an empty model list".into());
         }
         discovery::set_options(&mut fields, "model", model_options);
-        discovery::set_option_filter(&mut fields, "effort", "model", efforts_by_model);
+        discovery::set_option_filter_with_defaults(
+            &mut fields,
+            "effort",
+            "model",
+            efforts_by_model,
+            defaults_by_model,
+        );
         discovery::set_options_if_found(
             &mut fields,
             "approval",
@@ -211,6 +229,31 @@ impl AgentPort for CodexAdapter {
     }
 }
 
+fn stop_codex_app_server(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-s", "KILL", "--", &process_group])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value, String> {
     let mut command = discovery::configured_command(executable, env);
     command
@@ -218,17 +261,28 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .spawn()
         .map_err(|err| format!("could not run Codex app-server: {err}"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("Codex app-server stdin unavailable")?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("Codex app-server stdout unavailable")?;
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            stop_codex_app_server(&mut child);
+            return Err("Codex app-server stdin unavailable".into());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            stop_codex_app_server(&mut child);
+            return Err("Codex app-server stdout unavailable".into());
+        }
+    };
     let stderr = child.stderr.take();
     let (sender, receiver) = mpsc::channel();
     let stdout_reader = std::thread::spawn(move || {
@@ -244,7 +298,7 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
         }
     });
     let stderr_reader = std::thread::spawn(move || discovery::read_all(stderr));
-    writeln!(
+    if let Err(err) = writeln!(
         stdin,
         "{}",
         serde_json::json!({
@@ -259,31 +313,45 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
                 "capabilities": {}
             }
         })
-    )
-    .map_err(|err| format!("could not initialize Codex app-server: {err}"))?;
-    stdin.flush().ok();
+    ) {
+        stop_codex_app_server(&mut child);
+        return Err(format!("could not initialize Codex app-server: {err}"));
+    }
+    if let Err(err) = stdin.flush() {
+        stop_codex_app_server(&mut child);
+        return Err(format!("could not initialize Codex app-server: {err}"));
+    }
     let started = Instant::now();
     let mut requested_models = false;
     loop {
         let remaining = discovery::PROBE_TIMEOUT.saturating_sub(started.elapsed());
         if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            let stderr = stderr_reader.join().unwrap_or_default();
-            return Err(format!(
-                "Codex CLI option discovery timed out{}",
-                discovery::stderr_suffix(&stderr)
-            ));
+            stop_codex_app_server(&mut child);
+            return Err("Codex CLI option discovery timed out".into());
         }
-        let line = receiver
-            .recv_timeout(remaining)
-            .map_err(|_| "Codex CLI option discovery timed out".to_string())?;
+        let line = match receiver.recv_timeout(remaining) {
+            Ok(line) => line,
+            Err(_) => {
+                stop_codex_app_server(&mut child);
+                return Err("Codex CLI option discovery timed out".into());
+            }
+        };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
         if message.get("id").and_then(Value::as_i64) == Some(0) && !requested_models {
-            writeln!(
+            if let Err(err) = writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({
+                    "method": "initialized",
+                    "params": {}
+                })
+            ) {
+                stop_codex_app_server(&mut child);
+                return Err(format!("could not acknowledge Codex app-server: {err}"));
+            }
+            if let Err(err) = writeln!(
                 stdin,
                 "{}",
                 serde_json::json!({
@@ -291,15 +359,19 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
                     "id": 1,
                     "params": { "limit": 100 }
                 })
-            )
-            .map_err(|err| format!("could not request Codex models: {err}"))?;
-            stdin.flush().ok();
+            ) {
+                stop_codex_app_server(&mut child);
+                return Err(format!("could not request Codex models: {err}"));
+            }
+            if let Err(err) = stdin.flush() {
+                stop_codex_app_server(&mut child);
+                return Err(format!("could not request Codex models: {err}"));
+            }
             requested_models = true;
             continue;
         }
         if message.get("id").and_then(Value::as_i64) == Some(1) {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_codex_app_server(&mut child);
             drop(receiver);
             let _ = stdout_reader.join();
             let stderr = stderr_reader.join().unwrap_or_default();

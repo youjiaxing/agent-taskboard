@@ -23,6 +23,22 @@ if (state === "empty-host") {
   if (await page.$(".project-row")) throw new Error("empty Host should not render a Project row");
 } else {
   await page.waitForSelector(".project-board");
+  if (["offline", "rate-limited", "auth-failed"].includes(state)) {
+    const refreshResponse = page.waitForResponse((response) => {
+      if (!response.url().includes("/rpc")) return false;
+      try {
+        return response.request().postDataJSON()?.op === "refresh";
+      } catch {
+        return false;
+      }
+    });
+    await page.click('.refresh-bar button[data-act="refresh"]');
+    const response = await refreshResponse;
+    if (!response.ok()) {
+      throw new Error(`manual refresh failed at the protocol boundary: ${response.status()}`);
+    }
+    await page.waitForSelector(`.refresh-bar[data-kind="${state}"]`);
+  }
   if (state === "single-project") {
     const projects = await page.$$(".project-row");
     if (projects.length !== 1) throw new Error(`single Project fixture rendered ${projects.length} Project rows`);
@@ -45,12 +61,24 @@ if (state === "empty-host") {
   } else if (state === "offline") {
     await page.waitForSelector('.refresh-bar[data-kind="offline"]');
     await page.waitForSelector(".lanes");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("检查运行 Host 的电脑网络") || !text.includes("刷新")) {
+      throw new Error(`offline state must provide a concrete manual recovery step: ${text}`);
+    }
   } else if (state === "rate-limited") {
     await page.waitForSelector('.refresh-bar[data-kind="rate-limited"]');
     await page.waitForSelector(".lanes");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("大约可再刷新") || !text.includes("刷新")) {
+      throw new Error(`rate-limited state must show retry timing and the retry action: ${text}`);
+    }
   } else if (state === "auth-failed") {
     await page.waitForSelector('.refresh-bar[data-kind="auth-failed"]');
     await page.waitForSelector(".notice.bad");
+    const text = (await page.locator(".refresh-bar").textContent())?.replace(/\s+/g, " ") ?? "";
+    if (!text.includes("更新 GitHub 凭据") || !text.includes("刷新")) {
+      throw new Error(`auth failure must explain where to repair credentials and how to retry: ${text}`);
+    }
   } else {
     throw new Error(`unknown shell edge state ${state}`);
   }

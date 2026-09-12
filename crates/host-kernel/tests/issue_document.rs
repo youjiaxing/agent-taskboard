@@ -64,17 +64,19 @@ fn issue_document_load_has_explicit_states_and_keeps_the_last_body_on_failure() 
     }))
     .unwrap();
     let selected = host.snapshot().board.unwrap().selected.unwrap();
-    let (loaded_body, fetched_at_ms) = match selected.document {
+    let (loaded_body, editable_body, fetched_at_ms) = match selected.document {
         IssueDocumentState::Ready {
             body,
+            editable_body,
             fetched_at_ms,
-        } => (body, fetched_at_ms),
+        } => (body, editable_body, fetched_at_ms),
         state => panic!("expected ready, got {state:?}"),
     };
     assert_eq!(
         loaded_body,
         "# Question\n\nRead **all** constraints.\n\n- first\n- second"
     );
+    assert_eq!(editable_body.as_deref(), Some(loaded_body.as_str()));
     assert!(fetched_at_ms > 0);
 
     tracker.fail_issue_document_offline("you/garden#98");

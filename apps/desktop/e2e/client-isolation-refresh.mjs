@@ -16,9 +16,14 @@ const browserContext = await browser.newContext({
   locale: "zh-CN",
   viewport: { width: 1280, height: 840 },
 });
+const mobileContext = await browser.newContext({
+  locale: "zh-CN",
+  viewport: { width: 390, height: 844 },
+});
 const desktop = await desktopContext.newPage();
 const web = await browserContext.newPage();
-for (const page of [desktop, web]) {
+const mobile = await mobileContext.newPage();
+for (const page of [desktop, web, mobile]) {
   await page.addInitScript((protocol) => {
     window.__HOST_PROTOCOL__ = protocol;
   }, url);
@@ -31,20 +36,30 @@ for (const page of [desktop, web]) {
 }
 
 const clientIds = await Promise.all(
-  [desktop, web].map((page) =>
+  [desktop, web, mobile].map((page) =>
     page.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")),
   ),
 );
-if (!clientIds[0] || !clientIds[1] || clientIds[0] === clientIds[1]) {
+if (clientIds.some((id) => !id) || new Set(clientIds).size !== clientIds.length) {
   throw new Error(`real Client tabs need distinct identities, got ${JSON.stringify(clientIds)}`);
 }
 
 const focusProject = async (page, projectId, expectedName) => {
+  const started = Date.now();
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
   await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`);
+  const elapsed = Date.now() - started;
+  if (elapsed >= 500) {
+    throw new Error(`Project focus waited ${elapsed}ms for the slow Tracker`);
+  }
 };
 
 await focusProject(desktop, gardenProjectId, "garden");
+await desktop.waitForFunction(
+  () => document.querySelectorAll('[data-lane="frontier"] .issue-card').length >= 18,
+  undefined,
+  { timeout: 400 },
+);
 await desktop.click('[data-act="focus-issue"][data-id="you/garden#1"]');
 await desktop.waitForSelector('.detail-hd:has-text("garden issue 1")');
 await desktop.click('button[data-act="center-view"][data-id="graph"]');
@@ -53,6 +68,23 @@ await desktop.waitForSelector('button[data-act="center-view"][data-id="graph"].a
 await focusProject(web, notesProjectId, "notes");
 await web.click('[data-act="focus-issue"][data-id="you/notes#1"]');
 await web.waitForSelector('.detail-hd:has-text("notes issue")');
+
+await mobile.click('button[data-act="mobile-scope"]');
+await mobile.waitForSelector(".mobile-scope-sheet");
+const mobileFocusStarted = Date.now();
+await mobile.click(`.mobile-scope-sheet button[data-act="focus-project"][data-id="${gardenProjectId}"]`);
+await mobile.waitForSelector('.project-heading h1:has-text("garden")', { timeout: 500 });
+const mobileFocusElapsed = Date.now() - mobileFocusStarted;
+if (mobileFocusElapsed >= 500) {
+  throw new Error(`mobile Project focus waited ${mobileFocusElapsed}ms for the slow Tracker`);
+}
+await mobile.waitForSelector(".mobile-board-view");
+const mobileOverflow = await mobile.evaluate(
+  () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+);
+if (mobileOverflow > 1) {
+  throw new Error(`mobile Project switch overflowed by ${mobileOverflow}px`);
+}
 
 const desktopIdentity = await desktop.evaluate(() => ({
   project: document.querySelector(".project-heading h1")?.textContent?.trim(),
@@ -160,4 +192,5 @@ await setRefreshInterval(originalRefreshInterval);
 
 await desktopContext.close();
 await browserContext.close();
+await mobileContext.close();
 await browser.close();

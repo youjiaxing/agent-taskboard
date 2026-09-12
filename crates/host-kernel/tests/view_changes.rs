@@ -297,7 +297,12 @@ fn isolated_tree_gone_does_not_fall_back_to_project_directory() {
     git(&dir, &["commit", "-m", "main"]);
 
     let tree = make_dir(tmp.path(), "work/garden-iso");
-    init_repo(&tree);
+    // A native isolation directory shares the Project's Git history. A wholly
+    // unrelated repository cannot compare against the pre-launch Project commit.
+    git(
+        &dir,
+        &["worktree", "add", "--detach", tree.to_str().unwrap()],
+    );
     write_file(&tree, "iso.txt", "iso-only\n");
     git(&tree, &["add", "iso.txt"]);
     git(&tree, &["commit", "-m", "iso"]);

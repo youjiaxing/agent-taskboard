@@ -26,6 +26,15 @@ const dragBy = async (page, selector, dx, dy) => {
   await page.mouse.up();
 };
 
+const waitForDockedInspector = async (page) => page.waitForFunction(() => {
+  const panel = document.querySelector('[data-workbench-panel="inspector"]');
+  if (!panel || panel.getAttribute("data-floating") !== "false") return false;
+  const rect = panel.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0
+    ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    : false;
+}).then((handle) => handle.jsonValue());
+
 const browserPage = await openClient();
 const staleLayoutKey = "agent-taskboard-panel-layout:v1:browser:stale-history-instance";
 await browserPage.evaluate(({ staleKey }) => {
@@ -136,22 +145,22 @@ if (
 
 const desktopPage = await openClient({ tauri: true });
 await desktopPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
+await desktopPage.waitForSelector(".lifted-run");
 await desktopPage.waitForSelector('[data-workbench-panel="inspector"]');
 await desktopPage.waitForSelector('[data-document-state="ready"]');
-const desktopInspector = await desktopPage.locator('[data-workbench-panel="inspector"]').boundingBox();
-const desktopInspectorFloating = await desktopPage.locator('[data-workbench-panel="inspector"]').getAttribute("data-floating");
-if (!desktopInspector || desktopInspectorFloating !== "false") {
+const desktopInspector = await waitForDockedInspector(desktopPage);
+if (!desktopInspector) {
   throw new Error(`Tauri and browser Clients must not overwrite each other's layout: ${JSON.stringify({ desktopInspector, inspectorAfterReload })}`);
 }
 
 const secondBrowserPage = await openClient();
 await secondBrowserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
+await secondBrowserPage.waitForSelector(".lifted-run");
 await secondBrowserPage.waitForSelector('[data-workbench-panel="inspector"]');
 await secondBrowserPage.waitForSelector('[data-document-state="ready"]');
-const secondBrowserInspector = await secondBrowserPage.locator('[data-workbench-panel="inspector"]').boundingBox();
-const secondBrowserInspectorFloating = await secondBrowserPage.locator('[data-workbench-panel="inspector"]').getAttribute("data-floating");
-if (!secondBrowserInspector || secondBrowserInspectorFloating !== "false" || secondBrowserInspector.width > 500) {
-  throw new Error(`two Browser Clients must keep independent panel layouts: ${JSON.stringify({ secondBrowserInspector, secondBrowserInspectorFloating, inspectorAfterReload })}`);
+const secondBrowserInspector = await waitForDockedInspector(secondBrowserPage);
+if (!secondBrowserInspector || secondBrowserInspector.width > 500) {
+  throw new Error(`two Browser Clients must keep independent panel layouts: ${JSON.stringify({ secondBrowserInspector, inspectorAfterReload })}`);
 }
 await secondBrowserPage.close();
 
@@ -207,9 +216,7 @@ await browserPage.click('header.chrome button[data-act="toggle-issue"]');
 
 await browserPage.setViewportSize({ width: 1280, height: 840 });
 
-const terminalDraft = "draft survives panel switches";
 const activeRunId = await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run");
-await browserPage.fill('[data-workbench-panel="terminal"] form[data-act="inject-run"] input', terminalDraft);
 await browserPage.click('[data-workbench-panel="terminal"] button[data-act="hide-terminal"]');
 await browserPage.waitForSelector(".lanes");
 await browserPage.waitForFunction(() => !document.querySelector('[data-workbench-panel="terminal"]'));
@@ -227,9 +234,6 @@ if (frontierScrollBefore <= 0) throw new Error("panel layout fixture needs a scr
 
 await browserPage.click("button[data-act='show-terminal']");
 await browserPage.waitForSelector('[data-workbench-panel="terminal"]');
-if (await browserPage.inputValue('[data-workbench-panel="terminal"] form[data-act="inject-run"] input') !== terminalDraft) {
-  throw new Error("hiding and restoring Terminal must retain its input draft");
-}
 if (await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run") !== activeRunId) {
   throw new Error("hiding and restoring Terminal must retain the current Run");
 }

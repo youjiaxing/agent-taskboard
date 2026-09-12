@@ -1,14 +1,14 @@
 # Tracker 只在可见或动作节点刷新，上次数据只供展示
 
-Issue Tracker 是 Issue 状态与认领的唯一真源。Host 为每个 Project 保存一份**上次数据**，但这份数据只用于先画出看板和离线查看；判断 Issue 是否关闭、认领或自动推进前，必须先成功读取 Issue Tracker，不能拿上次数据执行动作。
+Issue Tracker 是 Issue 状态与认领的唯一真源。Host 为每个 Project 保存一份**上次数据**，但这份数据只用于先画出看板和离线查看；自动判断 Issue 是否关闭、自动推进认领或绑定 Run 启动前认领时，必须先成功读取 Issue Tracker，不能拿上次数据执行这些自动安全动作。人工 Issue 写入的定向读取边界由 [ADR 0019](./0019-cache-first-project-focus-and-targeted-writes.md) 规定。
 
 ## 刷新时机
 
-- 打开或切到 Project、可见窗口或标签回到前台、手动刷新时，立即刷新。
+- 打开 Project、可见窗口或标签回到前台、手动刷新时，立即刷新；切到 Project 时按 [ADR 0019](./0019-cache-first-project-focus-and-targeted-writes.md) 先复用刷新周期内的上次数据，只有到期或从未取得 Tracker 读取结果才后台刷新，限流与鉴权失败遵循该决策的恢复条件。
 - 至少有一个可见 Client 正显示该 Project 时，默认每 300 秒刷新；间隔可设置，最短 15 秒且不设人为最大值。已有明确配置保持原值。界面必须显示下一次自动刷新的倒计时，具体样式由原型决定。
 - 没有可见 Client 正显示 Project 时，不为展示而轮询。
 - 绑定该 Project 的 Run 结束时立即刷新，不受 Client 是否可见影响。
-- 认领、判断 Issue 是否关闭、自动推进认领下一张，以及冷启动恢复自动推进时，只刷新涉及的 Project；其它已登记 Project 不跟着刷新。
+- 自动推进认领下一张、绑定 Run 启动前认领、判断 Issue 是否关闭，以及冷启动恢复自动推进时，只刷新涉及的 Project；其它已登记 Project 不跟着刷新。
 - local markdown 文件内容变化触发刷新；Host 在自己的 tick 上检测已登记 Project 的内容 revision，不要求窗口位于前台。v1 不依赖 webhook 作为远端 Tracker 的主路径。
 
 ## 上次数据
@@ -27,9 +27,11 @@ Host 按 Project 持久保存最近一次成功刷新得到的数据：所有未
 - 401、403 或凭据失败仍按“决策：本机凭据与远端鉴权策略”做项目级降级，不混写成离线或限流。
 - 从未成功刷新且没有上次数据时，不展示像是真实数据的四列。
 
-离线或限流未恢复时，人可以查看上次数据、查看或停止已有 Run、向已有 Run 输入，以及启动游离 Run。Host 不认领、不放领，自动推进不领下一张；需要先认领才能启动的绑定 Issue Run 不启动。写操作不排队，也不先修改上次数据。
+离线或限流未恢复时，人可以查看上次数据、查看或停止已有 Run、向已有 Run 输入，以及启动游离 Run。人工发起的 Issue 写入按 [ADR 0019](./0019-cache-first-project-focus-and-targeted-writes.md) 直接交给 Tracker 处理，由当前操作独立返回成功、冲突或连接错误；自动推进不领下一张，绑定 Issue Run 启动前的认领也必须先恢复全量读取。写操作不排队，也不先修改上次数据。
 
 ## Tracker 写入边界
+
+> Issue 写入的读取范围已由 [ADR 0019](./0019-cache-first-project-focus-and-targeted-writes.md) 替代；本节保留为原始决策背景。
 
 从 #111 起，桌面与电脑浏览器 Client 可通过 Host 使用 [Tracker Adapter 统一能力面](./0002-tracker-adapter-capability-surface.md) 的必选写操作：创建、改标题正文、开关票、认领/放领、评论、父 Issue 与 Dependency。每次写入前仍须成功读取涉及的 Project；写入直接落到 Tracker 真源，失败则保留表单输入并显示错误，不先改上次数据、不离线排队。认领失败仍不得启动对应绑定 Run。
 

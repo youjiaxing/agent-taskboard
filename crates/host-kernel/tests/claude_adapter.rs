@@ -33,6 +33,8 @@ fn claude_adapter_declares_interactive_tui_contract() {
     assert_eq!(adapter.name(), CLAUDE_CODE_NAME);
     assert_eq!(adapter.bin(), CLAUDE_BIN);
     assert!(adapter.native_isolation());
+    assert_eq!(adapter.skill_invocation("wayfinder"), "/wayfinder");
+    assert_eq!(adapter.skill_invocation("implement"), "/implement");
 }
 
 #[test]

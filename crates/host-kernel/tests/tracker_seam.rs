@@ -189,6 +189,251 @@ fn host_commands_cover_create_update_open_comment_parent_and_dependency() {
 }
 
 #[test]
+fn create_issue_does_not_require_a_project_wide_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    let project_id = register(&mut host, &dir, "you/garden");
+    let reads = tracker.read_count("you/garden");
+    tracker.set_read_mode("you/garden", ReadMode::Offline);
+
+    host.handle(serde_json::json!({
+        "op": "createIssue",
+        "projectId": project_id,
+        "title": "created without a full refresh",
+        "body": "hello",
+    }))
+    .unwrap();
+
+    assert_eq!(tracker.read_count("you/garden"), reads);
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .frontier
+        .iter()
+        .any(|card| card.title == "created without a full refresh"));
+}
+
+#[test]
+fn update_issue_keeps_a_remote_change_to_an_unedited_field() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    tracker.set_issue_body("you/garden#8", "original body");
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    tracker.set_issue_body("you/garden#8", "remote body");
+
+    host.handle(serde_json::json!({
+        "op": "updateIssue",
+        "issueId": "you/garden#8",
+        "title": "local title",
+        "body": "original body",
+        "base": { "title": "main", "body": "original body" },
+    }))
+    .unwrap();
+
+    let (_, _, op) = tracker.log().last().cloned().expect("write operation");
+    assert!(matches!(
+        op,
+        TrackerWriteOp::UpdateIssue { title, body }
+            if title == "local title" && body == "remote body"
+    ));
+}
+
+#[test]
+fn update_issue_preserves_the_draft_when_the_same_field_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    tracker.set_issue_body("you/garden#8", "original body");
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 8, "remote title"),
+            IssueRecord::open("you/garden", 9, "gate"),
+        ],
+    );
+
+    let error = host
+        .handle(serde_json::json!({
+            "op": "updateIssue",
+            "issueId": "you/garden#8",
+            "title": "local title",
+            "body": "original body",
+            "base": { "title": "main", "body": "original body" },
+        }))
+        .unwrap_err();
+    match error {
+        KernelError::Conflict(conflict) => {
+            assert_eq!(conflict.issue_id, "you/garden#8");
+            assert_eq!(conflict.fields, vec!["title"]);
+            assert_eq!(conflict.latest.title.as_deref(), Some("remote title"));
+        }
+        other => panic!("expected field conflict, got {other:?}"),
+    }
+    assert!(
+        tracker.log().is_empty(),
+        "a conflicting edit must not write"
+    );
+
+    host.handle(serde_json::json!({
+        "op": "updateIssue",
+        "issueId": "you/garden#8",
+        "title": "local title",
+        "body": "original body",
+        "base": { "title": "main", "body": "original body" },
+        "conflictPolicy": "overwrite",
+    }))
+    .unwrap();
+    assert!(matches!(
+        tracker.log().last(),
+        Some((_, _, TrackerWriteOp::UpdateIssue { title, .. })) if title == "local title"
+    ));
+}
+
+#[test]
+fn dependency_writes_read_current_relations_without_a_base_and_when_overwriting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    let baseline = tracker.relation_read_count();
+
+    host.handle(serde_json::json!({
+        "op": "setIssueBlockedBy",
+        "issueId": "you/garden#8",
+        "blockedBy": ["you/garden#9"],
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setIssueBlockedBy",
+        "issueId": "you/garden#8",
+        "blockedBy": [],
+        "base": { "blockedBy": [] },
+        "conflictPolicy": "overwrite",
+    }))
+    .unwrap();
+
+    assert_eq!(tracker.relation_read_count(), baseline + 2);
+}
+
+#[test]
+fn relation_updates_reject_only_changes_to_the_same_relation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 8, "main"),
+            IssueRecord::open("you/garden", 9, "remote relation"),
+            IssueRecord::open("you/garden", 10, "local relation"),
+        ],
+    );
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    tracker.set_issues(
+        "you/garden",
+        vec![
+            IssueRecord::open("you/garden", 8, "main")
+                .parent("you/garden", 9, "remote relation")
+                .blocked_by("you/garden", 9, "remote relation", true),
+            IssueRecord::open("you/garden", 9, "remote relation"),
+            IssueRecord::open("you/garden", 10, "local relation"),
+        ],
+    );
+
+    let parent_error = host
+        .handle(serde_json::json!({
+            "op": "setIssueParent",
+            "issueId": "you/garden#8",
+            "parent": "you/garden#10",
+            "base": { "parent": null },
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        parent_error,
+        KernelError::Conflict(conflict) if conflict.fields == vec!["parent"]
+    ));
+
+    let dependency_error = host
+        .handle(serde_json::json!({
+            "op": "setIssueBlockedBy",
+            "issueId": "you/garden#8",
+            "blockedBy": ["you/garden#10"],
+            "base": { "blockedBy": [] },
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        dependency_error,
+        KernelError::Conflict(conflict) if conflict.fields == vec!["blockedBy"]
+    ));
+    assert!(
+        tracker.log().is_empty(),
+        "conflicting relations must not write"
+    );
+}
+
+#[test]
+fn issue_writes_do_not_use_the_project_wide_read_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    tracker.set_issue_body("you/garden#8", "old body");
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    let reads = tracker.read_count("you/garden");
+    tracker.set_read_mode("you/garden", ReadMode::Offline);
+
+    for request in [
+        serde_json::json!({
+            "op": "updateIssue",
+            "issueId": "you/garden#8",
+            "title": "renamed",
+            "body": "new body",
+        }),
+        serde_json::json!({
+            "op": "setIssueOpen",
+            "issueId": "you/garden#8",
+            "open": false,
+        }),
+        serde_json::json!({
+            "op": "addIssueComment",
+            "issueId": "you/garden#8",
+            "body": "hello",
+        }),
+        serde_json::json!({
+            "op": "claimIssue",
+            "issueId": "you/garden#9",
+        }),
+        serde_json::json!({
+            "op": "releaseIssue",
+            "issueId": "you/garden#9",
+        }),
+        serde_json::json!({
+            "op": "setIssueParent",
+            "issueId": "you/garden#8",
+            "parent": "you/garden#9",
+        }),
+        serde_json::json!({
+            "op": "setIssueBlockedBy",
+            "issueId": "you/garden#8",
+            "blockedBy": ["you/garden#9"],
+        }),
+    ] {
+        host.handle(request).unwrap();
+        assert_eq!(
+            tracker.read_count("you/garden"),
+            reads,
+            "an Issue write used the Project-wide read seam"
+        );
+    }
+}
+
+#[test]
 fn claim_and_release_still_route_through_the_seam() {
     let tmp = tempfile::tempdir().unwrap();
     let (tracker, dir) = garden_setup(&tmp);
@@ -284,54 +529,50 @@ fn failed_writes_are_denied_and_keep_tracker_details() {
 }
 
 #[test]
-fn writes_blocked_by_read_errors_keep_consistent_reasons() {
+fn project_read_failures_do_not_block_direct_issue_writes() {
     let tmp = tempfile::tempdir().unwrap();
     let (tracker, dir) = garden_setup(&tmp);
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
     register(&mut host, &dir, "you/garden");
 
-    tracker.set_write_mode("you/garden", WriteMode::Ok);
     tracker.set_read_mode("you/garden", ReadMode::Auth);
-    let err = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#8",
-        }))
-        .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("auth-failed")));
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#8",
+    }))
+    .unwrap();
 
     tracker.set_read_mode("you/garden", ReadMode::Offline);
-    let err = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#8",
-        }))
-        .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("offline")));
+    host.handle(serde_json::json!({
+        "op": "releaseIssue",
+        "issueId": "you/garden#8",
+    }))
+    .unwrap();
 
     tracker.set_read_mode("you/garden", ReadMode::RateLimited(Some(60_000)));
-    let err = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#8",
-        }))
-        .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("rate-limited")));
+    host.handle(serde_json::json!({
+        "op": "setIssueOpen",
+        "issueId": "you/garden#8",
+        "open": false,
+    }))
+    .unwrap();
 
-    // 从未成功读取过的项目
     let fresh_tmp = tempfile::tempdir().unwrap();
     let fresh_dir = make_dir(fresh_tmp.path(), "work/fresh");
     let fresh_tracker = Arc::new(SeamTracker::new());
     fresh_tracker.set_read_mode("you/fresh", ReadMode::Offline);
-    let mut fresh = boot(fresh_tmp.path(), fresh_tracker);
-    register(&mut fresh, &fresh_dir, "you/fresh");
-    let err = fresh
+    let mut fresh = boot(fresh_tmp.path(), Arc::clone(&fresh_tracker));
+    let project_id = register(&mut fresh, &fresh_dir, "you/fresh");
+    fresh
         .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/fresh#1",
+            "op": "createIssue",
+            "projectId": project_id,
+            "title": "first Issue",
         }))
-        .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("never-fetched")));
+        .unwrap();
+    assert!(fresh_tracker.log().iter().any(|(_, _, op)| {
+        matches!(op, TrackerWriteOp::CreateIssue { title, .. } if title == "first Issue")
+    }));
 }
 
 #[test]
@@ -426,7 +667,39 @@ fn incomplete_read_draws_no_frontier_or_graph_and_keeps_details() {
 }
 
 #[test]
-fn tracker_business_error_keeps_complete_last_data_but_blocks_writes() {
+fn incomplete_refresh_keeps_a_missing_selection_until_a_complete_read_confirms_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (tracker, dir) = garden_setup(&tmp);
+    let mut host = boot(tmp.path(), Arc::clone(&tracker));
+    register(&mut host, &dir, "you/garden");
+    host.handle(serde_json::json!({ "op": "focusIssue", "issueId": "you/garden#8" }))
+        .unwrap();
+
+    tracker.set_issues(
+        "you/garden",
+        vec![IssueRecord::open("you/garden", 9, "gate")],
+    );
+    tracker.set_read_mode(
+        "you/garden",
+        ReadMode::Incomplete("pagination stopped before the selected Issue".into()),
+    );
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    assert_eq!(
+        host.snapshot().board.unwrap().selected.unwrap().id,
+        "you/garden#8",
+        "an incomplete read cannot prove that the selected Issue was deleted"
+    );
+
+    tracker.set_read_mode("you/garden", ReadMode::Complete);
+    host.handle(serde_json::json!({ "op": "refresh" })).unwrap();
+    assert!(
+        host.snapshot().board.unwrap().selected.is_none(),
+        "a later complete read may clear the confirmed missing Issue"
+    );
+}
+
+#[test]
+fn tracker_business_error_keeps_complete_last_data_and_allows_direct_writes() {
     let tmp = tempfile::tempdir().unwrap();
     let (tracker, dir) = garden_setup(&tmp);
     let mut host = boot(tmp.path(), Arc::clone(&tracker));
@@ -447,13 +720,21 @@ fn tracker_business_error_keeps_complete_last_data_but_blocks_writes() {
             ..
         } if detail == "repository rule denied this query"
     ));
-    let err = host
-        .handle(serde_json::json!({
-            "op": "claimIssue",
-            "issueId": "you/garden#8",
-        }))
-        .unwrap_err();
-    assert!(matches!(err, KernelError::Denied(message) if message.contains("tracker-error")));
+
+    host.handle(serde_json::json!({
+        "op": "claimIssue",
+        "issueId": "you/garden#8",
+    }))
+    .unwrap();
+    assert!(host
+        .snapshot()
+        .board
+        .unwrap()
+        .columns
+        .unwrap()
+        .in_progress
+        .iter()
+        .any(|card| card.id == "you/garden#8"));
 }
 
 #[test]

@@ -275,6 +275,20 @@ fn which_cmd(name: &str) -> Option<PathBuf> {
         .map(|line| PathBuf::from(line.trim()))
 }
 
+#[cfg(not(windows))]
+fn remove_nvm_conflicting_vars(command: &mut Command) {
+    let keys = std::env::vars_os()
+        .map(|(key, _)| key)
+        .filter(|key| {
+            key.to_str()
+                .is_some_and(|key| key == "PREFIX" || key.eq_ignore_ascii_case("NPM_CONFIG_PREFIX"))
+        })
+        .collect::<Vec<_>>();
+    for key in keys {
+        command.env_remove(key);
+    }
+}
+
 fn capture_shell(shell: &Path, cwd: &Path, timeout: Duration) -> Result<LaunchEnvironment, String> {
     let mut command = Command::new(shell);
     command
@@ -282,6 +296,8 @@ fn capture_shell(shell: &Path, cwd: &Path, timeout: Duration) -> Result<LaunchEn
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(not(windows))]
+    remove_nvm_conflicting_vars(&mut command);
     #[cfg(windows)]
     {
         command

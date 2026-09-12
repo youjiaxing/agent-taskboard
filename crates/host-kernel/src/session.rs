@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+mod output;
+use output::{bounded_size, TerminalOutput};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnRequest {
     pub argv: Vec<String>,
@@ -27,6 +30,10 @@ pub trait AgentSession: Send + Sync {
     fn stop(&self);
     fn exit_code(&self) -> Option<i32>;
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk;
+    /// Read-only text for lightweight clients; control sequences stay in the PTY stream.
+    fn recent_output(&self) -> String {
+        readable_pty_output(&self.read_after(0, Duration::ZERO).data)
+    }
     fn was_stopped(&self) -> bool {
         false
     }
@@ -36,6 +43,13 @@ pub trait AgentSession: Send + Sync {
     fn completion_signals(&self) -> crate::agent::CompletionSignals {
         crate::agent::CompletionSignals::default()
     }
+}
+
+pub(crate) fn readable_pty_output(bytes: &[u8]) -> String {
+    let mut parser =
+        TerminalOutput::new(crate::run::DEFAULT_PTY_COLS, crate::run::DEFAULT_PTY_ROWS);
+    parser.process(bytes);
+    parser.contents()
 }
 
 pub trait SessionFactory: Send + Sync {
@@ -148,6 +162,11 @@ impl MemorySession {
         self.pulse.notify_all();
     }
 
+    /// Simulate the PTY channel disappearing without a user-requested stop.
+    pub fn disconnect(&self) {
+        self.finish(1);
+    }
+
     pub fn stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
@@ -227,6 +246,7 @@ impl SessionFactory for PtySessionFactory {
 
 struct PtyLive {
     output: Arc<Mutex<Vec<u8>>>,
+    screen: Arc<Mutex<TerminalOutput>>,
     exit: Arc<Mutex<Option<i32>>>,
     pulse: Arc<Condvar>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -237,6 +257,7 @@ struct PtyLive {
 
 impl PtyLive {
     fn spawn(request: SpawnRequest) -> Result<Arc<Self>, String> {
+        let (cols, rows) = bounded_size(request.cols, request.rows);
         let program = request
             .argv
             .first()
@@ -248,8 +269,8 @@ impl PtyLive {
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
-                rows: request.rows.max(2),
-                cols: request.cols.max(2),
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -273,10 +294,12 @@ impl PtyLive {
             .map_err(|err| err.to_string())?;
         let writer = pair.master.take_writer().map_err(|err| err.to_string())?;
         let output = Arc::new(Mutex::new(Vec::new()));
+        let screen = Arc::new(Mutex::new(TerminalOutput::new(cols, rows)));
         let exit = Arc::new(Mutex::new(None));
         let pulse = Arc::new(Condvar::new());
         let session = Arc::new(Self {
             output: Arc::clone(&output),
+            screen: Arc::clone(&screen),
             exit: Arc::clone(&exit),
             pulse: Arc::clone(&pulse),
             writer: Mutex::new(writer),
@@ -294,6 +317,7 @@ impl PtyLive {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            screen.lock().expect("pty screen").process(&buf[..n]);
                             reader_out
                                 .lock()
                                 .expect("pty output")
@@ -338,14 +362,24 @@ impl AgentSession for PtyLive {
     }
 
     fn resize(&self, cols: u16, rows: u16) {
+        let (cols, rows) = bounded_size(cols, rows);
         if let Ok(master) = self.master.lock() {
-            let _ = master.resize(portable_pty::PtySize {
-                rows: rows.max(2),
-                cols: cols.max(2),
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            if master
+                .resize(portable_pty::PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .is_ok()
+            {
+                self.screen.lock().expect("pty screen").resize(cols, rows);
+            }
         }
+    }
+
+    fn recent_output(&self) -> String {
+        self.screen.lock().expect("pty screen").contents()
     }
 
     fn stop(&self) {

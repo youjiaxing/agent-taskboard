@@ -57,6 +57,8 @@ pub struct AgentField {
 pub struct AgentFieldOptionFilter {
     pub field_id: String,
     pub options_by_value: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub defaults_by_value: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +83,8 @@ pub struct AgentSummary {
     pub id: String,
     pub name: String,
     pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
     pub fields: Vec<AgentField>,
 }
 
@@ -227,6 +231,10 @@ pub trait AgentPort: Send + Sync {
 
     fn native_isolation(&self) -> bool {
         false
+    }
+
+    fn skill_invocation(&self, skill: &str) -> String {
+        format!("/{skill}")
     }
 
     fn isolation_unavailable_reason(&self, language: Language) -> String {
@@ -468,6 +476,14 @@ impl AgentPort for MemoryAgent {
 
     fn native_isolation(&self) -> bool {
         self.native_isolation
+    }
+
+    fn skill_invocation(&self, skill: &str) -> String {
+        if self.id == CODEX_ID {
+            format!("${skill}")
+        } else {
+            format!("/{skill}")
+        }
     }
 
     fn isolation_tree_after_launch(

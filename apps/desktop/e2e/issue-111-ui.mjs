@@ -106,6 +106,9 @@ if (await page.inputValue("#issue-edit-title") !== "Failed draft title") {
 if (!(await page.locator("form[data-act='issue-edit'] .form-feedback").textContent())?.includes("simulated Local Markdown write failure")) {
   throw new Error("failed edit must show the tracker error");
 }
+if (await page.locator("form[data-act='issue-edit'] .issue-conflict").count()) {
+  throw new Error("a non-conflict write failure must not render conflict controls");
+}
 
 await page.fill("#issue-edit-title", "Child edited from desktop UI");
 await page.fill("#issue-edit-body", "edited body from desktop UI");
@@ -143,8 +146,7 @@ await page.click("button[data-act='toggle-issue-open']");
 await waitForIssueText("Status: ready-for-agent");
 
 await page.reload({ waitUntil: "domcontentloaded" });
-await page.waitForSelector(".issue-card:has-text('Child edited from desktop UI')");
-await page.locator(".issue-card-main", { hasText: "Child edited from desktop UI" }).click();
+await page.waitForSelector(".issue-detail .detail-hd:has-text('Child edited from desktop UI')");
 await page.waitForSelector("section.issue-document[data-document-state='ready']");
 if (await page.locator(".issue-detail").count() !== 1) throw new Error("Issue detail should survive reload");
 
@@ -163,6 +165,104 @@ await page.waitForFunction(
 await page.click("button[data-act='edit-issue']");
 if (await page.inputValue("#issue-edit-body") !== "externally changed body from markdown") {
   throw new Error("external Local Markdown changes must reload into the open Issue editor");
+}
+
+await page.fill("#issue-edit-body", "local conflict draft");
+await writeFile(
+  childPath,
+  (await readFile(childPath, "utf8")).replace(
+    "externally changed body from markdown",
+    "newer Tracker body",
+  ),
+);
+await page.focus("#issue-edit-body");
+const conflictScrollBefore = await page.$eval(".detail-scroll", (node) => {
+  node.scrollTop = node.scrollHeight;
+  return node.scrollTop;
+});
+if (conflictScrollBefore <= 0) {
+  throw new Error("conflict regression needs a scrollable Issue detail");
+}
+await page.$eval("form[data-act='issue-edit']", (form) => form.requestSubmit());
+await page.waitForSelector("form[data-act='issue-edit'] .issue-conflict");
+if (await page.inputValue("#issue-edit-body") !== "local conflict draft") {
+  throw new Error("a field conflict must preserve the local draft");
+}
+const conflictState = await page.evaluate(() => ({
+  activeId: document.activeElement?.id,
+  scrollTop: document.querySelector(".detail-scroll")?.scrollTop ?? 0,
+}));
+if (conflictState.activeId !== "issue-edit-body") {
+  throw new Error(`a field conflict must restore the edited field focus: ${JSON.stringify(conflictState)}`);
+}
+if (Math.abs(conflictState.scrollTop - conflictScrollBefore) > 1) {
+  throw new Error(`a field conflict changed Issue detail scroll: ${conflictScrollBefore} -> ${conflictState.scrollTop}`);
+}
+if (!(await page.locator(".issue-conflict-latest").textContent())?.includes("newer Tracker body")) {
+  throw new Error("a field conflict must show the latest Tracker value");
+}
+
+await page.click("button[data-act='use-latest-issue-conflict']");
+if (await page.inputValue("#issue-edit-body") !== "newer Tracker body") {
+  throw new Error("Use latest must load the Tracker value into the draft");
+}
+await page.fill("#issue-edit-body", "explicit overwrite body");
+await writeFile(
+  childPath,
+  (await readFile(childPath, "utf8")).replace("newer Tracker body", "last-second Tracker body"),
+);
+await page.click("form[data-act='issue-edit'] > .actions button[type='submit']");
+await page.waitForSelector("form[data-act='issue-edit'] .issue-conflict");
+await page.click("form[data-act='issue-edit'] button[data-conflict-policy='overwrite']");
+await page.waitForFunction(() => !document.querySelector("form[data-act='issue-edit']"));
+await waitForIssueText("explicit overwrite body");
+
+await page.click("button[data-act='edit-issue']");
+await page.fill("#issue-edit-title", "local title conflict draft");
+await writeFile(
+  childPath,
+  (await readFile(childPath, "utf8"))
+    .replace("# 02 — Child edited from desktop UI", "# 02 — remote title")
+    .replace("explicit overwrite body", "remote body changed outside draft"),
+);
+await page.click("form[data-act='issue-edit'] > .actions button[type='submit']");
+await page.waitForSelector("form[data-act='issue-edit'] .issue-conflict");
+await page.click("button[data-act='use-latest-issue-conflict']");
+await page.fill("#issue-edit-title", "title after loading latest");
+await page.click("form[data-act='issue-edit'] > .actions button[type='submit']");
+await page.waitForFunction(() => !document.querySelector("form[data-act='issue-edit']"));
+const afterLoadingLatest = await readFile(childPath, "utf8");
+if (
+  !afterLoadingLatest.includes("# 02 — title after loading latest")
+  || !afterLoadingLatest.includes("remote body changed outside draft")
+  || afterLoadingLatest.includes("explicit overwrite body")
+) {
+  throw new Error(`loading the latest conflicting field overwrote an untouched remote field: ${afterLoadingLatest}`);
+}
+
+await page.setViewportSize({ width: 390, height: 844 });
+await page.locator(".issue-card-main", { hasText: "title after loading latest" }).click();
+await page.waitForSelector(".mobile-issue-view section.issue-document[data-document-state='ready']");
+await page.click(".mobile-issue-view button[data-act='edit-issue']");
+await page.fill(".mobile-issue-view #issue-edit-body", "mobile conflict draft");
+await writeFile(
+  childPath,
+  (await readFile(childPath, "utf8")).replace("remote body changed outside draft", "mobile Tracker body"),
+);
+await page.click(".mobile-issue-view form[data-act='issue-edit'] > .actions button[type='submit']");
+await page.waitForSelector(".mobile-issue-view .issue-conflict");
+if (await page.inputValue(".mobile-issue-view #issue-edit-body") !== "mobile conflict draft") {
+  throw new Error("the mobile conflict flow must preserve the local draft");
+}
+const mobileOverflow = await page.evaluate(
+  () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+);
+if (mobileOverflow > 1) {
+  throw new Error(`mobile conflict controls overflow by ${mobileOverflow}px`);
+}
+await page.click(".mobile-issue-view button[data-act='use-latest-issue-conflict']");
+if (await page.inputValue(".mobile-issue-view #issue-edit-body") !== "mobile Tracker body") {
+  throw new Error("the mobile conflict flow must load the latest Tracker value");
 }
 
 await browser.close();

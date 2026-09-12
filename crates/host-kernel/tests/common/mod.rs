@@ -3,8 +3,9 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use host_kernel::{
@@ -12,6 +13,91 @@ use host_kernel::{
     ProbeContext, ProbeOutcome, TrackerReadError, TrackerReadOutcome, TrackerSeam,
     TrackerWriteError, TrackerWriteOp,
 };
+
+pub fn browser_e2e_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+pub const BOARD_TEST_NOW_MS: u64 = 1_787_748_507_000;
+
+pub fn boot_req(root: &Path) -> host_kernel::BootRequest {
+    host_kernel::BootRequest {
+        app_local_data_dir: root.to_path_buf(),
+        app_log_dir: root.join("logs"),
+        system_locale: "zh-Hans-CN".into(),
+        system_appearance: host_kernel::SystemAppearance::Light,
+        host_display_name: "Studio".into(),
+    }
+}
+
+pub fn make_dir(root: &Path, name: &str) -> PathBuf {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+pub fn boot(root: &Path, tracker: Arc<host_kernel::MemoryTracker>) -> host_kernel::HostKernel {
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_local(root: &Path) -> host_kernel::HostKernel {
+    let tracker = Arc::new(host_kernel::TrackerRouter::new(Arc::new(
+        host_kernel::MemoryTracker::new(),
+    )));
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_seam(root: &Path, tracker: Arc<SeamTracker>) -> host_kernel::HostKernel {
+    host_kernel::HostKernel::boot_with(boot_req(root), tracker).unwrap()
+}
+
+pub fn boot_board(
+    root: &Path,
+    tracker: Arc<host_kernel::MemoryTracker>,
+) -> host_kernel::HostKernel {
+    let mut host = boot(root, tracker);
+    pin_board_test_time(&mut host);
+    host
+}
+
+pub fn boot_board_seam(root: &Path, tracker: Arc<SeamTracker>) -> host_kernel::HostKernel {
+    let mut host = boot_seam(root, tracker);
+    pin_board_test_time(&mut host);
+    host
+}
+
+pub fn pin_board_test_time(host: &mut host_kernel::HostKernel) {
+    host.handle(serde_json::json!({
+        "op": "tick",
+        "nowMs": BOARD_TEST_NOW_MS,
+    }))
+    .unwrap();
+}
+
+pub fn register_project(
+    host: &mut host_kernel::HostKernel,
+    name: &str,
+    dir: &Path,
+    repository: &str,
+) -> String {
+    host.handle(serde_json::json!({
+        "op": "registerProject",
+        "name": name,
+        "localPath": dir,
+        "repository": repository,
+    }))
+    .unwrap()
+    .snapshot
+    .projects
+    .iter()
+    .find(|project| project.name == name)
+    .unwrap()
+    .id
+    .clone()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadMode {
@@ -40,6 +126,11 @@ pub struct SeamTracker {
     reads: Mutex<BTreeMap<String, u64>>,
     read_starts: Mutex<BTreeMap<String, u64>>,
     read_delay_ms: AtomicU64,
+    read_document_delay_ms: AtomicU64,
+    document_response_gate:
+        Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    relation_reads: AtomicU64,
+    write_delay_ms: AtomicU64,
     comments: Mutex<BTreeMap<String, Vec<String>>>,
     bodies: Mutex<BTreeMap<String, String>>,
     write_log: Mutex<Vec<(String, Option<String>, TrackerWriteOp)>>,
@@ -107,6 +198,28 @@ impl SeamTracker {
 
     pub fn set_read_delay_ms(&self, delay_ms: u64) {
         self.read_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn set_read_document_delay_ms(&self, delay_ms: u64) {
+        self.read_document_delay_ms
+            .store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn set_write_delay_ms(&self, delay_ms: u64) {
+        self.write_delay_ms.store(delay_ms, Ordering::Relaxed);
+    }
+
+    pub fn hold_next_document_response(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *self.document_response_gate.lock().unwrap() = Some((captured_tx, release_rx));
+        (captured_rx, release_tx)
+    }
+
+    pub fn relation_read_count(&self) -> u64 {
+        self.relation_reads.load(Ordering::Relaxed)
     }
 
     pub fn comments(&self, repository: &str) -> Vec<String> {
@@ -312,6 +425,10 @@ impl TrackerSeam for SeamTracker {
         _ctx: &ProbeContext<'_>,
         issue_id: &str,
     ) -> Result<IssueDocument, TrackerReadError> {
+        let delay_ms = self.read_document_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
         let issue = self
             .issues
             .lock()
@@ -323,7 +440,7 @@ impl TrackerSeam for SeamTracker {
             .ok_or_else(|| TrackerReadError::Failed {
                 detail: Some("unknown issue".into()),
             })?;
-        Ok(IssueDocument {
+        let document = IssueDocument {
             issue,
             body: self
                 .bodies
@@ -332,15 +449,44 @@ impl TrackerSeam for SeamTracker {
                 .get(issue_id)
                 .cloned()
                 .unwrap_or_default(),
-        })
+        };
+        let gate = self.document_response_gate.lock().unwrap().take();
+        if let Some((captured, release)) = gate {
+            captured.send(()).unwrap();
+            release.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        Ok(document)
+    }
+
+    fn read_issue_relations(
+        &self,
+        _ctx: &ProbeContext<'_>,
+        issue_id: &str,
+    ) -> Result<IssueRecord, TrackerReadError> {
+        self.relation_reads.fetch_add(1, Ordering::Relaxed);
+        self.issues
+            .lock()
+            .expect("seam tracker")
+            .values()
+            .flat_map(|issues| issues.iter())
+            .find(|issue| issue.id() == issue_id)
+            .cloned()
+            .ok_or_else(|| TrackerReadError::Failed {
+                detail: Some("unknown issue".into()),
+            })
     }
 
     fn write_issue(
         &self,
         ctx: &ProbeContext<'_>,
+        _current_issue: Option<&IssueRecord>,
         issue_id: Option<&str>,
         op: &TrackerWriteOp,
     ) -> Result<IssueRecord, TrackerWriteError> {
+        let delay_ms = self.write_delay_ms.load(Ordering::Relaxed);
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
         self.write_log.lock().expect("seam tracker").push((
             ctx.repository.to_string(),
             issue_id.map(ToOwned::to_owned),
@@ -378,4 +524,50 @@ impl TrackerSeam for SeamTracker {
         }
         self.apply_write(ctx, issue_id, op)
     }
+}
+
+pub fn start_unbound_grok(
+    host: &mut host_kernel::HostKernel,
+    project_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "project integration",
+    }))
+    .unwrap()
+}
+
+pub fn start_bound_grok(
+    host: &mut host_kernel::HostKernel,
+    project_id: &str,
+    issue_id: &str,
+) -> host_kernel::CommandOutcome {
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "issueId": issue_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "initial-instruction": "",
+            "additional-args": ""
+        },
+        "openingText": "browser board integration",
+    }))
+    .unwrap()
 }

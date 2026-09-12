@@ -27,11 +27,76 @@ if (!(await page.locator("button[data-act='select-agent'][data-id='grok-build']"
 await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
-await page.fill("input[data-launch='model']", "deep");
-await page.fill("input[data-launch='effort']", "high");
-await page.waitForFunction(() => document.querySelector(".launch-command-preview")?.textContent?.includes("--model deep --effort high"));
-
 const sheet = page.locator(".launch-sheet");
+// A preview response can replace the sheet between locating it and reading layout.
+// Read attached geometry in one browser task, retaining the actual width assertion.
+const sheetBox = await page.waitForFunction(() => {
+  const rect = document.querySelector(".launch-sheet")?.getBoundingClientRect();
+  return rect?.width ? { width: rect.width, height: rect.height } : null;
+}, undefined, { timeout: 2000 }).then((handle) => handle.jsonValue());
+if (!sheetBox || sheetBox.width < 700) {
+  throw new Error(`launch sheet is too narrow: ${sheetBox?.width}`);
+}
+const checkboxMetrics = async (id) => {
+  const input = page.locator(`.launch-sheet input[type='checkbox'][data-launch='${id}']`);
+  return input.evaluate((node) => {
+    const label = node.closest("label");
+    if (!(node instanceof HTMLInputElement) || !label) throw new Error("checkbox label missing");
+    const inputBox = node.getBoundingClientRect();
+    const labelBox = label.getBoundingClientRect();
+    return { inputWidth: inputBox.width, labelHeight: labelBox.height, labelWidth: labelBox.width };
+  });
+};
+const isolationMetrics = await checkboxMetrics("isolation");
+if (isolationMetrics.inputWidth > 40) {
+  throw new Error(`isolation checkbox is stretched: ${isolationMetrics.inputWidth}`);
+}
+if (isolationMetrics.labelHeight > 40) {
+  throw new Error(`isolation label is stacked vertically: ${isolationMetrics.labelHeight}`);
+}
+const alwaysApproveMetrics = await checkboxMetrics("always-approve");
+if (alwaysApproveMetrics.inputWidth > 40) {
+  throw new Error(`alwaysApprove checkbox is stretched: ${alwaysApproveMetrics.inputWidth}`);
+}
+if (alwaysApproveMetrics.labelWidth > alwaysApproveMetrics.inputWidth + 180) {
+  throw new Error(`alwaysApprove label is stretched across the form: ${alwaysApproveMetrics.labelWidth}`);
+}
+if (!(await page.locator("select[data-launch-select='sandbox']").count())) {
+  throw new Error("sandbox should render as a select");
+}
+await page.click(".launch-sheet summary[data-act='toggle-folded']");
+const overflow = await sheet.evaluate((node) => ({
+  scrollWidth: node.scrollWidth,
+  clientWidth: node.clientWidth,
+}));
+if (overflow.scrollWidth > overflow.clientWidth + 2) {
+  throw new Error(`launch sheet requires horizontal scrolling: ${overflow.scrollWidth} > ${overflow.clientWidth}`);
+}
+const setLaunchValue = async (id, value) => {
+  const select = page.locator(`select[data-launch-select='${id}']`);
+  if (await select.count()) {
+    const available = await select.locator("option:not([value='']):not([value='__custom__'])").evaluateAll((nodes) => nodes.map((node) => node.value));
+    const selected = available.at(-1);
+    if (!selected) throw new Error(`missing discovered ${id} options`);
+    await select.selectOption(selected);
+    return selected;
+  }
+  await page.fill(`input[data-launch='${id}']`, value);
+  return value;
+};
+const selectedModel = await setLaunchValue("model", "deep");
+const effortSelect = page.locator("select[data-launch-select='effort']");
+let selectedEffort = "high";
+if (await effortSelect.count()) {
+  const efforts = await effortSelect.locator("option:not([value='']):not([value='__custom__'])").evaluateAll((nodes) => nodes.map((node) => node.value));
+  selectedEffort = efforts.at(-1);
+  if (!selectedEffort) throw new Error("model-specific effort options were not rendered");
+  await effortSelect.selectOption(selectedEffort);
+} else {
+  await page.fill("input[data-launch='effort']", selectedEffort);
+}
+await page.waitForFunction(({ model, effort }) => document.querySelector(".launch-command-preview")?.textContent?.includes(`--model ${model} --effort ${effort}`), { model: selectedModel, effort: selectedEffort });
+
 await sheet.evaluate((node) => {
   node.scrollTop = node.scrollHeight;
 });
@@ -60,8 +125,18 @@ await page.click("button[data-act='select-agent'][data-id='codex']");
 await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
 await page.fill("textarea[data-field='openingText']", "manual fallback");
-await page.fill("input[data-launch='model']", "custom-model");
-await page.fill("input[data-launch='effort']", "ultra-special");
+if (await page.locator("select[data-launch-select='model']").count()) {
+  await page.selectOption("select[data-launch-select='model']", "__custom__");
+  await page.fill("input[data-launch-custom='model']", "custom-model");
+} else {
+  await page.fill("input[data-launch='model']", "custom-model");
+}
+if (await page.locator("select[data-launch-select='effort']").count()) {
+  await page.selectOption("select[data-launch-select='effort']", "__custom__");
+  await page.fill("input[data-launch-custom='effort']", "ultra-special");
+} else {
+  await page.fill("input[data-launch='effort']", "ultra-special");
+}
 await page.waitForFunction(() => document.querySelector(".launch-command-preview")?.textContent?.includes("custom-model"));
 if (!(await page.locator(".launch-warnings").textContent())?.includes("ultra-special")) {
   throw new Error("manual value should remain accepted with a readable warning");

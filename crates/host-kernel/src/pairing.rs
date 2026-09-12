@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{KernelError, LOCAL_RPC_PORT};
+use crate::{IssueConflict, KernelError, LOCAL_RPC_PORT};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,6 +196,11 @@ pub(crate) fn post_rpc(
         .nth(1)
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(0);
+    if status == 409 {
+        let conflict = serde_json::from_str::<IssueConflict>(body)
+            .map_err(|_| KernelError::Protocol(remote_error_message(body, "Issue conflict")))?;
+        return Err(KernelError::Conflict(conflict));
+    }
     if status == 403 {
         return Err(KernelError::Denied(remote_error_message(
             body,

@@ -2,7 +2,7 @@
   "name": "agent-taskboard",
   "private": true,
   "scripts": {
-    "dev": "npm --prefix apps/desktop run tauri dev",
+    "dev": "node scripts/dev.mjs",
     "build": "npm --prefix apps/desktop run tauri build",
     "test": "cargo test"
   }

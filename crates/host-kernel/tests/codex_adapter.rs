@@ -17,6 +17,11 @@ fi
 if [ "$1" = "app-server" ]; then
   read initialize
   printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  case "$initialized" in
+    *'"method":"initialized"'*) ;;
+    *) exit 3 ;;
+  esac
   read models
   printf '%s\n' '{"id":1,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"}]},{"id":"gpt-deep","model":"gpt-deep","isDefault":false,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"},{"reasoningEffort":"max"}]}],"nextCursor":null}}'
   exit 0
@@ -40,6 +45,8 @@ fn codex_adapter_declares_interactive_tui_contract() {
     assert_eq!(adapter.name(), CODEX_NAME);
     assert_eq!(adapter.bin(), CODEX_BIN);
     assert!(!adapter.native_isolation());
+    assert_eq!(adapter.skill_invocation("wayfinder"), "$wayfinder");
+    assert_eq!(adapter.skill_invocation("implement"), "$implement");
     assert!(adapter
         .isolation_unavailable_reason(Language::ZhCn)
         .contains("--worktree"));
@@ -101,6 +108,8 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
         filter.options_by_value["gpt-deep"],
         vec!["high", "xhigh", "max"]
     );
+    assert_eq!(filter.defaults_by_value["gpt-fast"], "low");
+    assert_eq!(filter.defaults_by_value["gpt-deep"], "high");
     assert_eq!(discovery.seed["model"], "gpt-fast");
     assert_eq!(discovery.seed["effort"], "low");
     assert_eq!(
@@ -120,6 +129,79 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
             .unwrap()
             .options,
         vec!["read-only", "workspace-write", "danger-full-access"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_adapter_stops_app_server_when_model_discovery_times_out() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = tmp.path().join("codex");
+    std::fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ "$1" = "app-server" ]; then
+  printf '%s' "$$" > "$CODEX_TEST_PID_FILE"
+  /bin/sleep 60 >/dev/null 2>&1 &
+  printf '%s' "$!" > "$CODEX_TEST_DESCENDANT_PID_FILE"
+  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  read models
+  read forever
+fi
+exit 2
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let pid_file = tmp.path().join("app-server.pid");
+    let descendant_pid_file = tmp.path().join("app-server-descendant.pid");
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([
+            ("PATH".into(), tmp.path().to_string_lossy().into_owned()),
+            (
+                "CODEX_TEST_PID_FILE".into(),
+                pid_file.to_string_lossy().into_owned(),
+            ),
+            (
+                "CODEX_TEST_DESCENDANT_PID_FILE".into(),
+                descendant_pid_file.to_string_lossy().into_owned(),
+            ),
+        ]),
+    );
+
+    let error = CodexAdapter
+        .discover_config(&executable, &env)
+        .expect_err("model discovery should time out");
+    assert!(error.contains("timed out"), "{error}");
+    let pids = [
+        std::fs::read_to_string(&pid_file).unwrap(),
+        std::fs::read_to_string(&descendant_pid_file).unwrap(),
+    ];
+    let mut leaked = Vec::new();
+    for pid in pids {
+        let running = std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if running {
+            leaked.push(pid.trim().to_string());
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-KILL", pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "Codex app-server processes survived timeout: {leaked:?}"
     );
 }
 
