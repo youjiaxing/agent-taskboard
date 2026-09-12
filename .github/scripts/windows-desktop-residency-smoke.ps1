@@ -149,6 +149,8 @@ $startAtLogin = Find-Visible-Element '^Start at login$'
 Toggle-Element $startAtLogin
 Wait-Until { Has-AgentTaskboard-StartupEntry } "enabling Start at login did not create a real HKCU Run entry"
 Save-Screen "01a-start-at-login-enabled.png"
+$startAtLogin = Find-Visible-Element '^Start at login$'
+if (-not $startAtLogin) { throw "Start at login setting disappeared after enabling" }
 Toggle-Element $startAtLogin
 Wait-Until { -not (Has-AgentTaskboard-StartupEntry) } "disabling Start at login did not remove the real HKCU Run entry"
 Save-Screen "01b-start-at-login-disabled.png"
