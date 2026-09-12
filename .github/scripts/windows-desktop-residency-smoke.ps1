@@ -18,6 +18,9 @@ public static class AgentTaskboardNativeUi {
   public static extern bool IsWindowVisible(IntPtr hWnd);
 
   [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
   public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
   [DllImport("user32.dll")]
@@ -139,17 +142,21 @@ Wait-Until {
   $process.MainWindowHandle -ne [IntPtr]::Zero -and
     [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)
 } "Agent Taskboard did not expose a visible native window"
+[AgentTaskboardNativeUi]::SetForegroundWindow($process.MainWindowHandle) | Out-Null
 Save-Screen "01-launched.png"
 
-$settings = Find-Visible-Element '^Settings$'
-if (-not $settings) { throw "Settings button was not exposed to UI Automation" }
+$settings = $null
+Wait-Until {
+  $script:settings = Find-Visible-Element '^(Settings|设置)$'
+  $null -ne $script:settings
+} "Settings button was not exposed to UI Automation"
 Invoke-Element $settings
-Wait-Until { (Find-Visible-Element '^Start at login$') -ne $null } "Start at login setting did not appear"
-$startAtLogin = Find-Visible-Element '^Start at login$'
+Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -ne $null } "Start at login setting did not appear"
+$startAtLogin = Find-Visible-Element '^(Start at login|登录时自动启动)$'
 Toggle-Element $startAtLogin
 Wait-Until { Has-AgentTaskboard-StartupEntry } "enabling Start at login did not create a real HKCU Run entry"
 Save-Screen "01a-start-at-login-enabled.png"
-$startAtLogin = Find-Visible-Element '^Start at login$'
+$startAtLogin = Find-Visible-Element '^(Start at login|登录时自动启动)$'
 if (-not $startAtLogin) { throw "Start at login setting disappeared after enabling" }
 Toggle-Element $startAtLogin
 Wait-Until { -not (Has-AgentTaskboard-StartupEntry) } "disabling Start at login did not remove the real HKCU Run entry"
@@ -157,7 +164,7 @@ Save-Screen "01b-start-at-login-disabled.png"
 $process.Refresh()
 $windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle).Current.BoundingRectangle
 [AgentTaskboardNativeUi]::Click([int]($windowBounds.Left + 20), [int]($windowBounds.Top + 140), $false)
-Wait-Until { (Find-Visible-Element '^Start at login$') -eq $null } "Settings overlay did not close"
+Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -eq $null } "Settings overlay did not close"
 
 $process.Refresh()
 $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
