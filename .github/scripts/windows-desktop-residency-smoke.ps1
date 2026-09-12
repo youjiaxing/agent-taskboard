@@ -158,8 +158,15 @@ $windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($proce
 Wait-Until { (Find-Visible-Element '^Start at login$') -eq $null } "Settings overlay did not close"
 
 $process.Refresh()
-if (-not [AgentTaskboardNativeUi]::PostMessage($process.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
-  throw "WM_CLOSE could not be sent to Agent Taskboard"
+$windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+$windowPattern = $null
+if ($windowElement.TryGetCurrentPattern(
+    [System.Windows.Automation.WindowPattern]::Pattern,
+    [ref]$windowPattern
+)) {
+  $windowPattern.Close()
+} elseif (-not [AgentTaskboardNativeUi]::PostMessage($process.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
+  throw "the native close action could not be sent to Agent Taskboard"
 }
 Wait-Until {
   $process.Refresh()
