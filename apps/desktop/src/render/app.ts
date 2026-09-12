@@ -241,7 +241,7 @@ export function render(): void {
               ${updateSettings(copy)}
               <div class="field">
                 <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 300_000) / 1000)}" />
+                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
                 <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
               </div>
               <div class="field">

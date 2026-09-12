@@ -89,7 +89,7 @@ export async function executeRpc(
   result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
   result.snapshot.notifySound = result.snapshot.notifySound ?? true;
   result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
-  result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 300_000;
+  result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
   result.events = result.events ?? [];
   if (commit) commitRpcResult(result);
   return result;

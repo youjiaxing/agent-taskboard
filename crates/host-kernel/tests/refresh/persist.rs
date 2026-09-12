@@ -173,7 +173,7 @@ fn opening_foreground_and_manual_refresh_pull_while_fresh_focus_reuses_cache() {
 }
 
 #[test]
-fn visible_project_polls_every_five_minutes_and_hidden_does_not() {
+fn visible_project_polls_every_minute_and_hidden_does_not() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let tracker = Arc::new(MemoryTracker::new());
