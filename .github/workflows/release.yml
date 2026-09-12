@@ -149,6 +149,12 @@ jobs:
               }
             }
             if (-not $ready) { throw "installed app did not become ready on port 10529" }
+            & ".github/scripts/windows-desktop-residency-smoke.ps1" -ProcessId $process.Id -EvidenceDir "$env:RUNNER_TEMP/windows-desktop-evidence"
           } finally {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
           }
+      - uses: actions/upload-artifact@v4
+        if: startsWith(matrix.platform, 'windows')
+        with:
+          name: Windows-native-desktop-evidence
+          path: ${{ runner.temp }}/windows-desktop-evidence/*.png
