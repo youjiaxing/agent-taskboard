@@ -70,7 +70,7 @@ if (!detailText.includes("执行已停")) {
   throw new Error(`the Issue inspector must explain the recoverable stopped state: ${detailText}`);
 }
 
-await page.click('.issue-detail button[data-act="continue-run"]');
+await page.locator('.issue-detail button[data-act="continue-run"]').dispatchEvent("click");
 await page.waitForFunction((previousRunId) => {
   const currentRunId = document.querySelector(".pty-slot")?.dataset.run;
   return Boolean(currentRunId && currentRunId !== previousRunId);

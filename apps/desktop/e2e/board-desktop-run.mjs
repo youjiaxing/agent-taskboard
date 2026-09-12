@@ -62,6 +62,15 @@ if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes
 await session.capture("issue-98-existing-run-1440x900.png");
 await session.assertVisual("issue-99-run-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
+const telemetryCapsules = await session.page.$$(".lifted-terminal .telemetry-desktop .capsule");
+if (!telemetryCapsules.length) {
+  throw new Error("desktop Run should expose per-model telemetry capsules");
+}
+await telemetryCapsules[0].click();
+await session.page.waitForSelector(".lifted-terminal .telemetry-cards .telemetry-card");
+if (!(await session.page.$(".lifted-terminal .telemetry-meta")) || !(await session.page.$(".lifted-terminal .telemetry-cards .tiny"))) {
+  throw new Error("expanded telemetry should expose timing/rate details and the observation-only disclaimer");
+}
 const liftedWidths = await session.page.evaluate(() => {
   const terminal = document.querySelector(".lifted-terminal")?.getBoundingClientRect().width ?? 0;
   const detail = document.querySelector(".lifted-run .issue-detail")?.getBoundingClientRect().width ?? 0;
@@ -130,6 +139,9 @@ if (usageTitle !== "用量" && usageTitle !== "Usage") {
 }
 if (!(await session.page.$("button.active[data-act='usage-range'][data-id='today']"))) {
   throw new Error("usage range should default to today");
+}
+if ((await session.page.$$(".usage-trend-block")).length !== 2 || !(await session.page.$(".usage-page > .tiny"))) {
+  throw new Error("desktop usage should expose TTFT/rate trends and the observation-only disclaimer");
 }
 await session.page.click("button[data-act='close-usage']");
 await session.page.waitForSelector(".lanes");
