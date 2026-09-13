@@ -28,7 +28,10 @@ const startedRun = started.runs.find((run) => run.issueId === "you/disconnect#1"
 const firstRunId = startedRun?.id;
 if (!firstRunId) throw new Error(`the UI-created Run must be observable after launch: ${JSON.stringify(started.runs)}`);
 
-for (let attempt = 0; attempt < 40; attempt += 1) {
+// CI runners can briefly starve the Host tick loop while Chromium is painting
+// the shell. Keep the semantic assertion the same, but allow a bounded 30s
+// window for the disconnected PTY to surface as execution-stopped.
+for (let attempt = 0; attempt < 60; attempt += 1) {
   const tickResponse = page.waitForResponse((response) =>
     response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
   );
@@ -38,9 +41,9 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
   // Wait for the visible result instead of exhausting every tick in that gap.
   const stopped = await page.locator('[data-lane="inProgress"] .issue-card.execution-stopped', {
     hasText: "PTY disconnect issue",
-  }).waitFor({ state: "visible", timeout: 250 }).then(() => true, () => false);
+  }).waitFor({ state: "visible", timeout: 500 }).then(() => true, () => false);
   if (stopped) break;
-  if (attempt === 39) throw new Error("timed out waiting for disconnected PTY to become execution-stopped");
+  if (attempt === 59) throw new Error("timed out waiting for disconnected PTY to become execution-stopped");
 }
 const card = page.locator('[data-lane="inProgress"] .issue-card', { hasText: "PTY disconnect issue" }).first();
 const cardText = (await card.textContent())?.replace(/\s+/g, " ") ?? "";
