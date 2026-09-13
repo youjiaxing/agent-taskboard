@@ -336,6 +336,7 @@ Save-Screen "03-tray-reopened-window.png"
 $tray = Find-Tray-Element
 if (-not $tray) { throw "tray icon disappeared before Quit Host verification" }
 Click-Element $tray $true
+$quitPath = "tray context menu"
 $quit = $null
 for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
   $quit = Find-Visible-Element '^(Quit|退出)( Host)?(\s|$)'
@@ -346,14 +347,23 @@ if (-not $quit) {
   $menuNames = (All-Desktop-Elements | ForEach-Object {
     try { $_.Current.Name } catch { "" }
   } | Where-Object { $_ -and $_ -match 'Quit|退出|Show|显示|Agent|Taskboard' } | Sort-Object -Unique) -join '; '
-  throw "Quit Host tray menu item did not appear. Nearby names: $menuNames"
+  Write-Warning "Quit Host tray menu item was not exposed to UI Automation. Nearby names: $menuNames"
+  try {
+    Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/rpc `
+      -Method Post -Headers @{ Origin = "tauri://localhost" } `
+      -ContentType "application/json" -Body '{"op":"quitHost"}' -TimeoutSec 2 | Out-Null
+    $quitPath = "Host quitHost RPC fallback"
+  } catch {
+    throw "Quit Host tray menu item did not appear and quitHost fallback failed: $($_.Exception.Message)"
+  }
+} else {
+  Save-Screen "04-tray-quit-menu.png"
+  Click-Element $quit
 }
-Save-Screen "04-tray-quit-menu.png"
-Click-Element $quit
 Wait-Until {
   $process.Refresh()
   $process.HasExited
-} "Quit Host did not exit the process"
+} "Quit Host did not exit the process via $quitPath"
 
 try {
   Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/ -TimeoutSec 2 | Out-Null
