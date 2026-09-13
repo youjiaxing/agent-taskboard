@@ -336,9 +336,9 @@ Save-Screen "03-tray-reopened-window.png"
 $tray = Find-Tray-Element
 if (-not $tray) { throw "tray icon disappeared before Quit Host verification" }
 Click-Element $tray $true
-Wait-Until { (Find-Visible-Element '^(Quit Host|退出 Host)$') -ne $null } "Quit Host tray menu item did not appear" 20
+Wait-Until { (Find-Visible-Element '^(Quit Host|退出 Host)(\s|$)') -ne $null } "Quit Host tray menu item did not appear" 20
 Save-Screen "04-tray-quit-menu.png"
-$quit = Find-Visible-Element '^(Quit Host|退出 Host)$'
+$quit = Find-Visible-Element '^(Quit Host|退出 Host)(\s|$)'
 Click-Element $quit
 Wait-Until {
   $process.Refresh()
