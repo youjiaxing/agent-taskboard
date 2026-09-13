@@ -185,22 +185,31 @@ $windowHandle = [AgentTaskboardNativeUi]::GetAncestor($process.MainWindowHandle,
 if ($windowHandle -eq [IntPtr]::Zero) {
   throw "Agent Taskboard main window handle disappeared before close verification"
 }
-# WM_CLOSE is the direct Win32 close request. Tauri routes it through
-# CloseRequested, where the app prevents destruction and hides the window.
-# Keep the SC_CLOSE fallback for runners that only expose system-command
-# messages from their window manager.
-$closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
-if (-not $closePosted) {
-  $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
-}
-if (-not $closePosted) {
-  throw "could not post a close request to Agent Taskboard"
-}
-# Some WebView2 runners do not dispatch a posted WM_CLOSE until the native
-# WindowPattern is invoked. Exercise that same user-facing close operation as
-# a fallback while retaining the asynchronous Win32 request above.
+# First click the native title-bar close button, exactly as a Windows user
+# would. The message-based paths below cover runners whose virtual desktop
+# does not deliver synthetic mouse input to the title bar.
+$windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
+$windowBounds = $windowElement.Current.BoundingRectangle
+[AgentTaskboardNativeUi]::Click([int]($windowBounds.Right - 12), [int]($windowBounds.Top + 12), $false)
 Start-Sleep -Milliseconds 250
 $process.Refresh()
+if (-not $process.HasExited -and [AgentTaskboardNativeUi]::IsWindowVisible($windowHandle)) {
+  # WM_CLOSE is the direct Win32 close request. Tauri routes it through
+  # CloseRequested, where the app prevents destruction and hides the window.
+  # Keep the SC_CLOSE fallback for runners that only expose system-command
+  # messages from their window manager.
+  $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+  if (-not $closePosted) {
+    $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
+  }
+  if (-not $closePosted) {
+    throw "could not post a close request to Agent Taskboard"
+  }
+  # Some WebView2 runners do not dispatch a posted WM_CLOSE until the native
+  # WindowPattern is invoked. Exercise that same user-facing close operation.
+  Start-Sleep -Milliseconds 250
+  $process.Refresh()
+}
 if (-not $process.HasExited -and $windowHandle -ne [IntPtr]::Zero -and
     [AgentTaskboardNativeUi]::IsWindowVisible($windowHandle)) {
   $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
