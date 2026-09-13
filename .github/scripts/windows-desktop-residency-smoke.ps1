@@ -136,6 +136,17 @@ function Has-AgentTaskboard-StartupEntry {
   })
 }
 
+function Host-Window-IsHidden {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/rpc `
+      -Method Post -ContentType "application/json" -Body '{"op":"snapshot"}' -TimeoutSec 2
+    $snapshot = $response.Content | ConvertFrom-Json
+    return $snapshot.snapshot.windowVisible -eq $false
+  } catch {
+    return $false
+  }
+}
+
 $process = Get-Process -Id $ProcessId
 Wait-Until {
   $process.Refresh()
@@ -200,9 +211,13 @@ if (-not $process.HasExited -and $process.MainWindowHandle -ne [IntPtr]::Zero -a
 }
 Wait-Until {
   $process.Refresh()
-  -not $process.HasExited -and
-    ($process.MainWindowHandle -eq [IntPtr]::Zero -or
-      -not [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle))
+  $nativeHidden = $process.MainWindowHandle -eq [IntPtr]::Zero -or
+    -not [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)
+  $hostHidden = Host-Window-IsHidden
+  if ($hostHidden -and -not $nativeHidden) {
+    Write-Host "Host reports window hidden while Win32 visibility is still settling"
+  }
+  -not $process.HasExited -and ($nativeHidden -or $hostHidden)
 } "closing the window did not hide it while retaining the Host" 20
 
 $stillReady = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/ -TimeoutSec 3
