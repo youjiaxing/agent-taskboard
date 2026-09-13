@@ -217,6 +217,11 @@ await page.click("form[data-act='issue-edit'] button[data-conflict-policy='overw
 await page.waitForFunction(() => !document.querySelector("form[data-act='issue-edit']"));
 await waitForIssueText("explicit overwrite body");
 
+// A Local Markdown watcher may briefly reload the selected document after the
+// overwrite response. Wait for the editable projection before opening the next
+// form so a slow runner cannot click during that transient loading state.
+await page.waitForSelector("section.issue-document[data-document-state='ready']");
+await page.waitForSelector("button[data-act='edit-issue']");
 await page.click("button[data-act='edit-issue']");
 await page.fill("#issue-edit-title", "local title conflict draft");
 await writeFile(
