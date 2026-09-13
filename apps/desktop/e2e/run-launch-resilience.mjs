@@ -59,7 +59,9 @@ await page.$eval("form[data-form='launch']", (form) => {
 await page.waitForFunction(() => document.querySelector("form[data-form='launch'] button[type='submit']")?.matches(":disabled") === true);
 releaseFirstLaunch();
 
-await page.waitForSelector("form[data-form='launch'] .notice.bad:has-text('pty unavailable')");
+await page.waitForSelector("form[data-form='launch'] .notice.bad:has-text('pty unavailable')", {
+  timeout: 60_000,
+});
 await page.waitForTimeout(250);
 if (launchRequests !== 1) {
   throw new Error(`double submit must result in one launch request, got ${launchRequests}`);

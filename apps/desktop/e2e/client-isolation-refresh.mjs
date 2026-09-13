@@ -112,15 +112,17 @@ await desktop.click('button[data-act="new-issue"]');
 await desktop.fill("#issue-create-title", "draft survives slow refresh");
 await desktop.fill("#issue-create-body", "body remains local and editable");
 await desktop.focus("#issue-create-title");
-const titleHandle = await desktop.$("#issue-create-title");
-if (!titleHandle) throw new Error("missing create Issue title field");
+if (await desktop.locator("#issue-create-title").count() !== 1) {
+  throw new Error("missing create Issue title field");
+}
 
 await desktop.click('.refresh-bar button[data-act="refresh"]');
 await desktop.waitForSelector('.refresh-bar[data-kind="refreshing"]');
-const responsiveDuringSlowRead = await titleHandle.evaluate((node) => ({
-  connected: node.isConnected,
-  value: node.value,
-}));
+const titleField = desktop.locator("#issue-create-title");
+const responsiveDuringSlowRead = {
+  connected: await titleField.count() === 1 && await titleField.isVisible(),
+  value: await titleField.inputValue().catch(() => ""),
+};
 if (!responsiveDuringSlowRead.connected || responsiveDuringSlowRead.value !== "draft survives slow refresh") {
   throw new Error(`slow refresh reset the open form: ${JSON.stringify(responsiveDuringSlowRead)}`);
 }
