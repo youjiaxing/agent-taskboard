@@ -27,6 +27,9 @@ public static class AgentTaskboardNativeUi {
   public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
   [DllImport("user32.dll")]
+  public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+  [DllImport("user32.dll")]
   public static extern bool SetCursorPos(int x, int y);
 
   [DllImport("user32.dll")]
@@ -76,6 +79,24 @@ function Find-Visible-Element([string]$NamePattern) {
   foreach ($element in (All-Desktop-Elements)) {
     try {
       if (-not $element.Current.IsOffscreen -and $element.Current.Name -match $NamePattern) {
+        return $element
+      }
+    } catch {}
+  }
+  return $null
+}
+
+function Find-Window-Close-Button($WindowElement) {
+  $condition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )
+  foreach ($element in $WindowElement.FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      $condition
+  )) {
+    try {
+      if (-not $element.Current.IsOffscreen -and $element.Current.Name -match '^(Close|关闭)$') {
         return $element
       }
     } catch {}
@@ -191,7 +212,7 @@ if ($windowHandle -eq [IntPtr]::Zero) {
 # does not deliver synthetic mouse input to the title bar.
 $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
 $windowBounds = $windowElement.Current.BoundingRectangle
-$closeButton = Find-Visible-Element '^(Close|关闭)$'
+$closeButton = Find-Window-Close-Button $windowElement
 if ($closeButton) {
   Invoke-Element $closeButton
 } else {
@@ -204,7 +225,11 @@ if (-not $process.HasExited -and [AgentTaskboardNativeUi]::IsWindowVisible($wind
   # CloseRequested, where the app prevents destruction and hides the window.
   # Keep the SC_CLOSE fallback for runners that only expose system-command
   # messages from their window manager.
-  $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+  # SendMessage keeps the request on the owning UI thread. This matters on
+  # Windows-hosted runners where the WebView2 message queue may not dispatch
+  # a posted message while the runner is backgrounded.
+  [AgentTaskboardNativeUi]::SendMessage($windowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  $closePosted = $true
   if (-not $closePosted) {
     $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
   }
