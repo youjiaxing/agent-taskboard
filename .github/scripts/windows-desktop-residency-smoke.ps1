@@ -182,6 +182,22 @@ if (-not $closePosted) {
 if (-not $closePosted) {
   throw "could not post a close request to Agent Taskboard"
 }
+# Some WebView2 runners do not dispatch a posted WM_CLOSE until the native
+# WindowPattern is invoked. Exercise that same user-facing close operation as
+# a fallback while retaining the asynchronous Win32 request above.
+Start-Sleep -Milliseconds 250
+$process.Refresh()
+if (-not $process.HasExited -and $process.MainWindowHandle -ne [IntPtr]::Zero -and
+    [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)) {
+  $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+  $windowPattern = $null
+  if ($windowElement.TryGetCurrentPattern(
+      [System.Windows.Automation.WindowPattern]::Pattern,
+      [ref]$windowPattern
+  )) {
+    $windowPattern.Close()
+  }
+}
 Wait-Until {
   $process.Refresh()
   -not $process.HasExited -and
