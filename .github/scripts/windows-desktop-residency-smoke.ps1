@@ -209,16 +209,24 @@ if (-not $process.HasExited -and $process.MainWindowHandle -ne [IntPtr]::Zero -a
     $windowPattern.Close()
   }
 }
-Wait-Until {
+$closeSucceeded = $false
+$lastNativeHidden = $false
+$lastHostHidden = $false
+for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
   $process.Refresh()
-  $nativeHidden = $process.MainWindowHandle -eq [IntPtr]::Zero -or
+  $lastNativeHidden = $process.MainWindowHandle -eq [IntPtr]::Zero -or
     -not [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)
-  $hostHidden = Host-Window-IsHidden
-  if ($hostHidden -and -not $nativeHidden) {
-    Write-Host "Host reports window hidden while Win32 visibility is still settling"
+  $lastHostHidden = Host-Window-IsHidden
+  if (-not $process.HasExited -and ($lastNativeHidden -or $lastHostHidden)) {
+    $closeSucceeded = $true
+    break
   }
-  -not $process.HasExited -and ($nativeHidden -or $hostHidden)
-} "closing the window did not hide it while retaining the Host" 20
+  Start-Sleep -Milliseconds 500
+}
+if (-not $closeSucceeded) {
+  $process.Refresh()
+  throw "closing the window did not hide it while retaining the Host (exited=$($process.HasExited), handle=$($process.MainWindowHandle), nativeHidden=$lastNativeHidden, hostHidden=$lastHostHidden)"
+}
 
 $stillReady = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/ -TimeoutSec 3
 if ($stillReady.StatusCode -ne 200) { throw "Host stopped after closing the window" }
