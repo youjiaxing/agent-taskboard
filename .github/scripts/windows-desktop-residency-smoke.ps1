@@ -185,12 +185,18 @@ $windowHandle = [AgentTaskboardNativeUi]::GetAncestor($process.MainWindowHandle,
 if ($windowHandle -eq [IntPtr]::Zero) {
   throw "Agent Taskboard main window handle disappeared before close verification"
 }
+[AgentTaskboardNativeUi]::SetForegroundWindow($windowHandle) | Out-Null
 # First click the native title-bar close button, exactly as a Windows user
 # would. The message-based paths below cover runners whose virtual desktop
 # does not deliver synthetic mouse input to the title bar.
 $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
 $windowBounds = $windowElement.Current.BoundingRectangle
-[AgentTaskboardNativeUi]::Click([int]($windowBounds.Right - 12), [int]($windowBounds.Top + 12), $false)
+$closeButton = Find-Visible-Element '^(Close|关闭)$'
+if ($closeButton) {
+  Invoke-Element $closeButton
+} else {
+  [AgentTaskboardNativeUi]::Click([int]($windowBounds.Right - 12), [int]($windowBounds.Top + 12), $false)
+}
 Start-Sleep -Milliseconds 250
 $process.Refresh()
 if (-not $process.HasExited -and [AgentTaskboardNativeUi]::IsWindowVisible($windowHandle)) {
