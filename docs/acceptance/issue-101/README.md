@@ -34,7 +34,7 @@ cargo test --test host_kernel pairing:: -- --test-threads=1 --nocapture
 
 `verify-v1-acceptance.mjs` 要求 `docs/acceptance/v1/*.md` 恰好包含 #1–#156 各一次，并且每条为“状态：通过”；当前输出为 `156 unique stories, all PASS`。Pairing 真实 TCP 门覆盖 offer/code、token 复用、撤销即时失效、Host/Project 隔离与远端 Host 存活（10 tests passed）。
 
-Release workflow 的 matrix 是 macOS Apple Silicon、macOS Intel、Windows x64；Windows 步骤执行 `npm ci`、NSIS `/S` 安装、原生启动、10529 readiness、关闭窗口保留 Host、托盘重开、Quit Host 退出及开关 Start at login 后核对 HKCU Run。最后的 `finalize-updater` 将 `latest.json` 的三平台 URL 固定为公开 Release 下载地址，避免 API asset URL 被 updater 拒绝。
+Release workflow 的 matrix 是 macOS Apple Silicon、macOS Intel、Windows x64；Windows 步骤执行 `npm ci`、NSIS `/S` 安装、原生启动、10529 readiness、关闭窗口保留 Host、托盘重开、Quit Host 退出及开关 Start at login 后核对 HKCU Run。Windows hosted runner 的 UIA 不暴露托盘右键菜单时，smoke 会记录附近名称并调用同一 Host 的真实 `quitHost` RPC fallback，仍核对进程退出和 10529 释放；不会把该 fallback 写成菜单点击。最后的 `finalize-updater` 将 `latest.json` 的三平台 URL 固定为公开 Release 下载地址，避免 API asset URL 被 updater 拒绝。
 
 日志由 `tauri-plugin-log` 配置为单文件 5 MiB、保留 5 个轮转文件；本机日志目录中已观察到 5 个约 5 MiB 的历史文件。端口被其他进程占用时，第二个原生实例显示“端口 10529 已被占用；桌面窗口可以继续用”，而现有 Host 保持服务。
 

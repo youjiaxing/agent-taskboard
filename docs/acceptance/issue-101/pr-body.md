@@ -14,7 +14,7 @@
 ### Client
 
 - 桌面壳使用 Tauri notification plugin 请求权限、发送原生通知并跳回 Host/Project/Issue/Run；浏览器保留 Web Notification 回退，桌面通知与声音独立。
-- Release workflow 在发布后修正 latest.json 的三平台公开下载 URL；Windows smoke 覆盖 NSIS 静默安装、10529、窗口关闭/托盘/Quit Host 与 HKCU Run。
+- Release workflow 在发布后修正 latest.json 的三平台公开下载 URL；Windows smoke 覆盖 NSIS 静默安装、10529、窗口关闭/托盘/Quit Host 与 HKCU Run。Hosted runner 若不暴露托盘 UIA 菜单，会记录该限制并调用真实 `quitHost` RPC fallback 验证退出，不伪造菜单点击证据。
 
 ## Explicitly out of scope
 

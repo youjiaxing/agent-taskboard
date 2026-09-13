@@ -372,4 +372,4 @@ try {
   if ($_.Exception.Message -eq "10529 remained available after Quit Host") { throw }
 }
 
-Write-Host ("Windows native residency smoke passed via {0}: close retained Host, tray reopened, Quit Host exited." -f $closePath)
+Write-Host ("Windows native residency smoke passed via close={0}, quit={1}: close retained Host, tray reopened, Quit Host exited." -f $closePath, $quitPath)
