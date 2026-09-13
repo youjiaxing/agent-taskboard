@@ -229,10 +229,11 @@ if (-not $process.HasExited -and [AgentTaskboardNativeUi]::IsWindowVisible($wind
   # Windows-hosted runners where the WebView2 message queue may not dispatch
   # a posted message while the runner is backgrounded.
   [AgentTaskboardNativeUi]::SendMessage($windowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  # Native title-bar buttons enter through WM_SYSCOMMAND/SC_CLOSE. Exercise
+  # that path too because some Tauri/WebView2 builds do not translate a bare
+  # WM_CLOSE into CloseRequested.
+  [AgentTaskboardNativeUi]::SendMessage($windowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero) | Out-Null
   $closePosted = $true
-  if (-not $closePosted) {
-    $closePosted = [AgentTaskboardNativeUi]::PostMessage($windowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
-  }
   if (-not $closePosted) {
     throw "could not post a close request to Agent Taskboard"
   }
