@@ -163,7 +163,8 @@ function Has-AgentTaskboard-StartupEntry {
 function Host-Window-IsHidden {
   try {
     $response = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/rpc `
-      -Method Post -ContentType "application/json" -Body '{"op":"snapshot"}' -TimeoutSec 2
+      -Method Post -Headers @{ Origin = "tauri://localhost" } `
+      -ContentType "application/json" -Body '{"op":"snapshot"}' -TimeoutSec 2
     $snapshot = $response.Content | ConvertFrom-Json
     return $snapshot.snapshot.windowVisible -eq $false
   } catch {
@@ -280,7 +281,8 @@ if (-not $closeSucceeded) {
   # exercised, and retain the native failure in the final log.
   try {
     Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/rpc `
-      -Method Post -ContentType "application/json" -Body '{"op":"hideWindow"}' -TimeoutSec 2 | Out-Null
+      -Method Post -Headers @{ Origin = "tauri://localhost" } `
+      -ContentType "application/json" -Body '{"op":"hideWindow"}' -TimeoutSec 2 | Out-Null
   } catch {
     # The diagnostic below remains the authoritative failure if the Host RPC
     # is unavailable as well.
