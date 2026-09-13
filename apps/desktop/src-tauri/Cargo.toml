@@ -1,6 +1,6 @@
 [package]
 name = "agent-taskboard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agent Taskboard desktop shell"
 edition = "2021"
 
@@ -24,6 +24,7 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "^2.7.0"
 tauri-plugin-log = "2.9.0"
+tauri-plugin-notification = "2.4.0"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"

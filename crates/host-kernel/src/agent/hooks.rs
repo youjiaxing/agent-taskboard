@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct CompletionSignals {
     pub session_end: bool,
     pub stop_failure: bool,
+    pub waiting_for_user: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -29,8 +30,10 @@ if [ -z "$sink" ]; then
 fi
 mkdir -p "$sink" 2>/dev/null
 case "$event" in
-  *SessionEnd*|*session_end*) : > "$sink/session-end" ;;
-  *StopFailure*|*stop_failure*) : > "$sink/stop-failure" ;;
+  *PermissionRequest*|*permission_request*) : > "$sink/waiting-for-user" ;;
+  *UserPromptSubmit*|*user_prompt_submit*) rm -f "$sink/waiting-for-user" ;;
+  *SessionEnd*|*session_end*) rm -f "$sink/waiting-for-user"; : > "$sink/session-end" ;;
+  *StopFailure*|*stop_failure*) rm -f "$sink/waiting-for-user"; : > "$sink/stop-failure" ;;
 esac
 exit 0
 "#;
@@ -41,6 +44,8 @@ set "SINK=%AGENT_TASKBOARD_HOOK_SINK%"
 set "EVENT=%~1"
 if "%SINK%"=="" exit /b 0
 if not exist "%SINK%" mkdir "%SINK%" >nul 2>nul
+echo %EVENT% | findstr /I "PermissionRequest permission_request" >nul && type nul > "%SINK%\waiting-for-user"
+echo %EVENT% | findstr /I "UserPromptSubmit user_prompt_submit SessionEnd session_end StopFailure stop_failure" >nul && del /q "%SINK%\waiting-for-user" >nul 2>nul
 echo %EVENT% | findstr /I "SessionEnd session_end" >nul && type nul > "%SINK%\session-end"
 echo %EVENT% | findstr /I "StopFailure stop_failure" >nul && type nul > "%SINK%\stop-failure"
 exit /b 0
@@ -81,6 +86,7 @@ pub fn read_signals(sink: &Path) -> CompletionSignals {
     CompletionSignals {
         session_end: sink.join("session-end").is_file(),
         stop_failure: sink.join("stop-failure").is_file(),
+        waiting_for_user: sink.join("waiting-for-user").is_file(),
     }
 }
 
@@ -97,8 +103,12 @@ pub fn write_json_hooks(path: &Path, recorder: &Path) -> Result<(), String> {
     }
     let session_end = recorder_command(recorder, "SessionEnd");
     let stop_failure = recorder_command(recorder, "StopFailure");
+    let permission_request = recorder_command(recorder, "PermissionRequest");
+    let user_prompt_submit = recorder_command(recorder, "UserPromptSubmit");
     let body = serde_json::json!({
         "hooks": {
+            "PermissionRequest": [{"hooks": [{"type": "command", "command": permission_request, "timeout": 5}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": user_prompt_submit, "timeout": 5}]}],
             "SessionEnd": [{"hooks": [{"type": "command", "command": session_end, "timeout": 5}]}],
             "StopFailure": [{"hooks": [{"type": "command", "command": stop_failure, "timeout": 5}]}]
         }
@@ -162,5 +172,50 @@ fn symlink_any(src: &Path, dest: &Path) -> std::io::Result<()> {
         } else {
             fs::copy(src, dest).map(|_| ())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn recorder_tracks_and_clears_real_waiting_signal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sink = tmp.path().join("sink");
+        let recorder = write_recorder(&sink).unwrap();
+        let run = |event: &str| {
+            assert!(std::process::Command::new(&recorder)
+                .arg(event)
+                .env("AGENT_TASKBOARD_HOOK_SINK", &sink)
+                .status()
+                .unwrap()
+                .success());
+        };
+
+        run("PermissionRequest");
+        assert!(read_signals(&sink).waiting_for_user);
+        run("UserPromptSubmit");
+        assert!(!read_signals(&sink).waiting_for_user);
+        run("PermissionRequest");
+        run("SessionEnd");
+        let signals = read_signals(&sink);
+        assert!(!signals.waiting_for_user);
+        assert!(signals.session_end);
+    }
+
+    #[test]
+    fn json_hook_plan_includes_waiting_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sink = tmp.path().join("sink");
+        let recorder = write_recorder(&sink).unwrap();
+        let settings = tmp.path().join("settings.json");
+        write_json_hooks(&settings, &recorder).unwrap();
+        let body = fs::read_to_string(settings).unwrap();
+        assert!(body.contains("PermissionRequest"));
+        assert!(body.contains("UserPromptSubmit"));
+        assert!(body.contains("SessionEnd"));
+        assert!(body.contains("StopFailure"));
     }
 }

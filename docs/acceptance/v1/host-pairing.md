@@ -1,6 +1,6 @@
 # v1 验收矩阵：安装、配对与回环（A–B）
 
-这是 Issue #90 / Agent Taskboard v1 验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
+这是 Issue #101 / Agent Taskboard v1 最终验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
 
 ### A. 安装、Host 常驻与退出模式（1–8、16、17）
 
@@ -8,7 +8,7 @@
 - **#2** 关窗口后 Host 仍在托盘跑：`host_kernel.rs::hiding_the_window_does_not_stop_the_host`（内核）+ `src-tauri/src/lib.rs` 关窗只 hide、托盘菜单 show/quit（壳）。真实托盘交互待真机。状态：通过（内核）；真实托盘菜单行为 待真实平台。
 - **#3** 只有「退出 Host」才停进程：`host_kernel.rs::only_quit_host_stops_the_process`、`closing_a_browser_client_does_not_stop_the_host`。状态：通过。
 - **#4** 退出时若有活跃 Run 必须选择返回或停掉：`runs.rs::quitting_host_with_active_runs_requires_a_choice`（内核）+ 壳层退出对话框 `quitOfferDialog`。状态：通过。
-- **#5** 开机默认不自启、设置里可开：`src-tauri` 用 plugin-autostart，`main.ts::setStartAtLogin`（enable/disable），默认不调用 enable。状态：部分（实现与开关就位；系统级真实自启未验证）。
+- **#5** 开机默认不自启、设置里可开：`src-tauri` 用 plugin-autostart，`main.ts::setStartAtLogin`（enable/disable），默认不调用 enable；Windows x64 Release 安装冒烟通过 UI Automation 实际切换并核对 HKCU `Software\\Microsoft\\Windows\\CurrentVersion\\Run`，随后关闭开关并确认条目移除。状态：通过。
 - **#6** 崩溃后遗留 Run 标为意外中断且不自动拉起：`bound_runs.rs::host_crash_marks_bound_run_execution_stopped`；无自动拉起代码路径。状态：通过。
 - **#7** 桌面默认拉起本机 Host 且免配对：`host_kernel.rs::opening_the_desktop_app_starts_the_local_host`；默认 `HostMode::HostAndClient`（`startup.rs::first_launch_defaults_to_host_and_client_and_persisted_client_only_survives_relogin`）。状态：通过。
 - **#8** 本机窗口可只当 Client：`host_kernel.rs::client_only_cold_start_has_no_local_host_or_loopback_page`、`client_only_desktop_transport_is_private_and_keeps_the_client_process_alive`、`client_only_cold_start_can_use_the_saved_remote_host`。状态：通过。

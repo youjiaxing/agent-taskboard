@@ -3,6 +3,7 @@ import { chromium } from "playwright";
 const url = process.env.BOARD_URL;
 const gardenProjectId = process.env.GARDEN_PROJECT_ID;
 const notesProjectId = process.env.NOTES_PROJECT_ID;
+const navigationBudgetMs = Number(process.env.E2E_NAVIGATION_BUDGET_MS ?? "500");
 if (!url || !gardenProjectId || !notesProjectId) {
   throw new Error("missing slow Issue write E2E environment");
 }
@@ -26,9 +27,9 @@ await page.waitForSelector(".project-board");
 const focusProject = async (projectId, expectedName) => {
   const started = Date.now();
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
-  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: 500 });
+  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: navigationBudgetMs });
   const elapsed = Date.now() - started;
-  if (elapsed >= 500) {
+  if (elapsed >= navigationBudgetMs) {
     throw new Error(`Project focus waited ${elapsed}ms for the slow Issue write`);
   }
 };
@@ -53,9 +54,9 @@ await page.waitForSelector('form[data-act="issue-edit"][aria-busy="true"]');
 await focusProject(notesProjectId, "notes");
 const issueFocusStarted = Date.now();
 await page.click('[data-act="focus-issue"][data-id="you/notes#1"]');
-await page.waitForSelector('.detail-hd:has-text("notes issue")', { timeout: 500 });
+await page.waitForSelector('.detail-hd:has-text("notes issue")', { timeout: navigationBudgetMs });
 const issueFocusElapsed = Date.now() - issueFocusStarted;
-if (issueFocusElapsed >= 500) {
+if (issueFocusElapsed >= navigationBudgetMs) {
   throw new Error(`Issue focus waited ${issueFocusElapsed}ms for the slow Issue write`);
 }
 

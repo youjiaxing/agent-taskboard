@@ -8,6 +8,20 @@ use std::time::Duration;
 mod output;
 use output::{bounded_size, TerminalOutput};
 
+const ACTION_REQUIRED_TITLE: &[u8] = b"]0;[ ! ] Action Required |";
+
+fn terminal_requests_action(probe: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    probe.extend_from_slice(chunk);
+    let found = probe
+        .windows(ACTION_REQUIRED_TITLE.len())
+        .any(|window| window == ACTION_REQUIRED_TITLE);
+    let keep = ACTION_REQUIRED_TITLE.len().saturating_sub(1);
+    if probe.len() > keep {
+        probe.drain(..probe.len() - keep);
+    }
+    found
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnRequest {
     pub argv: Vec<String>,
@@ -38,7 +52,7 @@ pub trait AgentSession: Send + Sync {
         false
     }
     fn waiting_for_user(&self) -> bool {
-        false
+        self.completion_signals().waiting_for_user
     }
     fn completion_signals(&self) -> crate::agent::CompletionSignals {
         crate::agent::CompletionSignals::default()
@@ -207,6 +221,7 @@ impl AgentSession for MemorySession {
         crate::agent::CompletionSignals {
             session_end: self.session_end.load(Ordering::SeqCst),
             stop_failure: self.stop_failure.load(Ordering::SeqCst),
+            waiting_for_user: self.waiting.load(Ordering::SeqCst),
         }
     }
 
@@ -253,10 +268,16 @@ struct PtyLive {
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     stopped: AtomicBool,
+    waiting: Arc<AtomicBool>,
+    hook_sink: Option<PathBuf>,
 }
 
 impl PtyLive {
     fn spawn(request: SpawnRequest) -> Result<Arc<Self>, String> {
+        let hook_sink = request
+            .env
+            .get("AGENT_TASKBOARD_HOOK_SINK")
+            .map(PathBuf::from);
         let (cols, rows) = bounded_size(request.cols, request.rows);
         let program = request
             .argv
@@ -297,6 +318,7 @@ impl PtyLive {
         let screen = Arc::new(Mutex::new(TerminalOutput::new(cols, rows)));
         let exit = Arc::new(Mutex::new(None));
         let pulse = Arc::new(Condvar::new());
+        let waiting = Arc::new(AtomicBool::new(false));
         let session = Arc::new(Self {
             output: Arc::clone(&output),
             screen: Arc::clone(&screen),
@@ -306,6 +328,8 @@ impl PtyLive {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
             stopped: AtomicBool::new(false),
+            waiting: Arc::clone(&waiting),
+            hook_sink,
         });
         let reader_out = Arc::clone(&output);
         let reader_pulse = Arc::clone(&pulse);
@@ -313,10 +337,14 @@ impl PtyLive {
             .name("run-pty-reader".into())
             .spawn(move || {
                 let mut buf = [0u8; 4096];
+                let mut waiting_probe = Vec::with_capacity(ACTION_REQUIRED_TITLE.len() * 2);
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
+                            if terminal_requests_action(&mut waiting_probe, &buf[..n]) {
+                                waiting.store(true, Ordering::SeqCst);
+                            }
                             screen.lock().expect("pty screen").process(&buf[..n]);
                             reader_out
                                 .lock()
@@ -353,8 +381,30 @@ impl PtyLive {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_required_title_is_detected_across_pty_chunks() {
+        let mut probe = Vec::new();
+        assert!(!terminal_requests_action(
+            &mut probe,
+            b"\x1b]0;[ ! ] Action Req"
+        ));
+        assert!(terminal_requests_action(
+            &mut probe,
+            b"uired | agent-taskboard\x07"
+        ));
+    }
+}
+
 impl AgentSession for PtyLive {
     fn write(&self, data: &[u8]) -> io::Result<()> {
+        self.waiting.store(false, Ordering::SeqCst);
+        if let Some(sink) = &self.hook_sink {
+            let _ = std::fs::remove_file(sink.join("waiting-for-user"));
+        }
         self.writer
             .lock()
             .map_err(|_| io::Error::other("pty writer"))?
@@ -395,6 +445,17 @@ impl AgentSession for PtyLive {
 
     fn was_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
+    }
+
+    fn waiting_for_user(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst) || self.completion_signals().waiting_for_user
+    }
+
+    fn completion_signals(&self) -> crate::agent::CompletionSignals {
+        self.hook_sink
+            .as_deref()
+            .map(crate::agent::read_completion_signals)
+            .unwrap_or_default()
     }
 
     fn read_after(&self, after: usize, wait: Duration) -> PtyChunk {

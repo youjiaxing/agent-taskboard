@@ -1,11 +1,13 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 
-const [config, desktopPackage, packageLock, cargo] = await Promise.all([
+const [config, desktopPackage, packageLock, cargo, renderedSettings, formEvents] = await Promise.all([
   readJson(new URL("../src-tauri/tauri.conf.json", import.meta.url)),
   readJson(new URL("../package.json", import.meta.url)),
   readJson(new URL("../package-lock.json", import.meta.url)),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
+  readFile(new URL("../src/render/shell.ts", import.meta.url), "utf8"),
+  readFile(new URL("../src/events/forms.ts", import.meta.url), "utf8"),
 ]);
 
 const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
@@ -53,6 +55,12 @@ if (
   ])
 ) {
   fail("updater must use this repository's latest.json");
+}
+if (
+  !renderedSettings.includes('data-field="startAtLogin"') ||
+  !formEvents.includes('data-field") === "startAtLogin"')
+) {
+  fail("start-at-login setting and change handler must share the same field name");
 }
 
 console.log(`release contract ok for v${config.version}`);

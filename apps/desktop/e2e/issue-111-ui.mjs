@@ -29,7 +29,7 @@ const issueText = async (needle) => {
 };
 const waitForIssueText = async (needle) => {
   let lastError;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     try {
       return await issueText(needle);
     } catch (error) {
@@ -40,7 +40,7 @@ const waitForIssueText = async (needle) => {
   throw lastError;
 };
 const waitForIssueTextWithout = async (needle) => {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
     const files = await issueFiles();
     if (!files.some((contents) => contents.includes(needle))) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -217,6 +217,11 @@ await page.click("form[data-act='issue-edit'] button[data-conflict-policy='overw
 await page.waitForFunction(() => !document.querySelector("form[data-act='issue-edit']"));
 await waitForIssueText("explicit overwrite body");
 
+// A Local Markdown watcher may briefly reload the selected document after the
+// overwrite response. Wait for the editable projection before opening the next
+// form so a slow runner cannot click during that transient loading state.
+await page.waitForSelector("section.issue-document[data-document-state='ready']");
+await page.waitForSelector("button[data-act='edit-issue']");
 await page.click("button[data-act='edit-issue']");
 await page.fill("#issue-edit-title", "local title conflict draft");
 await writeFile(

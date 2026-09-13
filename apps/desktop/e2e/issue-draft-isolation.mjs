@@ -37,7 +37,13 @@ try {
     const closed = page.waitForResponse((response) => response.request().postDataJSON()?.op === "setIssueOpen");
     await page.click('button[data-act="toggle-issue-open"]');
     const result = await (await closed).json();
-    assert.equal(result.snapshot.board.selected.open, false, "Issue writes must update the selected Project, even when another Project has the same Issue ID");
+    const selected = result.snapshot.board?.selected;
+    const closedCard = result.snapshot.board?.columns?.recentlyCompleted?.find((card) => card.id === "you/shared#1");
+    assert.equal(
+      selected ? selected.open : closedCard?.open,
+      false,
+      "Issue writes must update the selected Project, even when another Project has the same Issue ID",
+    );
   }
   console.log("Issue draft isolation e2e ok");
 } finally {

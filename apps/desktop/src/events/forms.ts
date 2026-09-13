@@ -1,4 +1,4 @@
-import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
+import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
 import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
@@ -315,7 +315,7 @@ ui.app.addEventListener("change", async (event) => {
     applyLocalPath((target as HTMLInputElement).value, true);
     return;
   }
-  if (target.getAttribute("data-field") === "ui.startAtLogin" && "checked" in target) {
+  if (target.getAttribute("data-field") === "startAtLogin" && "checked" in target) {
     await setStartAtLogin((target as HTMLInputElement).checked);
     render();
   }
@@ -360,9 +360,7 @@ ui.app.addEventListener("change", async (event) => {
       target.getAttribute("data-field") === "notifySound"
         ? (target as HTMLInputElement).checked
         : Boolean(ui.snapshot.notifySound);
-    if (desktop && typeof Notification !== "undefined" && Notification.permission === "default") {
-      await Notification.requestPermission();
-    }
+    if (desktop) await requestDesktopNotificationPermission();
     await rpc("setNotificationPrefs", { desktop, sound });
     render();
   }

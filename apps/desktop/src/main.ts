@@ -1,6 +1,10 @@
 import { ensureMobileAppearance, focusedRun, loadMobileAppearance, mobileClient } from "./view-helpers";
 import { loadSelectedIssueDocument, protocolBase, rpc, rpcDetached } from "./rpc";
 import { FitAddon } from "@xterm/addon-fit";
+import {
+  onAction as onNativeNotificationAction,
+  sendNotification as sendNativeNotification,
+} from "@tauri-apps/plugin-notification";
 
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -37,6 +41,7 @@ import {
 import {
   desktopShellAvailable,
   checkForUpdates,
+  requestDesktopNotificationPermission,
 } from "./launch-session";
 import {
   refreshBar,
@@ -117,20 +122,29 @@ export function deliverHostEvents(events: HostEvent[], snap: Snapshot): void {
     if (event.type !== "notification") continue;
     const title = notificationTitle(snap.copy, event.kind);
     const body = event.issueId || event.runId;
-    if (snap.notifyDesktop && typeof Notification !== "undefined") {
-      const show = () => {
+    if (snap.notifyDesktop) {
+      void requestDesktopNotificationPermission().then((granted) => {
+        if (!granted) return;
+        if (desktopShellAvailable()) {
+          sendNativeNotification({
+            title,
+            body,
+            group: event.runId,
+            extra: {
+              kind: event.kind,
+              runId: event.runId,
+              issueId: event.issueId ?? "",
+              projectId: event.projectId,
+            },
+          });
+          return;
+        }
+        if (typeof Notification === "undefined") return;
         const note = new Notification(title, { body, tag: event.runId });
         note.onclick = () => {
           void jumpToNotification(event);
         };
-      };
-      if (Notification.permission === "granted") {
-        show();
-      } else if (Notification.permission === "default") {
-        void Notification.requestPermission().then((permission) => {
-          if (permission === "granted") show();
-        });
-      }
+      });
     }
     if (snap.notifySound) {
       playNotifySound();
@@ -844,6 +858,27 @@ window.addEventListener("agent-taskboard:check-update", () => {
 });
 
 let wasMobileClient = mobileClient();
+
+if (desktopShellAvailable()) {
+  void onNativeNotificationAction((notification) => {
+    const runId = String(notification.extra?.runId ?? "");
+    const projectId = String(notification.extra?.projectId ?? "");
+    if (!runId || !projectId) return;
+    const rawKind = String(notification.extra?.kind ?? "waiting");
+    const kind: NotificationKind = ["waiting", "completed", "abnormal-stop", "crash-recovered"].includes(rawKind)
+      ? rawKind as NotificationKind
+      : "waiting";
+    void jumpToNotification({
+      type: "notification",
+      kind,
+      runId,
+      issueId: String(notification.extra?.issueId ?? "") || null,
+      projectId,
+    });
+  }).catch((error: unknown) => {
+    console.warn("native notification actions unavailable", error);
+  });
+}
 
 window.addEventListener("resize", () => {
   if (!ui.snapshot) return;

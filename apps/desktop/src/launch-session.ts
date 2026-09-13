@@ -10,6 +10,10 @@ import { check } from "@tauri-apps/plugin-updater";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open as openDirectory } from "@tauri-apps/plugin-dialog";
+import {
+  isPermissionGranted as isNativeNotificationPermissionGranted,
+  requestPermission as requestNativeNotificationPermission,
+} from "@tauri-apps/plugin-notification";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 export function syncLaunchDraft(snap: Snapshot): void {
@@ -306,6 +310,17 @@ export async function setStartAtLogin(enabled: boolean): Promise<void> {
   } catch (error) {
     ui.startupSettingsError = error instanceof Error ? error.message : String(error);
   }
+}
+
+export async function requestDesktopNotificationPermission(): Promise<boolean> {
+  if (desktopShellAvailable()) {
+    if (await isNativeNotificationPermissionGranted()) return true;
+    return (await requestNativeNotificationPermission()) === "granted";
+  }
+  if (typeof Notification === "undefined") return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  return (await Notification.requestPermission()) === "granted";
 }
 
 export async function checkForUpdates(manual: boolean): Promise<void> {

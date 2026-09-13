@@ -47,8 +47,8 @@ fn refresh_interval_is_configurable_and_survives_reboot() {
 }
 
 #[test]
-fn refresh_interval_has_a_five_minute_default_and_no_artificial_maximum() {
-    assert_eq!(DEFAULT_REFRESH_INTERVAL_MS, 300_000);
+fn refresh_interval_has_a_one_minute_default_and_no_artificial_maximum() {
+    assert_eq!(DEFAULT_REFRESH_INTERVAL_MS, 60_000);
 
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

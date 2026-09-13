@@ -264,7 +264,19 @@ fn codex_attach_hooks_uses_per_run_config_not_home() {
     let plan = CodexAdapter
         .attach_completion_hooks(&sink, &project)
         .unwrap();
+    assert!(plan
+        .extra_argv
+        .iter()
+        .any(|arg| arg == "--dangerously-bypass-hook-trust"));
     assert!(plan.extra_argv.iter().any(|arg| arg == "-c"));
+    assert!(plan
+        .extra_argv
+        .iter()
+        .any(|arg| arg.contains("PermissionRequest")));
+    assert!(plan
+        .extra_argv
+        .iter()
+        .any(|arg| arg.contains("UserPromptSubmit")));
     assert!(plan.extra_argv.iter().any(|arg| arg.contains("SessionEnd")));
     assert!(!project.join(".codex").exists());
 }

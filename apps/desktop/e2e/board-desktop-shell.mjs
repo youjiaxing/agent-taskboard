@@ -61,7 +61,9 @@ if (rightmostIssueId) {
     await session.clickCard(session.page.locator(`.issue-card[data-issue-id="${leftmostIssueId}"] .issue-card-main`));
     await session.page.waitForSelector('.issue-document[data-document-state="ready"]');
   }
-  const rightmostBox = await session.page.locator(`.issue-card[data-issue-id="${rightmostIssueId}"] .issue-card-main`).boundingBox();
+  const rightmostCard = session.page.locator(`.issue-card[data-issue-id="${rightmostIssueId}"] .issue-card-main`);
+  await rightmostCard.waitFor({ state: "visible" });
+  const rightmostBox = await rightmostCard.boundingBox();
   if (!rightmostBox) throw new Error("rightmost Issue card has no clickable geometry");
   await session.page.mouse.click(rightmostBox.x + rightmostBox.width / 2, rightmostBox.y + rightmostBox.height / 2);
   await session.page.waitForFunction((id) => document.querySelector(`.issue-detail .detail-hd`)?.textContent?.includes(id.split("#").at(-1)), rightmostIssueId);

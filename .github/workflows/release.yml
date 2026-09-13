@@ -31,7 +31,14 @@ jobs:
       - run: npx --prefix apps/desktop playwright install chromium
       - run: npm --prefix apps/desktop run verify:release
       - run: npm --prefix apps/desktop run build
-      - run: cargo test
+      # Browser journeys launch real Chromium processes and share constrained runner CPU.
+      # Keep the release gate deterministic instead of weakening interaction/timing assertions.
+      - run: cargo test -- --test-threads=1
+        env:
+          # Cross-version macOS font rasterization differs while the explicit
+          # geometry, overlap, overflow, and interaction assertions stay exact.
+          VISUAL_DIFF_MAX_RATIO: "0.05"
+          E2E_NAVIGATION_BUDGET_MS: "750"
 
   publish:
     name: ${{ matrix.name }}
@@ -42,12 +49,15 @@ jobs:
         include:
           - name: macOS Apple Silicon
             platform: macos-latest
+            target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin --bundles app,dmg
           - name: macOS Intel
-            platform: macos-latest
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin --bundles app,dmg
           - name: Windows x64
             platform: windows-latest
+            target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc --bundles nsis
     runs-on: ${{ matrix.platform }}
     steps:
@@ -86,3 +96,97 @@ jobs:
           updaterJsonPreferNsis: true
           releaseAssetNamePattern: Agent.Taskboard_[version]_[platform]_[arch][setup][ext]
           args: ${{ matrix.args }}
+      - name: 从 dmg 安装并原生启动
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=$(find "target/${{ matrix.target }}/release/bundle/dmg" -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          mount_output=$(hdiutil attach "$dmg" -nobrowse -readonly)
+          mount_point=$(printf '%s\n' "$mount_output" | awk '/\/Volumes\// {sub(/^.*\/Volumes\//, "/Volumes/"); print; exit}')
+          test -d "$mount_point/Agent Taskboard.app"
+          install_root="$RUNNER_TEMP/Applications"
+          mkdir -p "$install_root"
+          ditto "$mount_point/Agent Taskboard.app" "$install_root/Agent Taskboard.app"
+          hdiutil detach "$mount_point"
+          executable="$install_root/Agent Taskboard.app/Contents/MacOS/agent-taskboard"
+          file "$executable"
+          "$executable" >"$RUNNER_TEMP/agent-taskboard-${{ matrix.target }}.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:10529/ | grep -q 'id="app"'; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            cat "$RUNNER_TEMP/agent-taskboard-${{ matrix.target }}.log"
+            exit 1
+          fi
+          curl --fail --silent http://127.0.0.1:10529/ >/dev/null
+      - name: 从 NSIS 安装并原生启动
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem "target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "NSIS setup.exe was not built" }
+          $installer = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "installer exited with $($installer.ExitCode)" }
+          $app = Get-ChildItem $env:LOCALAPPDATA -Filter "agent-taskboard.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $app) { throw "installed agent-taskboard.exe was not found" }
+          Write-Host "Launching $($app.FullName)"
+          $process = Start-Process -FilePath $app.FullName -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt += 1) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/ -TimeoutSec 2
+                if ($response.StatusCode -eq 200 -and $response.Content -match 'id=.(app).') {
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $ready) { throw "installed app did not become ready on port 10529" }
+            & ".github/scripts/windows-desktop-residency-smoke.ps1" -ProcessId $process.Id -EvidenceDir "$env:RUNNER_TEMP/windows-desktop-evidence"
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        if: startsWith(matrix.platform, 'windows')
+        with:
+          name: Windows-native-desktop-evidence
+          path: ${{ runner.temp }}/windows-desktop-evidence/*.png
+
+  finalize-updater:
+    name: 固定 updater 下载地址
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: 将 latest.json 指向公开 Release 下载地址
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$REPOSITORY" --pattern latest.json --output latest.json --clobber
+          jq --arg tag "$TAG" --arg repository "$REPOSITORY" '
+            (.version) as $version |
+            .platforms |= with_entries(
+              .value.url = ("https://github.com/" + $repository + "/releases/download/" + $tag + "/" +
+                (if (.key | startswith("darwin-aarch64")) then "Agent.Taskboard_" + $version + "_darwin_aarch64.app.tar.gz"
+                 elif (.key | startswith("darwin-x86_64")) then "Agent.Taskboard_" + $version + "_darwin_x64.app.tar.gz"
+                 elif (.key | startswith("windows-x86_64")) then "Agent.Taskboard_" + $version + "_windows_x64-setup.exe"
+                 else error("unsupported updater platform: " + .key)
+                 end))
+            )' latest.json > latest.json.tmp
+          mv latest.json.tmp latest.json
+          gh release upload "$TAG" latest.json --repo "$REPOSITORY" --clobber

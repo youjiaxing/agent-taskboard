@@ -20,6 +20,10 @@ pub use codex::{CodexAdapter, CODEX_BIN, CODEX_ID, CODEX_NAME};
 pub use grok::{GrokAdapter, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME};
 pub use hooks::{CompletionHookPlan, CompletionSignals};
 
+pub(crate) fn read_completion_signals(sink: &Path) -> CompletionSignals {
+    hooks::read_signals(sink)
+}
+
 pub fn builtin_agents() -> Vec<Arc<dyn AgentPort>> {
     vec![
         Arc::new(GrokAdapter),

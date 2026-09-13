@@ -7,6 +7,7 @@ import { PNG } from "pngjs";
 const visualBaselineDir = join(dirname(fileURLToPath(import.meta.url)), "baselines");
 const visualDiffDir = process.env.VISUAL_DIFF_DIR ?? join("target", "visual-diffs");
 const updateVisualBaselines = process.env.UPDATE_VISUAL_BASELINES === "1";
+const maxVisualDiffRatio = Number(process.env.VISUAL_DIFF_MAX_RATIO ?? "0.002");
 const deterministicNowMs = 1_787_748_507_000;
 
 export async function installDeterministicHostProtocol(page, protocol) {
@@ -51,7 +52,7 @@ export function createVisualAssert(page) {
       includeAA: false,
     });
     const ratio = different / (actual.width * actual.height);
-    if (ratio > 0.002) {
+    if (ratio > maxVisualDiffRatio) {
       await mkdir(visualDiffDir, { recursive: true });
       await writeFile(join(visualDiffDir, name.replace(".png", ".actual.png")), actualBuffer);
       await writeFile(join(visualDiffDir, name.replace(".png", ".diff.png")), PNG.sync.write(diff));
