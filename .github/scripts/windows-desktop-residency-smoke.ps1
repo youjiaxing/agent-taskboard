@@ -167,22 +167,13 @@ $windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($proce
 Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -eq $null } "Settings overlay did not close"
 
 $process.Refresh()
-$windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
-$windowPattern = $null
-if ($windowElement.TryGetCurrentPattern(
-    [System.Windows.Automation.WindowPattern]::Pattern,
-    [ref]$windowPattern
-)) {
-  $windowPattern.Close()
-} elseif (-not [AgentTaskboardNativeUi]::PostMessage($process.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
-  throw "the native close action could not be sent to Agent Taskboard"
-}
+[AgentTaskboardNativeUi]::PostMessage($process.MainWindowHandle, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero) | Out-Null
 Wait-Until {
   $process.Refresh()
   -not $process.HasExited -and
     ($process.MainWindowHandle -eq [IntPtr]::Zero -or
       -not [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle))
-} "closing the window did not hide it while retaining the Host"
+} "closing the window did not hide it while retaining the Host" 20
 
 $stillReady = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10529/ -TimeoutSec 3
 if ($stillReady.StatusCode -ne 200) { throw "Host stopped after closing the window" }

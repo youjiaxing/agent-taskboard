@@ -5,7 +5,7 @@
 
 Agent Taskboard 是一个**本地优先的桌面效率工具**：它把多个工作项目中的 GitHub Issue、依赖关系和执行状态集中起来，并把 Issue 交给本机安装的编码 Agent 命令行工具执行。
 
-项目名称是 **Agent Taskboard**，桌面应用名称为 **Agent Taskboard**。当前版本为 `v0.1.0`，可从 [GitHub Releases](https://github.com/youjiaxing/agent-taskboard/releases) 下载。
+项目名称是 **Agent Taskboard**，桌面应用名称为 **Agent Taskboard**。当前版本为 `v0.1.1`，可从 [GitHub Releases](https://github.com/youjiaxing/agent-taskboard/releases) 下载。
 
 > 项目仍处于早期阶段。数据保存在本机，项目路径和 Agent CLI 登录状态也依赖当前电脑的环境。使用前请先阅读下方的限制和安全提示。
 

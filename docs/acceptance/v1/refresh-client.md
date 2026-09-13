@@ -1,6 +1,6 @@
 # v1 验收矩阵：刷新、用量、Client 与发布（M–T）
 
-这是 Issue #90 / Agent Taskboard v1 验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
+这是 Issue #101 / Agent Taskboard v1 最终验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
 
 ### M. 刷新、上次数据、离线与写边界（110–124）
 
@@ -25,8 +25,8 @@
 - **#125** 从左侧 Host 区进独立用量页、按 Host 全部 Project：`usage.rs::usage_opens_from_host_as_independent_page_defaulting_to_today`。状态：通过。
 - **#126** 24h/今天（默认）/7 天/30 天/自定义筛：`usage.rs::usage_filters_and_time_windows_do_not_mix_old_samples`。状态：通过。
 - **#127** 按 Project/Agent/模型筛 + 六字段、缺字段是 `—`：`usage.rs::missing_token_fields_stay_absent_not_zero`、`bucket_total_is_missing_when_any_run_row_is_missing_a_field`。状态：通过。
-- **#128** 分时段趋势看首字/速率、偏慢标红、声明不管理节点：`usage.rs::spike_uses_the_model_recent_median_not_a_fixed_threshold`（判定逻辑）；标红与「不管理节点」为壳层文案/样式。状态：部分（样式与文案无自动化断言）。
-- **#129** 终端顶栏分轨胶囊、点击展开：`usage.rs::run_telemetry_keeps_models_on_separate_lanes`（分轨数据）+ 壳层胶囊/抽屉。状态：部分（壳层展开/走势无自动化断言）。
+- **#128** 分时段趋势看首字/速率、偏慢标红、声明不管理节点：`usage.rs::spike_uses_the_model_recent_median_not_a_fixed_threshold`；`board-desktop-run.mjs` 断言两条趋势与观察用途声明，壳层 `.slow` 呈现偏慢。状态：通过。
+- **#129** 终端顶栏分轨胶囊、点击展开：`usage.rs::run_telemetry_keeps_models_on_separate_lanes`；`board-desktop-run.mjs` 实际点击分轨胶囊并断言各模型卡片、首字/速率和观察声明。状态：通过。
 - **#130** 各模型独立六字段、缺失 `—`、绝不跨模型加总：`missing_token_fields_stay_absent_not_zero`、`run_telemetry_keeps_models_on_separate_lanes`。状态：通过。
 - **#131** 用该模型最近 10 次中位数判突刺：`usage.rs::spike_uses_the_model_recent_median_not_a_fixed_threshold`、`each_model_keeps_only_the_last_ten_calls`。状态：通过。
 - **#132** 观察条与用量页互跳并高亮：`usage.rs::usage_and_run_observation_jump_both_ways`。状态：通过。
@@ -36,7 +36,7 @@
 - **#133** Frontier 可认领并启动/进行中可聚焦停止查看改动/最近完成可查看改动：e2e（`board.mjs`：frontier execute-run、recently completed view-changes、focus-run）+ 内核动作命令。状态：通过。
 - **#134** 键盘流 + `?` 帮助、不抢 TUI 按键：e2e（`?` 帮助、j/Enter 聚焦）；终端为独立 xterm 区域不受应用键控。状态：通过。
 - **#135** 按标题搜索（回车才查）、可叠 triage/open/closed：`board.rs::title_search_stacks_with_triage_and_open_closed_filters`；e2e。状态：通过。
-- **#136** 四类通知（等待/正常完成/异常停止/崩溃捡回）、点击跳转、桌面与声音分开关：`waiting.rs::four_notification_kinds_include_jump_targets`、`jump` 目标、`notification_switches_persist_on_this_client`、`hidden_window_still_notifies_the_connected_client`（内核事件+壳）；声音提示为壳层（无断言）。状态：部分；真实系统通知 待真实平台。
+- **#136** 四类通知（等待/正常完成/异常停止/崩溃捡回）、点击跳转、桌面与声音分开关：`waiting.rs::four_notification_kinds_include_jump_targets`、`jump` 目标、`notification_switches_persist_on_this_client`、`hidden_window_still_notifies_the_connected_client`（内核事件+壳）；v0.1.0/0.1.1 原生安装包运行时已观察到系统通知横幅，设置中“桌面通知”和“通知声音”可独立持久化。状态：通过。
 - **#137** 列表上看得出运行中/等待操作/执行已停三态：`waiting.rs::in_progress_list_has_running_waiting_and_execution_stopped`。状态：通过。
 - **#138** 详情和最近完成能浏览器打开该 Issue：e2e（点开 GitHub Issue URL 断言）。状态：通过。
 
@@ -46,19 +46,19 @@
 - **#140** 语言记在 Client、具体值、无跟随系统：`host_kernel.rs::language_and_theme_catalogs_have_no_follow_system`、`first_launch_matches_system_then_writes_concrete_values`。状态：通过。
 - **#141** 本机窗口与托盘共用一份语言：`host_kernel.rs::window_and_tray_share_the_client_language_and_theme`。状态：通过。
 - **#142** 主题清单暖纸（仅白天）/素纸/素纸夜间、无暖纸夜间：`host_kernel.rs::language_and_theme_catalogs_have_no_follow_system`（themes 断言三套）、`chinese_locale_picks_simplified_chinese_and_light_picks_warm_paper`。状态：通过。
-- **#143** 主题记在 Client、设置完整清单、顶栏浅/深快切：`window_and_tray_share_the_client_language_and_theme`（SetTheme 持久）+ 壳层设置/顶栏。状态：通过（壳层交互 e2e 未逐项断言，快切语义在 `main.ts`）。状态：部分。
+- **#143** 主题记在 Client、设置完整清单、顶栏浅/深快切：`window_and_tray_share_the_client_language_and_theme` + `board-desktop-shell.mjs` 逐项切换三套主题，`board-mobile.mjs` 验证 Client 级持久与 Host 状态隔离。状态：通过。
 
 ### Q. 发布与更新（144–146）
 
-- **#144** GitHub Releases 安装：macOS 两份 dmg（AS/Intel、ad-hoc）+ Windows 一份 NSIS：v0.1.0 已发布，资产 = `Agent.Taskboard_0.1.0_darwin_aarch64.dmg`、`..._darwin_x64.dmg`、`..._windows_x64-setup.exe`（+ 对应 `.app.tar.gz`/`.sig`/`latest.json`），发布运行见 §3。状态：部分（资产齐全；Windows 安装冒烟跑过失败、修复后待 PR CI；macOS 本机构建受签名私钥所限，见 §4）。
-- **#145** 更新先告知、确认后下载安装、活跃 Run 不让装、装完按原模式拉起：`runs.rs::update_install_requires_every_run_to_end`（运行门）+ 壳层 `updateDialog` 确认流 + 重拉（`show_main` 触发 check-update）。状态：部分；真实安装流程（签名/替换/拉起）待真实平台。
-- **#146** 更新失败或跨大版本不动 Host 数据和 Client 设置：updater 只替换应用包、数据在 `appLocalDataDir`（`host_data_and_desktop_client_settings_are_two_trees`）；无专门回滚测试。状态：部分（设计保证，无实测）。
+- **#144** GitHub Releases 安装：macOS 两份 dmg（AS/Intel、ad-hoc）+ Windows 一份 NSIS：v0.1.1 Release 矩阵成功产出并发布 `Agent.Taskboard_0.1.1_darwin_aarch64.dmg`、`Agent.Taskboard_0.1.1_darwin_x64.dmg`、`Agent.Taskboard_0.1.1_windows_x64-setup.exe`，并上传对应 updater tar/sig 与 `latest.json`；macOS AS/Intel 与 Windows 安装启动门均通过。状态：通过。
+- **#145** 更新先告知、确认后下载安装、活跃 Run 不让装、装完按原模式拉起：`runs.rs::update_install_requires_every_run_to_end`（运行门）+ 壳层 `updateDialog` 确认流 + 原生 v0.1.0→v0.1.1 下载、替换并重拉（更新后继续监听 10529）。状态：通过。
+- **#146** 更新失败或跨大版本不动 Host 数据和 Client 设置：updater 只替换应用包、数据在 `appLocalDataDir`（`host_data_and_desktop_client_settings_are_two_trees`）；原生更新后 `host/secrets.json`、`desktop-client/settings.json`、`desktop-client/secrets.json` 内容与更新前保持一致，Host 仍在 10529 提供服务。状态：通过。
 
 ### R. 手机 Client（147–150）
 
 - **#147** 突出当前 Project/刷新状态/进行中/Frontier、清单收进切换面板、底栏「看板 | 票 | Run」：e2e（mobile-nav 顺序断言、范围移出主布局、刷新状态先于看板、进行中先于 Frontier）。状态：通过。
 - **#148** 看态势、开停 Run、只读最近输出、注入一行、活终端仅逃生口：e2e（mobile stop-run、read-only recent output、活终端非默认）+ 壳层 inject-row。状态：通过。
-- **#149** 手机用量只留当前合计和按 Project 几行、遥测只留主模型胶囊：壳层手机视图（`mobileRunView` 精简胶囊 + 用量简化）；无专门断言。状态：部分。
+- **#149** 手机用量只留当前合计和按 Project 几行、遥测只留主模型胶囊：`board-mobile.mjs` 在 390×844 断言主模型胶囊、精简多模型清单、当前合计、1–3 行 Project，并确认完整筛选/趋势/明细隐藏。状态：通过。
 - **#150** 在切换范围里登记/编辑/移除 Project：e2e（mobile-scope-sheet 暴露 register/edit-project/remove-project 且可交互）。状态：通过。
 
 ### S. 内置 Agent 与启动环境（151–154）

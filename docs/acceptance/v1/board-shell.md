@@ -1,6 +1,6 @@
 # v1 验收矩阵：看板、主壳与 skills（E–G）
 
-这是 Issue #90 / Agent Taskboard v1 验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
+这是 Issue #101 / Agent Taskboard v1 最终验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
 
 ### E. 四列看板与 Frontier（34–43）
 
@@ -23,7 +23,7 @@
 - **#47** 依赖图只画 Dependency 不画父子：`board.rs::dependency_graph_contains_only_dependency_edges`、`parent_filter_does_not_shrink_the_dependency_graph`。状态：通过。
 - **#48** 可开「已关闭上下文」，默认关、只加点：`board.rs::closed_context_toggle_only_adds_nodes`。状态：通过。
 - **#49** 点图节点只换详情：`board.rs::focusing_a_graph_node_only_changes_details`。状态：通过。
-- **#50** 跟 Host 走的总览：按终端状态分组、按 Project 过滤：`bound_runs.rs::host_overview_is_a_host_view_and_keeps_all_project_runs`（Host 级、含全部 Project Run）+ 壳层总览（含 ended 过滤）。状态：部分（分组/过滤的壳层展示无专门断言）。
+- **#50** 跟 Host 走的总览：按终端状态分组、按 Project 过滤：`bound_runs.rs::host_overview_is_a_host_view_and_keeps_all_project_runs` + `board-desktop-run.mjs` 的空 Run、Project 指标、返回看板与 ended 过滤验收。状态：通过。
 - **#51** 总览不是跨 Project Frontier 聚合、也不是跨 Host：`bound_runs.rs::host_overview_is_a_host_view_and_keeps_all_project_runs`（只跟一个 Host、只列 Run）。状态：通过。
 - **#52** 底栏跟当前 Issue：有活跃 Run 出终端、无则收起：`bound_runs.rs::focusing_an_issue_with_an_active_run_focuses_that_pty`、`focusing_an_issue_without_an_active_run_hides_the_pty`；e2e（无活跃 Run 移除终端 dock）。状态：通过。
 - **#53** 点已有 Run 的票终端抬到中间、自动收起左侧、右侧留 Issue：e2e（lift 后侧栏移除、运行聚焦）；内核 `focus_run_command_focuses_the_bound_issue_and_pty`。状态：通过（壳 e2e + 内核）。

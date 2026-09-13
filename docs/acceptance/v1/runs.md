@@ -1,6 +1,6 @@
 # v1 验收矩阵：启动、Run、终端、改动与自动推进（H–L）
 
-这是 Issue #90 / Agent Taskboard v1 验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
+这是 Issue #101 / Agent Taskboard v1 最终验收矩阵的分册，索引见 [`../v1.md`](../v1.md)。
 
 ### H. 启动配置表单与 Run 启动（59–77）
 
