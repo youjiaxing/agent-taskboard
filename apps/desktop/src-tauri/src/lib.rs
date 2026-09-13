@@ -66,13 +66,18 @@ pub fn run() {
                 let ui = app_handle.clone();
                 let _ = app_handle.run_on_main_thread(move || {
                     let _ = refresh_shell(&ui, &outcome.snapshot);
-                    if outcome.snapshot.window_visible {
-                        if let Some(window) = ui.get_webview_window("main") {
+                    if let Some(window) = ui.get_webview_window("main") {
+                        if outcome.snapshot.window_visible {
                             if !window.is_visible().unwrap_or(true) {
                                 let _ = window.show();
                                 let _ = window.unminimize();
                                 let _ = window.set_focus();
                             }
+                        } else if window.is_visible().unwrap_or(false) {
+                            // Keep every HideWindow command (including the
+                            // local RPC path used by headless Windows shells)
+                            // consistent with the native close request.
+                            let _ = window.hide();
                         }
                     }
                     if outcome.process == ProcessIntent::Exit {
