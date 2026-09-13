@@ -18,6 +18,9 @@ public static class AgentTaskboardNativeUi {
   public static extern bool IsWindowVisible(IntPtr hWnd);
 
   [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+  [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
 
   [DllImport("user32.dll")]
@@ -178,7 +181,7 @@ $windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($proce
 Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -eq $null } "Settings overlay did not close"
 
 $process.Refresh()
-$windowHandle = $process.MainWindowHandle
+$windowHandle = [AgentTaskboardNativeUi]::GetAncestor($process.MainWindowHandle, 2)
 if ($windowHandle -eq [IntPtr]::Zero) {
   throw "Agent Taskboard main window handle disappeared before close verification"
 }
@@ -198,9 +201,9 @@ if (-not $closePosted) {
 # a fallback while retaining the asynchronous Win32 request above.
 Start-Sleep -Milliseconds 250
 $process.Refresh()
-if (-not $process.HasExited -and $process.MainWindowHandle -ne [IntPtr]::Zero -and
-    [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)) {
-  $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+if (-not $process.HasExited -and $windowHandle -ne [IntPtr]::Zero -and
+    [AgentTaskboardNativeUi]::IsWindowVisible($windowHandle)) {
+  $windowElement = [System.Windows.Automation.AutomationElement]::FromHandle($windowHandle)
   $windowPattern = $null
   if ($windowElement.TryGetCurrentPattern(
       [System.Windows.Automation.WindowPattern]::Pattern,
@@ -214,8 +217,13 @@ $lastNativeHidden = $false
 $lastHostHidden = $false
 for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
   $process.Refresh()
-  $lastNativeHidden = $process.MainWindowHandle -eq [IntPtr]::Zero -or
-    -not [AgentTaskboardNativeUi]::IsWindowVisible($process.MainWindowHandle)
+  $rootHandle = if ($process.MainWindowHandle -eq [IntPtr]::Zero) {
+    [IntPtr]::Zero
+  } else {
+    [AgentTaskboardNativeUi]::GetAncestor($process.MainWindowHandle, 2)
+  }
+  $lastNativeHidden = $rootHandle -eq [IntPtr]::Zero -or
+    -not [AgentTaskboardNativeUi]::IsWindowVisible($rootHandle)
   $lastHostHidden = Host-Window-IsHidden
   if (-not $process.HasExited -and ($lastNativeHidden -or $lastHostHidden)) {
     $closeSucceeded = $true
