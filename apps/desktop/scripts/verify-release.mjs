@@ -1,17 +1,19 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 
-const [config, desktopPackage, packageLock, cargo, renderedSettings, formEvents] = await Promise.all([
+const [config, desktopPackage, packageLock, cargo, hostCargo, renderedSettings, formEvents] = await Promise.all([
   readJson(new URL("../src-tauri/tauri.conf.json", import.meta.url)),
   readJson(new URL("../package.json", import.meta.url)),
   readJson(new URL("../package-lock.json", import.meta.url)),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
+  readFile(new URL("../../../crates/host-kernel/Cargo.toml", import.meta.url), "utf8"),
   readFile(new URL("../src/render/shell.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/events/forms.ts", import.meta.url), "utf8"),
 ]);
 
 const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-const versions = [config.version, desktopPackage.version, cargoVersion];
+const hostCargoVersion = hostCargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+const versions = [config.version, desktopPackage.version, cargoVersion, hostCargoVersion];
 if (versions.some((version) => !version) || new Set(versions).size !== 1) {
   fail(`version mismatch: ${versions.join(", ")}`);
 }
