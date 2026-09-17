@@ -8,7 +8,7 @@ A change the user asks for directly in conversation is not a ticket. Implement i
 
 ### Wrap-up
 
-Successful `/implement` of an implementation ticket 收尾 automatically in the same turn. Also 收尾 / 关票. Deliver by committing and pushing on the current branch; do not open a PR unless the user asks. Steps: `docs/agents/issue-tracker.md` (**收尾关票**).
+Successful `/implement` of an implementation ticket 收尾 automatically in the same turn. Also 收尾 / 关票. Deliver through a pull request: commit on a branch, `gh pr create`, then merge, so a body line `Closes #<n>` closes the ticket. Do not `gh issue close` first. Steps: `docs/agents/issue-tracker.md` (**收尾关票**).
 
 ### Triage labels
 
