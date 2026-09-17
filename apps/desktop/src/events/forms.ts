@@ -1,6 +1,6 @@
-import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
+import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, launchValuesForHost, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
 import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
-import { launchFieldOptions } from "../render/run";
+import { CUSTOM_VALUE, launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { render } from "../render/app";
 import { toLocalInput } from "../client-utils";
@@ -408,7 +408,7 @@ ui.app.addEventListener("change", async (event) => {
     } else if ("value" in target) {
       const next = (target as HTMLInputElement | HTMLSelectElement).value;
       ui.launchDraft.values[launchId] = next;
-      if (next !== "__custom__") applyLaunchDependentDefaults(launchId);
+      if (next !== CUSTOM_VALUE) applyLaunchDependentDefaults(launchId);
     }
     refreshLaunchWarnings();
     refreshLaunchFieldOptions();
@@ -455,10 +455,15 @@ ui.app.addEventListener("input", (event) => {
     scheduleLaunchPreview();
   }
   const launchId = target.getAttribute("data-launch");
-  if (launchId && ui.launchDraft && "value" in target && !(target instanceof HTMLInputElement && target.type === "checkbox")) {
+  if (
+    launchId
+    && ui.launchDraft
+    && "value" in target
+    && !(target instanceof HTMLInputElement && target.type === "checkbox")
+  ) {
     const next = (target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
     ui.launchDraft.values[launchId] = next;
-    if (next !== "__custom__") applyLaunchDependentDefaults(launchId);
+    if (next !== CUSTOM_VALUE) applyLaunchDependentDefaults(launchId);
     refreshLaunchWarnings();
     refreshLaunchFieldOptions();
     scheduleLaunchPreview();
@@ -469,7 +474,7 @@ ui.app.addEventListener("change", async (event) => {
   const target = event.target as HTMLElement | null;
   const launchSelectId = target?.getAttribute("data-launch-select");
   if (launchSelectId && ui.launchDraft && target instanceof HTMLSelectElement) {
-    if (target.value === "__custom__") {
+    if (target.value === CUSTOM_VALUE) {
       const field = ui.snapshot?.launchForm?.fields.find((candidate) => candidate.id === launchSelectId);
       const options = field ? launchFieldOptions(field, ui.launchDraft.values) : [];
       if (options.includes(ui.launchDraft.values[launchSelectId] ?? "")) {
@@ -550,7 +555,7 @@ ui.app.addEventListener("submit", async (event) => {
       projectId: ui.launchDraft.projectId,
       issueId: ui.launchDraft.issueId,
       agentId: ui.launchDraft.agentId,
-      values: { ...ui.launchDraft.values },
+      values: launchValuesForHost(ui.launchDraft),
       openingText: ui.launchDraft.openingText,
     };
     await runFormOperation(launchFormKey(draft.projectId), async () => {

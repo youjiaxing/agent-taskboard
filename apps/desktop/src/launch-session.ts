@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { startupCopy } from "./startup-copy";
 import type { LaunchDraft, RunLaunchForm, ShellCopy, Snapshot, UpdateInstallGate } from "./protocol";
 import { syncLaunchPicker } from "./launch-picker";
-import { launchFieldDefault, launchFieldOptions, launchSelectOptions } from "./render/run";
+import { launchFieldDefault, launchFieldOptions, launchSelectOptions, launchSelectState, CUSTOM_VALUE } from "./render/run";
 import { render } from "./render/app";
 import { rpc } from "./rpc";
 import { ui } from "./ui";
@@ -100,17 +100,23 @@ export function refreshLaunchFieldOptions(): void {
     if (!select) continue;
     const options = launchFieldOptions(field, ui.launchDraft.values);
     const current = ui.launchDraft.values[field.id] ?? "";
-    const known = options.includes(current);
+    const { customValue, customEntry } = launchSelectState(options, current);
     select.innerHTML = launchSelectOptions(options, current);
-    select.value = known ? current : current ? "__custom__" : "";
+    select.value = customEntry ? CUSTOM_VALUE : current;
     const custom = ui.app?.querySelector<HTMLInputElement>(
       `[data-launch-custom="${CSS.escape(field.id)}"]`,
     );
     if (custom) {
-      custom.hidden = known || !current;
-      custom.value = known ? "" : current;
+      custom.hidden = !customValue && !customEntry;
+      custom.value = customValue;
     }
   }
+}
+
+export function launchValuesForHost(draft: LaunchDraft): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(draft.values).filter(([, value]) => value !== CUSTOM_VALUE),
+  );
 }
 
 export function scheduleLaunchPreview(): void {
@@ -124,7 +130,7 @@ export function scheduleLaunchPreview(): void {
     void rpc("updateRunLaunch", {
       projectId: draft.projectId,
       agentId: draft.agentId,
-      values: { ...draft.values },
+      values: launchValuesForHost(draft),
       openingText: draft.openingText,
       language: effectiveClientLanguage(),
     }).then(() => {

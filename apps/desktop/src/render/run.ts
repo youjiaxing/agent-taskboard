@@ -136,14 +136,14 @@ export function launchField(
   const busy = awaiting ? ` data-launch-discovery="pending" aria-busy="true"` : "";
   const options = field.kind === "select" ? launchFieldOptions(field, values) : [];
   if (field.kind === "select" && options.length > 0) {
-    const known = options.includes(value);
-    const customValue = known ? "" : value;
+    const { customValue, customEntry } = launchSelectState(options, value);
+    const customHidden = !customValue && !customEntry;
     return `<div class="field"${busy}>
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
       <select id="${id}" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
         ${launchSelectOptions(options, value)}
       </select>
-      <input class="launch-custom-value" data-launch-custom="${escapeHtml(field.id)}" value="${escapeHtml(customValue)}" ${customValue ? "" : "hidden"} placeholder="${escapeHtml(customOptionLabel())}" ${customValue && field.required ? "required" : ""} />
+      <input class="launch-custom-value" data-launch-custom="${escapeHtml(field.id)}" value="${escapeHtml(customValue)}" ${customHidden ? "hidden" : ""} placeholder="${escapeHtml(customOptionLabel())}" ${!customHidden && field.required ? "required" : ""} />
       ${pendingHint}
     </div>`;
   }
@@ -161,16 +161,35 @@ export function launchField(
   </div>`;
 }
 
+export const CUSTOM_VALUE = "__custom__";
+
 export function customOptionLabel(): string {
   return effectiveClientLanguage() === "zh-CN" ? "自定义值" : "Custom value";
 }
 
+export function currentValueLabel(): string {
+  return effectiveClientLanguage() === "zh-CN" ? "当前值" : "current value";
+}
+
+export function launchSelectState(options: string[], value: string): {
+  customValue: string;
+  customEntry: boolean;
+} {
+  const customEntry = value === CUSTOM_VALUE;
+  const known = options.includes(value);
+  return { customValue: known || customEntry ? "" : value, customEntry };
+}
+
 export function launchSelectOptions(options: string[], value: string): string {
-  const selectedValue = options.includes(value) ? value : value ? "__custom__" : "";
+  const customEntry = value === CUSTOM_VALUE;
+  const known = options.includes(value);
   const placeholder = value ? "" : `<option value="" disabled selected>${escapeHtml(selectPlaceholderLabel())}</option>`;
-  return `${placeholder}${options
-    .map((option) => `<option value="${escapeHtml(option)}" ${option === selectedValue ? "selected" : ""}>${escapeHtml(option)}</option>`)
-    .join("")}<option value="__custom__" ${selectedValue === "__custom__" ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
+  const current = value && !customEntry && !known
+    ? `<option value="${escapeHtml(value)}" selected>${escapeHtml(value)} · ${escapeHtml(currentValueLabel())}</option>`
+    : "";
+  return `${placeholder}${current}${options
+    .map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`)
+    .join("")}<option value="${CUSTOM_VALUE}" ${customEntry ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
 }
 
 export function selectPlaceholderLabel(): string {

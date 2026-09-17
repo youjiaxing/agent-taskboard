@@ -138,6 +138,11 @@ if (!switchedAgent.toLowerCase().includes("codex")) {
 await page.fill("textarea[data-field='openingText']", "manual fallback");
 if (await page.locator("select[data-launch-select='model']").count()) {
   await page.selectOption("select[data-launch-select='model']", "__custom__");
+  await page.waitForTimeout(500);
+  const customPreview = (await page.locator(".launch-command-preview").textContent()) ?? "";
+  if (customPreview.includes("__custom__")) {
+    throw new Error("the custom-entry sentinel must never reach the command preview");
+  }
   await page.fill("input[data-launch-custom='model']", "custom-model");
 } else {
   await page.fill("input[data-launch='model']", "custom-model");
