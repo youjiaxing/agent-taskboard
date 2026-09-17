@@ -8,6 +8,7 @@
     "dev:app": "node scripts/dev-app.mjs",
     "build": "tsc && vite build",
     "verify:release": "node scripts/verify-release.mjs",
+    "release": "node scripts/release.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
