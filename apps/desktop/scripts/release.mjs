@@ -82,7 +82,7 @@ git(["commit", "-m", `chore(release): ${version}`]);
 git(["push", "-u", "origin", "HEAD"]);
 
 console.log("\n开 PR 并合并");
-const prUrl = git([
+const prUrl = gh([
   "pr", "create",
   "--title", `chore(release): ${version}`,
   "--body", [
@@ -101,7 +101,7 @@ const prUrl = git([
 ]).trim();
 const prNumber = prUrl.split("/").pop();
 console.log(prUrl);
-git(["pr", "merge", prNumber, "--merge", "--delete-branch"]);
+gh(["pr", "merge", prNumber, "--merge", "--delete-branch"]);
 
 console.log("\n回到 main 并打发布标签");
 git(["checkout", "main"]);
@@ -164,6 +164,14 @@ function git(args, allowFailure = false) {
   } catch {
     return "";
   }
+}
+
+function gh(args) {
+  return execFileSync("gh", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+  });
 }
 
 function run(command, args, options) {
