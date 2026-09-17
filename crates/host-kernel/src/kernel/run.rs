@@ -202,6 +202,7 @@ impl HostKernel {
                 intents: launch::intent_options(language),
                 warnings: Vec::new(),
                 error: None,
+                option_discovery_pending: None,
                 option_discovery_error: None,
             });
             return Ok(());
@@ -212,16 +213,19 @@ impl HostKernel {
             .find(|agent| agent.id() == selected)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
-        let (discovery, option_discovery_error) = if defer_discovery {
+        let (discovery, option_discovery_pending, option_discovery_error) = if defer_discovery {
             (
                 AgentConfigDiscovery {
                     fields: agent.config_fields(),
                     seed: agent.seed_config(),
                 },
                 Some(launch::option_discovery_pending(language)),
+                None,
             )
         } else {
-            self.agent_config_for(&project.local_path, agent.as_ref(), language)
+            let (discovery, error) =
+                self.agent_config_for(&project.local_path, agent.as_ref(), language);
+            (discovery, None, error)
         };
         let current = self
             .launch_defaults
@@ -273,6 +277,7 @@ impl HostKernel {
             intents: launch::intent_options(language),
             warnings,
             error: None,
+            option_discovery_pending,
             option_discovery_error,
         });
         Ok(())

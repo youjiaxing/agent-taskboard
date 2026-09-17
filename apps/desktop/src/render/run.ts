@@ -69,7 +69,7 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
         <label class="label" for="opening-text">${escapeHtml(copy.openingPlaceholder)}</label>
         <textarea id="opening-text" data-field="openingText" rows="4" required placeholder="${escapeHtml(copy.openingPlaceholder)}">${escapeHtml(draft.openingText)}</textarea>
       </div>
-      ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
+      ${first.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values, form.optionDiscoveryPending)).join("")}
       <div class="field">
         <div class="label">${escapeHtml(copy.workingDirectory)}</div>
         <input value="${escapeHtml(form.workingDirectory)}" readonly />
@@ -86,7 +86,7 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
       }
       <details class="folded" ${ui.launchFolded ? "open" : ""}>
         <summary data-act="toggle-folded">${escapeHtml(copy.foldedOptions)}</summary>
-        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values)).join("")}
+        ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values, form.optionDiscoveryPending)).join("")}
         ${
           snap.showCommandPreview
             ? `<div class="field"><div class="label">${escapeHtml(copy.commandPreview)}</div><pre class="payload launch-command-preview">${escapeHtml(form.commandPreview)}</pre></div>`
@@ -105,35 +105,59 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
-export function launchField(field: AgentField, value: string, values: Record<string, string>): string {
+function fieldAwaitsDiscovery(
+  field: AgentField,
+  values: Record<string, string>,
+  discoveryPending?: string | null,
+): boolean {
+  if (!discoveryPending) return false;
+  if (field.id === "model") return true;
+  return field.kind === "select" && launchFieldOptions(field, values).length === 0;
+}
+
+export function launchField(
+  field: AgentField,
+  value: string,
+  values: Record<string, string>,
+  discoveryPending?: string | null,
+): string {
   const id = `launch-${field.id}`;
+  const awaiting = fieldAwaitsDiscovery(field, values, discoveryPending);
+  const pendingHint =
+    awaiting && field.id === "model" && discoveryPending
+      ? `<p class="hint" data-launch-discovery="pending">${escapeHtml(discoveryPending)}</p>`
+      : "";
   if (field.kind === "boolean") {
     return `<label class="graph-opt">
       <input type="checkbox" data-launch="${escapeHtml(field.id)}" ${value === "true" ? "checked" : ""} />
       ${escapeHtml(field.label)}
     </label>`;
   }
-  if (field.kind === "select") {
-    const options = launchFieldOptions(field, values);
+  const busy = awaiting ? ` data-launch-discovery="pending" aria-busy="true"` : "";
+  const options = field.kind === "select" ? launchFieldOptions(field, values) : [];
+  if (field.kind === "select" && options.length > 0) {
     const known = options.includes(value);
     const customValue = known ? "" : value;
-    return `<div class="field">
+    return `<div class="field"${busy}>
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
       <select id="${id}" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
         ${launchSelectOptions(options, value)}
       </select>
       <input class="launch-custom-value" data-launch-custom="${escapeHtml(field.id)}" value="${escapeHtml(customValue)}" ${customValue ? "" : "hidden"} placeholder="${escapeHtml(customOptionLabel())}" ${customValue && field.required ? "required" : ""} />
+      ${pendingHint}
     </div>`;
   }
   if (field.kind === "multiline") {
-    return `<div class="field">
+    return `<div class="field"${busy}>
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
       <textarea id="${id}" data-launch="${escapeHtml(field.id)}" rows="3">${escapeHtml(value)}</textarea>
+      ${pendingHint}
     </div>`;
   }
-  return `<div class="field">
+  return `<div class="field"${busy}>
     <label class="label" for="${id}">${escapeHtml(field.label)}</label>
     <input id="${id}" data-launch="${escapeHtml(field.id)}" value="${escapeHtml(value)}" ${field.required ? "required" : ""} />
+    ${pendingHint}
   </div>`;
 }
 

@@ -68,6 +68,7 @@ fn discovery_failure_keeps_manual_fields_and_reports_a_readable_error() {
 
     assert!(form.fields.iter().any(|field| field.id == "model"));
     assert_eq!(form.values["model"], "grok-4.6");
+    assert!(form.option_discovery_pending.is_none());
     assert!(form
         .option_discovery_error
         .as_deref()

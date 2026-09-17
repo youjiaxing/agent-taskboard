@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use host_kernel::{
-    AgentPort, ClaudeAdapter, LaunchEnvironment, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME,
+    AgentFieldKind, AgentPort, ClaudeAdapter, LaunchEnvironment, CLAUDE_BIN, CLAUDE_CODE_ID,
+    CLAUDE_CODE_NAME,
 };
 
 fn make_discoverable_claude(dir: &std::path::Path) -> PathBuf {
@@ -76,6 +77,7 @@ fn claude_adapter_discovers_documented_aliases_and_enums_from_help() {
             .unwrap()
     };
     assert_eq!(field("model").options, vec!["fable", "opus", "sonnet"]);
+    assert_eq!(field("model").kind, AgentFieldKind::Select);
     assert_eq!(
         field("effort").options,
         vec!["low", "medium", "high", "xhigh", "max"]

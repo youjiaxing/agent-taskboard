@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use host_kernel::{
-    AgentPort, CodexAdapter, Language, LaunchEnvironment, CODEX_BIN, CODEX_ID, CODEX_NAME,
+    AgentFieldKind, AgentPort, CodexAdapter, Language, LaunchEnvironment, CODEX_BIN, CODEX_ID,
+    CODEX_NAME,
 };
 
 fn make_discoverable_codex(dir: &std::path::Path) -> PathBuf {
@@ -96,6 +97,7 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
         .find(|field| field.id == "model")
         .unwrap();
     assert_eq!(model.options, vec!["gpt-fast", "gpt-deep"]);
+    assert_eq!(model.kind, AgentFieldKind::Select);
     let effort = discovery
         .fields
         .iter()

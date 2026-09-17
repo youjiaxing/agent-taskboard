@@ -128,6 +128,8 @@ pub struct RunLaunchForm {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_discovery_pending: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option_discovery_error: Option<String>,
 }
 
