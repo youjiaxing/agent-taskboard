@@ -1,3 +1,4 @@
+mod edit_menu;
 mod signal;
 mod startup;
 
@@ -5,25 +6,44 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use edit_menu::{
+    edit_menu_enabled, EditMenuContext, EditMenuEnabled, EDIT_COPY, EDIT_CUT, EDIT_PASTE,
+    EDIT_REDO, EDIT_SELECT_ALL, EDIT_UNDO,
+};
 use host_kernel::{
     BootRequest, Command, HostKernel, HostMode, HostSnapshot, LoopbackAssets, LoopbackServer,
     ProcessIntent, SystemAppearance, LOCAL_RPC_PORT,
 };
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{
+    AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
+};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_log::RotationStrategy;
+use tauri_plugin_opener::OpenerExt;
 
 const LOG_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
 const LOG_FILE_COUNT: usize = 5;
+const USAGE_GUIDE_URL: &str = "https://github.com/youjiaxing/agent-taskboard";
 
 struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
     protocol_url: String,
     startup_settings_path: PathBuf,
     menu_signature: Mutex<Option<ShellMenuSignature>>,
+    edit_context: Mutex<EditMenuContext>,
+    edit_items: Mutex<Option<EditMenuItems>>,
     _loopback: LoopbackServer,
+}
+
+struct EditMenuItems {
+    undo: MenuItem<tauri::Wry>,
+    redo: MenuItem<tauri::Wry>,
+    cut: MenuItem<tauri::Wry>,
+    copy: MenuItem<tauri::Wry>,
+    paste: MenuItem<tauri::Wry>,
+    select_all: MenuItem<tauri::Wry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +51,41 @@ struct ShellMenuSignature {
     app_name: String,
     show_window: String,
     quit_host: String,
+    settings: String,
     edit_menu: String,
+    edit_undo: String,
+    edit_redo: String,
+    edit_cut: String,
+    edit_copy: String,
+    edit_paste: String,
+    edit_select_all: String,
+    window_menu: String,
+    help_menu: String,
+    keyboard_help: String,
+    usage_guide: String,
+}
+
+impl ShellMenuSignature {
+    fn from_snapshot(snapshot: &HostSnapshot) -> Self {
+        let copy = &snapshot.copy;
+        Self {
+            app_name: copy.app_name.clone(),
+            show_window: copy.show_window.clone(),
+            quit_host: copy.quit_host.clone(),
+            settings: copy.settings.clone(),
+            edit_menu: copy.edit_menu.clone(),
+            edit_undo: copy.edit_undo.clone(),
+            edit_redo: copy.edit_redo.clone(),
+            edit_cut: copy.edit_cut.clone(),
+            edit_copy: copy.edit_copy.clone(),
+            edit_paste: copy.edit_paste.clone(),
+            edit_select_all: copy.edit_select_all.clone(),
+            window_menu: copy.window_menu.clone(),
+            help_menu: copy.help_menu.clone(),
+            keyboard_help: copy.keyboard_help.clone(),
+            usage_guide: copy.usage_guide.clone(),
+        }
+    }
 }
 
 pub fn run() {
@@ -53,7 +107,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![set_host_mode])
+        .invoke_handler(tauri::generate_handler![
+            set_host_mode,
+            set_edit_menu_context
+        ])
         .setup(|app| {
             signal::spawn_ctrl_c_handler(app.handle().clone());
             let startup_settings_path = startup_settings_path(app.handle())?;
@@ -102,6 +159,8 @@ pub fn run() {
                 protocol_url: protocol_url.clone(),
                 startup_settings_path,
                 menu_signature: Mutex::new(None),
+                edit_context: Mutex::new(EditMenuContext::default()),
+                edit_items: Mutex::new(None),
                 _loopback: loopback,
             });
             build_tray(app.handle())?;
@@ -211,6 +270,18 @@ fn set_host_mode(mode: &str, state: tauri::State<'_, AppState>) -> Result<(), St
     )
 }
 
+#[tauri::command]
+fn set_edit_menu_context(context: EditMenuContext, app: AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut cached = state.edit_context.lock().map_err(|err| err.to_string())?;
+        if *cached == context {
+            return Ok(());
+        }
+        *cached = context;
+    }
+    apply_edit_menu_state(&app)
+}
+
 fn boot_kernel(
     app: &AppHandle,
     host_mode: HostMode,
@@ -277,12 +348,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String> {
-    let signature = ShellMenuSignature {
-        app_name: snapshot.copy.app_name.clone(),
-        show_window: snapshot.copy.show_window.clone(),
-        quit_host: snapshot.copy.quit_host.clone(),
-        edit_menu: snapshot.copy.edit_menu.clone(),
-    };
+    let signature = ShellMenuSignature::from_snapshot(snapshot);
     if let Some(state) = app.try_state::<AppState>() {
         let cached = state.menu_signature.lock().map_err(|err| err.to_string())?;
         if cached.as_ref() == Some(&signature) {
@@ -301,14 +367,21 @@ fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String>
 fn resident_items(
     app: &AppHandle,
     snapshot: &HostSnapshot,
+    quit_accelerator: Option<&str>,
 ) -> tauri::Result<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)> {
     let show = MenuItem::with_id(app, "show", &snapshot.copy.show_window, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", &snapshot.copy.quit_host, true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        &snapshot.copy.quit_host,
+        true,
+        quit_accelerator,
+    )?;
     Ok((show, quit))
 }
 
 fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
-    let (show, quit) = resident_items(app, snapshot)?;
+    let (show, quit) = resident_items(app, snapshot, None)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(menu))?;
@@ -318,40 +391,287 @@ fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<
 }
 
 fn rebuild_app_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
-    let (show, quit) = resident_items(app, snapshot)?;
-    let app_menu = Submenu::with_items(
+    let copy = &snapshot.copy;
+    let enabled = current_edit_enabled(app);
+    let (show, quit) = resident_items(app, snapshot, Some("CmdOrCtrl+Q"))?;
+    let settings = MenuItem::with_id(app, "settings", &copy.settings, true, Some("CmdOrCtrl+,"))?;
+    let about = PredefinedMenuItem::about(
         app,
-        &snapshot.copy.app_name,
-        true,
-        &[&show, &PredefinedMenuItem::separator(app)?, &quit],
+        None,
+        Some(AboutMetadata {
+            name: Some(copy.app_name.clone()),
+            version: Some(app.package_info().version.to_string()),
+            ..Default::default()
+        }),
+    )?;
+    let app_menu = build_app_submenu(app, copy.app_name.as_str(), &about, &settings, &show, &quit)?;
+
+    let redo_accelerator = if cfg!(target_os = "macos") {
+        "Shift+CmdOrCtrl+Z"
+    } else {
+        "CmdOrCtrl+Y"
+    };
+    let undo = MenuItem::with_id(
+        app,
+        EDIT_UNDO,
+        &copy.edit_undo,
+        enabled.undo,
+        Some("CmdOrCtrl+Z"),
+    )?;
+    let redo = MenuItem::with_id(
+        app,
+        EDIT_REDO,
+        &copy.edit_redo,
+        enabled.redo,
+        Some(redo_accelerator),
+    )?;
+    let cut = MenuItem::with_id(
+        app,
+        EDIT_CUT,
+        &copy.edit_cut,
+        enabled.cut,
+        Some("CmdOrCtrl+X"),
+    )?;
+    let copy_item = MenuItem::with_id(
+        app,
+        EDIT_COPY,
+        &copy.edit_copy,
+        enabled.copy,
+        Some("CmdOrCtrl+C"),
+    )?;
+    let paste = MenuItem::with_id(
+        app,
+        EDIT_PASTE,
+        &copy.edit_paste,
+        enabled.paste,
+        Some("CmdOrCtrl+V"),
+    )?;
+    let select_all = MenuItem::with_id(
+        app,
+        EDIT_SELECT_ALL,
+        &copy.edit_select_all,
+        enabled.select_all,
+        Some("CmdOrCtrl+A"),
     )?;
     let edit = Submenu::with_items(
         app,
-        &snapshot.copy.edit_menu,
+        &copy.edit_menu,
         true,
         &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
+            &undo,
+            &redo,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
+            &cut,
+            &copy_item,
+            &paste,
+            &select_all,
         ],
     )?;
-    app.set_menu(Menu::with_items(app, &[&app_menu, &edit])?)?;
+    let window_menu = build_window_submenu(app, &copy.window_menu)?;
+    let help_keyboard = MenuItem::with_id(
+        app,
+        "help-keyboard",
+        &copy.keyboard_help,
+        true,
+        None::<&str>,
+    )?;
+    let help_usage = MenuItem::with_id(app, "help-usage", &copy.usage_guide, true, None::<&str>)?;
+    let help = Submenu::with_id_and_items(
+        app,
+        HELP_SUBMENU_ID,
+        &copy.help_menu,
+        true,
+        &[&help_keyboard, &help_usage],
+    )?;
+    app.set_menu(Menu::with_items(
+        app,
+        &[&app_menu, &edit, &window_menu, &help],
+    )?)?;
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut items) = state.edit_items.lock() {
+            *items = Some(EditMenuItems {
+                undo,
+                redo,
+                cut,
+                copy: copy_item,
+                paste,
+                select_all,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn build_app_submenu(
+    app: &AppHandle,
+    title: &str,
+    about: &PredefinedMenuItem<tauri::Wry>,
+    settings: &MenuItem<tauri::Wry>,
+    show: &MenuItem<tauri::Wry>,
+    quit: &MenuItem<tauri::Wry>,
+) -> tauri::Result<Submenu<tauri::Wry>> {
+    #[cfg(target_os = "macos")]
+    {
+        Submenu::with_items(
+            app,
+            title,
+            true,
+            &[
+                about,
+                &PredefinedMenuItem::separator(app)?,
+                settings,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::services(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::hide(app, None)?,
+                &PredefinedMenuItem::hide_others(app, None)?,
+                &PredefinedMenuItem::show_all(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                show,
+                &PredefinedMenuItem::separator(app)?,
+                quit,
+            ],
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Submenu::with_items(
+            app,
+            title,
+            true,
+            &[
+                about,
+                &PredefinedMenuItem::separator(app)?,
+                settings,
+                &PredefinedMenuItem::separator(app)?,
+                show,
+                &PredefinedMenuItem::separator(app)?,
+                quit,
+            ],
+        )
+    }
+}
+
+fn build_window_submenu(app: &AppHandle, title: &str) -> tauri::Result<Submenu<tauri::Wry>> {
+    let minimize = PredefinedMenuItem::minimize(app, None)?;
+    let maximize = PredefinedMenuItem::maximize(app, None)?;
+    let close_window = PredefinedMenuItem::close_window(app, None)?;
+    #[cfg(target_os = "macos")]
+    {
+        Submenu::with_id_and_items(
+            app,
+            WINDOW_SUBMENU_ID,
+            title,
+            true,
+            &[
+                &minimize,
+                &maximize,
+                &PredefinedMenuItem::fullscreen(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &close_window,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::bring_all_to_front(app, None)?,
+            ],
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Submenu::with_id_and_items(
+            app,
+            WINDOW_SUBMENU_ID,
+            title,
+            true,
+            &[
+                &minimize,
+                &maximize,
+                &PredefinedMenuItem::separator(app)?,
+                &close_window,
+            ],
+        )
+    }
+}
+
+fn current_edit_enabled(app: &AppHandle) -> EditMenuEnabled {
+    app.try_state::<AppState>()
+        .and_then(|state| state.edit_context.lock().ok().map(|context| *context))
+        .map(edit_menu_enabled)
+        .unwrap_or_else(|| edit_menu_enabled(EditMenuContext::default()))
+}
+
+fn apply_edit_menu_state(app: &AppHandle) -> Result<(), String> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(());
+    };
+    let context = *state.edit_context.lock().map_err(|err| err.to_string())?;
+    let enabled = edit_menu_enabled(context);
+    let items = state.edit_items.lock().map_err(|err| err.to_string())?;
+    let Some(items) = items.as_ref() else {
+        return Ok(());
+    };
+    items
+        .undo
+        .set_enabled(enabled.undo)
+        .map_err(|err| err.to_string())?;
+    items
+        .redo
+        .set_enabled(enabled.redo)
+        .map_err(|err| err.to_string())?;
+    items
+        .cut
+        .set_enabled(enabled.cut)
+        .map_err(|err| err.to_string())?;
+    items
+        .copy
+        .set_enabled(enabled.copy)
+        .map_err(|err| err.to_string())?;
+    items
+        .paste
+        .set_enabled(enabled.paste)
+        .map_err(|err| err.to_string())?;
+    items
+        .select_all
+        .set_enabled(enabled.select_all)
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
 fn handle_shell_menu(app: &AppHandle, id: &str) {
     match id {
         "show" => show_main(app),
+        "settings" => {
+            show_main(app);
+            dispatch_webview_event(app, "agent-taskboard:open-settings");
+        }
         "quit" => quit_host(app),
+        EDIT_UNDO => dispatch_webview_event(app, "agent-taskboard:edit-undo"),
+        EDIT_REDO => dispatch_webview_event(app, "agent-taskboard:edit-redo"),
+        EDIT_CUT => dispatch_webview_event(app, "agent-taskboard:edit-cut"),
+        EDIT_COPY => dispatch_webview_event(app, "agent-taskboard:edit-copy"),
+        EDIT_PASTE => dispatch_webview_event(app, "agent-taskboard:edit-paste"),
+        EDIT_SELECT_ALL => dispatch_webview_event(app, "agent-taskboard:edit-select-all"),
+        "help-keyboard" => {
+            show_main(app);
+            dispatch_webview_event(app, "agent-taskboard:open-keyboard-help");
+        }
+        "help-usage" => {
+            let _ = app.opener().open_url(USAGE_GUIDE_URL, None::<&str>);
+        }
         _ => {}
     }
 }
 
+fn dispatch_webview_event(app: &AppHandle, event: &str) {
+    if let Some(window) = app.get_webview_window("main") {
+        let encoded = serde_json::to_string(event).unwrap();
+        let _ = window.eval(format!("window.dispatchEvent(new Event({encoded}));"));
+    }
+}
+
 fn show_main(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.show();
+    }
     let mut became_visible = false;
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut kernel) = state.kernel.lock() {

@@ -10,6 +10,21 @@ import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
 
+export async function openSettingsPanel(): Promise<void> {
+  ui.settingsOpen = true;
+  await loadStartupSettings();
+  ui.pairingOpen = false;
+  ui.formOpen = null;
+  ui.removeProject = null;
+  ui.projectMenuId = "";
+  render();
+}
+
+export function openKeyboardHelp(): void {
+  ui.keyboardHelpOpen = true;
+  render();
+}
+
 let deferredLaunchDiscoverySequence = 0;
 
 async function completeDeferredLaunchDiscovery(
@@ -139,13 +154,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "settings") {
-    ui.settingsOpen = true;
-    await loadStartupSettings();
-    ui.pairingOpen = false;
-    ui.formOpen = null;
-    ui.removeProject = null;
-    ui.projectMenuId = "";
-    render();
+    await openSettingsPanel();
     return;
   }
   if (act === "host-mode" && target.dataset.id) {
@@ -245,8 +254,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "keyboard-help") {
-    ui.keyboardHelpOpen = true;
-    render();
+    openKeyboardHelp();
     return;
   }
   if (act === "close-keyboard-help") {

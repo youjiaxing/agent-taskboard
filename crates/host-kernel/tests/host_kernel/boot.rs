@@ -171,6 +171,10 @@ fn window_and_tray_share_the_client_language_and_theme() {
     assert_eq!(snap.appearance.theme, Theme::PlainPaper);
     assert_eq!(snap.copy.quit_host, "Quit Host");
     assert_eq!(snap.copy.show_window, "Open window");
+    assert_eq!(snap.copy.window_menu, "Window");
+    assert_eq!(snap.copy.help_menu, "Help");
+    assert_eq!(snap.copy.edit_undo, "Undo typing");
+    assert_eq!(snap.copy.usage_guide, "User guide");
     drop(host);
 
     let host = HostKernel::boot(boot_req(tmp.path())).unwrap();

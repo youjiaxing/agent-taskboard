@@ -21,7 +21,8 @@ import {
   formatCountdown,
 } from "./client-utils";
 import { ui } from "./ui";
-import { handleAppClick } from "./events/click";
+import { handleAppClick, openKeyboardHelp, openSettingsPanel } from "./events/click";
+import { bindNativeMenuBridge, hookTerminalEditMenu } from "./edit-menu";
 import { bindFormEvents } from "./events/forms";
 import {
   clonePanelGeometry,
@@ -425,6 +426,7 @@ export function ensureTerminal(theme: Theme): void {
   ui.termHost = document.createElement("div");
   ui.termHost.className = "pty-host";
   ui.term.open(ui.termHost);
+  hookTerminalEditMenu(ui.term);
   ui.term.onData((data) => {
     const runId = ui.snapshot?.focusedRunId;
     if (!runId) return;
@@ -856,6 +858,16 @@ window.addEventListener("agent-taskboard:host-window-shown", () => {
 window.addEventListener("agent-taskboard:check-update", () => {
   void checkForUpdates(false);
 });
+
+window.addEventListener("agent-taskboard:open-settings", () => {
+  void openSettingsPanel();
+});
+
+window.addEventListener("agent-taskboard:open-keyboard-help", () => {
+  openKeyboardHelp();
+});
+
+bindNativeMenuBridge();
 
 let wasMobileClient = mobileClient();
 
