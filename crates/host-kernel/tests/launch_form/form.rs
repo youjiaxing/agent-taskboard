@@ -26,9 +26,10 @@ fn deferred_discovery_returns_the_launch_form_without_running_cli_discovery() {
     assert_eq!(form.values["model"], "grok-4.6");
     assert_eq!(grok.discovery_count(), 0);
     assert!(form
-        .option_discovery_error
+        .option_discovery_pending
         .as_deref()
         .is_some_and(|message| message.contains("稍后")));
+    assert!(form.option_discovery_error.is_none());
 }
 
 #[test]
@@ -497,6 +498,7 @@ fn last_agent_skips_picker_until_switch() {
         .launch_form
         .unwrap();
     assert!(!form.skip_agent_picker);
+    assert_eq!(form.selected_agent_id, "grok-build");
     assert_eq!(form.agents.len(), 2);
 }
 

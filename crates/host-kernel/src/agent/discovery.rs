@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::{AgentField, AgentFieldOptionFilter};
+use super::{AgentField, AgentFieldKind, AgentFieldOptionFilter};
 use crate::LaunchEnvironment;
 
 pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -12,6 +12,9 @@ pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 pub(super) fn set_options(fields: &mut [AgentField], id: &str, options: Vec<String>) {
     if let Some(field) = fields.iter_mut().find(|field| field.id == id) {
         field.options = options;
+        if !field.options.is_empty() {
+            field.kind = AgentFieldKind::Select;
+        }
     }
 }
 

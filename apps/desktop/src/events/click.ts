@@ -59,7 +59,19 @@ async function completeDeferredLaunchDiscovery(
     }
     render();
   } catch {
-    // The static launch form remains usable when option discovery fails.
+    if (
+      sequence === deferredLaunchDiscoverySequence
+      && ui.snapshot?.launchForm?.projectId === projectId
+      && ui.snapshot.launchForm.issueId === issueId
+      && ui.snapshot.launchForm.selectedAgentId === agentId
+      && ui.snapshot.launchForm.optionDiscoveryPending
+    ) {
+      ui.snapshot = {
+        ...ui.snapshot,
+        launchForm: { ...ui.snapshot.launchForm, optionDiscoveryPending: null },
+      };
+      render();
+    }
   }
 }
 

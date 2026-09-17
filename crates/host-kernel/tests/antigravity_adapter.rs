@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use host_kernel::{
-    builtin_agents, AgentPort, AntigravityAdapter, Language, LaunchEnvironment, ANTIGRAVITY_BIN,
-    ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
+    builtin_agents, AgentFieldKind, AgentPort, AntigravityAdapter, Language, LaunchEnvironment,
+    ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
 };
 
 fn make_discoverable_agy(dir: &std::path::Path) -> PathBuf {
@@ -122,6 +122,7 @@ fn antigravity_adapter_discovers_models_and_filters_encoded_efforts() {
         field("model").options,
         vec!["gemini-fast-low", "gemini-fast-high", "claude-thinking"]
     );
+    assert_eq!(field("model").kind, AgentFieldKind::Select);
     assert_eq!(field("effort").options, vec!["low", "medium", "high"]);
     assert_eq!(
         field("execution-mode").options,

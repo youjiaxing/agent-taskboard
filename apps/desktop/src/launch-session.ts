@@ -2,6 +2,7 @@ import { effectiveClientLanguage } from "./view-helpers";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { startupCopy } from "./startup-copy";
 import type { LaunchDraft, RunLaunchForm, ShellCopy, Snapshot, UpdateInstallGate } from "./protocol";
+import { syncLaunchPicker } from "./launch-picker";
 import { launchFieldDefault, launchFieldOptions, launchSelectOptions } from "./render/run";
 import { render } from "./render/app";
 import { rpc } from "./rpc";
@@ -26,13 +27,12 @@ export function syncLaunchDraft(snap: Snapshot): void {
   }
   if (!form.skipAgentPicker) {
     ui.launchDraft = null;
-    if (
-      ui.launchPickerProjectId !== form.projectId
-      || (form.selectedAgentId && form.selectedAgentId !== ui.launchPickerAgentId)
-    ) {
-      ui.launchPickerProjectId = form.projectId;
-      ui.launchPickerAgentId = form.selectedAgentId;
-    }
+    const picker = syncLaunchPicker(
+      { projectId: form.projectId, selectedAgentId: form.selectedAgentId },
+      { projectId: ui.launchPickerProjectId, agentId: ui.launchPickerAgentId },
+    );
+    ui.launchPickerProjectId = picker.projectId;
+    ui.launchPickerAgentId = picker.agentId;
     return;
   }
   ui.launchPickerProjectId = form.projectId;

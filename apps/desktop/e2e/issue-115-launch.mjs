@@ -61,8 +61,11 @@ if (alwaysApproveMetrics.inputWidth > 40) {
 if (alwaysApproveMetrics.labelWidth > alwaysApproveMetrics.inputWidth + 180) {
   throw new Error(`alwaysApprove label is stretched across the form: ${alwaysApproveMetrics.labelWidth}`);
 }
-if (!(await page.locator("select[data-launch-select='sandbox']").count())) {
-  throw new Error("sandbox should render as a select");
+if (await page.locator("select[data-launch-select='sandbox']").count()) {
+  throw new Error("sandbox with no candidates must not render as an empty select");
+}
+if (!(await page.locator("input[data-launch='sandbox']").count())) {
+  throw new Error("sandbox with no candidates should stay a text field");
 }
 await page.click(".launch-sheet summary[data-act='toggle-folded']");
 const overflow = await sheet.evaluate((node) => ({
@@ -122,8 +125,16 @@ if (await page.locator("button[data-act='select-agent']").count()) {
 await page.click("button[data-act='switch-agent']");
 await page.waitForSelector("button[data-act='select-agent'][data-id='grok-build'].active");
 await page.click("button[data-act='select-agent'][data-id='codex']");
+await page.waitForTimeout(1_250);
+if (!(await page.locator("button[data-act='select-agent'][data-id='codex']").getAttribute("aria-pressed"))?.includes("true")) {
+  throw new Error("picker selection must survive a tick snapshot");
+}
 await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
+const switchedAgent = (await page.locator(".launch-agent b").textContent())?.trim() ?? "";
+if (!switchedAgent.toLowerCase().includes("codex")) {
+  throw new Error(`next step must keep the clicked Agent, got ${JSON.stringify(switchedAgent)}`);
+}
 await page.fill("textarea[data-field='openingText']", "manual fallback");
 if (await page.locator("select[data-launch-select='model']").count()) {
   await page.selectOption("select[data-launch-select='model']", "__custom__");

@@ -695,6 +695,7 @@ export type RunLaunchForm = {
   intents: IntentOption[];
   warnings?: string[];
   error?: string | null;
+  optionDiscoveryPending?: string | null;
   optionDiscoveryError?: string | null;
 };
 
