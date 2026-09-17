@@ -32,21 +32,19 @@ const branch = `release/v${version}`;
 const repoRoot = fileURLToPath(repo);
 const relative = edits.map((edit) => fileURLToPath(edit.path).slice(repoRoot.length));
 
-if (!dryRun) {
-  const branchState = git(["status", "--porcelain"]);
-  if (branchState.trim()) {
-    fail("工作树不干净，先处理未提交改动再发版");
-  }
-  const current = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-  if (current !== "main") {
-    fail(`发版要在 main 上进行，当前在 ${current}`);
-  }
-  if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], true)) {
-    fail(`本地已存在分支 ${branch}`);
-  }
-  if (git(["rev-parse", "--verify", "--quiet", `refs/tags/v${version}`], true)) {
-    fail(`标签 v${version} 已存在`);
-  }
+const branchState = git(["status", "--porcelain"]);
+if (branchState.trim()) {
+  fail("工作树不干净，先处理未提交改动再发版");
+}
+const current = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+if (current !== "main") {
+  fail(`发版要在 main 上进行，当前在 ${current}`);
+}
+if (git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], true)) {
+  fail(`本地已存在分支 ${branch}`);
+}
+if (git(["rev-parse", "--verify", "--quiet", `refs/tags/v${version}`], true)) {
+  fail(`标签 v${version} 已存在`);
 }
 
 for (const edit of edits) {
@@ -153,11 +151,19 @@ function cargoLockVersion(text, next) {
 }
 
 function git(args, allowFailure = false) {
-  return execFileSync("git", args, {
+  const options = {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: allowFailure ? ["ignore", "pipe", "ignore"] : ["ignore", "pipe", "inherit"],
-  });
+  };
+  if (!allowFailure) {
+    return execFileSync("git", args, options);
+  }
+  try {
+    return execFileSync("git", args, options);
+  } catch {
+    return "";
+  }
 }
 
 function run(command, args, options) {
