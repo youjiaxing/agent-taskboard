@@ -9,23 +9,24 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: implementation tickets follow **收尾关票** below; Wayfinder Resolve and triage use `gh issue close <number> --comment "..."`.
+- **Close**: implementation tickets follow **收尾关票** below. Wayfinder Resolve and triage still `gh issue close <number> --comment "..."` (do not use that as the default after `/implement`).
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
 ## Scope
 
-Issues track work this repo has already chosen to track. A request the user makes directly in conversation is not one: implement it, and deliver it the way the user asks (commit, branch, or PR). Never open an issue on your own initiative to give a change a number. **收尾关票** below applies only when an implementation ticket already exists.
+Issues track work this repo has already chosen to track. A request the user makes directly in conversation is not one: implement it without opening an issue, and deliver it through the pull-request flow below unless the user asks for a direct commit. Never open an issue on your own initiative to give a change a number.
 
 ## 收尾关票
 
-After a successful `/implement` of an implementation ticket, run these steps in the same turn. Successful means tests are green and `HEAD` is the implementation commit. Also run them when the user says 收尾 / 关票.
+After a successful `/implement` of an implementation ticket, run these steps in the same turn. Successful means tests are green and `HEAD` is the implementation commit. Also run them when the user says 收尾 / 关票, and for a direct user request unless they asked for something else. The issue closes because GitHub processes `Closes #<n>` on merge — not because the agent ran `gh issue close`.
 
-1. Commit the task changes on the current branch (usually `main`) with a Conventional Commit message that names the ticket in the subject (`fix(launch): 修复启动表选 Agent 被覆盖且 model 无法点选 (#126)`) and carries a `Closes #<n>` line in the body. Done when `git status` is clean and `HEAD` is the implementation commit.
-2. `git push`. Done when the remote branch is at that commit.
-3. Confirm the ticket closed: `gh issue view <n>` reports `CLOSED`. GitHub closes it when the commit carrying `Closes #<n>` lands on the default branch; if it is still open (keyword missing), close it explicitly with `gh issue close <n> --comment "<what landed>"`.
+1. Commit the task changes on a feature branch with a Conventional Commit message (`fix(launch): …`), naming the ticket in the subject when one exists (`… (#126)`). Done when `git status` is clean and `HEAD` is the implementation commit.
+2. `git push -u origin HEAD`. Done when the branch tracks `origin`.
+3. `gh pr create` with title equal to the commit title and a body that has `## 摘要`, a `Closes #<n>` line when a ticket exists, `## 范围` (Host kernel / Client), and `明确不做` for deferred tickets. Done when `gh pr view` shows that URL.
+4. `gh pr merge <pr> --merge --delete-branch`. Done when the PR is `MERGED`, the ticket is `CLOSED` if there was one, the feature branch is gone on the remote, and local `main` is at the merge commit.
 
-A PR is opt-in: open one only when the user asks for it. Then replace step 3 with `gh pr create` (title equal to the commit title, body with `## 摘要`, a `Closes #<n>` line, `## 范围`, and `明确不做` for deferred tickets) followed by `gh pr merge <pr> --merge --delete-branch`; `Closes #<n>` closes the issue on merge. If merge is blocked, stop and report.
+If the user only asked to open a PR, stop after step 3. If merge is blocked, stop and report.
 
 Wayfinder children still **Resolve**: comment, `gh issue close`, then a pointer on the map.
 
