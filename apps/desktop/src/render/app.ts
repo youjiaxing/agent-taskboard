@@ -10,6 +10,7 @@ import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
 import { panelUiText, refreshPanelSizeFeedback } from "../workbench";
 import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
+import { scheduleEditMenuContextSync } from "../edit-menu";
 
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
@@ -426,4 +427,5 @@ export function render(): void {
     ui.mobilePtyPumping = false;
     attachTerminal(snap);
   }
+  scheduleEditMenuContextSync();
 }

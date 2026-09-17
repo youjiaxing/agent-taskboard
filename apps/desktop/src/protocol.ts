@@ -36,6 +36,15 @@ export type ShellCopy = {
   shadeLight: string;
   shadeDark: string;
   editMenu: string;
+  windowMenu: string;
+  helpMenu: string;
+  editUndo: string;
+  editRedo: string;
+  editCut: string;
+  editCopy: string;
+  editPaste: string;
+  editSelectAll: string;
+  usageGuide: string;
   pairingRequired: string;
   pairingTitle: string;
   pairingThisHost: string;
