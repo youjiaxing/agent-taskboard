@@ -1,3 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/host-kernel", "apps/desktop/src-tauri"]
+
+[profile.dev]
+# 完整 DWARF 会让 target/debug 膨胀到 20GB 以上；保留行号足够定位 panic 与 backtrace。
+debug = "line-tables-only"
