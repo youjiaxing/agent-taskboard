@@ -2,78 +2,111 @@
 // 控制仓库 target/ 的体积：先删增量缓存，超过阈值再整目录清理。
 //
 // Rust 的 target/ 会随每次改编译参数、换工具链、跑不同构建而累积陈旧产物，
-// 本仓库实测曾达 24GB。整目录清理后冷编译约 50 秒，所以按阈值清理很划算。
+// 本仓库实测曾达 24GB；整目录清理后冷编译约 41 秒，所以按阈值清理很划算。
+// 既作为模块供 scripts/dev.mjs 在启动前调用，也作为 CLI（npm run sweep）手动使用。
 
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const MIN_LIMIT_GB = 1;
-const DEFAULT_LIMIT_GB = 10;
 const CACHE_DIRS = ["target/debug/incremental", "target/release/incremental"];
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const args = process.argv.slice(2);
+export const DEFAULT_LIMIT_GB = 6;
 
-function option(name, fallback) {
-  const index = args.indexOf(`--${name}`);
-  return index === -1 ? fallback : args[index + 1];
-}
-
-const dryRun = args.includes("--dry-run");
-const force = args.includes("--force");
-const limitGb = Number(option("limit", DEFAULT_LIMIT_GB));
-
-if (!Number.isFinite(limitGb) || limitGb < MIN_LIMIT_GB) {
-  console.error(`--limit 需要一个不小于 ${MIN_LIMIT_GB} 的 GB 数字，收到 ${JSON.stringify(option("limit", ""))}`);
-  process.exit(1);
-}
-
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const target = path.join(repo, "target");
-
-if (!existsSync(target)) {
-  console.log("target/ 不存在，无需处理");
-  process.exit(0);
-}
-
-const sizeGb = (directory) => {
-  const output = execFileSync("du", ["-sk", directory], { encoding: "utf8" });
-  return Number(output.split(/\s+/)[0]) / 1024 / 1024;
-};
-
-const before = sizeGb(target);
-console.log(`target/ 当前 ${before.toFixed(1)}GB（阈值 ${limitGb}GB${force ? "，--force" : ""}）`);
-
-for (const relative of CACHE_DIRS) {
-  const directory = path.join(repo, relative);
-  if (!existsSync(directory)) continue;
-  const freed = sizeGb(directory);
-  if (dryRun) {
-    console.log(`[预演] 会删除 ${relative}（${freed.toFixed(1)}GB）`);
-    continue;
+export function sweepTarget({ limitGb = DEFAULT_LIMIT_GB, dryRun = false, force = false, log = console.log } = {}) {
+  assertLimit(limitGb);
+  const target = path.join(REPO_ROOT, "target");
+  if (!existsSync(target)) {
+    log("target/ 不存在，无需清理");
+    return { beforeGb: 0, afterGb: 0, removed: [], cleanedWholeTarget: false };
   }
-  rmSync(directory, { recursive: true, force: true });
-  console.log(`已删除 ${relative}（${freed.toFixed(1)}GB）`);
+
+  const beforeGb = sizeGb(target);
+  const removed = [];
+  for (const relative of CACHE_DIRS) {
+    const directory = path.join(REPO_ROOT, relative);
+    if (!existsSync(directory)) {
+      continue;
+    }
+    const freedGb = sizeGb(directory);
+    removed.push(relative);
+    if (dryRun) {
+      log(`[预演] 会删除 ${relative}（${freedGb.toFixed(1)}GB）`);
+      continue;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+
+  if (dryRun) {
+    const afterCaches = sizeGb(target);
+    const wouldClean = afterCaches > limitGb || force;
+    log(`[预演] target/ ${afterCaches.toFixed(1)}GB / 上限 ${limitGb}GB —— ${wouldClean ? "会执行 cargo clean" : "未超上限，保留依赖产物"}`);
+    return { beforeGb, afterGb: afterCaches, removed, cleanedWholeTarget: false };
+  }
+
+  const afterCaches = sizeGb(target);
+  if (afterCaches > limitGb || force) {
+    log(`target/ ${afterCaches.toFixed(1)}GB 超过上限 ${limitGb}GB，执行 cargo clean`);
+    execFileSync(cargoPath(), ["clean"], { cwd: REPO_ROOT, stdio: "inherit" });
+    log("target/ 已清空，下次构建为冷编译（本仓库约 41 秒）");
+    return { beforeGb, afterGb: 0, removed, cleanedWholeTarget: true };
+  }
+
+  log(`target/ ${afterCaches.toFixed(1)}GB / 上限 ${limitGb}GB —— 未超上限，仅清理增量缓存`);
+  return { beforeGb, afterGb: afterCaches, removed, cleanedWholeTarget: false };
 }
 
-if (dryRun) {
-  const afterCaches = existsSync(target) ? sizeGb(target) : 0;
-  console.log(`[预演] 删缓存后约 ${afterCaches.toFixed(1)}GB；${afterCaches > limitGb || force ? "还会执行 cargo clean" : "未超阈值，保留依赖产物"}`);
-  process.exit(0);
+function assertLimit(limitGb) {
+  if (!Number.isFinite(limitGb) || limitGb < MIN_LIMIT_GB) {
+    throw new Error(`阈值需要一个不小于 ${MIN_LIMIT_GB} 的 GB 数字，收到 ${JSON.stringify(limitGb)}`);
+  }
 }
 
-const afterCaches = sizeGb(target);
-if (afterCaches > limitGb || force) {
-  console.log(`仍为 ${afterCaches.toFixed(1)}GB，执行 cargo clean`);
-  execFileSync(cargoPath(), ["clean"], { cwd: repo, stdio: "inherit" });
-  console.log("target/ 已清空，下次构建为冷编译（本仓库约 50 秒）");
-} else {
-  console.log(`留在阈值内，保留依赖产物，未做整目录清理（现在 ${afterCaches.toFixed(1)}GB）`);
+function sizeGb(directory) {
+  let output;
+  try {
+    output = execFileSync("du", ["-sk", directory], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    throw new Error(`无法读取 ${directory} 的体积`);
+  }
+  return Number(output.split(/\s+/)[0]) / 1024 / 1024;
 }
 
 function cargoPath() {
   const local = path.join(process.env.HOME ?? "", ".cargo/bin/cargo");
   return existsSync(local) ? local : "cargo";
+}
+
+function runCli() {
+  const args = process.argv.slice(2);
+  const option = (name, fallback) => {
+    const index = args.indexOf(`--${name}`);
+    return index === -1 ? fallback : args[index + 1];
+  };
+
+  const rawLimit = option("limit", null);
+  const limitGb = rawLimit === null ? DEFAULT_LIMIT_GB : Number(rawLimit);
+  if (rawLimit !== null && !Number.isFinite(limitGb)) {
+    console.error(`--limit 需要数字，收到 ${JSON.stringify(rawLimit)}`);
+    process.exit(1);
+  }
+
+  try {
+    sweepTarget({
+      limitGb,
+      dryRun: args.includes("--dry-run"),
+      force: args.includes("--force"),
+    });
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runCli();
 }

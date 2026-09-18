@@ -1,7 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
+import { sweepTarget } from "./sweep-target.mjs";
 
 const isWindows = process.platform === "win32";
 const npm = isWindows ? "npm.cmd" : "npm";
+
+try {
+  sweepTarget();
+} catch (error) {
+  console.warn(`跳过 target 清理：${error.message}`);
+}
+
 const child = spawn(npm, ["--prefix", "apps/desktop", "run", "tauri", "dev"], {
   detached: !isWindows,
   env: process.env,
