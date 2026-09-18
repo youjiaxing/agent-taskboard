@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "npm --prefix apps/desktop run tauri build",
+    "sweep": "node scripts/sweep-target.mjs",
     "test": "cargo test"
   }
 }
