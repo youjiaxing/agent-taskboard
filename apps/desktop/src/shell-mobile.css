@@ -1,51 +1,15 @@
 @media (min-width: 640px) and (max-width: 899.98px) {
-  .board-shell.inspector-docked:not(.issue-collapsed),
-  .lifted-run.inspector-docked:not(.issue-collapsed) { display: block; }
-  .workbench-panel,
-  .workbench-panel[data-floating="false"],
-  .workbench-panel[data-floating="true"] {
-    position: absolute;
-    left: 8px;
-    top: 8px;
-    right: auto;
-    bottom: auto;
-    width: var(--panel-width) !important;
-    height: var(--panel-height) !important;
-    min-width: 0;
-    min-height: 0;
-    max-width: calc(100% - 16px);
-    max-height: calc(100% - 16px);
-    z-index: var(--layer-sticky);
-    overflow: auto;
-    border: 1px solid var(--color-border-strong);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-raised);
-  }
-  .workbench-panel[data-floating="true"] {
-    left: clamp(8px, var(--panel-x), calc(100% - var(--panel-width) - 8px));
-    top: clamp(8px, var(--panel-y), calc(100% - var(--panel-height) - 8px));
-  }
-  .lifted-run {
-    display: block;
-  }
-  .lifted-run > .workbench-panel[data-front="false"] {
-    display: none;
-  }
-  .lifted-run > .workbench-panel[data-front="true"] {
-    left: 8px;
-    top: 8px;
-  }
-  .run-dock[data-floating="false"] > .panel-resize-handle,
-  .lifted-terminal[data-floating="false"] > .panel-resize-handle { display: block; }
-  .run-dock[data-floating="false"] > .panel-resize-handle {
-    top: auto;
-    right: 0;
-    bottom: 0;
-    width: 18px;
-    height: 18px;
-    cursor: nwse-resize;
-  }
-  .run-dock[data-floating="false"] > .panel-resize-handle::after { display: block; }
+  .board-shell:not(.issue-collapsed),
+  .lifted-run:not(.issue-collapsed) { grid-template-columns: minmax(0, 1fr); }
+  .board-shell:not(.issue-collapsed) > .board-main,
+  .lifted-run:not(.issue-collapsed) > .lifted-terminal { display: none; }
+  .fixed-right-rail { width: 100%; max-width: none; }
+  .fixed-right-rail > .fixed-panel-resize { display: none; }
+  .body.changes-open { grid-template-columns: var(--client-sidebar-width) minmax(0, 1fr); }
+  .body.side-collapsed.changes-open { grid-template-columns: 1fr; }
+  .body.changes-open > .workspace { display: none; }
+  .fixed-changes-panel { width: 100%; max-width: none; }
+  .fixed-changes-panel > .fixed-panel-resize { display: none; }
 }
 @media (max-width: 639.98px) {
   :root {
@@ -57,31 +21,20 @@
     --density-bottom-gap: env(safe-area-inset-bottom);
   }
   .frame { grid-template-rows: var(--density-topbar-height) minmax(0, 1fr) 58px; }
+  .frame.page-settings, .frame.page-usage, .frame.page-host-overview { grid-template-rows: var(--density-topbar-height) minmax(0, 1fr); }
   .chrome { padding: 0; }
   .chrome-lead { padding-left: var(--space-8); }
   .chrome-main { padding-right: var(--space-8); }
-  .chrome-primary, .chrome-context { display: none; }
+  .chrome-primary { flex: 1; overflow: hidden; }
+  .chrome-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chrome-trail { margin-left: auto; }
   .chrome-trail { gap: var(--space-2); }
   .body, .body.side-collapsed { grid-template-columns: 1fr; min-height: 0; }
   .workspace { min-height: 0; overflow: auto; padding-bottom: var(--density-bottom-gap); }
   .project-board, .usage-page { padding: var(--space-12) var(--space-12) var(--space-16); overflow: visible; }
-  .usage-page.workbench-panel,
-  .usage-page.workbench-panel[data-floating="false"],
-  .usage-page.workbench-panel[data-floating="true"] {
-    position: static;
-    inset: auto;
-    width: 100%;
-    height: auto;
-    max-width: none;
-    max-height: none;
-    flex: 1;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    overflow: auto;
-  }
-  .panel-layout-bar, .panel-resize-handle { display: none; }
+  .usage-page { width: 100%; height: auto; max-width: none; flex: 1; border: 0; overflow: auto; }
+  .settings-content { padding: var(--space-16); }
+  .fixed-panel-resize { display: none; }
   .board-head { padding: 0 0 var(--space-10); border-bottom: 0; }
   .board-head p, .board-hint, .issue-search, .view-switch { display: none; }
   .board-shell { display: block; }

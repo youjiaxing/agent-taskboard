@@ -10,12 +10,31 @@ try {
 }
 await session.page.click("button[data-act='toggle-hosts']");
 const visibleHosts = await session.page.$$eval(".host-picker button[data-act='focus-host']", (nodes) =>
-  nodes.map((node) => node.textContent?.replace(/\s+/g, " ").trim()),
+  nodes.map((node) => ({
+    id: node.getAttribute("data-id"),
+    text: node.textContent?.replace(/\s+/g, " ").trim(),
+    active: node.classList.contains("active"),
+  })),
 );
 if (visibleHosts.length < 2) {
   throw new Error(`daily shell fixture should expose multiple Hosts, got ${JSON.stringify(visibleHosts)}`);
 }
+const originalHost = visibleHosts.find((host) => host.active);
+const otherHost = visibleHosts.find((host) => !host.active);
+if (!originalHost?.id || !otherHost?.id) throw new Error(`Host switch fixture is incomplete: ${JSON.stringify(visibleHosts)}`);
+await session.page.click(`.host-picker button[data-id="${otherHost.id}"]`);
+await session.page.waitForFunction((name) => document.querySelector('.host-line .host-name')?.textContent?.trim() === name, otherHost.text);
+const otherHostScope = await session.page.evaluate(() => ({
+  host: document.querySelector(".host-line .host-name")?.textContent?.trim(),
+  projects: [...document.querySelectorAll(".side .project-block b")].map((node) => node.textContent?.trim()),
+  runs: document.querySelectorAll(".side .run-row").length,
+}));
+if (otherHostScope.projects.includes("garden") || otherHostScope.runs > 0) {
+  throw new Error(`sidebar leaked Projects or Runs from another Host: ${JSON.stringify(otherHostScope)}`);
+}
 await session.page.click("button[data-act='toggle-hosts']");
+await session.page.click(`.host-picker button[data-id="${originalHost.id}"]`);
+await session.page.waitForSelector(".lanes");
 if (await session.page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
 }
@@ -99,8 +118,8 @@ if (detailScrollBeforeCollapse <= 0) {
 await session.page.click("button[data-act='toggle-issue']");
 await session.page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
 const lanesWithoutInspector = await session.page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
-if (Math.abs(lanesWithoutInspector - lanesWithInspector) > 1) {
-  throw new Error(`floating Inspector must not change lane width: ${lanesWithInspector} -> ${lanesWithoutInspector}`);
+if (lanesWithoutInspector <= lanesWithInspector + 100) {
+  throw new Error(`hiding the fixed right rail should release its width to the board: ${lanesWithInspector} -> ${lanesWithoutInspector}`);
 }
 const frontierScrollAfterCollapse = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (Math.abs(frontierScrollAfterCollapse - frontierScrollBeforeInspectorActions) > 1) {
@@ -256,7 +275,7 @@ const dailyShellGeometry = await session.page.evaluate(() => {
   const chrome = rect(".chrome");
   const side = rect(".side");
   const lanes = [...document.querySelectorAll(".lane")].map((node) => node.getBoundingClientRect());
-  const boardTabs = [...document.querySelectorAll('.chrome [data-act="center-view"]')];
+  const boardTabs = [...document.querySelectorAll('[data-page-toolbar] [data-act="center-view"]')];
   return {
     chromeHeight: chrome?.height ?? 0,
     sideWidth: side?.width ?? 0,
@@ -276,7 +295,7 @@ if (dailyShellGeometry.sideWidth < 220 || dailyShellGeometry.sideWidth > 250) {
   throw new Error(`desktop Host / Project hierarchy should keep a stable native rail, got ${dailyShellGeometry.sideWidth}px`);
 }
 if (dailyShellGeometry.boardTabs.join("|") !== "看板|依赖图") {
-  throw new Error(`board and graph controls should live in the stable middle chrome, got ${JSON.stringify(dailyShellGeometry.boardTabs)}`);
+  throw new Error(`board and graph controls should live in the content toolbar, got ${JSON.stringify(dailyShellGeometry.boardTabs)}`);
 }
 if (dailyShellGeometry.laneLefts.some((left, index, all) => index > 0 && left <= all[index - 1])) {
   throw new Error(`four desktop lanes should remain ordered left to right: ${JSON.stringify(dailyShellGeometry.laneLefts)}`);
@@ -290,6 +309,37 @@ if (dailyShellGeometry.laneBorderWidths.some((width) => width !== "0px")) {
 if (dailyShellGeometry.horizontalOverflow > 0) {
   throw new Error(`daily desktop shell should not create page-level horizontal scrolling: ${dailyShellGeometry.horizontalOverflow}px`);
 }
+const shellControlOwnership = await session.page.evaluate(() => ({
+  globalActions: [...document.querySelectorAll("[data-global-actions] [data-global-action]")]
+    .map((node) => node.getAttribute("data-global-action")),
+  topLevelSwitches: document.querySelectorAll('.chrome [data-act="center-view"]').length,
+  toolbarSwitches: document.querySelectorAll('[data-page-toolbar] [data-act="center-view"]').length,
+  toolbarSearches: document.querySelectorAll('[data-page-toolbar] .issue-search').length,
+  toolbarProjectNames: document.querySelectorAll('[data-page-toolbar] .project-heading h1').length,
+  toolbarKeyboardHelp: document.querySelectorAll('[data-page-toolbar] [data-act="keyboard-help"]').length,
+  topProjectName: document.querySelector('[data-current-identity]')?.textContent?.trim(),
+}));
+const expectedGlobalOrder = ["right-rail", "appearance", "settings", "more"];
+if (shellControlOwnership.globalActions.join("|") !== expectedGlobalOrder.join("|")) {
+  throw new Error(`global action order is wrong: ${JSON.stringify(shellControlOwnership)}`);
+}
+if (shellControlOwnership.topLevelSwitches !== 0 || shellControlOwnership.toolbarSwitches !== 2 || shellControlOwnership.toolbarSearches !== 1 || shellControlOwnership.toolbarProjectNames !== 1 || shellControlOwnership.toolbarKeyboardHelp !== 0) {
+  throw new Error(`page controls must belong only to the content toolbar: ${JSON.stringify(shellControlOwnership)}`);
+}
+if (shellControlOwnership.topProjectName === "garden") {
+  throw new Error("the global identity must not duplicate the Project name from the content toolbar");
+}
+await session.page.click('.chrome button[data-act="more-menu"]');
+await session.page.waitForSelector('.more-menu button[data-act="keyboard-help"]');
+const keyboardHelpOwnership = await session.page.evaluate(() => ({
+  total: document.querySelectorAll('[data-act="keyboard-help"]').length,
+  inMoreMenu: document.querySelectorAll('.more-menu [data-act="keyboard-help"]').length,
+  inToolbar: document.querySelectorAll('[data-page-toolbar] [data-act="keyboard-help"]').length,
+}));
+if (keyboardHelpOwnership.total !== 1 || keyboardHelpOwnership.inMoreMenu !== 1 || keyboardHelpOwnership.inToolbar !== 0) {
+  throw new Error(`keyboard help must belong only to the global more menu: ${JSON.stringify(keyboardHelpOwnership)}`);
+}
+await session.page.click('.chrome button[data-act="more-menu"]');
 await assertShellRegionsDoNotOverlap(session.page);
 
 const shellStructure = async () => session.page.evaluate(() => ({
@@ -420,10 +470,26 @@ const hostAppearanceAfterBrowserChoice = await session.page.evaluate(async (prot
 if (hostAppearanceAfterBrowserChoice.appearancePreference !== "system") {
   throw new Error(`desktop browser appearance must not overwrite desktop-client settings, got ${JSON.stringify(hostAppearanceAfterBrowserChoice)}`);
 }
+const stableAddress = session.page.url();
 for (const appearancePreference of ["light", "dark", "warm", "system"]) {
   await session.page.click("button[data-act='settings']");
-  await session.page.click(`button[data-act='appearance'][data-id='${appearancePreference}']`);
-  await session.page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+  await session.page.waitForSelector('.settings-page[data-primary-page="settings"]');
+  if (appearancePreference === "light") {
+    await session.capture("issue-147-settings-1440x900.png");
+    const settingsSections = await session.page.$$eval("[data-settings-section]", (nodes) =>
+      nodes.map((node) => node.getAttribute("data-settings-section")),
+    );
+    if (settingsSections.join("|") !== "appearance|startup|updates|refresh|notifications|host") {
+      throw new Error(`settings page should retain all agreed sections: ${JSON.stringify(settingsSections)}`);
+    }
+  }
+  if (await session.page.$(".overlay[data-act='close-settings']")) {
+    throw new Error("settings must be a primary page, not an overlay");
+  }
+  await session.page.click(`.settings-page button[data-act='appearance'][data-id='${appearancePreference}']`);
+  await session.page.click("button[data-act='return-page']");
+  await session.page.waitForSelector(".lanes");
+  if (session.page.url() !== stableAddress) throw new Error("internal page navigation must keep the browser address stable");
   const resolvedTheme = await session.page.getAttribute("html", "data-theme");
   if (resolvedTheme === "system") {
     throw new Error("data-theme must only contain a resolved theme");
@@ -438,10 +504,43 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
     throw new Error(`appearance ${appearancePreference} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);
   }
 }
+
+await session.page.fill("#issue-title-search", "ready");
+await submitIssueSearch();
+await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length >= 2);
+await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
+await session.page.waitForSelector('.detail-hd:has-text("child ready")');
+const settingsReturnStyle = await session.page.addStyleTag({ content: '[data-lane="frontier"] { max-height: 70px; }' });
+const boardStateBeforeSettings = await session.page.evaluate(() => {
+  const lane = document.querySelector('[data-lane="frontier"]');
+  if (lane) lane.scrollTop = lane.scrollHeight;
+  return {
+    title: document.querySelector("#issue-title-search")?.value,
+    selected: document.querySelector(".detail-hd")?.textContent?.trim(),
+    scrollTop: lane?.scrollTop ?? 0,
+  };
+});
+if (boardStateBeforeSettings.scrollTop <= 0) throw new Error("settings return fixture needs non-zero board scroll");
+await session.page.click("button[data-act='settings']");
+await session.page.waitForSelector(".settings-page");
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector('.detail-hd:has-text("child ready")');
+const boardStateAfterSettings = await session.page.evaluate(() => ({
+  title: document.querySelector("#issue-title-search")?.value,
+  selected: document.querySelector(".detail-hd")?.textContent?.trim(),
+  scrollTop: document.querySelector('[data-lane="frontier"]')?.scrollTop ?? 0,
+}));
+if (JSON.stringify(boardStateAfterSettings) !== JSON.stringify(boardStateBeforeSettings)) {
+  throw new Error(`settings return must restore filter, selection and scroll: ${JSON.stringify({ boardStateBeforeSettings, boardStateAfterSettings })}`);
+}
+await settingsReturnStyle.evaluate((node) => node.remove());
+await session.page.fill("#issue-title-search", "");
+await submitIssueSearch();
+
 await session.page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
 await session.page.waitForFunction(() => document.documentElement.dataset.theme === "light");
 await session.page.click("button[data-act='settings']");
-const reducedMotion = await session.page.$eval(".sheet", (node) => {
+const reducedMotion = await session.page.$eval(".settings-page", (node) => {
   const style = getComputedStyle(node);
   const milliseconds = (duration) => duration.endsWith("ms") ? parseFloat(duration) : parseFloat(duration) * 1000;
   return {
@@ -453,19 +552,34 @@ const reducedMotion = await session.page.$eval(".sheet", (node) => {
 if (reducedMotion.animationDurationMs > 5 || reducedMotion.transitionDurationMs > 5 || reducedMotion.animationIterationCount === "infinite") {
   throw new Error(`reduced motion should remove perceptible movement: ${JSON.stringify(reducedMotion)}`);
 }
-await session.page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+await session.page.click("button[data-act='return-page']");
 await session.page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
 
-await session.page.setViewportSize({ width: 640, height: 840 });
-await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "false");
-if (await session.page.$(".mobile-nav")) {
-  const mobileNavVisibleAt640 = await session.page.$eval(".mobile-nav", (node) => getComputedStyle(node).display !== "none");
-  if (mobileNavVisibleAt640) throw new Error("640px must belong to compact desktop, not mobile");
+for (const [width, expectedViewport, expectedMobile] of [
+  [640, "compact-desktop", "false"],
+  [639, "mobile", "true"],
+  [899, "compact-desktop", "false"],
+  [900, "full-desktop", "false"],
+]) {
+  await session.page.setViewportSize({ width, height: 840 });
+  await session.page.waitForFunction(
+    ({ viewport, mobile }) => document.documentElement.dataset.viewport === viewport && document.documentElement.dataset.mobile === mobile,
+    { viewport: expectedViewport, mobile: expectedMobile },
+  );
+  const responsiveState = await session.page.evaluate(() => ({
+    horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    boardMainDisplay: document.querySelector(".board-main") ? getComputedStyle(document.querySelector(".board-main")).display : "missing",
+  }));
+  if (responsiveState.horizontalOverflow > 0) throw new Error(`${width}px viewport must not create horizontal overflow: ${responsiveState.horizontalOverflow}`);
+  if (width === 899 && responsiveState.boardMainDisplay !== "none") {
+    throw new Error(`899px must use the compact desktop fixed-region composition: ${JSON.stringify(responsiveState)}`);
+  }
+  if (width === 900 && responsiveState.boardMainDisplay === "none") {
+    throw new Error(`900px must use the full desktop composition: ${JSON.stringify(responsiveState)}`);
+  }
 }
-await session.page.setViewportSize({ width: 639, height: 840 });
-await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "true");
 await session.page.setViewportSize({ width: 1440, height: 900 });
-await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "false");
+await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
 let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
   releaseDocumentRefresh = resolve;
@@ -556,21 +670,18 @@ await session.page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await session.capture("issue-98-desktop-detail-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
 const normalDetailWidth = await session.page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
-if (normalDetailWidth < 340) {
-  throw new Error(`Issue document should be readable in the default desktop shell, got ${normalDetailWidth}px`);
+if (Math.abs(normalDetailWidth - 320) > 2) {
+  throw new Error(`Issue document should use the default fixed right-rail width, got ${normalDetailWidth}px`);
 }
 if (await session.page.$('button[data-act="toggle-issue-width"]')) {
   throw new Error("Issue details should not expose a widen/narrow action");
 }
-const detailHide = session.page.locator('.issue-detail .detail-title-row button[data-act="toggle-issue"]');
-if ((await detailHide.count()) !== 1) {
-  throw new Error("Issue details should expose one local hide control");
+if (await session.page.$('.issue-detail button[data-act="toggle-issue"]')) {
+  throw new Error("the right-rail toggle must exist only in the global top bar");
 }
-if ((await detailHide.getAttribute("aria-label")) !== "收起详情" || (await detailHide.textContent())?.trim()) {
-  throw new Error("Issue detail hide control should be icon-only with an accessible label");
-}
-if ((await detailHide.locator("svg").count()) !== 1) {
-  throw new Error("Issue detail hide control should use a meaningful panel icon");
+const detailHide = session.page.locator('.chrome button[data-act="toggle-issue"]');
+if ((await detailHide.count()) !== 1 || (await detailHide.getAttribute("aria-label")) !== "收起详情") {
+  throw new Error("the global top bar should expose one right-rail hide control");
 }
 await detailHide.click();
 await session.page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));

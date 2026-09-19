@@ -5,8 +5,9 @@ import {
   focusedRun,
   loadBrowserAppearance,
   mobileClient,
+  viewportClass,
 } from "./view-helpers";
-import { loadSelectedIssueDocument, protocolBase, rpc, rpcDetached } from "./rpc";
+import { loadSelectedIssueDocument, loadViewChanges, protocolBase, rpc, rpcDetached } from "./rpc";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   onAction as onNativeNotificationAction,
@@ -33,19 +34,10 @@ import { handleAppClick, openKeyboardHelp, openSettingsPanel } from "./events/cl
 import { bindNativeMenuBridge, hookTerminalEditMenu } from "./edit-menu";
 import { bindFormEvents } from "./events/forms";
 import {
-  clonePanelGeometry,
-  saveWorkbenchLayout,
-  panelContainer,
-  floatingOrigin,
-  panelIsFloating,
-  withPanelFloating,
-  updatePanelNode,
-  issueCardAtPoint,
-  graphActionAtPoint,
-  workbenchPanelId,
-  clamp,
-  bringPanelToFront,
-  finishPanelPointer,
+  fixedPanelRegion,
+  fixedPanelWidth,
+  saveClientPanelState,
+  setFixedPanelWidth,
 } from "./workbench";
 import {
   desktopShellAvailable,
@@ -115,7 +107,7 @@ export async function jumpToNotification(event: Extract<HostEvent, { type: "noti
     await rpc("focusProject", { projectId: event.projectId });
   }
   if (event.issueId) {
-    ui.issueDetailVisible = true;
+    ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: event.issueId });
   }
   if (event.runId) {
@@ -172,15 +164,6 @@ export function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions
 
 export function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
   return ui.snapshot?.copyCatalog?.[language] ?? fallback;
-}
-
-export function effectiveClientLanguage(): Language {
-  if (mobileClient()) return ensureBrowserAppearance().language;
-  return ui.snapshot?.appearance.language ?? "en";
-}
-
-export function languageLabel(copy: ShellCopy, language: Language): string {
-  return language === "zh-CN" ? copy.languageZh : copy.languageEn;
 }
 
 export function captureActiveField(): {
@@ -359,7 +342,7 @@ export function renderStatusBarsOnly(): void {
   const copy = language !== ui.snapshot.appearance.language
     ? clientCopy(language, ui.snapshot.copy)
     : ui.snapshot.copy;
-  const current = ui.app?.querySelector<HTMLElement>(".project-board > .refresh-bar");
+  const current = ui.app?.querySelector<HTMLElement>(".project-board [data-page-toolbar] > .refresh-bar");
   if (current) current.outerHTML = refreshBar(copy, ui.snapshot.board);
   const pending = ui.app?.querySelector<HTMLElement>('.project-board > .refresh-bar[data-kind="pending"]');
   if (pending) pending.outerHTML = pendingBar(copy, ui.snapshot);
@@ -585,77 +568,41 @@ export async function pumpPty(): Promise<void> {
 
 ui.app.addEventListener("pointerdown", (event) => {
   if (mobileClient()) return;
-  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-panel-drag], [data-panel-resize]");
-  if (!target) return;
-  const panelId = workbenchPanelId(target.dataset.panelDrag ?? target.dataset.panelResize);
-  if (!panelId) return;
-  let panel = target.closest<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
-  if (!panel) return;
-  bringPanelToFront(panelId);
+  const target = (event.target as HTMLElement).closest<HTMLElement>("[data-panel-resize]");
+  const region = fixedPanelRegion(target?.dataset.panelResize);
+  if (!target || !region) return;
   event.preventDefault();
-  const kind = target.dataset.panelDrag ? "drag" : "resize";
-  let rerendered = false;
-  if (kind === "drag" && !panelIsFloating(panelId)) {
-    ui.workbenchLayout[panelId] = withPanelFloating(panelId, floatingOrigin(panelId, panel), true);
-    saveWorkbenchLayout();
-    render();
-    rerendered = true;
-    panel = ui.app.querySelector<HTMLElement>(`[data-workbench-panel="${panelId}"]`);
-    if (!panel) return;
-  }
-  const rect = panel.getBoundingClientRect();
-  const container = panelContainer(panel).getBoundingClientRect();
-  ui.workbenchLayout[panelId] = {
-    ...ui.workbenchLayout[panelId],
-    width: rect.width,
-    height: rect.height,
-    x: rect.left - container.left,
-    y: rect.top - container.top,
-    ...(panelId === "inspector" && !panelIsFloating(panelId)
-      ? { dockedWidth: rect.width }
-      : {}),
-  };
   ui.panelPointerInteraction = {
     pointerId: event.pointerId,
-    panelId,
-    kind,
+    region,
     startClientX: event.clientX,
-    startClientY: event.clientY,
-    start: { ...clonePanelGeometry(ui.workbenchLayout[panelId]), floating: panelIsFloating(panelId) },
+    startWidth: fixedPanelWidth(region),
   };
-  if (!rerendered) target.setPointerCapture?.(event.pointerId);
+  target.setPointerCapture?.(event.pointerId);
 });
 
 document.addEventListener("pointermove", (event) => {
   const interaction = ui.panelPointerInteraction;
   if (!interaction || interaction.pointerId !== event.pointerId) return;
   event.preventDefault();
-  const panel = ui.app?.querySelector<HTMLElement>(`[data-workbench-panel="${interaction.panelId}"]`);
-  if (!panel) return;
-  const container = panelContainer(panel).getBoundingClientRect();
   const dx = event.clientX - interaction.startClientX;
-  const dy = event.clientY - interaction.startClientY;
-  const next = clonePanelGeometry(interaction.start);
-  if (interaction.kind === "drag") {
-    next.x = clamp(interaction.start.x + dx, 8, container.width - next.width - 8);
-    next.y = clamp(interaction.start.y + dy, 8, container.height - next.height - 8);
-  } else if (!interaction.start.floating && interaction.panelId === "terminal") {
-    const bottomEdgeHandle = window.matchMedia("(min-width: 641px) and (max-width: 900px)").matches;
-    const maxHeight = Math.max(180, container.height - 16);
-    next.height = clamp(interaction.start.height + (bottomEdgeHandle ? dy : -dy), 180, maxHeight);
-  } else if (!interaction.start.floating && interaction.panelId === "inspector") {
-    next.width = clamp(interaction.start.width - dx, 280, container.width * 0.72);
-    next.dockedWidth = next.width;
-  } else {
-    next.width = clamp(interaction.start.width + dx, 280, container.width - interaction.start.x - 8);
-    next.height = clamp(interaction.start.height + dy, 180, container.height - interaction.start.y - 8);
-  }
-  ui.workbenchLayout[interaction.panelId] = next;
-  updatePanelNode(interaction.panelId);
+  const nextWidth = interaction.region === "sidebar"
+    ? interaction.startWidth + dx
+    : interaction.startWidth - dx;
+  setFixedPanelWidth(interaction.region, nextWidth);
 }, true);
 
-window.addEventListener("pointerup", (event) => finishPanelPointer(event.pointerId));
-window.addEventListener("pointercancel", (event) => finishPanelPointer(event.pointerId));
+function finishFixedPanelResize(pointerId: number): void {
+  if (ui.panelPointerInteraction?.pointerId !== pointerId) return;
+  ui.panelPointerInteraction = null;
+  saveClientPanelState();
+  ui.fitAddon?.fit();
+  const runId = ui.snapshot?.focusedRunId;
+  if (runId && !mobileClient()) void sendPtyResize(runId);
+}
+
+window.addEventListener("pointerup", (event) => finishFixedPanelResize(event.pointerId));
+window.addEventListener("pointercancel", (event) => finishFixedPanelResize(event.pointerId));
 
 export function shouldReportClientView(): boolean {
   return true;
@@ -750,27 +697,6 @@ export function finishPointerInteraction(pointerId: number): void {
 }
 
 document.addEventListener("pointerdown", (event) => ui.activePointers.add(event.pointerId), true);
-document.addEventListener("pointerdown", (event) => {
-  if (mobileClient() || !ui.snapshot) return;
-  const target = event.target as HTMLElement | null;
-  const panel = target?.closest<HTMLElement>(
-    '[data-workbench-panel="inspector"][data-floating="true"]',
-  );
-  if (!panel) return;
-  if (target?.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
-  const graphAction = graphActionAtPoint(event.clientX, event.clientY);
-  if (graphAction) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    graphAction.click();
-    return;
-  }
-  const card = issueCardAtPoint(event.clientX, event.clientY);
-  if (!card || card.dataset.issueId === ui.snapshot.board?.selected?.id) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  card.click();
-}, true);
 document.addEventListener("pointerup", (event) => finishPointerInteraction(event.pointerId), true);
 document.addEventListener("pointercancel", (event) => finishPointerInteraction(event.pointerId), true);
 window.addEventListener("blur", () => {
@@ -816,6 +742,11 @@ document.addEventListener("keydown", (event) => {
       ui.appearanceMenuOpen = false;
       render();
       ui.app.querySelector<HTMLButtonElement>("button[data-act='appearance-menu']")?.focus();
+    } else if (ui.moreMenuOpen) {
+      event.preventDefault();
+      ui.moreMenuOpen = false;
+      render();
+      ui.app.querySelector<HTMLButtonElement>("button[data-act='more-menu']")?.focus();
     } else if (ui.keyboardHelpOpen) {
       ui.keyboardHelpOpen = false;
       render();
@@ -830,13 +761,13 @@ document.addEventListener("keydown", (event) => {
   if (
     typingTarget(event.target)
     || ui.keyboardHelpOpen
-    || ui.settingsOpen
+    || ui.clientView.page === "settings"
     || ui.pairingOpen
     || ui.formOpen
     || Boolean(ui.removeProject)
     || Boolean(ui.snapshot.launchForm)
     || Boolean(ui.snapshot.quitOffer)
-    || ui.changesOpen
+    || ui.clientView.panels.rightSide === "changes"
   ) return;
   const cards = [...ui.app.querySelectorAll<HTMLButtonElement>(".issue-card-main")];
   if (!cards.length) return;
@@ -933,6 +864,7 @@ if (desktopShellAvailable()) {
 }
 
 window.addEventListener("resize", () => {
+  document.documentElement.dataset.viewport = viewportClass();
   if (!ui.snapshot) return;
   const isMobile = mobileClient();
   if (isMobile !== wasMobileClient) {
@@ -948,6 +880,15 @@ window.addEventListener("resize", () => {
 rpc("snapshot")
   .then(async () => {
     render();
+    const restoredChangesRun = ui.snapshot ? focusedRun(ui.snapshot) : undefined;
+    if (!mobileClient() && ui.clientView.panels.rightSide === "changes" && restoredChangesRun) {
+      try {
+        await loadViewChanges(restoredChangesRun.id, ui.changesScope);
+        render();
+      } catch {
+        // Keep the restored panel visible so its scope controls can retry the read.
+      }
+    }
     ensureTick();
     await reportClientView();
     render();

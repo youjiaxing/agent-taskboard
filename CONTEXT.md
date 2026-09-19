@@ -137,7 +137,7 @@ Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。�
 _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 / Windows Terminal 当产品终端
 
 **专注工作区**:
-选择 Issue 或 Run 后使用的固定区域 Client 页面：Embedded Terminal 始终位于主区，桌面右侧在 `320px` 窄栏与 `520px` 查看改动面板之间切换，侧栏默认 `248px`；各区域只在确认的最小和最大宽度内调整，并按 Client 记住可见性与宽度。手机使用单面板页面，不把桌面区域压缩或改成自由浮窗。
+选择 Issue 或 Run 后使用的固定区域 Client 页面：Embedded Terminal 始终位于主区，桌面右侧在 `320px` 窄栏与 `520px` 查看改动面板之间切换，侧栏默认 `248px`；各区域只在确认的最小和最大宽度内调整，并按 Client 记住可见性与宽度。越界宽度会夹紧，损坏状态恢复默认；不保存 `x/y`、高度、浮动坐标或覆盖关系。手机使用单面板页面，不把桌面区域压缩或改成自由浮窗。
 _Avoid_: 工作台面板, 自由拖动, 任意浮窗, 把面板说成独立 Host 或新的 Run
 
 **Host**:

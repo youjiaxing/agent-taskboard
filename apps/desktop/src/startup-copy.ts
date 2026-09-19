@@ -1,6 +1,8 @@
 import type { AppearancePreference } from "./protocol";
 
 export type StartupCopy = {
+  back: string;
+  more: string;
   appearance: string;
   appearanceSystem: string;
   appearanceLight: string;
@@ -23,6 +25,8 @@ export type StartupCopy = {
 
 const catalog: Record<"zh-CN" | "en", StartupCopy> = {
   "zh-CN": {
+    back: "返回",
+    more: "更多",
     appearance: "外观",
     appearanceSystem: "跟随系统",
     appearanceLight: "素纸",
@@ -43,6 +47,8 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     launchEnvironmentFailed: "重新读取失败；已保留上一次可用的内存快照。",
   },
   en: {
+    back: "Back",
+    more: "More",
     appearance: "Appearance",
     appearanceSystem: "Follow system",
     appearanceLight: "Plain paper",

@@ -257,6 +257,6 @@ if (filteredProjects.some((name) => name !== "garden")) {
   throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
 }
 await assertShellRegionsDoNotOverlap(session.page);
-await session.page.click("button[data-act='return-board']");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 }

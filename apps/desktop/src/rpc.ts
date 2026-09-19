@@ -1,5 +1,6 @@
 import { deliverHostEvents } from "./main";
 import { isLoopbackPage, syncLaunchDraft } from "./launch-session";
+import { syncClientPrimaryPage } from "./view-helpers";
 import { render } from "./render/app";
 import { ui } from "./ui";
 import { RpcHttpError, type ChangeScope, type IssueConflict, type RpcResult } from "./protocol";
@@ -28,9 +29,10 @@ export function commitRpcResult(result: RpcResult): void {
   syncLaunchDraft(result.snapshot);
   deliverHostEvents(result.events ?? [], result.snapshot);
   ui.snapshot = result.snapshot;
+  syncClientPrimaryPage(result.snapshot);
   if (result.viewChanges) {
     ui.changesView = result.viewChanges;
-    ui.changesOpen = true;
+    ui.clientView.panels.rightSide = "changes";
   }
 }
 

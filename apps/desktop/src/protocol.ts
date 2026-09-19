@@ -924,34 +924,58 @@ export type RpcResult = {
   viewChanges?: ViewChanges;
 };
 
-export type WorkbenchPanelId = "inspector" | "terminal" | "usage";
+export type PrimaryPage =
+  | "board"
+  | "dependency-graph"
+  | "focus-workspace"
+  | "settings"
+  | "host-overview"
+  | "usage";
 
-export type WorkbenchPanelGeometry = {
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-  floating: boolean;
-  runFloating?: boolean;
-  dockedWidth?: number;
-};
-
-export type WorkbenchLayout = Record<WorkbenchPanelId, WorkbenchPanelGeometry>;
-
-export type PanelPointerInteraction = {
-  pointerId: number;
-  panelId: WorkbenchPanelId;
-  kind: "drag" | "resize";
-  startClientX: number;
-  startClientY: number;
-  start: WorkbenchPanelGeometry;
-};
-
+export type RightSideMode = "hidden" | "rail" | "changes";
 export type ScrollPosition = { scrollTop: number; scrollLeft: number };
-export type BoardScrollPosition = ScrollPosition & {
+export type BoardViewMemory = {
+  projectId: string;
+  scroll: ScrollPosition;
   lanes: Record<string, ScrollPosition>;
 };
 export type GraphViewportAnchor = { issueId: string; viewportX: number; viewportY: number };
+export type GraphViewMemory = {
+  projectId: string;
+  viewportAnchor: GraphViewportAnchor | null;
+};
+export type ReturnPoint = {
+  page: PrimaryPage;
+  hostId: string;
+  projectId: string | null;
+  issueId: string | null;
+  runId: string | null;
+  board: BoardViewMemory | null;
+  graph: GraphViewMemory | null;
+};
+export type ClientPanelState = {
+  sidebarVisible: boolean;
+  sidebarWidth: number;
+  rightSide: RightSideMode;
+  rightRailWidth: number;
+  changesPanelWidth: number;
+};
+export type ClientLocalViewState = {
+  page: PrimaryPage;
+  returnPoint: ReturnPoint | null;
+  panels: ClientPanelState;
+};
+export type FixedPanelRegion = "sidebar" | "right-rail" | "changes-panel";
+export type PanelPointerInteraction = {
+  pointerId: number;
+  region: FixedPanelRegion;
+  startClientX: number;
+  startWidth: number;
+};
+
+export type BoardScrollPosition = ScrollPosition & {
+  lanes: Record<string, ScrollPosition>;
+};
 export type BrowserAppearance = {
   language: Language;
   appearancePreference: AppearancePreference;

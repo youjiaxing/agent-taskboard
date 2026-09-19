@@ -49,7 +49,7 @@ if (state === "empty-host") {
     if (!empty?.includes("尚无通过 Agent Taskboard 启动的 Run") || !empty.includes("Project 态势仍在上方可见")) {
       throw new Error(`Host overview should keep Project status above a compact Run empty state: ${empty}`);
     }
-    await page.click("button[data-act='return-board']");
+    await page.click("button[data-act='return-page']");
     await page.waitForSelector(".lanes");
   } else if (state === "frontier-empty") {
     await page.waitForSelector('[data-lane="frontier"] .lane-empty');

@@ -1,290 +1,229 @@
 import { chromium } from "playwright";
 
 const url = process.env.BOARD_URL;
-if (!url) throw new Error("missing Issue #116 E2E environment");
+if (!url) throw new Error("missing Issue #147 E2E environment");
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
+const panelKey = (clientId) => `agent-taskboard-client-panels:v1:browser:${clientId}`;
 
-const openClient = async ({ tauri = false } = {}) => {
+const openClient = async ({ clientId, panelState, legacy = false, tauriLabel = "" }) => {
   const page = await context.newPage();
-  await page.addInitScript(({ protocol, desktop }) => {
+  await page.addInitScript(({ protocol, id, state, legacyState, desktopLabel }) => {
     window.__HOST_PROTOCOL__ = protocol;
-    if (desktop) window.__TAURI_INTERNALS__ = {};
-  }, { protocol: url, desktop: tauri });
+    sessionStorage.setItem("agent-taskboard-client-id", id);
+    window.name = `agent-taskboard-client-window:${id}`;
+    if (desktopLabel) {
+      window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: desktopLabel } } };
+    }
+    if (state) {
+      const kind = desktopLabel ? "tauri" : "browser";
+      const identity = desktopLabel || id;
+      localStorage.setItem(`agent-taskboard-client-panels:v1:${kind}:${identity}`, JSON.stringify(state));
+    }
+    if (legacyState) {
+      localStorage.setItem("agent-taskboard-panel-layout:v2:browser:legacy", JSON.stringify({
+        inspector: { width: 999, height: 500, x: 24, y: 40, floating: true },
+      }));
+      localStorage.setItem("agent-taskboard-panel-layout-registry:v2", JSON.stringify({ legacy: Date.now() }));
+    }
+  }, { protocol: url, id: clientId, state: panelState, legacyState: legacy, desktopLabel: tauriLabel });
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector(".lanes");
+  await page.bringToFront();
   return page;
 };
 
-const dragBy = async (page, selector, dx, dy) => {
-  const box = await page.locator(selector).boundingBox();
-  if (!box) throw new Error(`missing drag target ${selector}`);
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 6 });
-  await page.mouse.up();
+let pointerId = 100;
+const dragBy = async (page, selector, dx) => {
+  const target = page.locator(selector);
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`missing resize target ${selector}`);
+  pointerId += 1;
+  const start = { x: box.x + box.width / 2, y: box.y + Math.min(box.height / 2, 80) };
+  await target.dispatchEvent("pointerdown", { pointerId, clientX: start.x, clientY: start.y, bubbles: true });
+  await page.evaluate(({ id, x, y }) => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: id, clientX: x, clientY: y, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointerup", { pointerId: id, clientX: x, clientY: y, bubbles: true }));
+  }, { id: pointerId, x: start.x + dx, y: start.y });
 };
 
-const waitForDockedInspector = async (page) => page.waitForFunction(() => {
-  const panel = document.querySelector('[data-workbench-panel="inspector"]');
-  if (!panel || panel.getAttribute("data-floating") !== "false") return false;
-  const rect = panel.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0
-    ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-    : false;
-}).then((handle) => handle.jsonValue());
+const widthOf = async (page, selector) => {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) {
+    const diagnostic = await page.evaluate((target) => ({
+      targetExists: Boolean(document.querySelector(target)),
+      targetDisplay: document.querySelector(target) ? getComputedStyle(document.querySelector(target)).display : "missing",
+      mobile: document.documentElement.dataset.mobile,
+      viewport: document.documentElement.dataset.viewport,
+      innerWidth: window.innerWidth,
+      clientId: sessionStorage.getItem("agent-taskboard-client-id"),
+      windowName: window.name,
+      storage: Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.includes("client-panels"))),
+      frame: document.querySelector(".frame")?.className,
+    }), selector);
+    throw new Error(`missing region ${selector}: ${JSON.stringify(diagnostic)}`);
+  }
+  return box.width;
+};
 
-const browserPage = await openClient();
-const staleLayoutKey = "agent-taskboard-panel-layout:v1:browser:stale-history-instance";
-await browserPage.evaluate(({ staleKey }) => {
-  localStorage.setItem(staleKey, JSON.stringify({ inspector: { width: 999 } }));
-  localStorage.setItem(
-    "agent-taskboard-panel-layout-registry:v1",
-    JSON.stringify({ [staleKey]: Date.now() - 8 * 86_400_000 }),
-  );
-}, { staleKey: staleLayoutKey });
-await browserPage.reload({ waitUntil: "domcontentloaded" });
-if (await browserPage.evaluate(({ staleKey }) => localStorage.getItem(staleKey), { staleKey: staleLayoutKey }) !== null) {
-  throw new Error("unused historical panel Client layout instances must be pruned");
-}
-const popupPromise = browserPage.waitForEvent("popup");
-const openerClientId = await browserPage.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id"));
-await browserPage.evaluate(() => window.open("about:blank", "panel-layout-popup"));
-const popupClient = await popupPromise;
-const popupSeedClientId = await popupClient.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")).catch(() => null);
-if (popupSeedClientId !== openerClientId) {
-  throw new Error(`popup should inherit the opener session storage before navigation: ${JSON.stringify({ openerClientId, popupSeedClientId })}`);
-}
-await popupClient.addInitScript(({ protocol }) => {
-  window.__HOST_PROTOCOL__ = protocol;
-}, { protocol: url });
-await popupClient.goto(url, { waitUntil: "domcontentloaded" });
-await popupClient.waitForLoadState("domcontentloaded");
-await popupClient.waitForSelector(".lanes");
-const [browserClientId, popupClientId] = await Promise.all([
-  browserPage.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")),
-  popupClient.evaluate(() => sessionStorage.getItem("agent-taskboard-client-id")),
-]);
-if (!browserClientId || !popupClientId || browserClientId === popupClientId) {
-  throw new Error(`Browser windows opened from an opener must use independent Client identities: ${JSON.stringify({ browserClientId, popupClientId })}`);
-}
-await popupClient.close();
+const cssPanelWidth = (page, name) => page.$eval(".frame", (node, property) =>
+  Number.parseFloat(getComputedStyle(node).getPropertyValue(property)), name);
+
+const assertNear = (actual, expected, label, tolerance = 3) => {
+  if (Math.abs(actual - expected) > tolerance) {
+    throw new Error(`${label}: expected ${expected}px, got ${actual}px`);
+  }
+};
+
+const assertStoredContract = async (page, storageKey, expected = {}) => {
+  const state = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "null"), storageKey);
+  const keys = Object.keys(state ?? {}).sort();
+  const allowed = ["changesPanelWidth", "rightRailWidth", "rightSide", "sidebarVisible", "sidebarWidth"].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(allowed)) {
+    throw new Error(`panel persistence contains unsupported fields: ${JSON.stringify(state)}`);
+  }
+  const serialized = JSON.stringify(state);
+  for (const forbidden of ["\"x\"", "\"y\"", "height", "floating", "overlap"]) {
+    if (serialized.includes(forbidden)) throw new Error(`panel persistence contains ${forbidden}: ${serialized}`);
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (state[key] !== value) throw new Error(`stored ${key} should be ${value}, got ${JSON.stringify(state)}`);
+  }
+  return state;
+};
+
+const browserPage = await openClient({ clientId: "panel-browser-a", legacy: true });
+const browserKey = panelKey("panel-browser-a");
+const legacyKeys = await browserPage.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("agent-taskboard-panel-layout")));
+if (legacyKeys.length) throw new Error(`legacy free-layout keys must be removed without migration: ${JSON.stringify(legacyKeys)}`);
+assertNear(await widthOf(browserPage, ".side"), 248, "default sidebar width");
+
+await dragBy(browserPage, '[data-panel-resize="sidebar"]', 60);
+assertNear(await widthOf(browserPage, ".side"), 308, "resized sidebar width");
 await browserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
 await browserPage.waitForSelector(".lifted-run");
-await browserPage.waitForSelector('[data-workbench-panel="inspector"]');
+await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
 await browserPage.waitForSelector('[data-document-state="ready"]');
-if (await browserPage.locator('[data-workbench-panel="inspector"]').getAttribute("data-floating") === "false") {
-  await browserPage.click('[data-panel-mode="inspector"]');
-  await browserPage.waitForSelector('[data-workbench-panel="inspector"][data-floating="true"]');
+assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 320, "default right rail width");
+await dragBy(browserPage, '[data-panel-resize="right-rail"]', -80);
+assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 400, "resized right rail width");
+await browserPage.click('.chrome button[data-act="view-changes"]');
+await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
+assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 520, "default changes panel width");
+await browserPage.setViewportSize({ width: 899, height: 840 });
+await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "compact-desktop");
+const compactChangesLayout = await browserPage.evaluate(() => ({
+  workspaceDisplay: getComputedStyle(document.querySelector(".workspace")).display,
+  panelWidth: document.querySelector('[data-fixed-panel="changes-panel"]')?.getBoundingClientRect().width ?? 0,
+  sideWidth: document.querySelector(".side")?.getBoundingClientRect().width ?? 0,
+  overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+}));
+assertNear(compactChangesLayout.panelWidth, 899 - compactChangesLayout.sideWidth, "compact changes region", 4);
+if (compactChangesLayout.workspaceDisplay !== "none" || compactChangesLayout.overflow > 0) {
+  throw new Error(`compact desktop should show one fixed content region without overlap: ${JSON.stringify(compactChangesLayout)}`);
 }
-await browserPage.waitForFunction(() => getComputedStyle(document.querySelector('[data-workbench-panel="inspector"]')).position === "absolute");
-
-for (const selector of [
-  '[data-panel-drag="inspector"]',
-  '[data-panel-resize="inspector"]',
-  '[data-panel-size="inspector"]',
-  '[data-panel-mode="inspector"]',
-]) {
-  await browserPage.waitForSelector(selector);
+await browserPage.setViewportSize({ width: 900, height: 840 });
+await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
+assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 520, "900px changes panel boundary");
+await browserPage.setViewportSize({ width: 1280, height: 840 });
+await dragBy(browserPage, '[data-panel-resize="changes-panel"]', -80);
+assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 600, "resized changes panel width");
+if (await browserPage.$("[data-panel-drag], [data-panel-mode], [data-floating], [data-workbench-panel]")) {
+  throw new Error("fixed regions must not expose drag, float, coordinate or legacy workbench controls");
 }
-
-const inspector = browserPage.locator('[data-workbench-panel="inspector"]');
-const inspectorBefore = await inspector.boundingBox();
-await dragBy(browserPage, '[data-panel-drag="inspector"]', -180, 70);
-const inspectorPositionAfter = await inspector.boundingBox();
-if (!inspectorBefore || !inspectorPositionAfter || inspectorPositionAfter.x > inspectorBefore.x - 120) {
-  throw new Error(`Inspector drag did not move the panel: ${JSON.stringify({ inspectorBefore, inspectorPositionAfter })}`);
-}
-
-await dragBy(browserPage, '[data-panel-resize="inspector"]', 96, 44);
-let inspectorAfterResize = await inspector.boundingBox();
-if (!inspectorAfterResize || inspectorAfterResize.width < inspectorPositionAfter.width + 60) {
-  throw new Error(`Inspector resize did not produce clear width feedback: ${JSON.stringify({ inspectorPositionAfter, inspectorAfterResize })}`);
-}
-const inspectorSizeText = await browserPage.locator('[data-panel-size="inspector"]').textContent();
-if (!inspectorSizeText?.includes(`${Math.round(inspectorAfterResize.width)}`)) {
-  throw new Error(`Inspector size feedback should include its current width: ${inspectorSizeText}`);
-}
-const inspectorModeAfterResize = await inspector.getAttribute("data-floating");
-await browserPage.click('[data-panel-mode="inspector"]');
-await browserPage.waitForSelector('[data-workbench-panel="inspector"][data-floating="false"]');
-const dockedInspectorBefore = await browserPage.locator('[data-workbench-panel="inspector"]').boundingBox();
-await dragBy(browserPage, '[data-panel-resize="inspector"]', 80, 0);
-const dockedInspectorAfter = await browserPage.locator('[data-workbench-panel="inspector"]').boundingBox();
-if (!dockedInspectorBefore || !dockedInspectorAfter || dockedInspectorAfter.width > dockedInspectorBefore.width - 40) {
-  throw new Error(`docked Inspector resize did not update its grid column: ${JSON.stringify({ dockedInspectorBefore, dockedInspectorAfter })}`);
-}
-await browserPage.click('[data-panel-mode="inspector"]');
-await browserPage.waitForSelector('[data-workbench-panel="inspector"][data-floating="true"]');
-inspectorAfterResize = await browserPage.locator('[data-workbench-panel="inspector"]').boundingBox();
+await assertStoredContract(browserPage, browserKey, {
+  sidebarVisible: true,
+  sidebarWidth: 308,
+  rightSide: "changes",
+  rightRailWidth: 400,
+  changesPanelWidth: 600,
+});
 
 await browserPage.reload({ waitUntil: "domcontentloaded" });
+await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
+assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 600, "restored changes panel width");
+await browserPage.click('.chrome button[data-act="view-changes"]');
+await browserPage.waitForFunction(() => !document.querySelector('[data-fixed-panel="changes-panel"]'));
+await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
+assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 400, "restored right rail width");
+await browserPage.click('button[data-act="toggle-sidebar"]');
+await browserPage.waitForFunction(() => !document.querySelector(".side"));
+await assertStoredContract(browserPage, browserKey, {
+  sidebarVisible: false,
+  sidebarWidth: 308,
+  rightSide: "rail",
+  rightRailWidth: 400,
+  changesPanelWidth: 600,
+});
+await browserPage.reload({ waitUntil: "domcontentloaded" });
 await browserPage.waitForSelector(".lifted-run");
-await browserPage.waitForSelector('[data-workbench-panel="inspector"]');
-await browserPage.waitForSelector('[data-document-state="ready"]');
-const inspectorAfterReload = await browserPage.waitForFunction(() => {
-  const panel = document.querySelector('[data-workbench-panel="inspector"]');
-  if (!panel || getComputedStyle(panel).position !== "absolute") return false;
-  const rect = panel.getBoundingClientRect();
-  return rect.width > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : false;
-}).then((handle) => handle.jsonValue());
-const inspectorModeAfterReload = await browserPage.locator('[data-workbench-panel="inspector"]').getAttribute("data-floating");
-const geometryTolerance = 8;
-if (
-  !inspectorAfterReload
-  || !inspectorAfterResize
-  || Math.abs(inspectorAfterReload.width - inspectorAfterResize.width) > 2
-  || Math.abs(inspectorAfterReload.height - inspectorAfterResize.height) > 2
-  || Math.abs(inspectorAfterReload.x - inspectorAfterResize.x) > geometryTolerance
-  || Math.abs(inspectorAfterReload.y - inspectorAfterResize.y) > geometryTolerance
-  || inspectorModeAfterReload !== inspectorModeAfterResize
-) {
-  throw new Error(`browser Client layout did not survive reload: ${JSON.stringify({ inspectorAfterResize, inspectorAfterReload })}`);
-}
+await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
+if (await browserPage.$(".side")) throw new Error("the same Client must restore sidebar visibility after reload");
+await browserPage.click('button[data-act="toggle-sidebar"]');
+await browserPage.waitForSelector(".side");
+assertNear(await widthOf(browserPage, ".side"), 308, "restored sidebar width");
 
-const desktopPage = await openClient({ tauri: true });
-await desktopPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
-await desktopPage.waitForSelector(".lifted-run");
-await desktopPage.waitForSelector('[data-workbench-panel="inspector"]');
-await desktopPage.waitForSelector('[data-document-state="ready"]');
-const desktopInspector = await waitForDockedInspector(desktopPage);
-if (!desktopInspector) {
-  throw new Error(`Tauri and browser Clients must not overwrite each other's layout: ${JSON.stringify({ desktopInspector, inspectorAfterReload })}`);
-}
-
-const secondBrowserPage = await openClient();
-await secondBrowserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
-await secondBrowserPage.waitForSelector(".lifted-run");
-await secondBrowserPage.waitForSelector('[data-workbench-panel="inspector"]');
-await secondBrowserPage.waitForSelector('[data-document-state="ready"]');
-const secondBrowserInspector = await waitForDockedInspector(secondBrowserPage);
-if (!secondBrowserInspector || secondBrowserInspector.width > 500) {
-  throw new Error(`two Browser Clients must keep independent panel layouts: ${JSON.stringify({ secondBrowserInspector, inspectorAfterReload })}`);
-}
+const secondBrowserPage = await openClient({
+  clientId: "panel-browser-b",
+  panelState: { sidebarVisible: true, sidebarWidth: 248, rightSide: "rail", rightRailWidth: 320, changesPanelWidth: 520 },
+});
+assertNear(await cssPanelWidth(secondBrowserPage, "--client-sidebar-width"), 248, "independent Browser Client sidebar width");
+assertNear(await cssPanelWidth(secondBrowserPage, "--client-right-rail-width"), 320, "independent Browser Client right rail width");
+await assertStoredContract(secondBrowserPage, panelKey("panel-browser-b"), {
+  sidebarVisible: true,
+  sidebarWidth: 248,
+  rightSide: "rail",
+  rightRailWidth: 320,
+  changesPanelWidth: 520,
+});
 await secondBrowserPage.close();
 
-await browserPage.bringToFront();
-await browserPage.waitForSelector('[data-workbench-panel="terminal"]');
-for (const selector of [
-  '[data-panel-drag="terminal"]',
-  '[data-panel-size="terminal"]',
-  '[data-panel-mode="terminal"]',
-]) {
-  await browserPage.waitForSelector(selector);
-}
-const terminalBefore = await browserPage.locator('[data-workbench-panel="terminal"]').boundingBox();
-const terminalWasLifted = await browserPage.locator('[data-workbench-panel="terminal"]').evaluate((node) => node.classList.contains("lifted-terminal"));
-if (terminalWasLifted) {
-  await browserPage.click('[data-panel-mode="terminal"]');
-  await browserPage.waitForSelector('[data-workbench-panel="terminal"][data-floating="true"]');
-}
-await browserPage.waitForSelector('[data-panel-resize="terminal"]');
-const terminalResizeStart = await browserPage.locator('[data-workbench-panel="terminal"]').boundingBox();
-await dragBy(browserPage, '[data-panel-resize="terminal"]', 0, terminalWasLifted ? 72 : -72);
-const terminalAfter = await browserPage.locator('[data-workbench-panel="terminal"]').boundingBox();
-if (!terminalBefore || !terminalResizeStart || !terminalAfter || terminalAfter.height < terminalResizeStart.height + 40) {
-  throw new Error(`Terminal resize did not increase its height: ${JSON.stringify({ terminalBefore, terminalResizeStart, terminalAfter })}`);
-}
-
-await browserPage.setViewportSize({ width: 760, height: 620 });
-await browserPage.click('[data-panel-mode="terminal"]');
-await browserPage.waitForSelector('[data-workbench-panel="terminal"][data-floating="false"]');
-const dockedTerminalBefore = await browserPage.locator('[data-workbench-panel="terminal"]').boundingBox();
-await dragBy(browserPage, '[data-panel-resize="terminal"]', 0, 60);
-const dockedTerminalAfter = await browserPage.locator('[data-workbench-panel="terminal"]').boundingBox();
-if (!dockedTerminalBefore || !dockedTerminalAfter || dockedTerminalAfter.height < dockedTerminalBefore.height + 30) {
-  throw new Error(`narrow docked Terminal resize should grow when dragging its bottom edge: ${JSON.stringify({ dockedTerminalBefore, dockedTerminalAfter })}`);
-}
-await browserPage.click('[data-panel-mode="terminal"]');
-await browserPage.waitForSelector('[data-workbench-panel="terminal"][data-floating="true"]');
-const visibleRunPanels = await browserPage.evaluate(() => [...document.querySelectorAll(".lifted-run > [data-workbench-panel]")]
-  .filter((node) => getComputedStyle(node).display !== "none" && node.getBoundingClientRect().width > 0)
-  .map((node) => node.getAttribute("data-workbench-panel")));
-if (visibleRunPanels.length !== 1 || visibleRunPanels[0] !== "terminal") {
-  throw new Error(`narrow Run view should expose one reachable front panel: ${JSON.stringify(visibleRunPanels)}`);
-}
-await browserPage.click('header.chrome button[data-act="toggle-issue"]');
-await browserPage.click('header.chrome button[data-act="toggle-issue"]');
-await browserPage.waitForFunction(() => {
-  const panels = [...document.querySelectorAll(".lifted-run > [data-workbench-panel]")]
-    .filter((node) => getComputedStyle(node).display !== "none" && node.getBoundingClientRect().width > 0)
-    .map((node) => node.getAttribute("data-workbench-panel"));
-  return panels.length === 1 && panels[0] === "inspector";
+const clampedPage = await openClient({
+  clientId: "panel-browser-clamped",
+  panelState: {
+    sidebarVisible: true,
+    sidebarWidth: 9999,
+    rightSide: "rail",
+    rightRailWidth: -50,
+    changesPanelWidth: 9999,
+  },
 });
-await browserPage.click('header.chrome button[data-act="toggle-issue"]');
-
-await browserPage.setViewportSize({ width: 1280, height: 840 });
-
-const activeRunId = await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run");
-await browserPage.click('[data-workbench-panel="terminal"] button[data-act="hide-terminal"]');
-await browserPage.waitForSelector(".lanes");
-await browserPage.waitForFunction(() => !document.querySelector('[data-workbench-panel="terminal"]'));
-await browserPage.click('header.chrome button[data-act="toggle-issue"]');
-
-await browserPage.setViewportSize({ width: 760, height: 620 });
-await browserPage.click(".detail-maintenance > summary");
-await browserPage.fill("form[data-form='issue-comment'] textarea[name='body']", "Issue draft survives panel switches");
-await browserPage.addStyleTag({ content: '[data-lane="frontier"] { max-height: 120px; }' });
-const frontierScrollBefore = await browserPage.$eval('[data-lane="frontier"]', (node) => {
-  node.scrollTop = node.scrollHeight;
-  return node.scrollTop;
+assertNear(await cssPanelWidth(clampedPage, "--client-sidebar-width"), 320, "clamped sidebar width");
+assertNear(await cssPanelWidth(clampedPage, "--client-right-rail-width"), 280, "clamped right rail width");
+await assertStoredContract(clampedPage, panelKey("panel-browser-clamped"), {
+  sidebarWidth: 320,
+  rightRailWidth: 280,
+  changesPanelWidth: 640,
 });
-if (frontierScrollBefore <= 0) throw new Error("panel layout fixture needs a scrollable Frontier lane");
+await clampedPage.close();
 
-await browserPage.click("button[data-act='show-terminal']");
-await browserPage.waitForSelector('[data-workbench-panel="terminal"]');
-if (await browserPage.locator('[data-workbench-panel="terminal"] .pty-slot').getAttribute("data-run") !== activeRunId) {
-  throw new Error("hiding and restoring Terminal must retain the current Run");
-}
-await browserPage.click('[data-workbench-panel="terminal"] button[data-act="hide-terminal"]');
-await browserPage.waitForFunction(() => !document.querySelector('[data-workbench-panel="terminal"]'));
+const corruptPage = await openClient({
+  clientId: "panel-browser-corrupt",
+  panelState: { sidebarVisible: "yes", sidebarWidth: 300, rightSide: "floating", x: 20, height: 500 },
+});
+assertNear(await cssPanelWidth(corruptPage, "--client-sidebar-width"), 248, "corrupt state fallback sidebar width");
+await assertStoredContract(corruptPage, panelKey("panel-browser-corrupt"), {
+  sidebarVisible: true,
+  sidebarWidth: 248,
+  rightSide: "rail",
+  rightRailWidth: 320,
+  changesPanelWidth: 520,
+});
+await corruptPage.close();
 
-await browserPage.click("button[data-act='open-usage']");
-await browserPage.waitForSelector('[data-workbench-panel="usage"]');
-for (const selector of [
-  '[data-panel-drag="usage"]',
-  '[data-panel-resize="usage"]',
-  '[data-panel-size="usage"]',
-  "button[data-act='close-usage']",
-]) {
-  await browserPage.waitForSelector(selector);
-}
-const dockedUsageBefore = await browserPage.locator('[data-workbench-panel="usage"]').boundingBox();
-await dragBy(browserPage, '[data-panel-resize="usage"]', 0, -80);
-const dockedUsageAfter = await browserPage.locator('[data-workbench-panel="usage"]').boundingBox();
-if (!dockedUsageBefore || !dockedUsageAfter || dockedUsageAfter.height > dockedUsageBefore.height - 40) {
-  throw new Error(`docked Usage resize did not update its size: ${JSON.stringify({ dockedUsageBefore, dockedUsageAfter })}`);
-}
-await dragBy(browserPage, '[data-panel-drag="usage"]', 70, 45);
-const usageBeforeResize = await browserPage.locator('[data-workbench-panel="usage"]').boundingBox();
-await dragBy(browserPage, '[data-panel-resize="usage"]', 0, -80);
-const usageAfterResize = await browserPage.locator('[data-workbench-panel="usage"]').boundingBox();
-if (!usageBeforeResize || !usageAfterResize || usageAfterResize.height > usageBeforeResize.height - 40) {
-  throw new Error(`Usage resize did not produce clear height feedback: ${JSON.stringify({ usageBeforeResize, usageAfterResize })}`);
-}
-const usageOverflow = await browserPage.locator('[data-workbench-panel="usage"]').evaluate((node) => ({
-  overflowY: getComputedStyle(node).overflowY,
-  scrollHeight: node.scrollHeight,
-  clientHeight: node.clientHeight,
-}));
-if (usageOverflow.overflowY === "hidden" || usageOverflow.scrollHeight <= usageOverflow.clientHeight) {
-  throw new Error(`Usage content must remain vertically reachable in a narrow window: ${JSON.stringify(usageOverflow)}`);
-}
+const desktopPage = await openClient({
+  clientId: "ignored-for-tauri",
+  tauriLabel: "main",
+  panelState: { sidebarVisible: true, sidebarWidth: 248, rightSide: "rail", rightRailWidth: 320, changesPanelWidth: 520 },
+});
+if (!(await desktopPage.$(".side"))) throw new Error("Tauri Client should keep its own visible sidebar state");
+await assertStoredContract(desktopPage, "agent-taskboard-client-panels:v1:tauri:main", {
+  sidebarVisible: true,
+  sidebarWidth: 248,
+});
+await desktopPage.close();
 
-const overflow = await browserPage.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-if (overflow > 1) throw new Error(`insufficient-space layout must not force horizontal scrolling: ${overflow}`);
-await browserPage.click("button[data-act='close-usage']");
-await browserPage.waitForSelector(".lanes");
-await browserPage.waitForSelector('.detail-hd:has-text("panel layout issue")');
-await browserPage.click(".detail-maintenance > summary");
-if (await browserPage.inputValue("form[data-form='issue-comment'] textarea[name='body']") !== "Issue draft survives panel switches") {
-  throw new Error("switching through Usage must retain the current Issue draft");
-}
-const frontierScrollAfter = await browserPage.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
-if (Math.abs(frontierScrollAfter - frontierScrollBefore) > 1) {
-  throw new Error(`switching panels must retain board scroll: ${frontierScrollBefore} -> ${frontierScrollAfter}`);
-}
-
+await browserPage.close();
 await browser.close();
-console.log("Issue #116 panel layout e2e ok");
+console.log("Issue #147 fixed panel state e2e ok");

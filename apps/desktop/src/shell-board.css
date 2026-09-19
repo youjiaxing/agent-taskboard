@@ -52,7 +52,7 @@
 }
 
 .board-shell {
-  --issue-detail-width: clamp(var(--right-rail-width-min), 40%, var(--right-rail-width-max));
+  --issue-detail-width: var(--client-right-rail-width);
   display: block;
   position: relative;
   min-height: 0;
@@ -141,9 +141,6 @@
 
 .issue-card.sel { border-color: var(--color-border-strong); background: var(--color-surface); box-shadow: 0 0 0 1px var(--color-border-strong); }
 
-.board-shell:not(.issue-collapsed)[data-center-view="graph"] .dep-graph {
-  margin-right: calc(var(--issue-detail-width) + var(--space-12));
-}
 
 .issue-card.recently-completed.subdued { opacity: .58; }
 
@@ -175,17 +172,14 @@
 
 .issue-card.execution-stopped { opacity: .85; }
 
-.board-shell.inspector-docked:not(.issue-collapsed) {
+.board-shell:not(.issue-collapsed) {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(var(--right-rail-width-min), var(--inspector-panel-width));
+  grid-template-columns: minmax(0, 1fr) var(--issue-detail-width);
 }
 
-.board-shell.inspector-docked > .issue-detail[data-floating="false"],
-.lifted-run.inspector-docked > .issue-detail[data-floating="false"] {
-  position: static;
+.board-shell > .issue-detail {
   width: auto;
   height: auto;
   min-width: 0;
   max-width: none;
-  box-shadow: none;
 }

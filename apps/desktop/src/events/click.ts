@@ -1,22 +1,69 @@
 import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
-import { effectiveClientLanguage, resetGraphUiState } from "../view-helpers";
+import { effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance } from "../view-helpers";
-import { inspectorAnchorForIssue, panelIsFloating, positionInspectorAwayFromCard, setPanelFloating, workbenchPanelId } from "../workbench";
+import { saveClientPanelState } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
 
+function leaveSettingsPage(): void {
+  if (!ui.snapshot || ui.clientView.page !== "settings") return;
+  ui.clientView.page = primaryPageFromSnapshot(ui.snapshot);
+  ui.clientView.returnPoint = null;
+  ui.returnPointHistory.length = 0;
+}
+
 export async function openSettingsPanel(): Promise<void> {
-  ui.settingsOpen = true;
+  if (!ui.snapshot) return;
+  if (ui.clientView.page === "dependency-graph" && ui.snapshot.board?.selected?.id) {
+    ui.pendingGraphAnchor = captureGraphAnchor(ui.snapshot.board.selected.id);
+  }
+  enterPrimaryPage("settings", ui.snapshot);
   await loadStartupSettings();
   ui.pairingOpen = false;
   ui.formOpen = null;
   ui.removeProject = null;
   ui.projectMenuId = "";
+  render();
+}
+
+export async function returnToPreviousPage(): Promise<void> {
+  if (!ui.snapshot) return;
+  const returnPoint = ui.clientView.returnPoint;
+  if (!returnPoint) {
+    ui.clientView.page = primaryPageFromSnapshot(ui.snapshot);
+    ui.returnPointHistory.length = 0;
+    render();
+    return;
+  }
+  if (returnPoint.hostId && returnPoint.hostId !== ui.snapshot.focusedHostId) {
+    await rpc("focusHost", { hostId: returnPoint.hostId });
+  }
+  if (returnPoint.projectId && returnPoint.projectId !== ui.snapshot.focusedProjectId) {
+    await rpc("focusProject", { projectId: returnPoint.projectId });
+  }
+  if (returnPoint.page === "host-overview") {
+    await rpc("openHostOverview");
+  } else if (returnPoint.page === "usage") {
+    await rpc("openUsage");
+  } else if (returnPoint.page === "focus-workspace" && returnPoint.runId) {
+    await rpc("focusRun", { runId: returnPoint.runId });
+  } else {
+    if (ui.snapshot.usageOpen) await rpc("closeUsage");
+    if (ui.snapshot.workspaceView !== "project") await rpc("returnToBoard");
+    const view = returnPoint.page === "dependency-graph" ? "graph" : "board";
+    if (ui.snapshot.centerView !== view) await rpc("setCenterView", { view });
+    if (returnPoint.issueId && ui.snapshot.board?.selected?.id !== returnPoint.issueId) {
+      await rpc("focusIssue", { issueId: returnPoint.issueId });
+      await loadSelectedIssueDocument();
+    }
+  }
+  if (ui.clientView.returnPoint !== returnPoint) return;
+  restoreReturnPointMemory(returnPoint);
   render();
 }
 
@@ -79,8 +126,9 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target) {
-    if (ui.appearanceMenuOpen) {
+    if (ui.appearanceMenuOpen || ui.moreMenuOpen) {
       ui.appearanceMenuOpen = false;
+      ui.moreMenuOpen = false;
       render();
     }
     return;
@@ -88,6 +136,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (target.dataset.stop) event.stopPropagation();
   const act = target.dataset.act;
   if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
+  if (act !== "more-menu") ui.moreMenuOpen = false;
   if (act === "mobile-scope") {
     ui.mobileScopeOpen = true;
     render();
@@ -120,56 +169,38 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "close-settings" && event.target === target) {
-    ui.settingsOpen = false;
-    render();
+  if (act === "return-page" || act === "close-settings") {
+    await returnToPreviousPage();
     return;
   }
   if (act === "toggle-sidebar") {
-    ui.sidebarVisible = !ui.sidebarVisible;
+    ui.clientView.panels.sidebarVisible = !ui.clientView.panels.sidebarVisible;
+    saveClientPanelState();
     render();
     return;
   }
   if (act === "toggle-issue") {
-    ui.issueDetailVisible = !ui.issueDetailVisible;
-    if (ui.issueDetailVisible) {
-      ui.frontWorkbenchPanel = "inspector";
-    } else if (ui.snapshot.workspaceView === "run") {
-      ui.frontWorkbenchPanel = "terminal";
-    }
+    ui.clientView.panels.rightSide = ui.clientView.panels.rightSide === "rail" ? "hidden" : "rail";
+    ui.changesView = null;
+    saveClientPanelState();
     render();
-    return;
-  }
-  if (act === "panel-mode") {
-    const panelId = workbenchPanelId(target.dataset.id);
-    if (panelId) setPanelFloating(panelId, !panelIsFloating(panelId));
     return;
   }
   if (act === "hide-terminal") {
     ui.terminalPanelVisible = false;
-    if (ui.snapshot.workspaceView === "run") {
-      ui.sidebarVisible = ui.sidebarBeforeLift;
-      await rpc("returnToBoard");
-    }
+    if (ui.snapshot.workspaceView === "run") await rpc("returnToBoard");
     render();
     return;
   }
   if (act === "show-terminal") {
     ui.terminalPanelVisible = true;
-    ui.frontWorkbenchPanel = "terminal";
     render();
     return;
   }
   if (act === "open-overview") {
-    ui.sidebarVisible = true;
+    ui.mobileScopeOpen = false;
+    enterPrimaryPage("host-overview", ui.snapshot);
     await rpc("openHostOverview");
-    render();
-    return;
-  }
-  if (act === "return-board") {
-    ui.sidebarVisible = ui.sidebarBeforeLift;
-    ui.terminalPanelVisible = true;
-    await rpc("returnToBoard");
     render();
     return;
   }
@@ -227,7 +258,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "pair") {
     ui.mobileScopeOpen = false;
     ui.pairingOpen = true;
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     ui.hostPickerOpen = false;
     ui.formOpen = null;
     ui.removeProject = null;
@@ -247,7 +278,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.removeError = "";
     ui.projectMenuId = "";
     ui.pairingOpen = false;
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     ui.removeProject = null;
     render();
     return;
@@ -406,7 +437,9 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.projectMenuId = "";
     ui.mobileScopeOpen = false;
     ui.mobileView = "board";
-    ui.sidebarVisible = true;
+    ui.clientView.page = "board";
+    ui.clientView.returnPoint = null;
+    ui.returnPointHistory.length = 0;
     await rpc("focusProject", { projectId: target.dataset.id });
     render();
     return;
@@ -414,7 +447,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "new-run" && target.dataset.id) {
     const projectId = target.dataset.id;
     ui.projectMenuId = "";
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     ui.pairingOpen = false;
     ui.formOpen = null;
     ui.launchDraft = null;
@@ -431,7 +464,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "execute-run" && target.dataset.id && ui.snapshot.focusedProjectId) {
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     ui.pairingOpen = false;
     ui.formOpen = null;
     ui.launchDraft = null;
@@ -525,33 +558,25 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
-    ui.sidebarBeforeLift = ui.sidebarVisible;
-    ui.issueDetailVisible = true;
+    enterPrimaryPage("focus-workspace", ui.snapshot);
+    ui.clientView.panels.rightSide = "rail";
     ui.terminalPanelVisible = true;
-    ui.frontWorkbenchPanel = "terminal";
     await rpc("focusRun", { runId: target.dataset.id });
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileView = "run";
       ui.mobileLiveTerminal = false;
-    } else {
-      ui.sidebarVisible = false;
     }
     render();
     return;
   }
   if (act === "open-usage") {
     ui.mobileScopeOpen = false;
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     ui.pairingOpen = false;
     ui.formOpen = null;
-    ui.frontWorkbenchPanel = "usage";
+    enterPrimaryPage("usage", ui.snapshot);
     await rpc("openUsage");
-    render();
-    return;
-  }
-  if (act === "close-usage") {
-    await rpc("closeUsage");
     render();
     return;
   }
@@ -563,13 +588,15 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "open-usage-run" && target.dataset.id) {
+    enterPrimaryPage("usage", ui.snapshot);
     await rpc("openUsageForRun", { runId: target.dataset.id });
     render();
     return;
   }
   if (act === "open-run-usage" && target.dataset.id) {
+    enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.terminalPanelVisible = true;
-    ui.frontWorkbenchPanel = "terminal";
+    ui.clientView.panels.rightSide = "rail";
     await rpc("openRunFromUsage", { runId: target.dataset.id });
     render();
     return;
@@ -589,7 +616,17 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "view-changes" && target.dataset.id) {
-    ui.changesOpen = true;
+    if (ui.clientView.panels.rightSide === "changes") {
+      ui.clientView.panels.rightSide = "rail";
+      ui.changesView = null;
+      ui.noteTarget = null;
+      ui.noteDraft = "";
+      saveClientPanelState();
+      render();
+      return;
+    }
+    ui.clientView.panels.rightSide = "changes";
+    saveClientPanelState();
     ui.changesScope = "this-round";
     ui.noteTarget = null;
     ui.noteDraft = "";
@@ -598,7 +635,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "close-changes") {
-    ui.changesOpen = false;
+    ui.clientView.panels.rightSide = "rail";
+    saveClientPanelState();
     ui.changesView = null;
     ui.noteTarget = null;
     ui.noteDraft = "";
@@ -792,6 +830,12 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
+  if (act === "more-menu") {
+    ui.moreMenuOpen = !ui.moreMenuOpen;
+    render();
+    if (ui.moreMenuOpen) ui.app.querySelector<HTMLButtonElement>(".more-menu button")?.focus();
+    return;
+  }
   if (act === "appearance-menu") {
     ui.appearanceMenuOpen = !ui.appearanceMenuOpen;
     render();
@@ -815,7 +859,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "quit") {
-    ui.settingsOpen = false;
+    leaveSettingsPage();
     await rpc("quitHost");
     render();
     return;
@@ -827,6 +871,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "center-view" && target.dataset.id) {
     const view = target.dataset.id as CenterView;
+    ui.clientView.page = view === "graph" ? "dependency-graph" : "board";
     ui.pendingCenterView = view;
     ui.snapshot.centerView = view;
     if (view === "graph") {
@@ -864,7 +909,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "view-dependencies" && target.dataset.id) {
     ui.pendingGraphAnchor = null;
     resetGraphUiState();
-    ui.issueDetailVisible = true;
+    ui.clientView.page = "dependency-graph";
+    ui.clientView.panels.rightSide = "rail";
     await rpc("setCenterView", { view: "graph" });
     await rpc("centerDependencyGraph", { issueId: target.dataset.id });
     render();
@@ -895,8 +941,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-issue" && target.dataset.id) {
-    ui.issueDetailVisible = true;
-    ui.inspectorAnchorIssueId = target.dataset.id;
+    ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: target.dataset.id });
     render();
     await loadSelectedIssueDocument();
@@ -904,12 +949,10 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       ui.mobileView = "issue";
       ui.mobileLiveTerminal = false;
     } else if (target.closest(".issue-card") && ui.snapshot.focusedRunId) {
-      ui.sidebarBeforeLift = ui.sidebarVisible;
+      enterPrimaryPage("focus-workspace", ui.snapshot);
       await rpc("focusRun", { runId: ui.snapshot.focusedRunId });
-      ui.sidebarVisible = false;
     }
     render();
-    positionInspectorAwayFromCard(inspectorAnchorForIssue(ui.inspectorAnchorIssueId));
     return;
   }
   if (act === "filter-parent" && target.dataset.id) {

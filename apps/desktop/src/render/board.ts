@@ -4,7 +4,7 @@ import { currentProject, mobileClient } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
-import { panelIsFloating, panelWidth, workbenchIssuePanel } from "../workbench";
+import { fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
 
@@ -13,19 +13,25 @@ export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = 
   if (!project) return loopbackNotice(snap.loopbackPage);
   return `<div class="project-board">
     ${loopbackNotice(snap.loopbackPage)}
-    <div class="board-head">
-      <div class="board-head-row">
-        <div class="project-heading">
-          <h1>${escapeHtml(project.name)}</h1>
-          <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
-        </div>
-        <div class="board-head-actions">
-          <button type="button" class="primary" data-act="new-issue" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.createIssue)}</button>
+    <div class="content-toolbar" data-page-toolbar>
+      <div class="board-head">
+        <div class="board-head-row">
+          <div class="project-heading">
+            <h1>${escapeHtml(project.name)}</h1>
+            <p title="${escapeHtml(project.localPath)}">${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</p>
+          </div>
+          <div class="board-head-actions">
+            <div class="view-switch" role="tablist">
+              <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
+              <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
+            </div>
+            <button type="button" class="primary" data-act="new-issue" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.createIssue)}</button>
+          </div>
         </div>
       </div>
+      ${refreshBar(copy, snap.board)}
+      ${issueSearch(copy, snap)}
     </div>
-    ${refreshBar(copy, snap.board)}
-    ${issueSearch(copy, snap)}
     ${createIssueForm(copy, snap)}
     ${pendingBar(copy, snap)}
     ${connectionPanel(copy, project)}
@@ -59,7 +65,6 @@ export function issueSearch(copy: ShellCopy, snap: Snapshot): string {
       <option value="closed" ${search.state === "closed" ? "selected" : ""}>${escapeHtml(copy.searchClosed)}</option>
     </select>
     <button type="submit" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.searchSubmit)}</button>
-    <button type="button" data-act="keyboard-help" aria-label="${escapeHtml(copy.keyboardHelp)}">?</button>
     ${formFeedback(key)}
   </form>`;
 }
@@ -101,10 +106,9 @@ export function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = fa
   }
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : "";
-  const inspectorOpen = ui.issueDetailVisible && Boolean(board.selected);
-  const inspectorFloating = panelIsFloating("inspector");
-  const inspectorWidth = panelWidth("inspector");
-  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" data-center-view="${onGraph ? "graph" : "board"}" style="--issue-detail-width:${Math.round(inspectorWidth)}px;--inspector-panel-width:${Math.round(inspectorWidth)}px">
+  const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(board.selected);
+  const inspectorWidth = fixedPanelWidth("right-rail");
+  return `<div class="board-shell ${inspectorOpen ? "" : "issue-collapsed"}" data-center-view="${onGraph ? "graph" : "board"}" style="--issue-detail-width:${Math.round(inspectorWidth)}px">
     <div class="board-main">
       ${hint || board.parentFilter
         ? `<div class="board-hint">
@@ -364,11 +368,9 @@ export function issueCard(
     ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
     : lane === "inProgress" && issue.runId
       ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
-         <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>
-         ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>`}`
+         <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>`
       : lane === "recentlyCompleted"
-        ? `${!mobileClient() && issue.runId ? `<button type="button" data-act="view-changes" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.viewChanges)}</button>` : ""}
-           <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
+        ? `<button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
         : "";
   return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
     <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">

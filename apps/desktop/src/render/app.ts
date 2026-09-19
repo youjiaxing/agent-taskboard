@@ -1,11 +1,11 @@
-import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, languageLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, restoreGraphAnchor, syncGraphSelection } from "../main";
+import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, restoreGraphAnchor, syncGraphSelection } from "../main";
 import { clientCopy } from "../view-helpers";
 import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
-import type { AppearancePreference, ScrollPosition } from "../protocol";
+import type { ScrollPosition } from "../protocol";
 import {
+  APPEARANCE_DISPLAY_ORDER,
   APPEARANCE_PREFERENCES,
   browserClient,
-  currentProject,
   ensureBrowserAppearance,
   focusedRun,
   mobileClient,
@@ -13,18 +13,16 @@ import {
   mobileNavigation,
   mobileScopeSheet,
   resolveTheme,
+  viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { hostOverviewPage, keyboardHelpDialog, launchEnvironmentStatus, liftedRunView, projectBlock, quitOfferDialog, runDock, startupSettings, updateDialog, updateSettings, usagePage, viewChangesPanel } from "./shell";
+import { hostOverviewPage, keyboardHelpDialog, liftedRunView, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage, viewChangesPanel } from "./shell";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
-import { panelUiText, refreshPanelSizeFeedback } from "../workbench";
+import { applyClientPanelWidths, fixedPanelResizeHandle, panelUiText } from "../workbench";
 import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
-
-const APPEARANCE_MENU_ORDER: AppearancePreference[] = ["warm", "light", "dark", "system"];
-const LANGUAGES = ["zh-CN", "en"] as const;
 
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
@@ -44,17 +42,27 @@ export function render(): void {
   const localCopy = startupCopy(appearance.language);
   const resolvedTheme = resolveTheme(appearance.appearancePreference, ui.systemAppearance);
   const { hosts, projects } = snap;
-  const project = currentProject(snap);
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
   document.documentElement.dataset.theme = resolvedTheme;
   document.documentElement.dataset.mobile = isMobile ? "true" : "false";
+  document.documentElement.dataset.viewport = viewportClass();
   document.title = copy.appName;
 
   const host = hosts.find((item) => item.id === ui.snapshot?.focusedHostId) ?? hosts[0];
   const empty = ui.snapshot.emptyActions.length > 0;
   const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
-  const showSidebar = !isMobile && ui.sidebarVisible && !runLifted;
+  const showSidebar = !isMobile && ui.clientView.panels.sidebarVisible;
   const selectedIssue = snap.board?.selected;
+  const primaryIdentity = ui.clientView.page === "settings"
+    ? copy.settings
+    : ui.clientView.page === "host-overview"
+      ? copy.hostOverview
+      : ui.clientView.page === "usage"
+        ? copy.usage
+        : ui.clientView.page === "focus-workspace"
+          ? selectedIssue?.title ?? focusedRun(snap)?.agentName ?? copy.appName
+          : host?.displayName ?? copy.appName;
+  const showReturn = Boolean(ui.clientView.returnPoint && ui.clientView.page !== ui.clientView.returnPoint.page);
   const previousDetailScrollNode = ui.app.querySelector<HTMLElement>(".detail-scroll");
   if (previousDetailScrollNode && ui.renderedDetailIssueId) {
     ui.issueDetailScrollPositions.set(ui.renderedDetailIssueId, {
@@ -83,8 +91,14 @@ export function render(): void {
       scrollLeft: previousWorkspace.scrollLeft,
     });
   }
-  const inspectorOpen = ui.issueDetailVisible && Boolean(selectedIssue);
-  const showIssueToggle = !isMobile && Boolean(selectedIssue) && (snap.workspaceView === "project" || runLifted);
+  const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(selectedIssue);
+  const showChangesPanel = !isMobile
+    && ui.clientView.page !== "settings"
+    && ui.clientView.panels.rightSide === "changes"
+    && Boolean(focusedRun(snap));
+  const showIssueToggle = !isMobile
+    && Boolean(selectedIssue)
+    && ["board", "dependency-graph", "focus-workspace"].includes(ui.clientView.page);
   const previousGraphCanvas = ui.app.querySelector<HTMLElement>(".graph-canvas");
   const previousLaunchScrollTop = ui.app.querySelector<HTMLElement>(".launch-sheet")?.scrollTop ?? 0;
   const previousGraph = previousGraphCanvas
@@ -104,9 +118,7 @@ export function render(): void {
   const desktopProjectGraph =
     !isMobile &&
     !empty &&
-    !snap.usageOpen &&
-    snap.workspaceView === "project" &&
-    !runLifted &&
+    ui.clientView.page === "dependency-graph" &&
     snap.centerView === "graph" &&
     Boolean(snap.board?.graph);
   const nextGraphKey = desktopProjectGraph ? dependencyGraphRenderKey(snap.board) : "";
@@ -122,61 +134,60 @@ export function render(): void {
   }
 
   ui.app.innerHTML = `
-    <div class="frame">
+    <div class="frame page-${ui.clientView.page}">
       <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
         <div class="chrome-lead">
           ${isMobile
-            ? `<button type="button" class="chrome-button" data-act="mobile-scope">${escapeHtml(copy.mobileSwitchScope)}</button>`
-            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>
-               ${showSidebar ? `<span class="chrome-ui.app">${escapeHtml(copy.appName)}</span>` : ""}`}
+            ? `<button type="button" class="chrome-icon" data-act="mobile-scope" aria-label="${escapeHtml(copy.mobileSwitchScope)}">☰</button>`
+            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>`}
         </div>
         <div class="chrome-main">
           <div class="chrome-primary">
-            ${!isMobile && !empty && !snap.usageOpen && snap.workspaceView === "project" && !runLifted
-              ? `<div class="view-switch" role="tablist">
-                  <button type="button" class="${snap.centerView === "board" ? "active" : ""}" data-act="center-view" data-id="board">${escapeHtml(copy.viewBoard)}</button>
-                  <button type="button" class="${snap.centerView === "graph" ? "active" : ""}" data-act="center-view" data-id="graph">${escapeHtml(copy.viewGraph)}</button>
-                </div>`
-              : ""}
-            ${runLifted ? `<button type="button" class="chrome-button" data-act="return-board">← ${escapeHtml(copy.returnToBoard)}</button>` : ""}
-            ${!isMobile && snap.workspaceView === "host-overview" ? `<span class="chrome-title">${escapeHtml(copy.hostOverview)}</span>` : ""}
-            ${!isMobile && snap.usageOpen ? `<span class="chrome-title">${escapeHtml(copy.usage)}</span>` : ""}
-            ${!isMobile && !showSidebar ? `<button type="button" class="chrome-button ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>` : ""}
+            ${showReturn ? `<button type="button" class="chrome-button" data-act="return-page">← ${escapeHtml(localCopy.back)}</button>` : ""}
+            <span class="chrome-title" data-current-identity>${escapeHtml(primaryIdentity)}</span>
           </div>
-          ${!isMobile && project ? `<span class="chrome-context">${escapeHtml(host?.displayName ?? "")} · ${escapeHtml(project.name)}</span>` : ""}
-          <div class="chrome-trail">
-            ${!isMobile && focusedRun(snap) && !ui.terminalPanelVisible
-              ? `<button type="button" class="chrome-button" data-act="show-terminal">${escapeHtml(panelUiText().showTerminal)}</button>`
-              : ""}
+          <div class="chrome-trail" data-global-actions>
             ${showIssueToggle
-              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
+              ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" data-global-action="right-rail" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
+              : ""}
+            ${!isMobile && focusedRun(snap) && ui.clientView.page !== "settings"
+              ? `<button type="button" class="chrome-button ${ui.clientView.panels.rightSide === "changes" ? "active" : ""}" data-act="view-changes" data-id="${escapeHtml(focusedRun(snap)?.id ?? "")}" data-global-action="changes">${escapeHtml(copy.viewChanges)}</button>`
               : ""}
             <div class="appearance-menu-wrap">
-              <button type="button" class="chrome-button" data-act="appearance-menu" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
+              <button type="button" class="chrome-button" data-act="appearance-menu" data-global-action="appearance" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
               ${ui.appearanceMenuOpen
                 ? `<div class="appearance-menu" role="menu" aria-label="${escapeHtml(localCopy.appearance)}">
-                    ${APPEARANCE_MENU_ORDER.map((preference) =>
+                    ${APPEARANCE_DISPLAY_ORDER.map((preference) =>
                       `<button type="button" role="menuitemradio" aria-checked="${appearance.appearancePreference === preference}" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
                     ).join("")}
                   </div>`
                 : ""}
             </div>
-            <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
+            <button type="button" class="chrome-button ${ui.clientView.page === "settings" ? "active" : ""}" data-act="settings" data-global-action="settings">${escapeHtml(copy.settings)}</button>
+            <div class="more-menu-wrap">
+              <button type="button" class="chrome-icon" data-act="more-menu" data-global-action="more" aria-haspopup="menu" aria-expanded="${ui.moreMenuOpen}" aria-label="${escapeHtml(localCopy.more)}">•••</button>
+              ${ui.moreMenuOpen
+                ? `<div class="more-menu" role="menu">
+                    ${focusedRun(snap) && !ui.terminalPanelVisible ? `<button type="button" role="menuitem" data-act="show-terminal">${escapeHtml(panelUiText().showTerminal)}</button>` : ""}
+                    <button type="button" role="menuitem" data-act="keyboard-help">${escapeHtml(copy.keyboardHelp)}</button>
+                  </div>`
+                : ""}
+            </div>
           </div>
         </div>
       </header>
-      <div class="body ${showSidebar ? "" : "side-collapsed"}">
-        ${showSidebar ? `<aside class="side">
-          <div>
-            <div class="group-name">${escapeHtml(copy.hosts)}</div>
+      <div class="body ${showSidebar ? "" : "side-collapsed"}${showChangesPanel ? " changes-open" : ""}">
+        ${showSidebar ? `<aside class="side" data-fixed-panel="sidebar">
+          ${fixedPanelResizeHandle("sidebar")}
+          <div class="host-area">
             ${
               host
                 ? `<div class="host-line">
-                    <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span>${escapeHtml(host.displayName)}${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
+                    <button type="button" class="item active" data-act="toggle-hosts"><span class="dot"></span><span class="host-name">${escapeHtml(host.displayName)}</span>${host.local ? `<span class="tag">${escapeHtml(copy.thisMachine)}</span>` : ""}</button>
                     <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
                   </div>
-                  <button type="button" class="item ${snap.workspaceView === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>
-                  <button type="button" class="item ${snap.usageOpen ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
+                  <button type="button" class="item ${ui.clientView.page === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>
+                  <button type="button" class="item ${ui.clientView.page === "usage" ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
                 : ""
             }
             ${
@@ -206,114 +217,38 @@ export function render(): void {
         </aside>` : ""}
         <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
           ${
-            empty
-              ? `<div class="empty">
-                  ${loopbackNotice(snap.loopbackPage)}
-                  <h1>${escapeHtml(copy.noProjectTitle)}</h1>
-                  <p>${escapeHtml(copy.noProjectBody)}</p>
-                  <div class="actions">
-                    ${snap.emptyActions
-                      .map(
-                        (action, index) =>
-                          `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
-                      )
-                      .join("")}
-                  </div>
-                </div>`
-              : snap.usageOpen
-                ? usagePage(copy, snap)
-                : isMobile
-                  ? mobileMain(copy, snap)
-                  : snap.workspaceView === "host-overview"
-                    ? hostOverviewPage(copy, snap)
-                    : runLifted
-                      ? liftedRunView(copy, snap)
-                      : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
+            ui.clientView.page === "settings"
+              ? settingsPage(copy, localCopy, snap, appearance, isMobile)
+              : empty
+                ? `<div class="empty">
+                    ${loopbackNotice(snap.loopbackPage)}
+                    <h1>${escapeHtml(copy.noProjectTitle)}</h1>
+                    <p>${escapeHtml(copy.noProjectBody)}</p>
+                    <div class="actions">
+                      ${snap.emptyActions
+                        .map(
+                          (action, index) =>
+                            `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
+                        )
+                        .join("")}
+                    </div>
+                  </div>`
+                : ui.clientView.page === "usage"
+                  ? usagePage(copy, snap)
+                  : isMobile
+                    ? mobileMain(copy, snap)
+                    : ui.clientView.page === "host-overview"
+                      ? hostOverviewPage(copy, snap)
+                      : ui.clientView.page === "focus-workspace" && runLifted
+                        ? liftedRunView(copy, snap)
+                        : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
           }
         </main>
+        ${showChangesPanel ? viewChangesPanel(copy) : ""}
       </div>
-      ${isMobile && !empty && !snap.usageOpen ? mobileNavigation(copy, snap) : ""}
+      ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNavigation(copy, snap) : ""}
     </div>
     ${isMobile && ui.mobileScopeOpen ? mobileScopeSheet(copy, snap) : ""}
-    ${
-      ui.settingsOpen
-        ? `<div class="overlay" data-act="close-settings">
-            <div class="sheet" data-stop="true">
-              <h2>${escapeHtml(copy.settings)}</h2>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.language)}</div>
-                <div class="choices">
-                  ${LANGUAGES
-                    .map(
-                      (language) =>
-                        `<button type="button" class="${appearance.language === language ? "active" : ""}" data-act="language" data-id="${language}">${escapeHtml(languageLabel(copy, language))}</button>`,
-                    )
-                    .join("")}
-                </div>
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(localCopy.appearance)}</div>
-                <div class="choices">
-                  ${APPEARANCE_MENU_ORDER.map(
-                    (preference) =>
-                      `<button type="button" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
-                  ).join("")}
-                </div>
-              </div>
-              ${startupSettings(localCopy, snap)}
-              <div class="field">
-                <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(localCopy.rereadLaunchEnvironment)}</button>
-                ${launchEnvironmentStatus(localCopy)}
-              </div>
-              ${updateSettings(copy)}
-              <div class="field">
-                <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-                <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
-                <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
-              </div>
-              <div class="field">
-                <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
-                <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
-                <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
-              </div>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
-                ${escapeHtml(copy.showCommandPreview)}
-              </label>
-              ${isMobile ? "" : `<label class="graph-opt">
-                <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
-                ${escapeHtml(copy.notifyDesktop)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
-                ${escapeHtml(copy.notifySound)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.autoAdvance)}
-              </label>
-              <p class="hint">${escapeHtml(copy.autoAdvanceHelp)}</p>
-              ${
-                currentProject(snap)
-                  ? `<label class="graph-opt">
-                <input type="checkbox" data-field="projectAutoAdvance" ${currentProject(snap)?.autoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.projectAutoAdvance)}
-              </label>
-              <label class="graph-opt">
-                <input type="checkbox" data-field="restoreAutoAdvance" ${currentProject(snap)?.restoreAutoAdvance ? "checked" : ""} />
-                ${escapeHtml(copy.restoreAutoAdvance)}
-              </label>
-              <div class="field">
-                <label class="label" for="restore-delay">${escapeHtml(copy.restoreDelay)}</label>
-                <input id="restore-delay" type="number" min="0" max="600" data-field="restoreDelay" value="${Math.round((currentProject(snap)?.restoreDelayMs ?? 60000) / 1000)}" />
-              </div>`
-                  : ""
-              }
-              <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>`}
-            </div>
-          </div>`
-        : ""
-    }
     ${
       ui.pairingOpen
         ? `<div class="overlay" data-act="close-pairing">
@@ -371,10 +306,9 @@ export function render(): void {
     ${ui.removeProject ? removeDialog(copy, ui.removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
     ${updateDialog(copy)}
-    ${ui.changesOpen ? viewChangesPanel(copy) : ""}
     ${ui.keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
-  refreshPanelSizeFeedback();
+  applyClientPanelWidths();
   const graphPlaceholder = ui.app.querySelector<HTMLElement>("[data-preserve-graph-canvas]");
   if (reuseGraphCanvas && previousGraph && graphPlaceholder) {
     graphPlaceholder.replaceWith(previousGraph.canvas);
