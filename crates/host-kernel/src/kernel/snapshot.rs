@@ -144,7 +144,7 @@ impl HostKernel {
             .iter()
             .map(|project| {
                 project.summary(
-                    self.project_has_active_run(&project.id),
+                    self.project_active_run_count(&project.id),
                     self.project_has_execution_stopped(&project.id),
                     self.project_issue_counts(&project.id),
                 )

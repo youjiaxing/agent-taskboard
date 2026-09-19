@@ -2,19 +2,63 @@ import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatus
 import { effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
-import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
+import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialog-controller";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
   ui.clientView.page = primaryPageFromSnapshot(ui.snapshot);
   ui.clientView.returnPoint = null;
   ui.returnPointHistory.length = 0;
+}
+
+async function dismissDialog(dialogId: string): Promise<void> {
+  if (dialogId === "mobile-scope") {
+    ui.mobileScopeOpen = false;
+  } else if (dialogId === "pairing") {
+    if (ui.formOperations.pending.has("pairing")) return;
+    ui.pairingOpen = false;
+    ui.pairingError = "";
+  } else if (dialogId === "project-form") {
+    if (ui.projectOperation) return;
+    ui.formOpen = null;
+    supersedeProjectInference();
+    ui.formError = "";
+  } else if (dialogId === "launch") {
+    if (ui.snapshot?.launchForm && ui.formOperations.pending.has(`launch:${ui.snapshot.launchForm.projectId}`)) return;
+    await rpc("cancelRunLaunch");
+    ui.launchDraft = null;
+    ui.launchPickerProjectId = "";
+    ui.launchPickerAgentId = "";
+    ui.launchPreviewSequence += 1;
+    if (ui.launchPreviewTimer != null) window.clearTimeout(ui.launchPreviewTimer);
+  } else if (dialogId === "remove-project") {
+    if (ui.projectOperation) return;
+    ui.removeProject = null;
+    ui.removeError = "";
+  } else if (dialogId === "quit-host") {
+    await rpc("cancelQuit");
+  } else if (dialogId === "update") {
+    if (ui.updateState.kind === "installing") return;
+    ui.updateState = { kind: "idle" };
+  } else if (dialogId === "keyboard-help") {
+    ui.keyboardHelpOpen = false;
+  } else if (dialogId === "stop-run" || dialogId === "revoke-client") {
+    if (ui.confirmationPending) return;
+    ui.dangerConfirmation = null;
+    ui.confirmationError = "";
+    ui.confirmationPending = false;
+  } else {
+    return;
+  }
+  render();
+  restoreDialogTrigger(dialogId);
 }
 
 export async function openSettingsPanel(): Promise<void> {
@@ -126,24 +170,29 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target) {
-    if (ui.appearanceMenuOpen || ui.moreMenuOpen) {
+    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId) {
       ui.appearanceMenuOpen = false;
       ui.moreMenuOpen = false;
+      ui.projectMenuId = "";
       render();
     }
     return;
   }
   if (target.dataset.stop) event.stopPropagation();
   const act = target.dataset.act;
-  if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
-  if (act !== "more-menu") ui.moreMenuOpen = false;
-  if (act === "mobile-scope") {
-    ui.mobileScopeOpen = true;
-    render();
+  if (act === "dismiss-dialog") {
+    if (target.classList.contains("dialog-backdrop") || target.classList.contains("drawer-backdrop")) {
+      if (event.target !== target) return;
+    }
+    await dismissDialog(target.dataset.dialogId ?? target.closest<HTMLElement>("[data-dialog-id]")?.dataset.dialogId ?? "");
     return;
   }
-  if (act === "close-mobile-scope" && event.target === target) {
-    ui.mobileScopeOpen = false;
+  if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
+  if (act !== "more-menu") ui.moreMenuOpen = false;
+  if (act !== "project-menu") ui.projectMenuId = "";
+  if (act === "mobile-scope") {
+    rememberDialogTrigger("mobile-scope", target);
+    ui.mobileScopeOpen = true;
     render();
     return;
   }
@@ -232,6 +281,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "check-updates") {
+    rememberDialogTrigger("update", target);
     await checkForUpdates(true);
     return;
   }
@@ -239,23 +289,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     await installPendingUpdate();
     return;
   }
-  if (act === "update-later") {
-    if (event.target !== target && target.closest(".sheet")) return;
-    ui.updateState = { kind: "idle" };
-    render();
-    return;
-  }
-  if (act === "pairing-noop") {
-    return;
-  }
-  if (act === "close-pairing" && event.target === target) {
-    if (ui.formOperations.pending.has("pairing")) return;
-    ui.pairingOpen = false;
-    ui.pairingError = "";
-    render();
-    return;
-  }
   if (act === "pair") {
+    rememberDialogTrigger("pairing", target, target.closest(".mobile-scope-sheet") ? "button[data-act='mobile-scope']" : undefined);
     ui.mobileScopeOpen = false;
     ui.pairingOpen = true;
     leaveSettingsPage();
@@ -268,6 +303,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "register") {
+    rememberDialogTrigger("project-form", target, target.closest(".mobile-scope-sheet") ? "button[data-act='mobile-scope']" : undefined);
     ui.mobileScopeOpen = false;
     ui.formOpen = "register";
     ui.formProjectId = "";
@@ -301,16 +337,9 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "form-noop") {
-    return;
-  }
   if (act === "keyboard-help") {
+    rememberDialogTrigger("keyboard-help", target, "button[data-act='more-menu']");
     openKeyboardHelp();
-    return;
-  }
-  if (act === "close-keyboard-help") {
-    ui.keyboardHelpOpen = false;
-    render();
     return;
   }
   if (act === "open-issue" && target.dataset.url) {
@@ -419,15 +448,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     });
     return;
   }
-  if (act === "close-form" && (event.target === target || target.tagName === "BUTTON")) {
-    if (ui.projectOperation) return;
-    if (target.tagName !== "BUTTON") return;
-    ui.formOpen = null;
-    supersedeProjectInference();
-    ui.formError = "";
-    render();
-    return;
-  }
   if (act === "project-menu" && target.dataset.id) {
     ui.projectMenuId = ui.projectMenuId === target.dataset.id ? "" : target.dataset.id;
     render();
@@ -445,6 +465,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "new-run" && target.dataset.id) {
+    rememberDialogTrigger("launch", target);
     const projectId = target.dataset.id;
     ui.projectMenuId = "";
     leaveSettingsPage();
@@ -464,6 +485,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "execute-run" && target.dataset.id && ui.snapshot.focusedProjectId) {
+    rememberDialogTrigger("launch", target);
     leaveSettingsPage();
     ui.pairingOpen = false;
     ui.formOpen = null;
@@ -493,16 +515,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "release-claim" && target.dataset.id) {
     await rpcDetached("releaseIssue", { issueId: target.dataset.id });
-    render();
-    return;
-  }
-  if (act === "close-launch" && (event.target === target || target.tagName === "BUTTON")) {
-    await rpc("cancelRunLaunch");
-    ui.launchDraft = null;
-    ui.launchPickerProjectId = "";
-    ui.launchPickerAgentId = "";
-    ui.launchPreviewSequence += 1;
-    if (ui.launchPreviewTimer != null) window.clearTimeout(ui.launchPreviewTimer);
     render();
     return;
   }
@@ -607,12 +619,38 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "stop-run" && target.dataset.id) {
-    await rpc("stopRun", { runId: target.dataset.id });
-    if (mobileClient()) {
-      ui.mobileView = "board";
-      ui.mobileLiveTerminal = false;
-    }
+    rememberDialogTrigger("stop-run", target);
+    ui.dangerConfirmation = {
+      kind: "stop-run",
+      runId: target.dataset.id,
+      returnToMobileBoard: mobileClient(),
+    };
+    ui.confirmationError = "";
+    ui.confirmationPending = false;
     render();
+    return;
+  }
+  if (act === "confirm-stop-run" && ui.dangerConfirmation?.kind === "stop-run") {
+    if (ui.confirmationPending) return;
+    const confirmation = ui.dangerConfirmation;
+    ui.confirmationPending = true;
+    render();
+    try {
+      await rpc("stopRun", { runId: confirmation.runId });
+      ui.dangerConfirmation = null;
+      ui.confirmationError = "";
+      ui.confirmationPending = false;
+      if (confirmation.returnToMobileBoard) {
+        ui.mobileView = "board";
+        ui.mobileLiveTerminal = false;
+      }
+      render();
+      restoreDialogTrigger("stop-run");
+    } catch (error) {
+      ui.confirmationPending = false;
+      ui.confirmationError = error instanceof Error ? error.message : String(error);
+      render();
+    }
     return;
   }
   if (act === "view-changes" && target.dataset.id) {
@@ -670,11 +708,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "cancel-quit") {
-    await rpc("cancelQuit");
-    render();
-    return;
-  }
   if (act === "confirm-quit") {
     await rpc("confirmQuitStopAll");
     render();
@@ -694,6 +727,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "edit-project" && target.dataset.id) {
+    rememberDialogTrigger(
+      "project-form",
+      target,
+      target.closest(".mobile-scope-sheet")
+        ? "button[data-act='mobile-scope']"
+        : `button[data-act='project-menu'][data-id='${CSS.escape(target.dataset.id)}']`,
+    );
     ui.mobileScopeOpen = false;
     const project = ui.snapshot.projects.find((item) => item.id === target.dataset.id);
     if (!project) return;
@@ -714,17 +754,17 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "remove-project" && target.dataset.id) {
+    rememberDialogTrigger(
+      "remove-project",
+      target,
+      target.closest(".mobile-scope-sheet")
+        ? "button[data-act='mobile-scope']"
+        : `button[data-act='project-menu'][data-id='${CSS.escape(target.dataset.id)}']`,
+    );
     ui.mobileScopeOpen = false;
     ui.removeProject = ui.snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
     ui.removeError = "";
     ui.projectMenuId = "";
-    render();
-    return;
-  }
-  if (act === "close-remove" && (event.target === target || target.tagName === "BUTTON")) {
-    if (ui.projectOperation) return;
-    ui.removeProject = null;
-    ui.removeError = "";
     render();
     return;
   }
@@ -796,10 +836,34 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "revoke" && target.dataset.id) {
-    ui.pairingError = "";
-    await runFormOperation("pairing", async () => {
-      await rpc("revokeClient", { clientId: target.dataset.id });
+    rememberDialogTrigger("revoke-client", target);
+    ui.dangerConfirmation = {
+      kind: "revoke-client",
+      clientId: target.dataset.id,
+      clientName: target.dataset.name ?? target.closest(".client-row")?.querySelector("span")?.textContent?.trim() ?? target.dataset.id,
+    };
+    ui.confirmationError = "";
+    ui.confirmationPending = false;
+    render();
+    return;
+  }
+  if (act === "confirm-revoke-client" && ui.dangerConfirmation?.kind === "revoke-client") {
+    if (ui.confirmationPending) return;
+    const confirmation = ui.dangerConfirmation;
+    ui.confirmationPending = true;
+    const success = await runFormOperation(revokeClientFormKey(confirmation.clientId), async () => {
+      await rpc("revokeClient", { clientId: confirmation.clientId });
     });
+    ui.confirmationPending = false;
+    if (success) {
+      ui.dangerConfirmation = null;
+      ui.confirmationError = "";
+      render();
+      restoreDialogTrigger("revoke-client");
+    } else {
+      ui.confirmationError = ui.formOperations.errors.get(revokeClientFormKey(confirmation.clientId)) ?? "";
+      render();
+    }
     return;
   }
   if (act === "connect-host") {
@@ -859,7 +923,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "quit") {
-    leaveSettingsPage();
+    rememberDialogTrigger("quit-host", target);
     await rpc("quitHost");
     render();
     return;

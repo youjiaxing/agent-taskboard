@@ -100,6 +100,7 @@ if (
 }
 
 await page.click('.run-dock button[data-act="stop-run"]');
+await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 
 await browser.close();
 console.log("pty disconnect e2e ok");

@@ -227,17 +227,19 @@ if (!(await session.page.$("button[data-act='choose-project-directory']"))) {
 if (await session.page.$("button[data-act='infer']")) {
   throw new Error("registration should infer automatically instead of asking for a manual infer click");
 }
-await session.page.click(".overlay.modal[data-act='close-form']", { position: { x: 2, y: 2 } });
-if (!(await session.page.$("form[data-form='project']"))) {
-  throw new Error("clicking outside the registration sheet should keep the form open");
+await session.page.click(".dialog-backdrop[data-dialog-id='project-form']", { position: { x: 2, y: 2 } });
+if (await session.page.$("form[data-form='project']")) {
+  throw new Error("clicking the backdrop should close a normal form dialog");
 }
+await session.page.click("button[data-act='register']");
+await session.page.waitForSelector("form[data-form='project']");
 await session.page.click("button[data-act='choose-project-directory']");
 await session.page.waitForSelector("form[data-form='project'] .notice.bad");
 const pickerNotice = await session.page.$eval("form[data-form='project'] .notice.bad", (node) => node.textContent?.trim());
 if (!pickerNotice?.includes("系统目录选择只在本机桌面窗口可用")) {
   throw new Error(`browser Client should explain the desktop-only folder picker, got ${pickerNotice}`);
 }
-await session.page.click("form[data-form='project'] button[data-act='close-form']");
+await session.page.click("form[data-form='project'] .dialog-actions button[data-act='dismiss-dialog']");
 await session.page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await session.page.click("button[data-act='new-run']");
 await session.page.waitForSelector(".launch-sheet");
@@ -278,6 +280,7 @@ if (await session.page.$(".keyboard-help")) {
   throw new Error("terminal focus should keep ? in the official TUI");
 }
 await session.page.click(".run-dock button[data-act='stop-run']");
+await session.page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await session.page.waitForFunction(() => !document.querySelector(".run-dock"));
 
 await session.page.click("button[data-act='settings']");

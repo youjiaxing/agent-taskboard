@@ -18,6 +18,7 @@ try {
   };
   await readable();
   await page.getByRole('button', { name: '停止', exact: true }).click();
+  await page.locator("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']").click();
   await page.waitForSelector('.mobile-board-view');
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await page.waitForSelector('.mobile-run-output');

@@ -25,6 +25,7 @@ fn registering_a_github_project_lists_it_and_makes_it_current() {
     assert_eq!(out.snapshot.focused_project_id, project.id);
     assert!(out.snapshot.empty_actions.is_empty());
     assert!(!project.has_active_run);
+    assert_eq!(project.active_run_count, 0);
     assert!(project.tracker_synced);
     assert!(matches!(
         project.connection,
@@ -712,4 +713,23 @@ fn probe_source(script: ScriptedGitHub, pat: Option<&str>) -> CredentialSource {
         ProjectConnection::Ready { source } => source,
         other => panic!("expected ready, got {other:?}"),
     }
+}
+
+#[test]
+fn project_summary_without_active_run_count_still_deserializes() {
+    let summary: host_kernel::ProjectSummary = serde_json::from_value(serde_json::json!({
+        "id": "p1",
+        "name": "garden",
+        "localPath": "/work/garden",
+        "tracker": "github",
+        "githubHost": "github.com",
+        "repository": "you/garden",
+        "connection": { "status": "ready", "source": "cli" },
+        "hasActiveRun": true,
+        "trackerSynced": true,
+    }))
+    .unwrap();
+
+    assert!(summary.has_active_run);
+    assert_eq!(summary.active_run_count, 0);
 }

@@ -28,6 +28,7 @@ await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
 const sheet = page.locator(".launch-sheet");
+const scrollArea = page.locator(".launch-sheet .dialog-content");
 // A preview response can replace the sheet between locating it and reading layout.
 // Read attached geometry in one browser task, retaining the actual width assertion.
 const sheetBox = await page.waitForFunction(() => {
@@ -100,13 +101,13 @@ if (await effortSelect.count()) {
 }
 await page.waitForFunction(({ model, effort }) => document.querySelector(".launch-command-preview")?.textContent?.includes(`--model ${model} --effort ${effort}`), { model: selectedModel, effort: selectedEffort });
 
-await sheet.evaluate((node) => {
+await scrollArea.evaluate((node) => {
   node.scrollTop = node.scrollHeight;
 });
-const beforeWait = await sheet.evaluate((node) => node.scrollTop);
+const beforeWait = await scrollArea.evaluate((node) => node.scrollTop);
 if (beforeWait <= 0) throw new Error("launch sheet should be internally scrollable at this viewport");
 await page.waitForTimeout(1_250);
-const afterWait = await sheet.evaluate((node) => node.scrollTop);
+const afterWait = await scrollArea.evaluate((node) => node.scrollTop);
 if (afterWait < beforeWait - 2) {
   throw new Error(`launch sheet scroll reset after one second: ${beforeWait} -> ${afterWait}`);
 }
@@ -115,6 +116,7 @@ await page.click(".launch-sheet button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
 await page.waitForSelector(".run-dock");
 await page.click(".run-dock button[data-act='stop-run']");
+await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await page.waitForFunction(() => !document.querySelector(".run-dock"));
 
 await page.click("button[data-act='new-run']");

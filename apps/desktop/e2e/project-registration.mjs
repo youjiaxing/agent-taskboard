@@ -44,7 +44,7 @@ await page.waitForSelector("form[data-form='project'] [data-inference='pending']
 if (await page.locator("form[data-form='project'] button[type='submit']").isDisabled()) {
   throw new Error("inference must not disable manual submission");
 }
-if (await page.locator("form[data-form='project'] button[data-act='close-form']").isDisabled()) {
+if (await page.locator("form[data-form='project'] .dialog-actions button[data-act='dismiss-dialog']").isDisabled()) {
   throw new Error("inference must not disable cancellation");
 }
 if (await page.locator("#project-path").isDisabled()) {
@@ -85,7 +85,7 @@ await page.fill("#project-repo", "manual/cancelled");
 await page.fill("#project-path", staleProjectDir);
 await page.locator("#project-path").dispatchEvent("change");
 await page.waitForSelector("[data-inference='pending']");
-await page.click("button[data-act='close-form']");
+await page.click("form[data-form='project'] .dialog-actions button[data-act='dismiss-dialog']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 
 await page.click("button[data-act='register']");
@@ -112,7 +112,7 @@ for (let attempt = 0; inferenceRequests <= requestsBeforeRetry && attempt < 20; 
 if (inferenceRequests <= requestsBeforeRetry) throw new Error("retry should issue a new inference request");
 await page.waitForSelector("[data-inference='failed'] button[data-act='retry-infer']");
 await page.click("form[data-form='project'] button[type='submit']");
-await page.waitForSelector("form[data-form='project'] > .notice.bad");
+await page.waitForSelector("form[data-form='project'] .notice.bad");
 if ((await page.inputValue("#project-name")) !== "failed draft" || (await page.inputValue("#project-repo")) !== "manual/retry") {
   throw new Error("registration failure must preserve the complete draft");
 }

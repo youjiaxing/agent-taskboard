@@ -7,6 +7,7 @@ import { loopbackNotice } from "./run";
 import { fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
+import { badge, button, formField, selectControl, textArea, textInput } from "../components/primitives";
 
 export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
@@ -76,14 +77,21 @@ export function createIssueForm(copy: ShellCopy, snap: Snapshot): string {
   return `<section class="issue-editor issue-create-editor">
     <form data-act="issue-create" data-form="issue-create" aria-busy="${pending ? "true" : "false"}">
       <div class="issue-editor-title"><h2>${escapeHtml(copy.createIssue)}</h2></div>
-      <label class="label" for="issue-create-title">${escapeHtml(copy.issueTitle)}</label>
-      <input id="issue-create-title" name="title" required maxlength="240" value="${escapeHtml(ui.createIssueDraft.title)}" ${pending ? "disabled" : ""} />
-      <label class="label" for="issue-create-body">${escapeHtml(copy.issueBody)}</label>
-      <textarea id="issue-create-body" name="body" rows="5" ${pending ? "disabled" : ""}>${escapeHtml(ui.createIssueDraft.body)}</textarea>
+      ${formField({
+        id: "issue-create-title",
+        label: copy.issueTitle,
+        required: true,
+        control: textInput({ id: "issue-create-title", name: "title", value: ui.createIssueDraft.title, required: true, disabled: pending, attributes: { maxlength: 240 } }),
+      })}
+      ${formField({
+        id: "issue-create-body",
+        label: copy.issueBody,
+        control: textArea({ id: "issue-create-body", name: "body", value: ui.createIssueDraft.body, rows: 5, disabled: pending }),
+      })}
       ${formFeedback(key)}
       <div class="actions">
-        <button type="button" data-act="cancel-new-issue" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.createIssue)}</button>
+        ${button({ id: "cancel-new-issue", label: copy.cancel, disabled: pending })}
+        ${button({ id: "submit-issue-create", label: pending ? copy.operationPending : copy.createIssue, disabled: pending, busy: pending }, { type: "submit", variant: "primary" })}
       </div>
     </form>
   </section>`;
@@ -340,7 +348,7 @@ export function issueMetadataTags(labels: string[] | undefined, includeStatus = 
     .filter((label) => label.startsWith("type:") || (includeStatus && label.startsWith("status:")))
     .map((label) => {
       const [kind, ...rest] = label.split(":");
-      return `<span class="tag">${escapeHtml(`${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`)}</span>`;
+      return badge({ label: `${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`, className: "tag" });
     })
     .join("");
 }
@@ -353,11 +361,11 @@ export function issueCard(
 ): string {
   const activity = issueActivityLabel(copy, issue.activity);
   const tags = [
-    activity ? `<span class="tag">${escapeHtml(activity)}</span>` : "",
-    issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
+    activity ? badge({ label: activity, status: activity === copy.executionStopped ? "danger" : "info", className: "tag" }) : "",
+    issue.triageRole ? badge({ label: issue.triageRole, className: "tag" }) : "",
     issueMetadataTags(issue.labels),
     issue.claimedBy.length
-      ? `<span class="tag">${escapeHtml(copy.claimed)} ${escapeHtml(issue.claimedBy.join(", "))}</span>`
+      ? badge({ label: `${copy.claimed} ${issue.claimedBy.join(", ")}`, className: "tag" })
       : "",
   ]
     .filter(Boolean)
@@ -508,15 +516,22 @@ export function issueEditForm(copy: ShellCopy, issue: IssueDetail): string {
   return `<section class="detail-block issue-editor issue-edit-editor">
     <form data-act="issue-edit" data-form="issue-edit" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
       <h4>${escapeHtml(copy.editIssue)}</h4>
-      <label class="label" for="issue-edit-title">${escapeHtml(copy.issueTitle)}</label>
-      <input id="issue-edit-title" name="title" required maxlength="240" value="${escapeHtml(draft.title)}" ${pending ? "disabled" : ""} />
-      <label class="label" for="issue-edit-body">${escapeHtml(copy.issueBody)}</label>
-      <textarea id="issue-edit-body" name="body" rows="8" ${pending ? "disabled" : ""}>${escapeHtml(draft.body)}</textarea>
+      ${formField({
+        id: "issue-edit-title",
+        label: copy.issueTitle,
+        required: true,
+        control: textInput({ id: "issue-edit-title", name: "title", value: draft.title, required: true, disabled: pending, attributes: { maxlength: 240 } }),
+      })}
+      ${formField({
+        id: "issue-edit-body",
+        label: copy.issueBody,
+        control: textArea({ id: "issue-edit-body", name: "body", value: draft.body, rows: 8, disabled: pending }),
+      })}
       ${formFeedback(key)}
       ${issueConflictFeedback(copy, key)}
       <div class="actions">
-        <button type="button" data-act="cancel-edit-issue" data-id="${escapeHtml(issue.id)}" ${pending ? "disabled" : ""}>${escapeHtml(copy.cancel)}</button>
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.saveIssue)}</button>
+        ${button({ id: "cancel-edit-issue", label: copy.cancel, disabled: pending, data: { id: issue.id } })}
+        ${button({ id: "submit-issue-edit", label: pending ? copy.operationPending : copy.saveIssue, disabled: pending, busy: pending }, { type: "submit", variant: "primary" })}
       </div>
     </form>
   </section>`;
@@ -528,11 +543,13 @@ export function issueCommentForm(copy: ShellCopy, issue: IssueDetail): string {
   return `<section class="detail-block issue-editor issue-comment-editor">
     <form data-act="issue-comment" data-form="issue-comment" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
       <h4>${escapeHtml(copy.addComment)}</h4>
-      <textarea name="body" rows="4" required maxlength="10000" placeholder="${escapeHtml(copy.commentPlaceholder)}" ${pending ? "disabled" : ""}>${escapeHtml(ui.issueCommentDrafts.get(issueDraftKey(issue.id)) ?? "")}</textarea>
+      ${formField({
+        label: copy.addComment,
+        required: true,
+        control: textArea({ name: "body", value: ui.issueCommentDrafts.get(issueDraftKey(issue.id)) ?? "", rows: 4, required: true, disabled: pending, placeholder: copy.commentPlaceholder, attributes: { maxlength: 10000 } }),
+      })}
       ${formFeedback(key)}
-      <div class="actions">
-        <button type="submit" class="primary" ${pending ? "disabled" : ""}>${escapeHtml(pending ? copy.operationPending : copy.addComment)}</button>
-      </div>
+      <div class="actions">${button({ id: "submit-issue-comment", label: pending ? copy.operationPending : copy.addComment, disabled: pending, busy: pending }, { type: "submit", variant: "primary" })}</div>
     </form>
   </section>`;
 }
@@ -544,36 +561,44 @@ export function issueRelationsForm(copy: ShellCopy, board: BoardSnapshot, issue:
   const parentPending = ui.formOperations.pending.has(parentKey);
   const blockersPending = ui.formOperations.pending.has(blockersKey);
   const options = issueOptionList(board, issue);
-  const parentOptions = options
-    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.parent === option.id ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
-    .join("");
-  const blockerOptions = options
-    .map((option) => `<option value="${escapeHtml(option.id)}" ${draft.blockedBy.includes(option.id) ? "selected" : ""}>${escapeHtml(issueOptionLabel(option))}</option>`)
-    .join("");
   return `<section class="detail-block issue-editor issue-relations-editor">
     <h4>${escapeHtml(copy.family)} / ${escapeHtml(copy.deps)}</h4>
     <form data-act="issue-parent" data-form="issue-parent" data-id="${escapeHtml(issue.id)}" aria-busy="${parentPending ? "true" : "false"}">
-      <label class="label" for="issue-parent">${escapeHtml(copy.parentIssue)}</label>
-      <select id="issue-parent" name="parent" ${parentPending ? "disabled" : ""}>
-        <option value="">${escapeHtml(copy.none)}</option>
-        ${parentOptions}
-      </select>
+      ${formField({
+        id: "issue-parent",
+        label: copy.parentIssue,
+        control: selectControl({
+          id: "issue-parent",
+          name: "parent",
+          disabled: parentPending,
+          options: [
+            { value: "", label: copy.none, selected: !draft.parent },
+            ...options.map((option) => ({ value: option.id, label: issueOptionLabel(option), selected: draft.parent === option.id })),
+          ],
+        }),
+      })}
       ${formFeedback(parentKey)}
       ${issueConflictFeedback(copy, parentKey)}
-      <div class="actions">
-        <button type="submit" class="primary" ${parentPending ? "disabled" : ""}>${escapeHtml(parentPending ? copy.operationPending : copy.saveRelations)}</button>
-      </div>
+      <div class="actions">${button({ id: "submit-issue-parent", label: parentPending ? copy.operationPending : copy.saveRelations, disabled: parentPending, busy: parentPending }, { type: "submit", variant: "primary" })}</div>
     </form>
     <form data-act="issue-blockers" data-form="issue-blockers" data-id="${escapeHtml(issue.id)}" aria-busy="${blockersPending ? "true" : "false"}">
-      <label class="label" for="issue-blocked-by">${escapeHtml(copy.dependencyBlockers)}</label>
-      <select id="issue-blocked-by" name="blockedBy" multiple size="${Math.min(6, Math.max(3, options.length))}" ${blockersPending ? "disabled" : ""}>
-        ${blockerOptions}
-      </select>
+      ${formField({
+        id: "issue-blocked-by",
+        label: copy.dependencyBlockers,
+        control: selectControl({
+          id: "issue-blocked-by",
+          name: "blockedBy",
+          disabled: blockersPending,
+          multiple: true,
+          size: Math.min(6, Math.max(3, options.length)),
+          options: options.map((option) => ({ value: option.id, label: issueOptionLabel(option), selected: draft.blockedBy.includes(option.id) })),
+        }),
+      })}
       ${formFeedback(blockersKey)}
       ${issueConflictFeedback(copy, blockersKey)}
       <div class="actions">
-        <button type="button" data-act="clear-issue-blockers" data-id="${escapeHtml(issue.id)}" ${blockersPending ? "disabled" : ""}>${escapeHtml(copy.clearDependency)}</button>
-        <button type="submit" class="primary" ${blockersPending ? "disabled" : ""}>${escapeHtml(blockersPending ? copy.operationPending : copy.saveRelations)}</button>
+        ${button({ id: "clear-issue-blockers", label: copy.clearDependency, disabled: blockersPending, data: { id: issue.id } })}
+        ${button({ id: "submit-issue-blockers", label: blockersPending ? copy.operationPending : copy.saveRelations, disabled: blockersPending, busy: blockersPending }, { type: "submit", variant: "primary" })}
       </div>
     </form>
   </section>`;

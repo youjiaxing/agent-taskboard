@@ -1,4 +1,5 @@
 import { escapeHtml } from "./client-utils";
+import { drawer } from "./components/dialog";
 
 type MobileCopy = {
   mobileSwitchScope: string;
@@ -16,6 +17,7 @@ type MobileCopy = {
   noItems: string;
   stopRun: string;
   unboundIssue: string;
+  cancel: string;
 };
 
 type MobileHost = { id: string; displayName: string; local: boolean };
@@ -74,18 +76,19 @@ export function mobileScopeSheet(copy: MobileCopy, snapshot: MobileSnapshot): st
       <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
     </div>`)
     .join("");
-  return `<div class="overlay modal" data-act="close-mobile-scope">
-    <section class="sheet mobile-scope-sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.mobileSwitchScope)}</h2>
-      <div class="mobile-scope-hosts">${hosts}</div>
+  return drawer({
+    id: "mobile-scope",
+    title: copy.mobileSwitchScope,
+    closeLabel: copy.cancel,
+    className: "mobile-scope-sheet",
+    body: `<div class="mobile-scope-hosts">${hosts}</div>
       <div class="mobile-scope-projects">${projects}</div>
       <div class="actions">
         <button type="button" data-act="register">${escapeHtml(copy.addProject)}</button>
         <button type="button" data-act="pair">${escapeHtml(copy.pairAnotherHost)}</button>
         <button type="button" data-act="open-usage">${escapeHtml(copy.usage)}</button>
-      </div>
-    </section>
-  </div>`;
+      </div>`,
+  });
 }
 
 export function mobileMain(options: MobileRendererOptions): string {

@@ -24,6 +24,7 @@ import "./shell-graph.css";
 import "./shell-run.css";
 import "./shell-dialogs.css";
 import "./shell-mobile.css";
+import { handleDialogKeydown, rememberDialogTrigger } from "./components/dialog-controller";
 
 import {
   escapeHtml,
@@ -716,10 +717,19 @@ export function typingTarget(target: EventTarget | null): boolean {
 }
 
 document.addEventListener("keydown", (event) => {
-  if (!ui.snapshot || terminalHasFocus()) return;
-  if (ui.appearanceMenuOpen && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+  if (!ui.snapshot) return;
+  if (event.key === "?" && document.querySelector("[data-dialog-id='keyboard-help']")) {
     event.preventDefault();
-    const items = [...ui.app.querySelectorAll<HTMLButtonElement>(".appearance-menu button")];
+    document.querySelector<HTMLButtonElement>("[data-dialog-id='keyboard-help'] button[data-dialog-dismiss='true']")?.click();
+    return;
+  }
+  if (handleDialogKeydown(event)) return;
+  if (document.querySelector("[data-dialog-root='true']")) return;
+  if (terminalHasFocus()) return;
+  const openMenu = ui.app.querySelector<HTMLElement>(".ui-menu");
+  if (openMenu && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const items = [...openMenu.querySelectorAll<HTMLButtonElement>("button:not([disabled])")];
     if (!items.length) return;
     const current = items.findIndex((item) => item === document.activeElement);
     const next = event.key === "Home"
@@ -732,6 +742,9 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "?" && !typingTarget(event.target)) {
     event.preventDefault();
+    if (!ui.keyboardHelpOpen && document.activeElement instanceof HTMLElement) {
+      rememberDialogTrigger("keyboard-help", document.activeElement);
+    }
     ui.keyboardHelpOpen = !ui.keyboardHelpOpen;
     render();
     return;
@@ -747,9 +760,12 @@ document.addEventListener("keydown", (event) => {
       ui.moreMenuOpen = false;
       render();
       ui.app.querySelector<HTMLButtonElement>("button[data-act='more-menu']")?.focus();
-    } else if (ui.keyboardHelpOpen) {
-      ui.keyboardHelpOpen = false;
+    } else if (ui.projectMenuId) {
+      event.preventDefault();
+      const projectId = ui.projectMenuId;
+      ui.projectMenuId = "";
       render();
+      ui.app.querySelector<HTMLButtonElement>(`button[data-act='project-menu'][data-id='${CSS.escape(projectId)}']`)?.focus();
     }
     return;
   }

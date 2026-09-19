@@ -16,13 +16,47 @@ import {
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { hostOverviewPage, keyboardHelpDialog, liftedRunView, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage, viewChangesPanel } from "./shell";
+import { dangerConfirmationDialog, hostOverviewPage, keyboardHelpDialog, liftedRunView, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage, viewChangesPanel } from "./shell";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
 import { applyClientPanelWidths, fixedPanelResizeHandle, panelUiText } from "../workbench";
 import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
+import { dialog, dialogDismissButton } from "../components/dialog";
+import { button, emptyState, formField, menu, notice, textArea, textInput } from "../components/primitives";
+import { syncDialogFocus } from "../components/dialog-controller";
+
+function pairingDialog(copy: import("../protocol").ShellCopy, localCopy: ReturnType<typeof startupCopy>, snap: import("../protocol").Snapshot): string {
+  const pending = ui.formOperations.pending.has("pairing");
+  const body = `<p class="hint">${escapeHtml(copy.pairingSamePayload)}</p>
+    <fieldset class="pairing-fields" ${pending ? 'disabled aria-busy="true"' : ""}>
+      ${formField({
+        id: "pairing-address",
+        label: `${copy.pairingThisHost} · ${copy.pairingAddress}`,
+        control: `${textInput({ id: "pairing-address", value: ui.pairingAddress, attributes: { "data-field": "address" } })}<div class="actions">${button({ id: "show-offer", label: copy.pairingShow }, { variant: "primary" })}</div>`,
+      })}
+      ${snap.pairingOffer ? `<div class="offer"><div class="qr">${snap.pairingOffer.qrSvg}</div><pre class="payload">${escapeHtml(snap.pairingOffer.text)}</pre>${button({ id: "copy-offer", label: copy.pairingCopy })}</div>` : ""}
+      ${formField({
+        label: copy.pairingToAnother,
+        control: `${textArea({ value: ui.pairingPaste, rows: 4, placeholder: copy.pairingPaste, attributes: { "data-field": "paste" } })}<div class="actions">${button({ id: "connect-host", label: copy.pairingConnect }, { variant: "primary" })}</div>`,
+      })}
+    </fieldset>
+    ${pending ? `<p role="status">${escapeHtml(copy.operationPending)}</p>` : ""}
+    ${formFeedback("pairing")}
+    ${ui.pairingError ? notice({ status: "danger", role: "alert", message: ui.pairingError }) : ""}`;
+  return dialog({
+    id: "pairing",
+    tier: "form",
+    title: copy.pairingTitle,
+    body,
+    closeLabel: localCopy.close,
+    dismissible: !pending,
+    initialFocus: "first-field",
+    className: "pairing-sheet",
+    actions: dialogDismissButton(copy.cancel, { disabled: pending }),
+  });
+}
 
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
@@ -100,7 +134,7 @@ export function render(): void {
     && Boolean(selectedIssue)
     && ["board", "dependency-graph", "focus-workspace"].includes(ui.clientView.page);
   const previousGraphCanvas = ui.app.querySelector<HTMLElement>(".graph-canvas");
-  const previousLaunchScrollTop = ui.app.querySelector<HTMLElement>(".launch-sheet")?.scrollTop ?? 0;
+  const previousLaunchScrollTop = ui.app.querySelector<HTMLElement>(".launch-sheet .dialog-content")?.scrollTop ?? 0;
   const previousGraph = previousGraphCanvas
     ? {
         canvas: previousGraphCanvas,
@@ -156,21 +190,30 @@ export function render(): void {
             <div class="appearance-menu-wrap">
               <button type="button" class="chrome-button" data-act="appearance-menu" data-global-action="appearance" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
               ${ui.appearanceMenuOpen
-                ? `<div class="appearance-menu" role="menu" aria-label="${escapeHtml(localCopy.appearance)}">
-                    ${APPEARANCE_DISPLAY_ORDER.map((preference) =>
-                      `<button type="button" role="menuitemradio" aria-checked="${appearance.appearancePreference === preference}" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
-                    ).join("")}
-                  </div>`
+                ? menu({
+                    className: "appearance-menu",
+                    label: localCopy.appearance,
+                    actions: APPEARANCE_DISPLAY_ORDER.map((preference) => ({
+                      id: "appearance",
+                      label: appearancePreferenceLabel(localCopy, preference),
+                      pressed: appearance.appearancePreference === preference,
+                      data: { id: preference },
+                    })),
+                  })
                 : ""}
             </div>
             <button type="button" class="chrome-button ${ui.clientView.page === "settings" ? "active" : ""}" data-act="settings" data-global-action="settings">${escapeHtml(copy.settings)}</button>
             <div class="more-menu-wrap">
               <button type="button" class="chrome-icon" data-act="more-menu" data-global-action="more" aria-haspopup="menu" aria-expanded="${ui.moreMenuOpen}" aria-label="${escapeHtml(localCopy.more)}">•••</button>
               ${ui.moreMenuOpen
-                ? `<div class="more-menu" role="menu">
-                    ${focusedRun(snap) && !ui.terminalPanelVisible ? `<button type="button" role="menuitem" data-act="show-terminal">${escapeHtml(panelUiText().showTerminal)}</button>` : ""}
-                    <button type="button" role="menuitem" data-act="keyboard-help">${escapeHtml(copy.keyboardHelp)}</button>
-                  </div>`
+                ? menu({
+                    className: "more-menu",
+                    label: localCopy.more,
+                    actions: [
+                      ...(focusedRun(snap) && !ui.terminalPanelVisible ? [{ id: "show-terminal", label: panelUiText().showTerminal }] : []),
+                      { id: "keyboard-help", label: copy.keyboardHelp },
+                    ],
+                  })
                 : ""}
             </div>
           </div>
@@ -220,19 +263,14 @@ export function render(): void {
             ui.clientView.page === "settings"
               ? settingsPage(copy, localCopy, snap, appearance, isMobile)
               : empty
-                ? `<div class="empty">
-                    ${loopbackNotice(snap.loopbackPage)}
-                    <h1>${escapeHtml(copy.noProjectTitle)}</h1>
-                    <p>${escapeHtml(copy.noProjectBody)}</p>
-                    <div class="actions">
-                      ${snap.emptyActions
-                        .map(
-                          (action, index) =>
-                            `<button type="button" class="${index === 0 ? "primary" : ""}" data-act="${emptyActionAct(action)}">${escapeHtml(emptyActionLabel(copy, action))}</button>`,
-                        )
-                        .join("")}
-                    </div>
-                  </div>`
+                ? `${loopbackNotice(snap.loopbackPage)}${emptyState({
+                    title: copy.noProjectTitle,
+                    description: copy.noProjectBody,
+                    actions: snap.emptyActions.map((action, index) => button({
+                      id: emptyActionAct(action),
+                      label: emptyActionLabel(copy, action),
+                    }, { variant: index === 0 ? "primary" : "secondary" })).join(""),
+                  })}`
                 : ui.clientView.page === "usage"
                   ? usagePage(copy, snap)
                   : isMobile
@@ -249,62 +287,12 @@ export function render(): void {
       ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNavigation(copy, snap) : ""}
     </div>
     ${isMobile && ui.mobileScopeOpen ? mobileScopeSheet(copy, snap) : ""}
-    ${
-      ui.pairingOpen
-        ? `<div class="overlay" data-act="close-pairing">
-            <div class="sheet pairing-sheet" data-act="pairing-noop">
-              <h2>${escapeHtml(copy.pairingTitle)}</h2>
-              <p class="hint">${escapeHtml(copy.pairingSamePayload)}</p>
-              <fieldset class="pairing-fields" ${ui.formOperations.pending.has("pairing") ? 'disabled aria-busy="true"' : ""}>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairingThisHost)}</div>
-                <label class="label" for="pairing-address">${escapeHtml(copy.pairingAddress)}</label>
-                <input id="pairing-address" data-field="address" value="${escapeHtml(ui.pairingAddress)}" />
-                <div class="actions">
-                  <button type="button" class="primary" data-act="show-offer">${escapeHtml(copy.pairingShow)}</button>
-                </div>
-                ${
-                  ui.snapshot.pairingOffer
-                    ? `<div class="offer">
-                        <div class="qr">${ui.snapshot.pairingOffer.qrSvg}</div>
-                        <pre class="payload">${escapeHtml(ui.snapshot.pairingOffer.text)}</pre>
-                        <button type="button" data-act="copy-offer">${escapeHtml(copy.pairingCopy)}</button>
-                      </div>`
-                    : ""
-                }
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairedClients)}</div>
-                ${
-                  ui.snapshot.pairedClients.length
-                    ? ui.snapshot.pairedClients
-                        .map(
-                          (client) =>
-                            `<div class="client-row"><span>${escapeHtml(client.name)}</span><button type="button" data-act="revoke" data-id="${escapeHtml(client.id)}">${escapeHtml(copy.revokeClient)}</button></div>`,
-                        )
-                        .join("")
-                    : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`
-                }
-              </div>
-              <div class="field">
-                <div class="label">${escapeHtml(copy.pairingToAnother)}</div>
-                <textarea data-field="paste" rows="4" placeholder="${escapeHtml(copy.pairingPaste)}">${escapeHtml(ui.pairingPaste)}</textarea>
-                <div class="actions">
-                  <button type="button" class="primary" data-act="connect-host">${escapeHtml(copy.pairingConnect)}</button>
-                </div>
-              </div>
-              </fieldset>
-              ${ui.formOperations.pending.has("pairing") ? `<p role="status">${escapeHtml(copy.operationPending)}</p>` : ""}
-              ${formFeedback("pairing")}
-              ${ui.pairingError ? `<p class="notice">${escapeHtml(ui.pairingError)}</p>` : ""}
-            </div>
-          </div>`
-        : ""
-    }
+    ${ui.pairingOpen ? pairingDialog(copy, localCopy, snap) : ""}
     ${ui.formOpen ? projectForm(copy) : ""}
     ${snap.launchForm ? launchForm(copy, snap) : ""}
     ${ui.removeProject ? removeDialog(copy, ui.removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
+    ${dangerConfirmationDialog(copy)}
     ${updateDialog(copy)}
     ${ui.keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
@@ -347,7 +335,8 @@ export function render(): void {
   }
   if (restoredGraphAnchor) paintGraphEdges();
   restoreActiveField(activeField);
-  const nextLaunchSheet = ui.app.querySelector<HTMLElement>(".launch-sheet");
+  syncDialogFocus();
+  const nextLaunchSheet = ui.app.querySelector<HTMLElement>(".launch-sheet .dialog-content");
   if (nextLaunchSheet) nextLaunchSheet.scrollTop = previousLaunchScrollTop;
   const nextDetailScroll = ui.app.querySelector<HTMLElement>(".detail-scroll");
   const savedDetailScroll = selectedIssue

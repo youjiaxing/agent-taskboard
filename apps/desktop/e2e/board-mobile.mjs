@@ -81,6 +81,7 @@ if (!startedIssueRun?.id || startedIssueRun.status !== "running") {
 await session.page.click("button[data-act='mobile-run']");
 await session.page.waitForSelector(".mobile-run-view");
 await session.page.click(".mobile-run-view button[data-act='stop-run']");
+await session.page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await session.page.waitForSelector(".mobile-board-view");
 
 await session.page.click("button[data-act='mobile-scope']");
@@ -95,11 +96,11 @@ for (const action of ["register", "edit-project", "remove-project"]) {
 }
 await session.page.click(".mobile-scope-sheet button[data-act='edit-project']");
 await session.page.waitForSelector("form[data-form='project']");
-await session.page.click("form[data-form='project'] button[data-act='close-form']");
+await session.page.click("form[data-form='project'] .dialog-actions button[data-act='dismiss-dialog']");
 await session.page.click("button[data-act='mobile-scope']");
 await session.page.click(".mobile-scope-sheet button[data-act='remove-project']");
-await session.page.waitForSelector(".overlay[data-act='close-remove']");
-await session.page.click("button[data-act='close-remove']");
+await session.page.waitForSelector("[data-dialog-id='remove-project']");
+await session.page.click("[data-dialog-id='remove-project'] .dialog-actions button[data-act='dismiss-dialog']");
 
 const mobileBoardScrollBeforeIssue = await session.page.$eval(".workspace", (node) => {
   node.scrollTop = node.scrollHeight;
@@ -176,6 +177,7 @@ await session.page.click("button[data-act='mobile-live-terminal']");
 await session.page.waitForSelector(".mobile-run-view .pty-slot");
 const endedRunId = await session.page.$eval(".mobile-run-view .pty-slot", (node) => node.getAttribute("data-run"));
 await session.page.click(".mobile-run-view button[data-act='stop-run']");
+await session.page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await session.page.waitForSelector(".mobile-board-view");
 await session.page.click("button[data-act='mobile-run']");
 await session.page.waitForSelector(".mobile-run-view");

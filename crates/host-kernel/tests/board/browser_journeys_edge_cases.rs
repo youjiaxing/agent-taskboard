@@ -335,6 +335,44 @@ fn browser_manages_projects_from_the_desktop_sidebar_without_losing_context() {
 }
 
 #[test]
+fn browser_enforces_shared_dialog_geometry_focus_and_confirmation_contracts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/dialogs");
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open("you/dialogs", 1, "dialog contract issue"));
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    let project_id = register(&mut host, "dialog-project", &dir, "you/dialogs");
+    start_bound_grok(&mut host, &project_id, "you/dialogs#1");
+    let offer = host
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": "http://127.0.0.1:10529"
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap();
+    host.handle(serde_json::json!({
+        "op": "redeemPairing",
+        "code": offer.code,
+        "clientName": "dialog client"
+    }))
+    .unwrap();
+
+    run_browser_e2e(host, "dialog-contracts.mjs", &[]);
+}
+
+#[test]
 fn browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/lifecycle");
