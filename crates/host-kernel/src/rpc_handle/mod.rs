@@ -66,12 +66,12 @@ impl HostKernel {
             | "quitHost"
             | "redeemPairing"
             | "revokeClient"
+            | "setAppearancePreference"
             | "setClientView"
             | "setHostAutoAdvance"
             | "setLanguage"
             | "setNotificationPrefs"
             | "setShowCommandPreview"
-            | "setTheme"
             | "showWindow"
             | "snapshot"
             | "updateInstallGate" => self.handle_host_rpc(&op, request),

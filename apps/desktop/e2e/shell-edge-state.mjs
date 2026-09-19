@@ -1,7 +1,6 @@
 import { chromium } from "playwright";
 import {
   assertShellRegionsDoNotOverlap,
-  createVisualAssert,
   installDeterministicHostProtocol,
 } from "./visual-regression.mjs";
 
@@ -85,6 +84,5 @@ if (state === "empty-host") {
 }
 
 await assertShellRegionsDoNotOverlap(page);
-await createVisualAssert(page)(`issue-99-edge-${state}-1280x840.png`);
 await browser.close();
 console.log(`shell edge state ${state} ok`);

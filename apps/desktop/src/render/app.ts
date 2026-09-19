@@ -1,8 +1,19 @@
-import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, languageLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, restoreGraphAnchor, syncGraphSelection, themeLabel } from "../main";
+import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, languageLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, restoreGraphAnchor, syncGraphSelection } from "../main";
 import { clientCopy } from "../view-helpers";
-import { startupCopy } from "../startup-copy";
-import type { ScrollPosition } from "../protocol";
-import { currentProject, ensureMobileAppearance, focusedRun, mobileClient, mobileMain, mobileNavigation, mobileScopeSheet } from "../view-helpers";
+import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
+import type { AppearancePreference, ScrollPosition } from "../protocol";
+import {
+  APPEARANCE_PREFERENCES,
+  browserClient,
+  currentProject,
+  ensureBrowserAppearance,
+  focusedRun,
+  mobileClient,
+  mobileMain,
+  mobileNavigation,
+  mobileScopeSheet,
+  resolveTheme,
+} from "../view-helpers";
 import { escapeHtml } from "../client-utils";
 import { hostOverviewPage, keyboardHelpDialog, launchEnvironmentStatus, liftedRunView, projectBlock, quitOfferDialog, runDock, startupSettings, updateDialog, updateSettings, usagePage, viewChangesPanel } from "./shell";
 import { issuePanelIcon, projectMain } from "./board";
@@ -12,21 +23,30 @@ import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
 
+const APPEARANCE_MENU_ORDER: AppearancePreference[] = ["warm", "light", "dark", "system"];
+const LANGUAGES = ["zh-CN", "en"] as const;
+
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
   const snap = ui.snapshot;
   const isMobile = mobileClient();
   const activeField = captureActiveField();
-  const appearance = isMobile
-    ? { ...snap.appearance, ...ensureMobileAppearance() }
-    : snap.appearance;
-  const copy = isMobile && appearance.language !== snap.appearance.language
+  const browserAppearance = browserClient() ? ensureBrowserAppearance() : null;
+  const appearance = {
+    ...snap.appearance,
+    language: isMobile && browserAppearance ? browserAppearance.language : snap.appearance.language,
+    appearancePreference: browserAppearance?.appearancePreference ?? snap.appearance.appearancePreference,
+    appearancePreferences: browserAppearance ? APPEARANCE_PREFERENCES : snap.appearance.appearancePreferences,
+  };
+  const copy = appearance.language !== snap.appearance.language
     ? clientCopy(appearance.language, snap.copy)
     : snap.copy;
+  const localCopy = startupCopy(appearance.language);
+  const resolvedTheme = resolveTheme(appearance.appearancePreference, ui.systemAppearance);
   const { hosts, projects } = snap;
   const project = currentProject(snap);
   document.documentElement.lang = appearance.language === "zh-CN" ? "zh-CN" : "en";
-  document.documentElement.dataset.theme = appearance.theme;
+  document.documentElement.dataset.theme = resolvedTheme;
   document.documentElement.dataset.mobile = isMobile ? "true" : "false";
   document.title = copy.appName;
 
@@ -131,9 +151,17 @@ export function render(): void {
             ${showIssueToggle
               ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
               : ""}
+            <div class="appearance-menu-wrap">
+              <button type="button" class="chrome-button" data-act="appearance-menu" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
+              ${ui.appearanceMenuOpen
+                ? `<div class="appearance-menu" role="menu" aria-label="${escapeHtml(localCopy.appearance)}">
+                    ${APPEARANCE_MENU_ORDER.map((preference) =>
+                      `<button type="button" role="menuitemradio" aria-checked="${appearance.appearancePreference === preference}" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
+                    ).join("")}
+                  </div>`
+                : ""}
+            </div>
             <button type="button" class="chrome-button" data-act="settings">${escapeHtml(copy.settings)}</button>
-            <button type="button" class="chrome-button ${appearance.theme !== "plain-night" ? "active" : ""}" data-act="shade" data-id="light">${escapeHtml(copy.shadeLight)}</button>
-            <button type="button" class="chrome-button ${appearance.theme === "plain-night" ? "active" : ""}" data-act="shade" data-id="dark">${escapeHtml(copy.shadeDark)}</button>
           </div>
         </div>
       </header>
@@ -215,7 +243,7 @@ export function render(): void {
               <div class="field">
                 <div class="label">${escapeHtml(copy.language)}</div>
                 <div class="choices">
-                  ${appearance.languages
+                  ${LANGUAGES
                     .map(
                       (language) =>
                         `<button type="button" class="${appearance.language === language ? "active" : ""}" data-act="language" data-id="${language}">${escapeHtml(languageLabel(copy, language))}</button>`,
@@ -224,20 +252,18 @@ export function render(): void {
                 </div>
               </div>
               <div class="field">
-                <div class="label">${escapeHtml(copy.theme)}</div>
+                <div class="label">${escapeHtml(localCopy.appearance)}</div>
                 <div class="choices">
-                  ${appearance.themes
-                    .map(
-                      (theme) =>
-                        `<button type="button" class="${appearance.theme === theme ? "active" : ""}" data-act="theme" data-id="${theme}">${escapeHtml(themeLabel(copy, theme))}</button>`,
-                    )
-                    .join("")}
+                  ${APPEARANCE_MENU_ORDER.map(
+                    (preference) =>
+                      `<button type="button" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
+                  ).join("")}
                 </div>
               </div>
-              ${startupSettings(startupCopy(appearance.language), snap)}
+              ${startupSettings(localCopy, snap)}
               <div class="field">
-                <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(startupCopy(appearance.language).rereadLaunchEnvironment)}</button>
-                ${launchEnvironmentStatus(startupCopy(appearance.language))}
+                <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(localCopy.rereadLaunchEnvironment)}</button>
+                ${launchEnvironmentStatus(localCopy)}
               </div>
               ${updateSettings(copy)}
               <div class="field">

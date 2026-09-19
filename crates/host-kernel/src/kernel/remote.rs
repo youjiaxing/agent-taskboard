@@ -202,8 +202,7 @@ impl HostKernel {
     ) -> Result<(), KernelError> {
         let file = ClientSettingsFile {
             language: appearance.language,
-            theme: appearance.theme,
-            last_light_theme: appearance.last_light_theme,
+            appearance_preference: appearance.appearance_preference,
             focused_host_id: self.focused_host_id.clone(),
             remote_hosts: self
                 .remote_hosts

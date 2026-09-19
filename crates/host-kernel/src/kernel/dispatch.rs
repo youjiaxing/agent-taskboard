@@ -36,10 +36,12 @@ impl HostKernel {
                 self.persist_client_settings(&appearance)?;
                 self.appearance = appearance;
             }
-            Command::SetTheme(theme) => {
-                let appearance = self.appearance.with_theme(theme);
-                self.persist_client_settings(&appearance)?;
-                self.appearance = appearance;
+            Command::SetAppearancePreference(preference) => {
+                if self.appearance.appearance_preference != preference {
+                    let appearance = self.appearance.with_appearance_preference(preference);
+                    self.persist_client_settings(&appearance)?;
+                    self.appearance = appearance;
+                }
             }
             Command::BeginPairingOffer { address } => {
                 let address = pairing::parse_http_url(&address).map_err(KernelError::Protocol)?;

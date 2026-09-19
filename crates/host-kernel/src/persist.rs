@@ -11,7 +11,9 @@ use crate::owner;
 use crate::pairing;
 use crate::protocol::AppearanceSelection;
 use crate::refresh;
-use crate::{KernelError, Language, SystemAppearance, Theme, TrackerKind, LOCAL_HOST_ID};
+use crate::{
+    AppearancePreference, KernelError, Language, SystemAppearance, TrackerKind, LOCAL_HOST_ID,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,8 +145,8 @@ pub(crate) fn load_paired_clients(path: &Path) -> Result<Vec<pairing::IssuedClie
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ClientSettingsFile {
     pub(crate) language: Language,
-    pub(crate) theme: Theme,
-    pub(crate) last_light_theme: Theme,
+    #[serde(default)]
+    pub(crate) appearance_preference: AppearancePreference,
     #[serde(default = "local_host_id")]
     pub(crate) focused_host_id: String,
     #[serde(default)]
@@ -182,7 +184,7 @@ pub(crate) struct ClientSecretsFile {
 pub(crate) fn load_or_init_appearance(
     path: &Path,
     system_locale: &str,
-    system_appearance: SystemAppearance,
+    _system_appearance: SystemAppearance,
 ) -> Result<
     (
         AppearanceSelection,
@@ -198,13 +200,12 @@ pub(crate) fn load_or_init_appearance(
 > {
     if path.exists() {
         let raw = fs::read_to_string(path)?;
-        if let Ok(mut file) = serde_json::from_str::<ClientSettingsFile>(&raw) {
-            file.last_light_theme = daytime_theme(file.last_light_theme);
+        // 旧文件里的 theme/lastLightTheme 等字段由 serde 直接忽略，偏好回落到默认 system。
+        if let Ok(file) = serde_json::from_str::<ClientSettingsFile>(&raw) {
             return Ok((
                 AppearanceSelection {
                     language: file.language,
-                    theme: file.theme,
-                    last_light_theme: file.last_light_theme,
+                    appearance_preference: file.appearance_preference,
                 },
                 file.focused_host_id,
                 file.remote_hosts,
@@ -215,34 +216,15 @@ pub(crate) fn load_or_init_appearance(
                 file.notify_sound,
             ));
         }
-        if let Ok(mut file) = serde_json::from_str::<AppearanceSelection>(&raw) {
-            file.last_light_theme = daytime_theme(file.last_light_theme);
-            return Ok((
-                file,
-                LOCAL_HOST_ID.to_string(),
-                Vec::new(),
-                board::DEFAULT_RECENT_LIMIT,
-                CenterView::Board,
-                true,
-                true,
-                true,
-            ));
-        }
     }
     let language = match_language(system_locale);
-    let theme = match system_appearance {
-        SystemAppearance::Light => Theme::WarmPaper,
-        SystemAppearance::Dark => Theme::PlainNight,
-    };
     let appearance = AppearanceSelection {
         language,
-        theme,
-        last_light_theme: Theme::WarmPaper,
+        appearance_preference: AppearancePreference::System,
     };
     let file = ClientSettingsFile {
         language,
-        theme,
-        last_light_theme: Theme::WarmPaper,
+        appearance_preference: AppearancePreference::System,
         focused_host_id: LOCAL_HOST_ID.to_string(),
         remote_hosts: Vec::new(),
         recent_completed_limit: board::DEFAULT_RECENT_LIMIT,
@@ -301,13 +283,6 @@ pub(crate) fn match_language(locale: &str) -> Language {
         Language::ZhCn
     } else {
         Language::En
-    }
-}
-
-pub(crate) fn daytime_theme(theme: Theme) -> Theme {
-    match theme {
-        Theme::PlainNight => Theme::WarmPaper,
-        other => other,
     }
 }
 

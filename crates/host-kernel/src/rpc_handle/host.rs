@@ -42,14 +42,16 @@ impl HostKernel {
                 )?;
                 self.dispatch(Command::SetLanguage(language))
             }
-            "setTheme" => {
-                let theme = serde_json::from_value(
+            "setAppearancePreference" => {
+                let appearance_preference = serde_json::from_value(
                     request
-                        .get("theme")
+                        .get("appearancePreference")
                         .cloned()
-                        .ok_or_else(|| KernelError::Protocol("missing theme".into()))?,
+                        .ok_or_else(|| {
+                            KernelError::Protocol("missing appearancePreference".into())
+                        })?,
                 )?;
-                self.dispatch(Command::SetTheme(theme))
+                self.dispatch(Command::SetAppearancePreference(appearance_preference))
             }
             "beginPairingOffer" => {
                 let address = request

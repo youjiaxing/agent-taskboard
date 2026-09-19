@@ -136,9 +136,9 @@ _Avoid_: 全图, 归属树, 相关图
 Host 上我们自己开的真实终端（PTY），用来跑 Agent 官方 CLI。不是用户系统里的终端 App，也不是自研聊天 UI。桌面和浏览器 Client 只是把这块终端画出来、把按键送回去；PTY 不在 Client 上。
 _Avoid_: Console panel（可指日志面板）, Chat UI, 把 Terminal / iTerm2 / Windows Terminal 当产品终端
 
-**工作台面板（Workbench panel）**:
-Client 中可独立拖动、调整大小、停靠或浮窗的 Issue Inspector、Embedded Terminal 与用量区域。面板布局只记在当前 Client，不改变 Issue、Run 或用量页各自的语义。
-_Avoid_: 把面板说成独立 Host、把浮窗说成新的页面或 Run
+**专注工作区**:
+选择 Issue 或 Run 后使用的固定区域 Client 页面：Embedded Terminal 始终位于主区，桌面右侧在 `320px` 窄栏与 `520px` 查看改动面板之间切换，侧栏默认 `248px`；各区域只在确认的最小和最大宽度内调整，并按 Client 记住可见性与宽度。手机使用单面板页面，不把桌面区域压缩或改成自由浮窗。
+_Avoid_: 工作台面板, 自由拖动, 任意浮窗, 把面板说成独立 Host 或新的 Run
 
 **Host**:
 跑 Issue Tracker 访问、Agent CLI 和 Run 的常驻进程。PTY 只存在于 Host 上。它所在的电脑就说「跑 Host 的那台电脑」。
@@ -165,5 +165,5 @@ _Avoid_: 登录, 账号, 我们的中继
 _Avoid_: 用户语言偏好（像登录账号）, 跟随系统（不是可选项）, locale
 
 **主题**:
-某个 Client 上产品壳的一套外观。默认主壳骨架是 Codex 气质的原生左侧栏 + 白主区，不是纸面书桌。v1 清单仍是：暖纸（仅白天）、素纸、素纸夜间。没有暖纸夜间。记在每个 Client，值是一份具体主题；设置里没有「跟随系统」。第一次按系统浅/深匹配：浅 → 暖纸，深 → 素纸夜间。不改变 Tracker 原文或官方 TUI。
-_Avoid_: 皮肤（可口语）, 跟随系统, 暗色模式（那只是素纸夜间，不是第二种产品）
+某个 Client 上产品壳的外观偏好，取值为跟随系统、素纸、素纸夜间或暖纸；跟随系统只实时解析为素纸或素纸夜间，暖纸始终是浅色。每个 Client 只记自己的偏好，解析结果不改变 Tracker 原文、Embedded Terminal 或官方 Agent TUI。
+_Avoid_: 皮肤（可口语）, 账号级主题, 把跟随系统当成已解析主题, 暖纸夜间

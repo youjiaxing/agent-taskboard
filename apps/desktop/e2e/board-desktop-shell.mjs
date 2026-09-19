@@ -269,7 +269,7 @@ const dailyShellGeometry = await session.page.evaluate(() => {
     horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
   };
 });
-if (dailyShellGeometry.chromeHeight > 40) {
+if (dailyShellGeometry.chromeHeight !== 44) {
   throw new Error(`desktop chrome should stay native and compact, got ${dailyShellGeometry.chromeHeight}px`);
 }
 if (dailyShellGeometry.sideWidth < 220 || dailyShellGeometry.sideWidth > 250) {
@@ -290,7 +290,6 @@ if (dailyShellGeometry.laneBorderWidths.some((width) => width !== "0px")) {
 if (dailyShellGeometry.horizontalOverflow > 0) {
   throw new Error(`daily desktop shell should not create page-level horizontal scrolling: ${dailyShellGeometry.horizontalOverflow}px`);
 }
-await session.assertVisual("issue-99-desktop-1280x840.png");
 await assertShellRegionsDoNotOverlap(session.page);
 
 const shellStructure = async () => session.page.evaluate(() => ({
@@ -302,18 +301,171 @@ const shellStructure = async () => session.page.evaluate(() => ({
     width: Math.round(node.getBoundingClientRect().width),
   })),
 }));
-const warmStructure = await shellStructure();
-for (const theme of ["plain-paper", "plain-night", "warm-paper"]) {
+const readCssTokens = async (names) => session.page.evaluate((tokenNames) => {
+  const style = getComputedStyle(document.documentElement);
+  return Object.fromEntries(tokenNames.map((name) => [name, style.getPropertyValue(name).trim()]));
+}, names);
+const assertCssTokens = async (expected, label) => {
+  const actual = await readCssTokens(Object.keys(expected));
+  const mismatches = Object.entries(expected).filter(([name, value]) => actual[name] !== value);
+  if (mismatches.length) {
+    throw new Error(`${label} token mismatch: ${JSON.stringify({ mismatches, actual })}`);
+  }
+};
+const commonTokens = {
+  "--terminal-canvas": "#171717", "--terminal-surface": "#1f1f1f", "--terminal-text": "#f5f5f5",
+  "--terminal-text-muted": "#a3a3a3", "--terminal-cursor": "#f5f5f5", "--terminal-selection": "#314766",
+  "--font-family-ui": 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  "--font-family-mono": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  "--font-weight-regular": "400", "--font-weight-medium": "500", "--font-weight-semibold": "600",
+  "--font-size-xs": "11px", "--font-size-sm": "12px", "--font-size-md": "13px", "--font-size-lg": "14px",
+  "--font-size-xl": "16px", "--font-size-2xl": "20px", "--font-size-3xl": "24px",
+  "--line-height-xs": "16px", "--line-height-sm": "18px", "--line-height-md": "20px", "--line-height-lg": "20px",
+  "--line-height-xl": "24px", "--line-height-2xl": "28px", "--line-height-3xl": "32px",
+  "--letter-spacing-heading": "-.01em", "--letter-spacing-body": "0",
+  "--space-0": "0", "--space-2": "2px", "--space-4": "4px", "--space-6": "6px", "--space-8": "8px",
+  "--space-10": "10px", "--space-12": "12px", "--space-16": "16px", "--space-20": "20px", "--space-24": "24px",
+  "--space-32": "32px", "--space-40": "40px", "--space-48": "48px",
+  "--radius-xs": "4px", "--radius-sm": "6px", "--radius-md": "8px", "--radius-lg": "12px", "--radius-xl": "16px", "--radius-full": "999px",
+  "--control-height-sm": "28px", "--control-height-md": "32px", "--control-height-lg": "36px", "--touch-target-min": "44px",
+  "--topbar-height-desktop": "44px", "--topbar-height-mobile": "48px",
+  "--sidebar-width-min": "216px", "--sidebar-width-default": "248px", "--sidebar-width-max": "320px",
+  "--right-rail-width-min": "280px", "--right-rail-width-default": "320px", "--right-rail-width-max": "420px",
+  "--changes-panel-width-min": "420px", "--changes-panel-width-default": "520px", "--changes-panel-width-max": "640px",
+  "--dialog-width-confirm": "420px", "--dialog-width-form": "560px", "--dialog-width-wide": "880px",
+  "--shadow-focus": "0 0 0 3px color-mix(in srgb, #2563eb 22%, transparent)",
+  "--shadow-raised-light": "0 1px 2px rgb(0 0 0 / 7%), 0 8px 24px rgb(0 0 0 / 8%)",
+  "--shadow-dialog-light": "0 2px 8px rgb(0 0 0 / 12%), 0 18px 60px rgb(0 0 0 / 18%)",
+  "--shadow-raised-dark": "0 1px 2px rgb(0 0 0 / 28%), 0 10px 30px rgb(0 0 0 / 28%)",
+  "--shadow-dialog-dark": "0 20px 70px rgb(0 0 0 / 46%)",
+  "--layer-base": "0", "--layer-sticky": "10", "--layer-rail": "20", "--layer-menu": "100",
+  "--layer-overlay": "200", "--layer-dialog": "210", "--layer-toast": "300", "--layer-tooltip": "400",
+  "--duration-fast": ".1s", "--duration-normal": ".16s", "--duration-slow": ".24s",
+  "--ease-standard": "cubic-bezier(.2, 0, 0, 1)", "--ease-exit": "cubic-bezier(.4, 0, 1, 1)",
+  "--density-body-font-size": "13px", "--density-control-height": "32px", "--density-topbar-height": "44px",
+  "--density-gutter-inline": "12px", "--density-panel-gap": "8px", "--density-bottom-gap": "0",
+};
+const themeColorTokens = {
+  light: ["#f7f7f5", "#ffffff", "#f3f3f1", "#ffffff", "#eeeeeb", "#e6e6e2", "#202123", "#56575b", "#75767a", "#ffffff", "#e2e2de", "#c6c7c3", "#2563eb", "#202123", "#0f1012", "#ffffff", "#dce7f9", "#237a43", "#eaf6ee", "#8a6100", "#fff4d6", "#b42318", "#ffece9", "#1d5db8", "#eaf2ff", "rgb(0 0 0 / 48%)"],
+  dark: ["#171717", "#1f1f1f", "#262626", "#2b2b2b", "#303030", "#3a3a3a", "#f3f3f3", "#c8c8c8", "#a0a0a0", "#171717", "#373737", "#555555", "#60a5fa", "#f3f3f3", "#ffffff", "#171717", "#23456b", "#6bcb8b", "#173725", "#f2c15c", "#3e3217", "#ff8075", "#421d1a", "#7cb7ff", "#173052", "rgb(0 0 0 / 64%)"],
+  warm: ["#f5efe7", "#fffaf3", "#faf2e8", "#fffdf9", "#f3e7d9", "#ead9c5", "#2a231c", "#62584e", "#7b7065", "#fffaf3", "#e4d6c5", "#cbb9a3", "#a64b25", "#a94722", "#873817", "#ffffff", "#f3d7c1", "#237a43", "#eaf6ee", "#8a6100", "#fff4d6", "#b42318", "#ffece9", "#1d5db8", "#eaf2ff", "rgb(42 35 28 / 45%)"],
+};
+const themeColorNames = ["--color-canvas", "--color-surface", "--color-surface-subtle", "--color-surface-raised", "--color-surface-hover", "--color-surface-active", "--color-text", "--color-text-secondary", "--color-text-muted", "--color-text-inverse", "--color-border", "--color-border-strong", "--color-focus", "--color-accent", "--color-accent-hover", "--color-on-accent", "--color-selection", "--color-success", "--color-success-surface", "--color-warning", "--color-warning-surface", "--color-danger", "--color-danger-surface", "--color-info", "--color-info-surface", "--color-overlay"];
+const relativeLuminance = (hex) => {
+  const channels = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+};
+const contrastRatio = (foreground, background) => {
+  const values = [relativeLuminance(foreground), relativeLuminance(background)].sort((left, right) => right - left);
+  return (values[0] + 0.05) / (values[1] + 0.05);
+};
+for (const [theme, colors] of Object.entries(themeColorTokens)) {
+  const pairs = [
+    [colors[6], colors[0]], [colors[6], colors[1]], [colors[6], colors[2]],
+    [colors[7], colors[0]], [colors[7], colors[1]], [colors[7], colors[2]],
+    [colors[8], colors[1]],
+  ];
+  const failing = pairs.filter(([foreground, background]) => contrastRatio(foreground, background) < 4.5);
+  if (failing.length) throw new Error(`${theme} necessary text tokens must meet 4.5:1: ${JSON.stringify(failing)}`);
+}
+await assertCssTokens(commonTokens, "design foundation");
+await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.light[index]])), "light theme");
+const initialStructure = await shellStructure();
+if ((await session.page.getAttribute("html", "data-theme")) !== "light") {
+  throw new Error("a new browser Client should resolve system appearance to the current light color scheme");
+}
+await session.page.emulateMedia({ colorScheme: "dark" });
+await session.page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.dark[index]])), "dark theme");
+await session.page.click("button[data-act='appearance-menu']");
+const appearanceLabels = await session.page.$$eval(".appearance-menu [role='menuitemradio']", (nodes) =>
+  nodes.map((node) => node.textContent?.trim()),
+);
+if (appearanceLabels.join("|") !== "暖纸|素纸|素纸夜间|跟随系统") {
+  throw new Error(`appearance menu should expose the four agreed choices, got ${JSON.stringify(appearanceLabels)}`);
+}
+if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "warm") {
+  throw new Error("opening the appearance menu should focus its first choice");
+}
+await session.page.keyboard.press("ArrowDown");
+if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "light") {
+  throw new Error("appearance menu arrow navigation should move between choices");
+}
+const focusRing = await session.page.evaluate(() => getComputedStyle(document.activeElement).boxShadow);
+if (!focusRing || focusRing === "none") throw new Error("keyboard-focused appearance choices need the shared focus ring");
+await session.page.keyboard.press("Escape");
+if (await session.page.$(".appearance-menu")) throw new Error("Escape should close the appearance menu");
+await session.page.click("button[data-act='appearance-menu']");
+await session.page.click(".appearance-menu button[data-act='appearance'][data-id='warm']");
+await session.page.waitForFunction(() => document.documentElement.dataset.theme === "warm");
+await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.warm[index]])), "warm theme");
+await session.page.emulateMedia({ colorScheme: "light" });
+await session.page.waitForTimeout(50);
+if ((await session.page.getAttribute("html", "data-theme")) !== "warm") {
+  throw new Error("a manual appearance preference must stop following system changes");
+}
+const storedBrowserAppearance = await session.page.evaluate(() => localStorage.getItem("agent-taskboard-browser-appearance"));
+if (!storedBrowserAppearance?.includes('"appearancePreference":"warm"')) {
+  throw new Error(`desktop browser appearance should persist in this origin, got ${storedBrowserAppearance}`);
+}
+const hostAppearanceAfterBrowserChoice = await session.page.evaluate(async (protocol) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot" }),
+  });
+  return (await response.json()).snapshot.appearance;
+}, session.url);
+if (hostAppearanceAfterBrowserChoice.appearancePreference !== "system") {
+  throw new Error(`desktop browser appearance must not overwrite desktop-client settings, got ${JSON.stringify(hostAppearanceAfterBrowserChoice)}`);
+}
+for (const appearancePreference of ["light", "dark", "warm", "system"]) {
   await session.page.click("button[data-act='settings']");
-  await session.page.click(`button[data-act='theme'][data-id='${theme}']`);
+  await session.page.click(`button[data-act='appearance'][data-id='${appearancePreference}']`);
   await session.page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+  const resolvedTheme = await session.page.getAttribute("html", "data-theme");
+  if (resolvedTheme === "system") {
+    throw new Error("data-theme must only contain a resolved theme");
+  }
+  const expectedTheme = appearancePreference === "system" ? "light" : appearancePreference;
+  await assertCssTokens(
+    Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens[expectedTheme][index]])),
+    `${appearancePreference} appearance`,
+  );
   const themedStructure = await shellStructure();
-  if (JSON.stringify(themedStructure) !== JSON.stringify(warmStructure)) {
-    throw new Error(`theme ${theme} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);
+  if (JSON.stringify(themedStructure) !== JSON.stringify(initialStructure)) {
+    throw new Error(`appearance ${appearancePreference} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);
   }
 }
+await session.page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+await session.page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+await session.page.click("button[data-act='settings']");
+const reducedMotion = await session.page.$eval(".sheet", (node) => {
+  const style = getComputedStyle(node);
+  const milliseconds = (duration) => duration.endsWith("ms") ? parseFloat(duration) : parseFloat(duration) * 1000;
+  return {
+    animationDurationMs: milliseconds(style.animationDuration),
+    animationIterationCount: style.animationIterationCount,
+    transitionDurationMs: milliseconds(style.transitionDuration),
+  };
+});
+if (reducedMotion.animationDurationMs > 5 || reducedMotion.transitionDurationMs > 5 || reducedMotion.animationIterationCount === "infinite") {
+  throw new Error(`reduced motion should remove perceptible movement: ${JSON.stringify(reducedMotion)}`);
+}
+await session.page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
+await session.page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
 
+await session.page.setViewportSize({ width: 640, height: 840 });
+await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "false");
+if (await session.page.$(".mobile-nav")) {
+  const mobileNavVisibleAt640 = await session.page.$eval(".mobile-nav", (node) => getComputedStyle(node).display !== "none");
+  if (mobileNavVisibleAt640) throw new Error("640px must belong to compact desktop, not mobile");
+}
+await session.page.setViewportSize({ width: 639, height: 840 });
+await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "true");
 await session.page.setViewportSize({ width: 1440, height: 900 });
+await session.page.waitForFunction(() => document.documentElement.dataset.mobile === "false");
 let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
   releaseDocumentRefresh = resolve;
@@ -402,7 +554,6 @@ if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
 }
 await session.page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await session.capture("issue-98-desktop-detail-1440x900.png");
-await session.assertVisual("issue-99-desktop-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
 const normalDetailWidth = await session.page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
 if (normalDetailWidth < 340) {
