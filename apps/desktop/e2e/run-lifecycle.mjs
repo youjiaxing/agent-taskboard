@@ -5,7 +5,7 @@ await page.waitForSelector(".lanes");
 
 const card = (title) => page.locator(".issue-card", { hasText: title }).first();
 const closeInspectorIfOpen = async () => {
-  const close = page.locator('.board-shell > .issue-detail button[data-act="toggle-issue"]');
+  const close = page.locator('.chrome button[data-act="toggle-issue"]');
   if (!(await close.count())) return;
   await close.click();
   await page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
@@ -99,7 +99,7 @@ await page.waitForFunction(async ({ protocol, runId }) => {
   return new TextDecoder().decode(bytes).includes("resume after approval");
 }, { protocol: url, runId: activeRunId });
 
-await page.click(".lifted-terminal button[data-act='view-changes']");
+await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector(".changes-sheet .change-file h4:has-text('notes.txt')");
 const diffText = (await page.locator(".changes-sheet").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!diffText.includes("changed during the Run")) {
@@ -152,10 +152,10 @@ await page.click("form[data-act='usage-custom'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".usage-page .form-feedback"));
 if (failure.requests !== 2) throw new Error(`custom usage retry should issue one new request: ${failure.requests}`);
 rpcFailure = null;
-await page.click("button[data-act='close-usage']");
+await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lifted-terminal");
 await page.click(".lifted-terminal button[data-act='stop-run']");
-await page.click("button[data-act='return-board']");
+await page.click("button[data-act='return-page']");
 try {
   await page.waitForSelector(".lanes", { timeout: 2000 });
 } catch {

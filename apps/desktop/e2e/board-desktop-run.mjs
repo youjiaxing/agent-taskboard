@@ -42,7 +42,7 @@ if (!(await session.page.$(".overview-runs-empty"))) {
   throw new Error("a Host with no Runs should keep a compact Run empty state below Project data");
 }
 await session.page.unroute("**/*", emptyRunsOverviewResponse);
-await session.page.click("button[data-act='return-board']");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 
 await session.clickCard(session.page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
@@ -50,12 +50,20 @@ await session.page.waitForSelector(".lifted-run");
 if (await session.page.$(".lanes")) {
   throw new Error("lifting a Run should replace the board");
 }
-if (await session.page.$(".side")) {
-  throw new Error("lifting a Run should remove the sidebar from layout");
+if (!(await session.page.$(".side"))) {
+  throw new Error("the global shell should keep the current Host sidebar while a Run is focused");
 }
 await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
 await session.page.waitForSelector(".lifted-terminal .xterm-viewport");
+const focusedRunGlobalActions = await session.page.$$eval(
+  "[data-global-actions] [data-global-action]",
+  (nodes) => nodes.map((node) => node.getAttribute("data-global-action")),
+);
+const expectedFocusedRunActions = ["right-rail", "changes", "appearance", "settings", "more"];
+if (focusedRunGlobalActions.join("|") !== expectedFocusedRunActions.join("|")) {
+  throw new Error(`focused Run global action order is wrong: ${JSON.stringify(focusedRunGlobalActions)}`);
+}
 const terminalPalettes = [];
 for (const appearancePreference of ["light", "dark", "warm"]) {
   await session.page.click("button[data-act='appearance-menu']");
@@ -109,8 +117,8 @@ const liftedWidths = await session.page.evaluate(() => {
     horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
   };
 });
-if (liftedWidths.terminal < liftedWidths.detail * 1.8 || liftedWidths.terminal > liftedWidths.detail * 2.2) {
-  throw new Error(`lifted Run should use about a 2:1 split, got ${JSON.stringify(liftedWidths)}`);
+if (Math.abs(liftedWidths.detail - 320) > 2 || liftedWidths.terminal <= liftedWidths.detail) {
+  throw new Error(`focused Run should keep the bounded right rail and a larger terminal main area: ${JSON.stringify(liftedWidths)}`);
 }
 if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
   throw new Error(`lifted Run and Issue should share one continuous workspace seam, got ${JSON.stringify(liftedWidths)}`);
@@ -118,7 +126,7 @@ if (liftedWidths.gap !== "0px" || liftedWidths.padding !== "0px") {
 if (liftedWidths.horizontalOverflow > 0) {
   throw new Error(`lifted Run should not create page-level horizontal scrolling: ${liftedWidths.horizontalOverflow}px`);
 }
-await session.page.click("button[data-act='return-board']");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 await session.page.waitForSelector(".side");
 if (!(await session.page.$(".run-dock"))) {
@@ -145,7 +153,7 @@ if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold)
 }
 await session.clickCard(session.page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
 await session.page.waitForSelector(".lifted-run");
-await session.page.click("button[data-act='return-board']");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 if (await session.page.$(".side")) {
   throw new Error("returning should preserve a sidebar that was already collapsed");
@@ -168,7 +176,7 @@ if (!(await session.page.$("button.active[data-act='usage-range'][data-id='today
 if ((await session.page.$$(".usage-trend-block")).length !== 2 || !(await session.page.$(".usage-page > .tiny"))) {
   throw new Error("desktop usage should expose TTFT/rate trends and the observation-only disclaimer");
 }
-await session.page.click("button[data-act='close-usage']");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 
 const afterGraphFrontier = await session.page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
@@ -179,14 +187,17 @@ if (!afterGraphFrontier.includes("unparented ready")) {
 }
 
 const inProgress = session.page.locator('[data-lane="inProgress"] .issue-card:has-text("active work")');
-for (const action of ["focus-run", "stop-run", "view-changes"]) {
+for (const action of ["focus-run", "stop-run"]) {
   if (!(await inProgress.locator(`button[data-act="${action}"]`).count())) {
     throw new Error(`in-progress row should expose ${action}`);
   }
 }
+if (await inProgress.locator('button[data-act="view-changes"]').count()) {
+  throw new Error("the change-panel toggle must exist only in the global top bar");
+}
 
 if (await session.page.$(".board-shell > .issue-detail")) {
-  await session.page.click('.issue-detail button[data-act="toggle-issue"]');
+  await session.page.click('.chrome button[data-act="toggle-issue"]');
   await session.page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
 }
 const recentOpen = session.page.locator('[data-lane="recentlyCompleted"] button[data-act="open-issue"]').first();
@@ -195,8 +206,8 @@ const openedRecentUrl = await session.page.evaluate(() => window.__OPENED_URLS__
 if (!openedRecentUrl?.startsWith("https://github.com/you/garden/issues/")) {
   throw new Error(`recently completed should open its GitHub Issue, got ${openedRecentUrl}`);
 }
-if (!(await session.page.locator('[data-lane="recentlyCompleted"] button[data-act="view-changes"]').count())) {
-  throw new Error("recently completed row with a Run should expose view changes");
+if (await session.page.locator('[data-lane="recentlyCompleted"] button[data-act="view-changes"]').count()) {
+  throw new Error("recently completed rows must not duplicate the global change-panel toggle");
 }
 
 const frontierRun = session.page.locator('[data-lane="frontier"] button[data-act="execute-run"]').first();
@@ -269,8 +280,8 @@ if (await session.page.$(".keyboard-help")) {
 await session.page.click(".run-dock button[data-act='stop-run']");
 await session.page.waitForFunction(() => !document.querySelector(".run-dock"));
 
-await session.page.click("button:has-text('设置')");
-await session.page.waitForSelector("#recent-limit");
+await session.page.click("button[data-act='settings']");
+await session.page.waitForSelector(".settings-page #recent-limit");
 const browserUpdateText = await session.page.$eval(".update-settings", (node) => node.textContent?.replace(/\s+/g, " ").trim());
 if (!browserUpdateText?.includes("浏览器 Client 不能给 Host 换包")) {
   throw new Error(`browser Client should not expose update installation: ${browserUpdateText}`);
@@ -306,7 +317,6 @@ if (!launchEnvironmentText?.includes("启动环境已更新")) {
 }
 await session.page.fill("#recent-limit", "1");
 await session.page.locator("#recent-limit").dispatchEvent("change");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForFunction(() => document.querySelectorAll('[data-lane="recentlyCompleted"] .issue-card').length === 1);
-await session.page.click(".overlay[data-act='close-settings']", { position: { x: 2, y: 2 } });
-await session.page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-settings']"));
 }

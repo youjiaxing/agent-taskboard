@@ -15,6 +15,7 @@ import type {
   LaunchEnvironmentState,
   BrowserAppearance,
   SystemAppearance,
+  ClientLocalViewState,
   PanelPointerInteraction,
   Project,
   ProjectDraft,
@@ -24,8 +25,6 @@ import type {
   UpdateState,
   UsageCustomDraft,
   ViewChanges,
-  WorkbenchLayout,
-  WorkbenchPanelId,
 } from "./protocol";
 
 function sessionClientId(): string {
@@ -61,7 +60,19 @@ if (!appEl) {
 export const ui = {
   app: appEl,
   snapshot: null as Snapshot | null,
-  settingsOpen: false,
+  clientView: {
+    page: "board",
+    returnPoint: null,
+    panels: {
+      sidebarVisible: true,
+      sidebarWidth: 248,
+      rightSide: "rail",
+      rightRailWidth: 320,
+      changesPanelWidth: 520,
+    },
+  } as ClientLocalViewState,
+  clientViewInitialized: false,
+  returnPointHistory: [] as import("./protocol").ReturnPoint[],
   startAtLogin: null as boolean | null,
   startupSettingsError: "",
   launchEnvironmentState: {
@@ -105,7 +116,6 @@ export const ui = {
   launchPickerAgentId: "",
   launchPreviewTimer: undefined as number | undefined,
   launchPreviewSequence: 0,
-  changesOpen: false,
   changesScope: "this-round" as ChangeScope,
   changesView: null as ViewChanges | null,
   noteDraft: "",
@@ -129,8 +139,7 @@ export const ui = {
   telemetryExpanded: false,
   keyboardHelpOpen: false,
   keyboardCursorIssueId: "",
-  sidebarVisible: true,
-  issueDetailVisible: true,
+  moreMenuOpen: false,
   terminalPanelVisible: true,
   renderedDetailIssueId: "",
   renderedBoardProjectId: "",
@@ -147,7 +156,6 @@ export const ui = {
   graphListQuery: "",
   overviewProjectId: "",
   overviewShowEnded: false,
-  sidebarBeforeLift: true,
   mobileView: "board" as MobileView,
   mobileScopeOpen: false,
   mobileLiveTerminal: false,
@@ -159,9 +167,6 @@ export const ui = {
   systemAppearance: (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") as SystemAppearance,
   appearanceMenuOpen: false,
   clientId: sessionClientId(),
-  workbenchLayout: null as unknown as WorkbenchLayout,
   panelPointerInteraction: null as PanelPointerInteraction | null,
-  frontWorkbenchPanel: "inspector" as WorkbenchPanelId,
-  inspectorAnchorIssueId: "",
   pendingCenterView: null as import("./protocol").CenterView | null,
 };

@@ -1,12 +1,12 @@
-import type { ChangeFile, ChangeLine, ChangeRepo, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
+import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { focusedRun, mobileClient } from "../view-helpers";
-import { panelControls, panelCssVariables, panelIsFloating, panelResizeHandle, panelWidth, workbenchIssuePanel } from "../workbench";
+import { APPEARANCE_DISPLAY_ORDER, focusedRun, mobileClient } from "../view-helpers";
+import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { projectMain } from "./board";
 import { ui } from "../ui";
-import { type StartupCopy } from "../startup-copy";
+import { appearancePreferenceLabel, type StartupCopy } from "../startup-copy";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
@@ -172,16 +172,15 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
   const trend = `${usageTrend(copy.ttft, usage.buckets, "ttftMs")}${usageTrend(copy.genRate, usage.buckets, "tokensPerSec")}`;
   const hit =
     usage.cacheHitRate == null ? "—" : `${Math.round(usage.cacheHitRate * 1000) / 10}%`;
-  const panel = ui.workbenchLayout.usage;
-  return `<div class="usage-page workbench-panel" data-workbench-panel="usage" data-floating="${panel.floating}" data-front="${ui.frontWorkbenchPanel === "usage"}" style="${panelCssVariables("usage")}">
-    ${panelControls("usage")}
-    <div class="board-head">
-      <div class="board-head-row">
-        <div>
-          <h1>${escapeHtml(copy.usage)}</h1>
-          <p>${escapeHtml(copy.usageHint)}</p>
+  return `<div class="usage-page">
+    <div class="content-toolbar" data-page-toolbar>
+      <div class="board-head">
+        <div class="board-head-row">
+          <div>
+            <h1>${escapeHtml(copy.usage)}</h1>
+            <p>${escapeHtml(copy.usageHint)}</p>
+          </div>
         </div>
-        <button type="button" data-act="close-usage">${escapeHtml(copy.closeUsage)}</button>
       </div>
     </div>
     <div class="choices usage-ranges">
@@ -215,7 +214,6 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
     <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
     <div class="usage-list usage-full">${rows}</div>
     <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
-    ${panelResizeHandle("usage")}
   </div>`;
 }
 
@@ -255,10 +253,11 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
   const allCountsAvailable = visibleProjects.length > 0 && totalCounts.available === visibleProjects.length;
   const activeRuns = visibleRuns.filter((run) => run.status !== "ended").length;
   return `<div class="overview-page">
-    <div class="board-head">
-      <div class="board-head-row">
-        <div><h1>${escapeHtml(copy.hostOverview)}</h1><p>${escapeHtml(copy.hostOverviewHint)}</p></div>
-        <button type="button" data-act="return-board">${escapeHtml(copy.returnToBoard)}</button>
+    <div class="content-toolbar" data-page-toolbar>
+      <div class="board-head">
+        <div class="board-head-row">
+          <div><h1>${escapeHtml(copy.hostOverview)}</h1><p>${escapeHtml(copy.hostOverviewHint)}</p></div>
+        </div>
       </div>
     </div>
     <div class="overview-controls">
@@ -395,16 +394,13 @@ export function injectRunForm(copy: ShellCopy, run: RunSummary): string {
 export function runControls(copy: ShellCopy, run: RunSummary): string {
   return `<div class="actions">
     <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
-    ${mobileClient() ? "" : `<button type="button" data-act="view-changes" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.viewChanges)}</button>`}
     <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
   </div>`;
 }
 
 export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
   const identity = runIdentity(copy, run);
-  const panel = ui.workbenchLayout.terminal;
-  return `<div class="${className} workbench-panel" data-workbench-panel="terminal" data-floating="${panel.floating}" data-front="${ui.frontWorkbenchPanel === "terminal"}" style="${panelCssVariables("terminal")}">
-    ${panelControls("terminal")}
+  return `<div class="${className}" data-terminal-panel>
     <header class="run-dock-hd">
       <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
       ${runControls(copy, run)}
@@ -415,7 +411,6 @@ export function terminalPanel(copy: ShellCopy, run: RunSummary, className: strin
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
     ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
-    ${panelResizeHandle("terminal")}
   </div>`;
 }
 
@@ -430,10 +425,9 @@ export function runDock(copy: ShellCopy, snap: Snapshot): string {
 export function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
   if (!run) return projectMain(copy, snap);
-  const inspectorOpen = ui.issueDetailVisible && Boolean(snap.board?.selected);
-  const inspectorFloating = panelIsFloating("inspector");
-  const inspectorWidth = panelWidth("inspector");
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"} ${inspectorFloating ? "inspector-floating" : "inspector-docked"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
+  const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(snap.board?.selected);
+  const inspectorWidth = fixedPanelWidth("right-rail");
+  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
     ${ui.terminalPanelVisible ? terminalPanel(copy, run, "lifted-terminal") : projectMain(copy, snap)}
     ${inspectorOpen && snap.board ? workbenchIssuePanel(copy, snap.board) : ""}
   </section>`;
@@ -442,8 +436,9 @@ export function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
 export function viewChangesPanel(copy: ShellCopy): string {
   const view = ui.changesView;
   const scope = view?.scope ?? ui.changesScope;
-  return `<div class="overlay modal" data-act="close-changes">
-    <div class="sheet form-sheet changes-sheet" data-act="form-noop">
+  return `<aside class="fixed-changes-panel" data-fixed-panel="changes-panel">
+    ${fixedPanelResizeHandle("changes-panel")}
+    <div class="changes-sheet" data-view-state="${view ? "loaded" : "loading"}">
       <h2>${escapeHtml(copy.viewChanges)}</h2>
       <div class="choices">
         <button type="button" class="${scope === "this-round" ? "active" : ""}" data-act="changes-scope" data-id="this-round">${escapeHtml(copy.thisRound)}</button>
@@ -462,7 +457,7 @@ export function viewChangesPanel(copy: ShellCopy): string {
         <button type="button" data-act="close-changes">${escapeHtml(copy.cancel)}</button>
       </div>
     </div>
-  </div>`;
+  </aside>`;
 }
 
 export function changeRepoBlock(copy: ShellCopy, view: ViewChanges, repo: ChangeRepo): string {
@@ -564,6 +559,108 @@ export function launchEnvironmentStatus(copy: StartupCopy): string {
       : copy.launchEnvironmentIdle;
   const detail = ui.launchEnvironmentError || state.message || "";
   return `<p class="hint ${state.status === "failed" || detail ? "notice bad" : ""}" data-launch-environment-status="${state.status}">${escapeHtml(text)}${detail ? `<br>${escapeHtml(detail)}` : ""}</p>`;
+}
+
+const SETTINGS_LANGUAGES: Language[] = ["zh-CN", "en"];
+
+export function settingsPage(
+  copy: ShellCopy,
+  localCopy: StartupCopy,
+  snap: Snapshot,
+  appearance: AppearanceState,
+  isMobile: boolean,
+): string {
+  const languageLabel = (language: Language) => language === "zh-CN" ? copy.languageZh : copy.languageEn;
+  const project = snap.projects.find((item) => item.id === snap.focusedProjectId);
+  return `<section class="settings-page" data-primary-page="settings">
+    <div class="content-toolbar" data-page-toolbar>
+      <div class="board-head">
+        <div class="board-head-row"><div><h1>${escapeHtml(copy.settings)}</h1></div></div>
+      </div>
+    </div>
+    <div class="settings-content">
+      <section class="settings-section" data-settings-section="appearance">
+        <h2>${escapeHtml(localCopy.appearance)}</h2>
+        <div class="field">
+          <div class="label">${escapeHtml(copy.language)}</div>
+          <div class="choices">
+            ${SETTINGS_LANGUAGES.map((language) =>
+              `<button type="button" class="${appearance.language === language ? "active" : ""}" data-act="language" data-id="${language}">${escapeHtml(languageLabel(language))}</button>`,
+            ).join("")}
+          </div>
+        </div>
+        <div class="field">
+          <div class="label">${escapeHtml(localCopy.appearance)}</div>
+          <div class="choices">
+            ${APPEARANCE_DISPLAY_ORDER.map((preference) =>
+              `<button type="button" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
+            ).join("")}
+          </div>
+        </div>
+      </section>
+      <section class="settings-section" data-settings-section="startup">
+        <h2>${escapeHtml(localCopy.hostStartup)}</h2>
+        ${startupSettings(localCopy, snap)}
+        <div class="field">
+          <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(localCopy.rereadLaunchEnvironment)}</button>
+          ${launchEnvironmentStatus(localCopy)}
+        </div>
+      </section>
+      <section class="settings-section" data-settings-section="updates">
+        <h2>${escapeHtml(copy.updates)}</h2>
+        ${updateSettings(copy)}
+      </section>
+      <section class="settings-section" data-settings-section="refresh">
+        <h2>${escapeHtml(copy.refreshInterval)}</h2>
+        <div class="field">
+          <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
+          <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
+          <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
+        </div>
+        <div class="field">
+          <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
+          <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
+          <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
+        </div>
+      </section>
+      <section class="settings-section" data-settings-section="notifications">
+        <h2>${escapeHtml(copy.notifyDesktop)}</h2>
+        <label class="graph-opt">
+          <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
+          ${escapeHtml(copy.showCommandPreview)}
+        </label>
+        ${isMobile ? "" : `<label class="graph-opt">
+          <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
+          ${escapeHtml(copy.notifyDesktop)}
+        </label>
+        <label class="graph-opt">
+          <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
+          ${escapeHtml(copy.notifySound)}
+        </label>`}
+      </section>
+      <section class="settings-section" data-settings-section="host">
+        <h2>${escapeHtml(copy.hosts)}</h2>
+        ${isMobile ? "" : `<label class="graph-opt">
+          <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
+          ${escapeHtml(copy.autoAdvance)}
+        </label>
+        <p class="hint">${escapeHtml(copy.autoAdvanceHelp)}</p>
+        ${project ? `<label class="graph-opt">
+          <input type="checkbox" data-field="projectAutoAdvance" ${project.autoAdvance ? "checked" : ""} />
+          ${escapeHtml(copy.projectAutoAdvance)}
+        </label>
+        <label class="graph-opt">
+          <input type="checkbox" data-field="restoreAutoAdvance" ${project.restoreAutoAdvance ? "checked" : ""} />
+          ${escapeHtml(copy.restoreAutoAdvance)}
+        </label>
+        <div class="field">
+          <label class="label" for="restore-delay">${escapeHtml(copy.restoreDelay)}</label>
+          <input id="restore-delay" type="number" min="0" max="600" data-field="restoreDelay" value="${Math.round((project.restoreDelayMs ?? 60000) / 1000)}" />
+        </div>` : ""}
+        <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>`}
+      </section>
+    </div>
+  </section>`;
 }
 
 export function startupSettings(copy: StartupCopy, snap: Snapshot): string {

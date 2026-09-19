@@ -152,16 +152,16 @@ fn browser_supplements_issue_115_launch_form_behavior() {
 #[test]
 fn browser_clients_resize_move_and_restore_workbench_panels_independently() {
     let tmp = tempfile::tempdir().unwrap();
-    let project = make_dir(tmp.path(), "work/issue-116-ui");
+    let project = make_dir(tmp.path(), "work/issue-147-ui");
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open(
-        "you/issue-116-ui",
+        "you/issue-147-ui",
         1,
         "panel layout issue",
     ));
     for number in 2..=24 {
         tracker.add_issue(IssueRecord::open(
-            "you/issue-116-ui",
+            "you/issue-147-ui",
             number,
             format!("scrollable panel issue {number}"),
         ));
@@ -177,8 +177,8 @@ fn browser_clients_resize_move_and_restore_workbench_panels_independently() {
     )
     .unwrap();
     pin_board_test_time(&mut host);
-    let project_id = register(&mut host, "garden", &project, "you/issue-116-ui");
-    start_bound_grok(&mut host, &project_id, "you/issue-116-ui#1");
+    let project_id = register(&mut host, "garden", &project, "you/issue-147-ui");
+    start_bound_grok(&mut host, &project_id, "you/issue-147-ui#1");
 
     run_browser_e2e(host, "panel-layout.mjs", &[]);
 }

@@ -22,12 +22,16 @@ const mobileDensity = await session.page.evaluate(() => {
 if (JSON.stringify(mobileDensity) !== JSON.stringify({ bodyFontSize: "14px", controlHeight: "44px", topbarHeight: "48px", gutter: "16px", panelGap: "0" })) {
   throw new Error(`mobile must only apply the agreed density aliases: ${JSON.stringify(mobileDensity)}`);
 }
-const mobileProjectOrder = await session.page.$$eval(".project-board > *", (nodes) =>
-  nodes.map((node) => node.className).filter(Boolean),
-);
-const refreshIndex = mobileProjectOrder.findIndex((name) => name.includes("refresh-bar"));
-const lanesIndex = mobileProjectOrder.findIndex((name) => name.includes("board-shell"));
-if (refreshIndex < 0 || lanesIndex < 0 || refreshIndex > lanesIndex) {
+const mobileProjectOrder = await session.page.evaluate(() => {
+  const refresh = document.querySelector(".project-board [data-page-toolbar] .refresh-bar");
+  const board = document.querySelector(".project-board > .board-shell");
+  return {
+    hasRefresh: Boolean(refresh),
+    hasBoard: Boolean(board),
+    refreshPrecedesBoard: Boolean(refresh && board && (refresh.compareDocumentPosition(board) & Node.DOCUMENT_POSITION_FOLLOWING)),
+  };
+});
+if (!mobileProjectOrder.hasRefresh || !mobileProjectOrder.hasBoard || !mobileProjectOrder.refreshPrecedesBoard) {
   throw new Error(`mobile refresh status should precede work lanes, got ${JSON.stringify(mobileProjectOrder)}`);
 }
 const visibleMobileLanes = await session.page.waitForFunction(() => {
@@ -199,7 +203,7 @@ const compactProjects = await session.page.$$eval(".usage-compact .usage-row", (
 if (compactProjects < 1 || compactProjects > 3) {
   throw new Error(`mobile usage should show one to three Project rows, got ${compactProjects}`);
 }
-await session.page.click("button[data-act='close-usage']");
+await session.page.click("button[data-act='return-page']");
 
 await session.page.click("button[data-act='settings']");
 for (const forbidden of ["notifyDesktop", "notifySound", "hostAutoAdvance"]) {

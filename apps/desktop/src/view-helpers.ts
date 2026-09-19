@@ -3,9 +3,12 @@ import { ui } from "./ui";
 import type {
   AppearancePreference,
   BoardSnapshot,
+  BoardViewMemory,
   BrowserAppearance,
+  PrimaryPage,
   Project,
   ResolvedTheme,
+  ReturnPoint,
   SystemAppearance,
   RunSummary,
   ShellCopy,
@@ -16,7 +19,15 @@ import { issueDetail, projectMain } from "./render/board";
 import { injectRunForm, telemetryBar } from "./render/shell";
 
 export const MOBILE_BREAKPOINT = 640;
+export const FULL_DESKTOP_BREAKPOINT = 900;
 export const APPEARANCE_PREFERENCES: AppearancePreference[] = ["system", "light", "dark", "warm"];
+export const APPEARANCE_DISPLAY_ORDER: AppearancePreference[] = ["warm", "light", "dark", "system"];
+
+export function viewportClass(): "mobile" | "compact-desktop" | "full-desktop" {
+  if (window.innerWidth < MOBILE_BREAKPOINT) return "mobile";
+  if (window.innerWidth < FULL_DESKTOP_BREAKPOINT) return "compact-desktop";
+  return "full-desktop";
+}
 const BROWSER_APPEARANCE_KEY = "agent-taskboard-browser-appearance";
 
 export function mobileClient(): boolean {
@@ -86,6 +97,97 @@ export function currentProject(snap: Snapshot): Project | undefined {
   return (
     snap.projects.find((project) => project.id === snap.focusedProjectId) ?? snap.projects[0]
   );
+}
+
+export function primaryPageFromSnapshot(snap: Snapshot): PrimaryPage {
+  if (snap.usageOpen) return "usage";
+  if (snap.workspaceView === "host-overview") return "host-overview";
+  if (snap.workspaceView === "run") return "focus-workspace";
+  return snap.centerView === "graph" ? "dependency-graph" : "board";
+}
+
+export function syncClientPrimaryPage(snap: Snapshot): void {
+  if (!ui.clientViewInitialized) {
+    ui.clientView.page = primaryPageFromSnapshot(snap);
+    ui.clientViewInitialized = true;
+    return;
+  }
+  if (ui.clientView.page !== "settings") {
+    ui.clientView.page = primaryPageFromSnapshot(snap);
+  }
+}
+
+function cloneBoardMemory(memory: BoardViewMemory | undefined): BoardViewMemory | null {
+  if (!memory) return null;
+  return {
+    projectId: memory.projectId,
+    scroll: { ...memory.scroll },
+    lanes: Object.fromEntries(
+      Object.entries(memory.lanes).map(([lane, position]) => [lane, { ...position }]),
+    ),
+  };
+}
+
+export function captureReturnPoint(snap: Snapshot): ReturnPoint {
+  const projectId = snap.focusedProjectId || null;
+  const lanesNode = ui.app.querySelector<HTMLElement>(".lanes");
+  if (projectId && lanesNode) {
+    const lanes: Record<string, { scrollTop: number; scrollLeft: number }> = {};
+    for (const lane of lanesNode.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
+      if (lane.dataset.lane) {
+        lanes[lane.dataset.lane] = { scrollTop: lane.scrollTop, scrollLeft: lane.scrollLeft };
+      }
+    }
+    ui.boardScrollPositions.set(projectId, {
+      scrollTop: lanesNode.scrollTop,
+      scrollLeft: lanesNode.scrollLeft,
+      lanes,
+    });
+  }
+  const boardScroll = projectId ? ui.boardScrollPositions.get(projectId) : undefined;
+  return {
+    page: ui.clientView.page,
+    hostId: snap.focusedHostId,
+    projectId,
+    issueId: snap.board?.selected?.id ?? null,
+    runId: snap.focusedRunId || null,
+    board: cloneBoardMemory(
+      projectId && boardScroll
+        ? {
+            projectId,
+            scroll: { scrollTop: boardScroll.scrollTop, scrollLeft: boardScroll.scrollLeft },
+            lanes: boardScroll.lanes,
+          }
+        : undefined,
+    ),
+    graph: projectId
+      ? { projectId, viewportAnchor: ui.pendingGraphAnchor ? { ...ui.pendingGraphAnchor } : null }
+      : null,
+  };
+}
+
+export function enterPrimaryPage(page: PrimaryPage, snap: Snapshot): void {
+  if (ui.clientView.page !== page) {
+    if (ui.clientView.returnPoint) ui.returnPointHistory.push(ui.clientView.returnPoint);
+    ui.clientView.returnPoint = captureReturnPoint(snap);
+  }
+  ui.clientView.page = page;
+}
+
+export function restoreReturnPointMemory(returnPoint: ReturnPoint): void {
+  if (returnPoint.board) {
+    ui.boardScrollPositions.set(returnPoint.board.projectId, {
+      ...returnPoint.board.scroll,
+      lanes: Object.fromEntries(
+        Object.entries(returnPoint.board.lanes).map(([lane, position]) => [lane, { ...position }]),
+      ),
+    });
+  }
+  if (returnPoint.graph?.viewportAnchor) {
+    ui.pendingGraphAnchor = { ...returnPoint.graph.viewportAnchor };
+  }
+  ui.clientView.page = returnPoint.page;
+  ui.clientView.returnPoint = ui.returnPointHistory.pop() ?? null;
 }
 
 export function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
