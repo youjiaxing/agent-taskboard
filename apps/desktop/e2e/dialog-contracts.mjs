@@ -100,8 +100,8 @@ try {
   await stopDialog.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.click("button[data-act='mobile-scope']");
-  await page.click(".mobile-scope-sheet button[data-act='register']");
+  await page.click("button[data-act='mobile-drawer']");
+  await page.click("[data-dialog-id='mobile-drawer'] button[data-act='register']");
   const mobileProject = await assertDialogSemantics("project-form");
   const mobileBox = await mobileProject.panel.boundingBox();
   assert.ok(mobileBox);
@@ -111,8 +111,8 @@ try {
   await mobileProject.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
 
   await page.setViewportSize({ width: 390, height: 500 });
-  await page.click("button[data-act='mobile-scope']");
-  await page.click(".mobile-scope-sheet button[data-act='register']");
+  await page.click("button[data-act='mobile-drawer']");
+  await page.click("[data-dialog-id='mobile-drawer'] button[data-act='register']");
   const compact = await assertDialogSemantics("project-form");
   const before = await compact.panel.evaluate((panel) => {
     const header = panel.querySelector(".dialog-header").getBoundingClientRect();

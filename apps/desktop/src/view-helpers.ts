@@ -2,7 +2,6 @@ import { isTauri } from "@tauri-apps/api/core";
 import { ui } from "./ui";
 import type {
   AppearancePreference,
-  BoardSnapshot,
   BoardViewMemory,
   BrowserAppearance,
   GraphViewportAnchor,
@@ -15,9 +14,6 @@ import type {
   ShellCopy,
   Snapshot,
 } from "./protocol";
-import { mobileMain as renderMobileMain, mobileNavigation as renderMobileNavigation, mobileScopeSheet as renderMobileScopeSheet } from "./mobile-renderers";
-import { issueDetail, projectMain } from "./render/board";
-import { injectRunForm, telemetryBar } from "./render/shell";
 
 export const MOBILE_BREAKPOINT = 640;
 export const FULL_DESKTOP_BREAKPOINT = 900;
@@ -296,28 +292,20 @@ export function restoreReturnPointMemory(returnPoint: ReturnPoint): void {
   ui.clientView.returnPoint = ui.returnPointHistory.pop() ?? null;
 }
 
-export function mobileNavigation(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileNavigation(copy, snap, ui.mobileView);
+/** Readable mobile terminal text is cached per Host and Run. */
+export function mobileOutputKey(hostId: string, runId: string): string {
+  return JSON.stringify([hostId, runId]);
 }
 
-export function mobileScopeSheet(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileScopeSheet(copy, snap);
-}
-
-export function mobileMain(copy: ShellCopy, snap: Snapshot): string {
-  return renderMobileMain({
-    copy,
-    snapshot: snap,
-    mobileView: ui.mobileView,
-    mobileLiveTerminal: ui.mobileLiveTerminal,
-    mobilePtyText: ui.mobilePtyText,
-    focusedRun: (mobileSnapshot) => focusedRun(mobileSnapshot as Snapshot),
-    issueDetail: (mobileCopy, board, showPanelToggle) => issueDetail(mobileCopy as ShellCopy, board as BoardSnapshot, showPanelToggle),
-    projectMain: (mobileCopy, mobileSnapshot) => projectMain(mobileCopy as ShellCopy, mobileSnapshot as Snapshot),
-    telemetryBar: (mobileCopy, run) => telemetryBar(mobileCopy as ShellCopy, run as RunSummary),
-    injectRunForm: (mobileCopy, run) => injectRunForm(mobileCopy as ShellCopy, run as RunSummary),
-    board: snap.board,
-  });
+/**
+ * The mobile client reads readable Run output only while its workspace shows that Run's terminal:
+ * the Issue and history sections never poll a PTY.
+ */
+export function mobileReadableRun(snap: Snapshot): RunSummary | undefined {
+  if (!mobileClient() || ui.clientView.page !== "focus-workspace") return undefined;
+  if (ui.mobileWorkspaceSection !== "terminal" || ui.mobileLiveTerminal) return undefined;
+  const run = workspaceRun(snap);
+  return run && run.status !== "ended" ? run : undefined;
 }
 
 export function focusedRun(snap: Snapshot): RunSummary | undefined {
@@ -343,7 +331,8 @@ export function clientCopy(language: import("./protocol").Language, fallback: Sh
   return ui.snapshot?.copyCatalog?.[language] ?? fallback;
 }
 
+/** Every browser Client keeps its own appearance preference; only the desktop app reads the Host's. */
 export function effectiveClientLanguage(): import("./protocol").Language {
-  if (mobileClient()) return ensureBrowserAppearance().language;
+  if (browserClient()) return ensureBrowserAppearance().language;
   return ui.snapshot?.appearance.language ?? "en";
 }

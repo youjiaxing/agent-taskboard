@@ -18,6 +18,9 @@ export type StartupCopy = {
   startAtLogin: string;
   startAtLoginHelp: string;
   desktopStartupBrowser: string;
+  mobileWorkspace: string;
+  mobileNav: string;
+  mobileHistory: string;
   rereadLaunchEnvironment: string;
   launchEnvironmentIdle: string;
   launchEnvironmentReady: string;
@@ -57,6 +60,9 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     startAtLogin: "登录时自动启动",
     startAtLoginHelp: "默认关闭。开启后由系统登录启动项拉起 Agent Taskboard。",
     desktopStartupBrowser: "Host 启动模式和系统启动项只能在桌面应用中修改。",
+    mobileWorkspace: "专注工作区",
+    mobileNav: "手机一级视图",
+    mobileHistory: "历史",
     rereadLaunchEnvironment: "重新读取启动环境",
     launchEnvironmentIdle: "尚未手动重新读取。",
     launchEnvironmentReady: "启动环境已更新；之后的 Agent 探测和 Run 会使用新环境。",
@@ -101,6 +107,9 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     startAtLogin: "Start at login",
     startAtLoginHelp: "Off by default. When enabled, the system login item starts Agent Taskboard.",
     desktopStartupBrowser: "Host startup mode and the system login item can only be changed in the desktop app.",
+    mobileWorkspace: "Focus workspace",
+    mobileNav: "Mobile primary views",
+    mobileHistory: "History",
     rereadLaunchEnvironment: "Reread launch environment",
     launchEnvironmentIdle: "The launch environment has not been manually reread yet.",
     launchEnvironmentReady: "The launch environment was updated. Later Agent probes and Runs use the new environment.",

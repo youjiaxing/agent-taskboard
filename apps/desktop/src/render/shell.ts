@@ -2,7 +2,7 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail } from "./board";
 import { ui } from "../ui";
@@ -433,19 +433,27 @@ export function runControls(copy: ShellCopy, run: RunSummary): string {
   </div>`;
 }
 
-export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
-  const identity = runIdentity(copy, run);
-  return `<div class="${className}" data-terminal-panel data-terminal-surface="live" data-run="${escapeHtml(run.id)}">
-    <header class="run-dock-hd">
-      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
+/** Run identity and actions, shared by every terminal surface. */
+export function runHeader(copy: ShellCopy, run: RunSummary): string {
+  return `<header class="run-dock-hd">
+      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(runIdentity(copy, run))}</span></div>
       ${runControls(copy, run)}
-    </header>
-    ${telemetryBar(copy, run)}
-    ${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
+    </header>`;
+}
+
+/** Host-reported Run conditions that every terminal surface must keep visible. */
+export function runNotices(copy: ShellCopy, run: RunSummary): string {
+  return `${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
-    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
+    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}`;
+}
+
+export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
+  return `<div class="${className}" data-terminal-panel data-terminal-surface="live" data-run="${escapeHtml(run.id)}">
+    ${runHeader(copy, run)}
+    ${telemetryBar(copy, run)}
+    ${runNotices(copy, run)}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
-    ${mobileClient() && run.status !== "ended" ? injectRunForm(copy, run) : ""}
   </div>`;
 }
 
@@ -457,19 +465,16 @@ export function runDock(copy: ShellCopy, snap: Snapshot): string {
   return terminalPanel(copy, run, "run-dock");
 }
 
-function readOnlyTerminal(copy: ShellCopy, run: RunSummary): string {
+export function readOnlyTerminal(copy: ShellCopy, run: RunSummary): string {
   const labels = focusWorkspaceLabels();
   return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
-    <header class="run-dock-hd">
-      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(runIdentity(copy, run))}</span></div>
-      ${runControls(copy, run)}
-    </header>
+    ${runHeader(copy, run)}
     <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
     <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
   </div>`;
 }
 
-function emptyTerminalSurface(copy: ShellCopy, snap: Snapshot): string {
+export function emptyTerminalSurface(copy: ShellCopy, snap: Snapshot): string {
   const labels = focusWorkspaceLabels();
   const issue = snap.board?.selected;
   return `<div class="focus-terminal-surface empty-terminal" data-terminal-surface="empty">

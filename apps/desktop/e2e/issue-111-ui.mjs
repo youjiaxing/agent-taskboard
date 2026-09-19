@@ -268,16 +268,16 @@ if (
 
 await page.setViewportSize({ width: 390, height: 844 });
 await page.locator(".issue-card-main", { hasText: "title after loading latest" }).click();
-await page.waitForSelector(".mobile-issue-view section.issue-document[data-document-state='ready']");
-await page.click(".mobile-issue-view button[data-act='edit-issue']");
-await page.fill(".mobile-issue-view #issue-edit-body", "mobile conflict draft");
+await page.waitForSelector(".mobile-workspace-view section.issue-document[data-document-state='ready']");
+await page.click(".mobile-workspace-view button[data-act='edit-issue']");
+await page.fill(".mobile-workspace-view #issue-edit-body", "mobile conflict draft");
 await writeFile(
   childPath,
   (await readFile(childPath, "utf8")).replace("remote body changed outside draft", "mobile Tracker body"),
 );
-await page.click(".mobile-issue-view form[data-act='issue-edit'] > .actions button[type='submit']");
-await page.waitForSelector(".mobile-issue-view .issue-conflict");
-if (await page.inputValue(".mobile-issue-view #issue-edit-body") !== "mobile conflict draft") {
+await page.click(".mobile-workspace-view form[data-act='issue-edit'] > .actions button[type='submit']");
+await page.waitForSelector(".mobile-workspace-view .issue-conflict");
+if (await page.inputValue(".mobile-workspace-view #issue-edit-body") !== "mobile conflict draft") {
   throw new Error("the mobile conflict flow must preserve the local draft");
 }
 const mobileOverflow = await page.evaluate(
@@ -286,8 +286,8 @@ const mobileOverflow = await page.evaluate(
 if (mobileOverflow > 1) {
   throw new Error(`mobile conflict controls overflow by ${mobileOverflow}px`);
 }
-await page.click(".mobile-issue-view button[data-act='use-latest-issue-conflict']");
-if (await page.inputValue(".mobile-issue-view #issue-edit-body") !== "mobile Tracker body") {
+await page.click(".mobile-workspace-view button[data-act='use-latest-issue-conflict']");
+if (await page.inputValue(".mobile-workspace-view #issue-edit-body") !== "mobile Tracker body") {
   throw new Error("the mobile conflict flow must load the latest Tracker value");
 }
 

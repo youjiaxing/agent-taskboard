@@ -1,9 +1,9 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
-import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
+import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
-import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
+import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
@@ -18,9 +18,34 @@ function leaveSettingsPage(): void {
   ui.returnPointHistory.length = 0;
 }
 
+/** The mobile drawer closes as soon as it hands over to a page, a dialog, or a confirmation. */
+function closeMobileDrawer(): void {
+  ui.mobileDrawerOpen = false;
+  ui.mobileDrawerAppearanceOpen = false;
+}
+
+/** The mobile bottom navigation switches primary views; it is not a return-point stack. */
+async function openMobilePage(page: "board" | "focus-workspace"): Promise<void> {
+  if (!ui.snapshot) return;
+  ui.clientView.returnPoint = null;
+  ui.returnPointHistory.length = 0;
+  ui.clientView.page = page;
+  ui.mobileLiveTerminal = false;
+  if (page === "board") {
+    // The Host mirror also owns the workspace view; leaving it set would pull the client back in.
+    if (ui.snapshot.workspaceView !== "project") await rpc("returnToBoard");
+  } else if (!ui.snapshot.board?.selected) {
+    const run = workspaceRun(ui.snapshot);
+    if (run) await rpc("focusRun", { runId: run.id });
+  }
+  render();
+}
+
 async function dismissDialog(dialogId: string): Promise<void> {
-  if (dialogId === "mobile-scope") {
-    ui.mobileScopeOpen = false;
+  if (dialogId === "mobile-drawer") {
+    closeMobileDrawer();
+  } else if (dialogId === "mobile-search") {
+    ui.mobileSearchOpen = false;
   } else if (dialogId === "pairing") {
     if (ui.formOperations.pending.has("pairing")) return;
     ui.pairingOpen = false;
@@ -187,27 +212,50 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
   if (act !== "more-menu") ui.moreMenuOpen = false;
   if (act !== "project-menu") ui.projectMenuId = "";
-  if (act === "mobile-scope") {
-    rememberDialogTrigger("mobile-scope", target);
-    ui.mobileScopeOpen = true;
+  if (act === "mobile-drawer") {
+    rememberDialogTrigger("mobile-drawer", target);
+    ui.mobileDrawerOpen = true;
     render();
     return;
   }
-  if (act === "mobile-board") {
-    ui.mobileView = "board";
+  if (act === "mobile-nav" && target.dataset.id) {
+    await openMobilePage(target.dataset.id as "board" | "focus-workspace");
+    return;
+  }
+  if (act === "mobile-workspace-section" && target.dataset.id) {
+    ui.mobileWorkspaceSection = target.dataset.id as MobileWorkspaceSection;
     ui.mobileLiveTerminal = false;
     render();
     return;
   }
-  if (act === "mobile-issue") {
-    ui.mobileView = "issue";
+  if (act === "mobile-issue-entry" || act === "mobile-history-entry") {
+    rememberDialogTrigger(
+      "mobile-drawer",
+      target,
+      "button[data-act='mobile-drawer']",
+    );
+    closeMobileDrawer();
+    enterPrimaryPage("focus-workspace", ui.snapshot);
+    ui.mobileWorkspaceSection = act === "mobile-issue-entry" ? "issue" : "runs";
     ui.mobileLiveTerminal = false;
     render();
     return;
   }
-  if (act === "mobile-run") {
-    if (focusedRun(ui.snapshot)) ui.mobileView = "run";
+  if (act === "mobile-search-entry") {
+    rememberDialogTrigger("mobile-search", target, "button[data-act='mobile-drawer']");
+    closeMobileDrawer();
+    ui.mobileSearchOpen = true;
     render();
+    return;
+  }
+  if (act === "mobile-appearance-entry") {
+    ui.mobileDrawerAppearanceOpen = !ui.mobileDrawerAppearanceOpen;
+    render();
+    return;
+  }
+  if (act === "mobile-settings-entry") {
+    closeMobileDrawer();
+    await openSettingsPanel();
     return;
   }
   if (act === "mobile-live-terminal") {
@@ -232,7 +280,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "open-overview") {
-    ui.mobileScopeOpen = false;
+    closeMobileDrawer();
     enterPrimaryPage("host-overview", ui.snapshot);
     await rpc("openHostOverview");
     render();
@@ -275,8 +323,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "pair") {
-    rememberDialogTrigger("pairing", target, target.closest(".mobile-scope-sheet") ? "button[data-act='mobile-scope']" : undefined);
-    ui.mobileScopeOpen = false;
+    rememberDialogTrigger("pairing", target, target.closest("[data-dialog-id='mobile-drawer']") ? "button[data-act='mobile-drawer']" : undefined);
+    closeMobileDrawer();
     ui.pairingOpen = true;
     leaveSettingsPage();
     ui.hostPickerOpen = false;
@@ -288,8 +336,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "register") {
-    rememberDialogTrigger("project-form", target, target.closest(".mobile-scope-sheet") ? "button[data-act='mobile-scope']" : undefined);
-    ui.mobileScopeOpen = false;
+    rememberDialogTrigger("project-form", target, target.closest("[data-dialog-id='mobile-drawer']") ? "button[data-act='mobile-drawer']" : undefined);
+    closeMobileDrawer();
     ui.formOpen = "register";
     ui.formProjectId = "";
     ui.formDraft = emptyDraft();
@@ -442,8 +490,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "focus-project" && target.dataset.id) {
     ui.projectMenuId = "";
-    ui.mobileScopeOpen = false;
-    ui.mobileView = "board";
+    closeMobileDrawer();
     ui.clientView.page = "board";
     ui.clientView.returnPoint = null;
     ui.returnPointHistory.length = 0;
@@ -563,7 +610,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
-      ui.mobileView = "run";
+      ui.mobileWorkspaceSection = "terminal";
       ui.mobileLiveTerminal = false;
     }
     render();
@@ -585,7 +632,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "open-usage") {
-    ui.mobileScopeOpen = false;
+    closeMobileDrawer();
     leaveSettingsPage();
     ui.pairingOpen = false;
     ui.formOpen = null;
@@ -624,7 +671,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.dangerConfirmation = {
       kind: "stop-run",
       runId: target.dataset.id,
-      returnToMobileBoard: mobileClient(),
     };
     ui.confirmationError = "";
     ui.confirmationPending = false;
@@ -641,10 +687,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       ui.dangerConfirmation = null;
       ui.confirmationError = "";
       ui.confirmationPending = false;
-      if (confirmation.returnToMobileBoard) {
-        ui.mobileView = "board";
-        ui.mobileLiveTerminal = false;
-      }
       render();
       restoreDialogTrigger("stop-run");
     } catch (error) {
@@ -725,11 +767,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     rememberDialogTrigger(
       "project-form",
       target,
-      target.closest(".mobile-scope-sheet")
-        ? "button[data-act='mobile-scope']"
+      target.closest("[data-dialog-id='mobile-drawer']")
+        ? "button[data-act='mobile-drawer']"
         : `button[data-act='project-menu'][data-id='${CSS.escape(target.dataset.id)}']`,
     );
-    ui.mobileScopeOpen = false;
+    closeMobileDrawer();
     const project = ui.snapshot.projects.find((item) => item.id === target.dataset.id);
     if (!project) return;
     ui.formOpen = "edit";
@@ -752,11 +794,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     rememberDialogTrigger(
       "remove-project",
       target,
-      target.closest(".mobile-scope-sheet")
-        ? "button[data-act='mobile-scope']"
+      target.closest("[data-dialog-id='mobile-drawer']")
+        ? "button[data-act='mobile-drawer']"
         : `button[data-act='project-menu'][data-id='${CSS.escape(target.dataset.id)}']`,
     );
-    ui.mobileScopeOpen = false;
+    closeMobileDrawer();
     ui.removeProject = ui.snapshot.projects.find((item) => item.id === target.dataset.id) ?? null;
     ui.removeError = "";
     ui.projectMenuId = "";
@@ -880,7 +922,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "language" && target.dataset.id) {
-    if (mobileClient()) {
+    if (browserClient()) {
       const appearance = ensureBrowserAppearance();
       saveBrowserAppearance({ ...appearance, language: target.dataset.id as Language });
     } else {
@@ -1000,20 +1042,19 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-issue" && target.dataset.id) {
-    const desktopFocus = !mobileClient()
-      && (ui.clientView.page === "focus-workspace"
-        || Boolean(target.closest(".issue-card-main, .graph-node-main, .graph-index-main")));
-    if (desktopFocus) enterPrimaryPage("focus-workspace", ui.snapshot);
+    const enterWorkspace = ui.clientView.page === "focus-workspace"
+      || Boolean(target.closest(".issue-card-main, .graph-node-main, .graph-index-main"));
+    if (enterWorkspace) enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: target.dataset.id });
     const run = workspaceRun(ui.snapshot);
-    if (desktopFocus && run && (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run")) {
+    if (enterWorkspace && run && (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run")) {
       await rpc("focusRun", { runId: run.id });
     }
-    if (desktopFocus && ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
+    if (enterWorkspace && ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
-      ui.mobileView = "issue";
+      ui.mobileWorkspaceSection = "issue";
       ui.mobileLiveTerminal = false;
     }
     render();
