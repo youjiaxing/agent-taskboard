@@ -326,6 +326,30 @@ await session.page.keyboard.press("?");
 if (await session.page.$(".keyboard-help")) {
   throw new Error("terminal focus should keep ? in the official TUI");
 }
+const terminalShortcutGuard = await session.page.evaluate(() => {
+  const textarea = document.querySelector(".pty-host .xterm-helper-textarea");
+  const pageBefore = document.querySelector(".frame")?.className ?? "";
+  const steps = ["?", "/", "j", "ArrowDown", "k", "ArrowUp", "Enter", "Escape"].map((key) => {
+    textarea?.focus();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    return {
+      key,
+      inTerminal: document.activeElement?.closest(".pty-host") !== null,
+      searchFocused: document.activeElement?.id === "issue-title-search",
+      dialog: Boolean(document.querySelector("[data-dialog-root='true']")),
+      help: Boolean(document.querySelector(".keyboard-help")),
+      page: document.querySelector(".frame")?.className ?? "",
+      dock: Boolean(document.querySelector(".run-dock")),
+    };
+  });
+  return { pageBefore, steps };
+});
+const stolenKeys = terminalShortcutGuard.steps.filter(
+  (step) => !step.inTerminal || step.searchFocused || step.dialog || step.help || step.page !== terminalShortcutGuard.pageBefore || !step.dock,
+);
+if (stolenKeys.length) {
+  throw new Error(`terminal focus must keep every shell shortcut in the official TUI: ${JSON.stringify(stolenKeys)}`);
+}
 await session.page.click(".run-dock button[data-act='stop-run']");
 await session.page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await session.page.waitForFunction(() => !document.querySelector(".run-dock"));

@@ -59,7 +59,7 @@ if (
   fail("updater must use this repository's latest.json");
 }
 if (
-  !renderedSettings.includes('data-field="startAtLogin"') ||
+  !/"data-field":\s*"startAtLogin"/.test(renderedSettings) ||
   !formEvents.includes('data-field") === "startAtLogin"')
 ) {
   fail("start-at-login setting and change handler must share the same field name");

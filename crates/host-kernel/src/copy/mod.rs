@@ -229,7 +229,6 @@ pub struct ShellCopy {
     pub search_closed: String,
     pub search_submit: String,
     pub keyboard_help: String,
-    pub keyboard_help_body: String,
     pub this_round: String,
     pub uncommitted: String,
     pub add_change_note: String,

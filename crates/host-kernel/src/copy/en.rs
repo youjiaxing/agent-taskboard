@@ -221,7 +221,6 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 search_closed: "closed".into(),
                 search_submit: "Search".into(),
                 keyboard_help: "Keyboard help".into(),
-                keyboard_help_body: "Use J / K or arrow keys to move between board cards; Enter opens details; / focuses search; ? opens or closes help; Escape closes help. When the terminal is focused, all shortcuts stay with the official TUI.".into(),
                 this_round: "This round".into(),
                 uncommitted: "Uncommitted".into(),
                 add_change_note: "Add a change note".into(),

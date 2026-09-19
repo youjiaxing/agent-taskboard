@@ -7,8 +7,9 @@ import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail } from "./board";
 import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
+import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, menu, notice, progressFeedback } from "../components/primitives";
+import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
@@ -150,15 +151,20 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
     from: toLocalInput(usage.fromMs),
     to: toLocalInput(usage.toMs),
   };
-  const rangeBtn = (id: UsageRange, label: string) =>
-    `<button type="button" class="${range === id ? "active" : ""}" data-act="usage-range" data-id="${id}">${escapeHtml(label)}</button>`;
-  const optionList = (items: UsageOption[], selected: string | null | undefined) =>
-    `<option value="">${escapeHtml(copy.filterAll)}</option>${items
-      .map(
-        (item) =>
-          `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.name)}</option>`,
-      )
-      .join("")}`;
+  const rangeAction = (id: UsageRange, label: string): ActionDescriptor => ({
+    id: "usage-range",
+    label,
+    pressed: range === id,
+    data: { id },
+  });
+  const filterOptions = (items: UsageOption[], selected: string | null | undefined): SelectOption[] => [
+    { value: "", label: copy.filterAll },
+    ...items.map((item) => ({ value: item.id, label: item.name, selected: item.id === selected })),
+  ];
+  const modelOptions: SelectOption[] = [
+    { value: "", label: copy.filterAll },
+    ...usage.models.map((model) => ({ value: model, label: model, selected: model === usage.filter.model })),
+  ];
   const rows = usage.runs.length
     ? usage.runs
         .map(
@@ -168,7 +174,7 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
                 <b>${escapeHtml(row.projectName)}</b>
                 <span>${escapeHtml(row.agentName)}${row.models.length ? ` · ${escapeHtml(row.models.join(", "))}` : ""}</span>
               </div>
-              <button type="button" data-act="open-run-usage" data-id="${escapeHtml(row.runId)}">${escapeHtml(copy.openThisRun)}</button>
+              ${button({ id: "open-run-usage", label: copy.openThisRun, data: { id: row.runId } })}
             </header>
             <div class="token-row">${tokenCells(copy, row.tokens)}</div>
           </article>`,
@@ -189,31 +195,30 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
         </div>
       </div>
     </div>
-    <div class="choices usage-ranges">
-      ${rangeBtn("24-hours", copy.range24Hours)}
-      ${rangeBtn("today", copy.rangeToday)}
-      ${rangeBtn("7-days", copy.range7Days)}
-      ${rangeBtn("30-days", copy.range30Days)}
-      ${rangeBtn("custom", copy.rangeCustom)}
-    </div>
+    ${optionGroup({
+      label: copy.usage,
+      className: "usage-ranges",
+      actions: [
+        rangeAction("24-hours", copy.range24Hours),
+        rangeAction("today", copy.rangeToday),
+        rangeAction("7-days", copy.range7Days),
+        rangeAction("30-days", copy.range30Days),
+        rangeAction("custom", copy.rangeCustom),
+      ],
+    })}
     ${
       range === "custom"
         ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
-            <input type="datetime-local" name="from" required value="${escapeHtml(customDraft.from)}" ${customPending ? "disabled" : ""} />
-            <input type="datetime-local" name="to" required value="${escapeHtml(customDraft.to)}" ${customPending ? "disabled" : ""} />
-            <button type="submit" ${customPending ? "disabled" : ""}>${escapeHtml(customPending ? copy.operationPending : copy.rangeCustom)}</button>
+            ${textInput({ name: "from", type: "datetime-local", required: true, value: customDraft.from, disabled: customPending })}
+            ${textInput({ name: "to", type: "datetime-local", required: true, value: customDraft.to, disabled: customPending })}
+            ${button({ id: "apply-usage-custom", label: customPending ? copy.operationPending : copy.rangeCustom, disabled: customPending, busy: customPending }, { type: "submit", variant: "primary" })}
           </form>${formFeedback(customKey)}`
         : ""
     }
     <div class="usage-filters">
-      <label>${escapeHtml(copy.filterProject)}<select data-usage-filter="projectId">${optionList(usage.projects, usage.filter.projectId)}</select></label>
-      <label>${escapeHtml(copy.filterAgent)}<select data-usage-filter="agentId">${optionList(usage.agents, usage.filter.agentId)}</select></label>
-      <label>${escapeHtml(copy.filterModel)}<select data-usage-filter="model"><option value="">${escapeHtml(copy.filterAll)}</option>${usage.models
-        .map(
-          (model) =>
-            `<option value="${escapeHtml(model)}" ${model === usage.filter.model ? "selected" : ""}>${escapeHtml(model)}</option>`,
-        )
-        .join("")}</select></label>
+      <label>${escapeHtml(copy.filterProject)}${selectControl({ options: filterOptions(usage.projects, usage.filter.projectId), attributes: { "data-usage-filter": "projectId" } })}</label>
+      <label>${escapeHtml(copy.filterAgent)}${selectControl({ options: filterOptions(usage.agents, usage.filter.agentId), attributes: { "data-usage-filter": "agentId" } })}</label>
+      <label>${escapeHtml(copy.filterModel)}${selectControl({ options: modelOptions, attributes: { "data-usage-filter": "model" } })}</label>
     </div>
     <div class="token-row totals">${tokenCells(copy, usage.totals)}<span class="token-cell"><i>${escapeHtml(copy.cacheHit)}</i>${hit}</span></div>
     ${trend}
@@ -239,11 +244,14 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
     ["stopped", copy.runGroupStopped, visibleRuns.filter((run) => run.status === "ended" && Boolean(run.endedReason) && run.endedReason !== "exited")],
     ["ended", copy.runGroupEnded, visibleRuns.filter((run) => run.status === "ended" && (!run.endedReason || run.endedReason === "exited"))],
   ];
-  const projectOptions = snap.projects
-    .map(
-      (project) => `<option value="${escapeHtml(project.id)}" ${project.id === ui.overviewProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`,
-    )
-    .join("");
+  const projectOptions: SelectOption[] = [
+    { value: "", label: copy.filterAll },
+    ...snap.projects.map((project) => ({
+      value: project.id,
+      label: project.name,
+      selected: project.id === ui.overviewProjectId,
+    })),
+  ];
   const totalCounts = visibleProjects.reduce(
     (total, project) => {
       const counts = projectIssueCounts(project);
@@ -268,9 +276,9 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
     </div>
     <div class="overview-controls">
       <label>${escapeHtml(copy.filterProject)}
-        <select data-overview-filter="project"><option value="">${escapeHtml(copy.filterAll)}</option>${projectOptions}</select>
+        ${selectControl({ options: projectOptions, attributes: { "data-overview-filter": "project" } })}
       </label>
-      <label class="graph-opt"><input type="checkbox" data-field="showEndedRuns" ${ui.overviewShowEnded ? "checked" : ""} />${escapeHtml(copy.showEndedRuns)}</label>
+      ${checkbox({ label: copy.showEndedRuns, checked: ui.overviewShowEnded, attributes: { "data-field": "showEndedRuns" } })}
     </div>
     <div class="overview-stats">
       <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
@@ -674,26 +682,34 @@ export function settingsPage(
         <h2>${escapeHtml(localCopy.appearance)}</h2>
         <div class="field">
           <div class="label">${escapeHtml(copy.language)}</div>
-          <div class="choices">
-            ${SETTINGS_LANGUAGES.map((language) =>
-              `<button type="button" class="${appearance.language === language ? "active" : ""}" data-act="language" data-id="${language}">${escapeHtml(languageLabel(language))}</button>`,
-            ).join("")}
-          </div>
+          ${optionGroup({
+            label: copy.language,
+            actions: SETTINGS_LANGUAGES.map((language) => ({
+              id: "language",
+              label: languageLabel(language),
+              pressed: appearance.language === language,
+              data: { id: language },
+            })),
+          })}
         </div>
         <div class="field">
           <div class="label">${escapeHtml(localCopy.appearance)}</div>
-          <div class="choices">
-            ${APPEARANCE_DISPLAY_ORDER.map((preference) =>
-              `<button type="button" class="${appearance.appearancePreference === preference ? "active" : ""}" data-act="appearance" data-id="${preference}">${escapeHtml(appearancePreferenceLabel(localCopy, preference))}</button>`,
-            ).join("")}
-          </div>
+          ${optionGroup({
+            label: localCopy.appearance,
+            actions: APPEARANCE_DISPLAY_ORDER.map((preference) => ({
+              id: "appearance",
+              label: appearancePreferenceLabel(localCopy, preference),
+              pressed: appearance.appearancePreference === preference,
+              data: { id: preference },
+            })),
+          })}
         </div>
       </section>
       <section class="settings-section" data-settings-section="startup">
         <h2>${escapeHtml(localCopy.hostStartup)}</h2>
         ${startupSettings(localCopy, snap)}
         <div class="field">
-          <button type="button" data-act="refresh-launch-environment" ${snap.hostMode === "client-only" ? "disabled" : ""}>${escapeHtml(localCopy.rereadLaunchEnvironment)}</button>
+          ${button({ id: "refresh-launch-environment", label: localCopy.rereadLaunchEnvironment, disabled: snap.hostMode === "client-only" })}
           ${launchEnvironmentStatus(localCopy)}
         </div>
       </section>
@@ -703,31 +719,24 @@ export function settingsPage(
       </section>
       <section class="settings-section" data-settings-section="refresh">
         <h2>${escapeHtml(copy.refreshInterval)}</h2>
-        <div class="field">
-          <label class="label" for="refresh-interval">${escapeHtml(copy.refreshInterval)}</label>
-          <input id="refresh-interval" type="number" min="15" step="15" data-field="refreshInterval" value="${Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)}" />
-          <p class="hint">${escapeHtml(copy.refreshIntervalHelp)}</p>
-        </div>
-        <div class="field">
-          <label class="label" for="recent-limit">${escapeHtml(copy.recentLimit)}</label>
-          <input id="recent-limit" type="number" min="1" max="50" data-field="recentLimit" value="${snap.recentCompletedLimit}" />
-          <p class="hint">${escapeHtml(copy.recentLimitHelp)}</p>
-        </div>
+        ${formField({
+          id: "refresh-interval",
+          label: copy.refreshInterval,
+          control: textInput({ id: "refresh-interval", type: "number", value: String(Math.round((snap.refreshIntervalMs ?? 60_000) / 1000)), attributes: { min: 15, step: 15, "data-field": "refreshInterval" } }),
+          hint: copy.refreshIntervalHelp,
+        })}
+        ${formField({
+          id: "recent-limit",
+          label: copy.recentLimit,
+          control: textInput({ id: "recent-limit", type: "number", value: String(snap.recentCompletedLimit), attributes: { min: 1, max: 50, "data-field": "recentLimit" } }),
+          hint: copy.recentLimitHelp,
+        })}
       </section>
       <section class="settings-section" data-settings-section="notifications">
         <h2>${escapeHtml(copy.notifyDesktop)}</h2>
-        <label class="graph-opt">
-          <input type="checkbox" data-field="commandPreview" ${snap.showCommandPreview ? "checked" : ""} />
-          ${escapeHtml(copy.showCommandPreview)}
-        </label>
-        ${isMobile ? "" : `<label class="graph-opt">
-          <input type="checkbox" data-field="notifyDesktop" ${snap.notifyDesktop ? "checked" : ""} />
-          ${escapeHtml(copy.notifyDesktop)}
-        </label>
-        <label class="graph-opt">
-          <input type="checkbox" data-field="notifySound" ${snap.notifySound ? "checked" : ""} />
-          ${escapeHtml(copy.notifySound)}
-        </label>`}
+        ${checkbox({ label: copy.showCommandPreview, checked: snap.showCommandPreview, attributes: { "data-field": "commandPreview" } })}
+        ${isMobile ? "" : `${checkbox({ label: copy.notifyDesktop, checked: snap.notifyDesktop, attributes: { "data-field": "notifyDesktop" } })}
+        ${checkbox({ label: copy.notifySound, checked: snap.notifySound, attributes: { "data-field": "notifySound" } })}`}
       </section>
       <section class="settings-section" data-settings-section="host">
         <h2>${escapeHtml(copy.hosts)}</h2>
@@ -737,24 +746,16 @@ export function settingsPage(
             ? snap.pairedClients.map((client) => `<div class="client-row"><span>${escapeHtml(client.name)}</span>${button({ id: "revoke", label: copy.revokeClient, destructive: true, data: { id: client.id, name: client.name } })}</div>`).join("")
             : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`}
         </div>
-        ${isMobile ? "" : `<label class="graph-opt">
-          <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
-          ${escapeHtml(copy.autoAdvance)}
-        </label>
+        ${isMobile ? "" : `${checkbox({ label: copy.autoAdvance, checked: snap.autoAdvance, attributes: { "data-field": "hostAutoAdvance" } })}
         <p class="hint">${escapeHtml(copy.autoAdvanceHelp)}</p>
-        ${project ? `<label class="graph-opt">
-          <input type="checkbox" data-field="projectAutoAdvance" ${project.autoAdvance ? "checked" : ""} />
-          ${escapeHtml(copy.projectAutoAdvance)}
-        </label>
-        <label class="graph-opt">
-          <input type="checkbox" data-field="restoreAutoAdvance" ${project.restoreAutoAdvance ? "checked" : ""} />
-          ${escapeHtml(copy.restoreAutoAdvance)}
-        </label>
-        <div class="field">
-          <label class="label" for="restore-delay">${escapeHtml(copy.restoreDelay)}</label>
-          <input id="restore-delay" type="number" min="0" max="600" data-field="restoreDelay" value="${Math.round((project.restoreDelayMs ?? 60000) / 1000)}" />
-        </div>` : ""}
-        <button type="button" data-act="quit">${escapeHtml(copy.quitHost)}</button>`}
+        ${project ? `${checkbox({ label: copy.projectAutoAdvance, checked: project.autoAdvance, attributes: { "data-field": "projectAutoAdvance" } })}
+        ${checkbox({ label: copy.restoreAutoAdvance, checked: project.restoreAutoAdvance, attributes: { "data-field": "restoreAutoAdvance" } })}
+        ${formField({
+          id: "restore-delay",
+          label: copy.restoreDelay,
+          control: textInput({ id: "restore-delay", type: "number", value: String(Math.round((project.restoreDelayMs ?? 60000) / 1000)), attributes: { min: 0, max: 600, "data-field": "restoreDelay" } }),
+        })}` : ""}
+        ${button({ id: "quit", label: copy.quitHost })}`}
       </section>
     </div>
   </section>`;
@@ -766,17 +767,17 @@ export function startupSettings(copy: StartupCopy, snap: Snapshot): string {
   }
   return `<div class="field startup-settings">
     <div class="label">${escapeHtml(copy.hostStartup)}</div>
-    <div class="choices">
-      <button type="button" class="${snap.hostMode === "host-and-client" ? "active" : ""}" data-act="host-mode" data-id="host-and-client">${escapeHtml(copy.hostAndClient)}</button>
-      <button type="button" class="${snap.hostMode === "client-only" ? "active" : ""}" data-act="host-mode" data-id="client-only">${escapeHtml(copy.clientOnly)}</button>
-    </div>
+    ${optionGroup({
+      label: copy.hostStartup,
+      actions: [
+        { id: "host-mode", label: copy.hostAndClient, pressed: snap.hostMode === "host-and-client", data: { id: "host-and-client" } },
+        { id: "host-mode", label: copy.clientOnly, pressed: snap.hostMode === "client-only", data: { id: "client-only" } },
+      ],
+    })}
     <p class="hint">${escapeHtml(copy.hostModeHelp)} ${escapeHtml(copy.restartToApply)}</p>
-    <label class="graph-opt">
-      <input type="checkbox" data-field="startAtLogin" ${ui.startAtLogin ? "checked" : ""} ${ui.startAtLogin == null ? "disabled" : ""} />
-      ${escapeHtml(copy.startAtLogin)}
-    </label>
+    ${checkbox({ label: copy.startAtLogin, checked: ui.startAtLogin === true, disabled: ui.startAtLogin == null, attributes: { "data-field": "startAtLogin" } })}
     <p class="hint">${escapeHtml(copy.startAtLoginHelp)}</p>
-    ${ui.startupSettingsError ? `<p class="notice bad">${escapeHtml(ui.startupSettingsError)}</p>` : ""}
+    ${ui.startupSettingsError ? notice({ status: "danger", message: ui.startupSettingsError }) : ""}
   </div>`;
 }
 
@@ -790,10 +791,11 @@ export function updateSettings(copy: ShellCopy): string {
         : ui.updateState.kind === "blocked"
           ? `${copy.updateActiveRuns} (${ui.updateState.activeRunCount})`
           : "";
+  const checking = ui.updateState.kind === "checking" || ui.updateState.kind === "installing";
   return `<div class="field update-settings">
     <div class="label">${escapeHtml(copy.updates)}</div>
     ${desktopShellAvailable()
-      ? `<button type="button" data-act="check-updates" ${ui.updateState.kind === "checking" || ui.updateState.kind === "installing" ? "disabled" : ""}>${escapeHtml(ui.updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates)}</button>`
+      ? button({ id: "check-updates", label: ui.updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates, disabled: checking })
       : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
     ${status ? `<p class="hint update-status">${escapeHtml(status)}</p>` : ""}
   </div>`;
@@ -850,11 +852,19 @@ export function keyboardHelpDialog(copy: ShellCopy): string {
     id: "keyboard-help",
     tier: "confirm",
     title: copy.keyboardHelp,
-    body: `<p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>`,
+    body: `${shortcutList(localCopy)}<p class="hint">${escapeHtml(localCopy.shortcutsScope)}</p>`,
     closeLabel: localCopy.close,
     dismissible: true,
     initialFocus: "primary",
     className: "keyboard-help",
     actions: dialogDismissButton(copy.gotIt, { initialFocus: true }),
   });
+}
+
+/** Renders the same table the keydown handler dispatches from, so the help list cannot drift. */
+function shortcutList(copy: StartupCopy): string {
+  return `<ul class="shortcut-list">${SHELL_SHORTCUTS.map((shortcut) => `<li data-shortcut="${shortcut.id}">
+      <span class="shortcut-keys">${shortcutKeyLabels(shortcut.id).map((key) => `<kbd>${escapeHtml(key)}</kbd>`).join("")}</span>
+      <span class="shortcut-label">${escapeHtml(copy.shortcuts[shortcut.id])}</span>
+    </li>`).join("")}</ul>`;
 }
