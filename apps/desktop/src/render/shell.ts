@@ -1,12 +1,14 @@
 import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
-import { changeNoteFormKey, formFeedback, injectFormKey, usageCustomFormKey } from "../form-keys";
+import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, focusedRun, mobileClient } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient } from "../view-helpers";
 import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { projectMain } from "./board";
 import { ui } from "../ui";
-import { appearancePreferenceLabel, type StartupCopy } from "../startup-copy";
+import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
+import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
+import { button, menu, notice, progressFeedback } from "../components/primitives";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
@@ -29,10 +31,14 @@ export function projectRow(copy: ShellCopy, project: Project, focusedId: string)
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
       ui.projectMenuId === project.id
-        ? `<div class="project-menu">
-            <button type="button" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
-            <button type="button" class="danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
-          </div>`
+        ? menu({
+            className: "project-menu",
+            label: `${copy.projectMenu} ${project.name}`,
+            actions: [
+              { id: "edit-project", label: copy.editProject, data: { id: project.id } },
+              { id: "remove-project", label: copy.removeProject, destructive: true, data: { id: project.id } },
+            ],
+          })
         : ""
     }
   </div>`;
@@ -538,16 +544,51 @@ export function changeLineRow(
 }
 
 export function quitOfferDialog(copy: ShellCopy): string {
-  return `<div class="overlay modal" data-act="cancel-quit">
-    <div class="sheet" data-act="form-noop">
-      <h2>${escapeHtml(copy.quitActiveTitle)}</h2>
-      <p class="notice">${escapeHtml(copy.quitActiveBody)}</p>
-      <div class="actions">
-        <button type="button" data-act="cancel-quit">${escapeHtml(copy.quitReturn)}</button>
-        <button type="button" class="danger primary" data-act="confirm-quit">${escapeHtml(copy.quitStopAll)}</button>
-      </div>
-    </div>
-  </div>`;
+  const localCopy = startupCopy(effectiveClientLanguage());
+  const activeRunCount = ui.snapshot?.quitOffer?.activeRunCount ?? 0;
+  const count = localCopy.interruptedRunCount.replace("{count}", String(activeRunCount));
+  return confirmationDialog({
+    id: "quit-host",
+    title: copy.quitActiveTitle,
+    body: `${notice({ status: "danger", message: copy.quitActiveBody })}<p class="hint">${escapeHtml(count)}</p>`,
+    closeLabel: localCopy.close,
+    cancelLabel: copy.quitReturn,
+    confirm: { id: "confirm-quit", label: copy.quitStopAll, destructive: true },
+  });
+}
+
+export function dangerConfirmationDialog(copy: ShellCopy): string {
+  const confirmation = ui.dangerConfirmation;
+  if (!confirmation) return "";
+  const localCopy = startupCopy(effectiveClientLanguage());
+  if (confirmation.kind === "stop-run") {
+    const run = ui.snapshot?.runs.find((candidate) => candidate.id === confirmation.runId);
+    const runIdentity = run ? `${run.agentName} · ${run.issueId ?? run.id}` : confirmation.runId;
+    return confirmationDialog({
+      id: "stop-run",
+      title: localCopy.stopRunTitle,
+      body: `${notice({ status: "danger", message: localCopy.stopRunBody })}<p class="hint"><strong>Run</strong> · ${escapeHtml(runIdentity)}</p>`,
+      closeLabel: localCopy.close,
+      cancelLabel: copy.cancel,
+      confirm: { id: "confirm-stop-run", label: localCopy.stopRunConfirm, destructive: true, busy: ui.confirmationPending },
+      error: ui.confirmationError,
+    });
+  }
+  const body = localCopy.revokeClientBody.replace("{name}", confirmation.clientName);
+  return confirmationDialog({
+    id: "revoke-client",
+    title: localCopy.revokeClientTitle,
+    body: notice({ status: "danger", message: body }),
+    closeLabel: localCopy.close,
+    cancelLabel: copy.cancel,
+    confirm: {
+      id: "confirm-revoke-client",
+      label: localCopy.revokeClientConfirm,
+      destructive: true,
+      busy: ui.confirmationPending || ui.formOperations.pending.has(revokeClientFormKey(confirmation.clientId)),
+    },
+    error: ui.confirmationError,
+  });
 }
 
 export function launchEnvironmentStatus(copy: StartupCopy): string {
@@ -640,6 +681,12 @@ export function settingsPage(
       </section>
       <section class="settings-section" data-settings-section="host">
         <h2>${escapeHtml(copy.hosts)}</h2>
+        <div class="field paired-clients" data-paired-clients>
+          <div class="label">${escapeHtml(copy.pairedClients)}</div>
+          ${snap.pairedClients.length
+            ? snap.pairedClients.map((client) => `<div class="client-row"><span>${escapeHtml(client.name)}</span>${button({ id: "revoke", label: copy.revokeClient, destructive: true, data: { id: client.id, name: client.name } })}</div>`).join("")
+            : `<div class="nested">${escapeHtml(copy.noPairedClients)}</div>`}
+        </div>
         ${isMobile ? "" : `<label class="graph-opt">
           <input type="checkbox" data-field="hostAutoAdvance" ${snap.autoAdvance ? "checked" : ""} />
           ${escapeHtml(copy.autoAdvance)}
@@ -703,49 +750,61 @@ export function updateSettings(copy: ShellCopy): string {
 }
 
 export function updateDialog(copy: ShellCopy): string {
+  const localCopy = startupCopy(effectiveClientLanguage());
   if (ui.updateState.kind === "available") {
-    return `<div class="overlay modal update-dialog" data-act="update-later">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateAvailable)} ${escapeHtml(ui.updateState.version)}</h2>
-        <p class="notice">${escapeHtml(copy.updateReady)}</p>
-        ${ui.updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(ui.updateState.notes)}</p></div>` : ""}
-        <div class="actions">
-          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
-          <button type="button" class="primary" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
-        </div>
-      </div>
-    </div>`;
+    const body = `${notice({ message: copy.updateReady })}${ui.updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(ui.updateState.notes)}</p></div>` : ""}`;
+    return dialog({
+      id: "update",
+      tier: "confirm",
+      title: `${copy.updateAvailable} ${ui.updateState.version}`,
+      body,
+      closeLabel: localCopy.close,
+      dismissible: true,
+      initialFocus: "primary",
+      className: "update-dialog",
+      actions: `${dialogDismissButton(copy.updateLater)}${dialogActionButton({ id: "install-update", label: copy.updateConfirm }, { primary: true, initialFocus: true })}`,
+    });
   }
   if (ui.updateState.kind === "blocked") {
-    return `<div class="overlay modal update-dialog" data-act="update-later">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateAvailable)}</h2>
-        <p class="notice bad">${escapeHtml(copy.updateActiveRuns)} (${ui.updateState.activeRunCount})</p>
-        <div class="actions">
-          <button type="button" data-act="update-later">${escapeHtml(copy.updateLater)}</button>
-          <button type="button" data-act="install-update">${escapeHtml(copy.updateConfirm)}</button>
-        </div>
-      </div>
-    </div>`;
+    const count = localCopy.interruptedRunCount.replace("{count}", String(ui.updateState.activeRunCount));
+    return confirmationDialog({
+      id: "update",
+      title: copy.updateAvailable,
+      body: `${notice({ status: "danger", message: localCopy.updateBlockedBody })}<p class="hint">${escapeHtml(count)}</p>`,
+      closeLabel: localCopy.close,
+      cancelLabel: copy.updateLater,
+      confirm: { id: "install-update", label: localCopy.updateRetry, destructive: true },
+    });
   }
   if (ui.updateState.kind === "installing") {
-    const progress = ui.updateState.progress == null ? "" : ` ${ui.updateState.progress}%`;
-    return `<div class="overlay modal update-dialog">
-      <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true">
-        <h2>${escapeHtml(copy.updateInstalling)}${progress}</h2>
-        ${ui.updateState.progress == null ? "" : `<progress max="100" value="${ui.updateState.progress}"></progress>`}
-      </div>
-    </div>`;
+    const progress = ui.updateState.progress;
+    const progressLabel = progress == null ? copy.updateInstalling : `${copy.updateInstalling} ${progress}%`;
+    return dialog({
+      id: "update",
+      tier: "confirm",
+      title: copy.updateInstalling,
+      body: progressFeedback({ message: `${localCopy.updateInstallingBody} ${progressLabel}`, progress }),
+      closeLabel: localCopy.close,
+      dismissible: false,
+      initialFocus: "none",
+      busy: true,
+      className: "update-dialog",
+    });
   }
   return "";
 }
 
 export function keyboardHelpDialog(copy: ShellCopy): string {
-  return `<div class="overlay modal keyboard-help" data-act="close-keyboard-help">
-    <div class="sheet" data-act="form-noop" role="dialog" aria-modal="true" aria-label="${escapeHtml(copy.keyboardHelp)}">
-      <h2>${escapeHtml(copy.keyboardHelp)}</h2>
-      <p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>
-      <div class="actions"><button type="button" data-act="close-keyboard-help">${escapeHtml(copy.gotIt)}</button></div>
-    </div>
-  </div>`;
+  const localCopy = startupCopy(effectiveClientLanguage());
+  return dialog({
+    id: "keyboard-help",
+    tier: "confirm",
+    title: copy.keyboardHelp,
+    body: `<p class="hint">${escapeHtml(copy.keyboardHelpBody)}</p>`,
+    closeLabel: localCopy.close,
+    dismissible: true,
+    initialFocus: "primary",
+    className: "keyboard-help",
+    actions: dialogDismissButton(copy.gotIt, { initialFocus: true }),
+  });
 }

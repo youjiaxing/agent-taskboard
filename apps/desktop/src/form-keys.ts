@@ -1,5 +1,5 @@
 import { RpcHttpError, type BoardSnapshot, type FormKey, type IssueContentDraft, type IssueDetail, type IssueLink, type IssueRelationDraft, type IssueSearchDraft } from "./protocol";
-import { escapeHtml } from "./client-utils";
+import { notice } from "./components/primitives";
 import { render } from "./render/app";
 import { ui } from "./ui";
 
@@ -63,6 +63,10 @@ export function usageCustomFormKey(hostId: string): FormKey {
   return `usage-custom:${hostId}`;
 }
 
+export function revokeClientFormKey(clientId: string): FormKey {
+  return `revoke-client:${clientId}`;
+}
+
 export function issueDocumentBody(issue: IssueDetail): string {
   const document = issue.document;
   return document.kind === "ready" || document.kind === "stale"
@@ -119,7 +123,7 @@ export function issueOptionList(board: BoardSnapshot, issue: IssueDetail): Issue
 
 export function formFeedback(key: FormKey): string {
   const error = ui.formOperations.errors.get(key);
-  return error ? `<p class="notice bad form-feedback">${escapeHtml(error)}</p>` : "";
+  return error ? notice({ status: "danger", role: "alert", className: "form-feedback", message: error }) : "";
 }
 
 export function clearFormOperation(key: FormKey): void {

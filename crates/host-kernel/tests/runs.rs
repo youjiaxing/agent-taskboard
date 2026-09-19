@@ -145,6 +145,7 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     assert_eq!(out.snapshot.copy.new_run, "新建");
     assert_eq!(out.snapshot.copy.unbound_issue, "未绑定 Issue");
     assert!(out.snapshot.projects[0].has_active_run);
+    assert_eq!(out.snapshot.projects[0].active_run_count, 1);
     assert_eq!(out.snapshot.focused_run_id, run.id);
     assert_eq!(h.launch_env.capture_count(), 3);
     assert_eq!(
@@ -269,6 +270,7 @@ fn launch_failure_leaves_a_record_and_does_not_retry() {
     assert_eq!(run.failure.as_deref(), Some("could not spawn grok"));
     assert_eq!(h.sessions.spawn_count(), 1);
     assert!(!out.snapshot.projects[0].has_active_run);
+    assert_eq!(out.snapshot.projects[0].active_run_count, 0);
 }
 
 #[test]
@@ -293,6 +295,7 @@ fn stopping_a_run_ends_it() {
         .unwrap();
     assert_eq!(out.snapshot.runs[0].status, RunStatus::Ended);
     assert!(!out.snapshot.projects[0].has_active_run);
+    assert_eq!(out.snapshot.projects[0].active_run_count, 0);
     assert!(h.sessions.last_session().unwrap().stopped());
 }
 
@@ -311,6 +314,93 @@ fn unbound_runs_can_run_in_parallel() {
         .iter()
         .all(|run| run.status == RunStatus::Running));
     assert_eq!(h.sessions.spawn_count(), 2);
+    assert!(out.snapshot.projects[0].has_active_run);
+    assert_eq!(out.snapshot.projects[0].active_run_count, 2);
+}
+
+#[test]
+fn project_active_run_count_is_per_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden = make_dir(tmp.path(), "work/garden");
+    let yard = make_dir(tmp.path(), "work/yard");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+
+    let register_named = |host: &mut HostKernel, dir: &Path, name: &str| -> String {
+        host.handle(serde_json::json!({
+            "op": "registerProject",
+            "name": name,
+            "localPath": dir,
+            "repository": "you/garden",
+        }))
+        .unwrap()
+        .snapshot
+        .projects
+        .iter()
+        .find(|project| project.name == name)
+        .expect("registered project")
+        .id
+        .clone()
+    };
+    let garden_id = register_named(&mut h.host, &garden, "garden");
+    let yard_id = register_named(&mut h.host, &yard, "yard");
+
+    let count_for = |out: &host_kernel::CommandOutcome, project_id: &str| -> u32 {
+        out.snapshot
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .expect("project summary")
+            .active_run_count
+    };
+    let first_run = start_unbound(&mut h.host, &garden_id)
+        .unwrap()
+        .snapshot
+        .runs
+        .iter()
+        .find(|run| run.project_id == garden_id)
+        .expect("garden run")
+        .id
+        .clone();
+    start_unbound(&mut h.host, &garden_id).unwrap();
+    let out = start_unbound(&mut h.host, &yard_id).unwrap();
+
+    assert_eq!(count_for(&out, &garden_id), 2);
+    assert_eq!(count_for(&out, &yard_id), 1);
+
+    let out = h
+        .host
+        .handle(serde_json::json!({ "op": "stopRun", "runId": first_run }))
+        .unwrap();
+    let garden = out
+        .snapshot
+        .projects
+        .iter()
+        .find(|project| project.id == garden_id)
+        .expect("garden summary");
+    assert!(garden.has_active_run);
+    assert_eq!(garden.active_run_count, 1);
+    assert_eq!(count_for(&out, &yard_id), 1);
+
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": out.snapshot.runs.iter()
+                .find(|run| run.project_id == garden_id && run.is_active())
+                .expect("remaining garden run")
+                .id
+                .clone(),
+        }))
+        .unwrap();
+    let garden = out
+        .snapshot
+        .projects
+        .iter()
+        .find(|project| project.id == garden_id)
+        .expect("garden summary");
+    assert!(!garden.has_active_run);
+    assert_eq!(garden.active_run_count, 0);
+    assert_eq!(count_for(&out, &yard_id), 1);
 }
 
 #[test]

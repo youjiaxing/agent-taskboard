@@ -58,7 +58,7 @@ await page.waitForFunction(
     document.querySelector("#project-host")?.value === "manual.example.com" &&
     document.querySelector("#project-repo")?.value === "manual/kept",
 );
-await page.click("button[data-act='close-form']");
+await page.click("form[data-form='project'] .dialog-actions button[data-act='dismiss-dialog']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 
 await page.click("button[data-act='register']");
@@ -105,7 +105,7 @@ row = await openProjectMenu("gitlab-renamed");
 await row.locator("button[data-act='remove-project']").click();
 await page.waitForSelector("button[data-act='confirm-remove']");
 await page.click("button[data-act='confirm-remove']");
-await page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-remove']"));
+await page.waitForFunction(() => !document.querySelector("[data-dialog-id='remove-project']"));
 if (await projectRow("gitlab-renamed").count()) {
   throw new Error("removed self-hosted Project should leave the sidebar");
 }

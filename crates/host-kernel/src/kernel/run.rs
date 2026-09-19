@@ -502,9 +502,14 @@ impl HostKernel {
     }
 
     pub(crate) fn project_has_active_run(&self, project_id: &str) -> bool {
+        self.project_active_run_count(project_id) > 0
+    }
+
+    pub(crate) fn project_active_run_count(&self, project_id: &str) -> u32 {
         self.runs
             .iter()
-            .any(|run| run.project_id == project_id && run.is_active())
+            .filter(|run| run.project_id == project_id && run.is_active())
+            .count() as u32
     }
 
     pub(crate) fn project_has_execution_stopped(&self, project_id: &str) -> bool {

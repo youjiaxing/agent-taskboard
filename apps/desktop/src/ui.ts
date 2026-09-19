@@ -99,6 +99,12 @@ export const ui = {
   removeError: "",
   projectOperation: null as "save" | "remove" | null,
   removeProject: null as Project | null,
+  dangerConfirmation: null as
+    | { kind: "stop-run"; runId: string; returnToMobileBoard: boolean }
+    | { kind: "revoke-client"; clientId: string; clientName: string }
+    | null,
+  confirmationError: "",
+  confirmationPending: false,
   refreshing: false,
   tickTimer: undefined as number | undefined,
   activePointers: new Set<number>(),

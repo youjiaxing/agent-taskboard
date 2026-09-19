@@ -482,6 +482,8 @@ pub struct ProjectSummary {
     pub connection: ProjectConnection,
     pub has_active_run: bool,
     #[serde(default)]
+    pub active_run_count: u32,
+    #[serde(default)]
     pub has_execution_stopped: bool,
     pub tracker_synced: bool,
     #[serde(default)]
@@ -513,7 +515,7 @@ pub(crate) struct ProjectRecord {
 impl ProjectRecord {
     pub(crate) fn summary(
         &self,
-        has_active_run: bool,
+        active_run_count: u32,
         has_execution_stopped: bool,
         issue_counts: ProjectIssueCounts,
     ) -> ProjectSummary {
@@ -525,7 +527,8 @@ impl ProjectRecord {
             github_host: self.github_host.clone(),
             repository: self.repository.clone(),
             connection: self.connection.clone(),
-            has_active_run,
+            has_active_run: active_run_count > 0,
+            active_run_count,
             has_execution_stopped,
             tracker_synced: self.tracker_synced,
             auto_advance: self.auto_advance,

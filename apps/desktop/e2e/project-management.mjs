@@ -29,18 +29,18 @@ await page.waitForSelector('.issue-card:has-text("added issue")');
 
 let row = await openProjectMenu("active-project");
 await row.locator("button[data-act='remove-project']").click();
-await page.waitForSelector(".overlay[data-act='close-remove']");
-const activeRemovalText = (await page.locator(".overlay[data-act='close-remove']").textContent())?.replace(/\s+/g, " ") ?? "";
-if (!activeRemovalText.includes("活跃 Run") || await page.locator("button[data-act='confirm-remove']").count()) {
+await page.waitForSelector("[data-dialog-id='remove-project']");
+const activeRemovalText = (await page.locator("[data-dialog-id='remove-project']").textContent())?.replace(/\s+/g, " ") ?? "";
+if (!activeRemovalText.includes("活跃 Run：1") || await page.locator("button[data-act='confirm-remove']").count()) {
   throw new Error(`active Run must block Project removal with a visible reason: ${activeRemovalText}`);
 }
 await capture("issue-100-active-run-removal-blocked-1280x840.png");
-await page.click("button[data-act='close-remove']");
+await page.click("[data-dialog-id='remove-project'] .dialog-actions button[data-act='dismiss-dialog']");
 
 row = await openProjectMenu("stopped-project");
 await row.locator("button[data-act='remove-project']").click();
 await page.waitForSelector("button[data-act='confirm-remove']");
-const stoppedRemovalText = (await page.locator(".overlay[data-act='close-remove']").textContent())?.replace(/\s+/g, " ") ?? "";
+const stoppedRemovalText = (await page.locator("[data-dialog-id='remove-project']").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!stoppedRemovalText.includes("Tracker") || !stoppedRemovalText.includes("认领")) {
   throw new Error(`execution-stopped removal must warn that the Tracker claim stays: ${stoppedRemovalText}`);
 }
@@ -72,7 +72,7 @@ await page.$eval("button[data-act='confirm-remove']", (button) => {
 });
 await page.waitForFunction(() => document.querySelector("button[data-act='confirm-remove']")?.matches(":disabled") === true);
 releaseRemoval();
-await page.waitForFunction(() => !document.querySelector(".overlay[data-act='close-remove']"));
+await page.waitForFunction(() => !document.querySelector("[data-dialog-id='remove-project']"));
 if (removeRequests !== 1) throw new Error(`Project removal must submit once, got ${removeRequests}`);
 if (await projectRow("stopped-project").count()) throw new Error("removed Project must leave the sidebar");
 const heading = await page.$eval(".project-heading h1", (node) => node.textContent?.trim());

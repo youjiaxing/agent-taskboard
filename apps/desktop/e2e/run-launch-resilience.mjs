@@ -69,7 +69,7 @@ if (launchRequests !== 1) {
 if ((await opening.inputValue()) !== "preserve this launch draft") {
   throw new Error("launch failure must preserve the opening draft");
 }
-await page.$eval(".launch-sheet", (node) => { node.scrollTop = node.scrollHeight; });
+await page.$eval(".launch-sheet .dialog-content", (node) => { node.scrollTop = node.scrollHeight; });
 await capture("issue-100-launch-retry-1280x840.png");
 const afterFailure = await hostSnapshot(page, url);
 if (afterFailure.runs.some((run) => run.status === "running")) {

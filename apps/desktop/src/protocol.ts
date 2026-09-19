@@ -349,6 +349,7 @@ export type Project = {
   repository: string;
   connection: ProjectConnection;
   hasActiveRun: boolean;
+  activeRunCount: number;
   hasExecutionStopped?: boolean;
   trackerSynced: boolean;
   autoAdvance?: boolean;
@@ -425,7 +426,8 @@ export type FormKey =
   | `inject-run:${string}`
   | `change-note:${string}`
   | `usage-custom:${string}`
-  | `launch:${string}`;
+  | `launch:${string}`
+  | `revoke-client:${string}`;
 
 export type IssueSearchDraft = {
   projectId: string;

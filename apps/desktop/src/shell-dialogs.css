@@ -1,18 +1,82 @@
-.form-sheet {
-  width: min(var(--dialog-width-form), calc(100% - var(--space-24)));
-  max-height: calc(100vh - 80px);
+.dialog-backdrop,
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-overlay);
+  background: var(--color-overlay);
+}
+
+.dialog-backdrop {
+  display: grid;
+  place-items: center;
+  padding: var(--space-24);
+}
+
+.dialog-panel,
+.drawer-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  animation: sheet-in var(--duration-normal) var(--ease-standard);
+}
+
+.dialog-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+
+.dialog-tier-confirm { width: min(100%, var(--dialog-width-confirm)); max-width: var(--dialog-width-confirm); }
+.dialog-tier-form { width: min(100%, var(--dialog-width-form)); max-width: var(--dialog-width-form); }
+.dialog-tier-wide { width: min(100%, var(--dialog-width-wide)); max-width: var(--dialog-width-wide); }
+
+.dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-12);
+  padding: var(--space-16) var(--space-16) var(--space-12);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dialog-header h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-xl);
+}
+
+.dialog-close {
+  flex: 0 0 auto;
+  width: var(--control-height-sm);
+  min-width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  padding: 0;
+  font-size: var(--font-size-lg);
+}
+
+.dialog-content {
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
+  padding: var(--space-16);
+  overscroll-behavior: contain;
 }
 
-.form-sheet.launch-sheet {
-  width: min(var(--dialog-width-wide), calc(100% - var(--space-24)));
-  max-width: calc(100vw - 48px);
-  max-height: calc(100vh - 48px);
-  overflow-x: hidden;
-  overflow-y: auto;
+.dialog-actions {
+  justify-content: flex-end;
+  padding: var(--space-12) var(--space-16) var(--space-16);
+  border-top: 1px solid var(--color-border);
 }
 
-.form-sheet input:not([type="checkbox"]), .form-sheet textarea, .form-sheet select {
+.dialog-panel input:not([type="checkbox"]),
+.dialog-panel textarea,
+.dialog-panel select,
+.ui-form-field input:not([type="checkbox"]),
+.ui-form-field textarea,
+.ui-form-field select {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -23,7 +87,7 @@
   margin: var(--space-4) 0 var(--space-8);
 }
 
-.form-sheet input[type="checkbox"] {
+.dialog-panel input[type="checkbox"] {
   width: auto;
   flex: 0 0 auto;
   margin: 0;
@@ -31,7 +95,7 @@
   accent-color: var(--color-accent);
 }
 
-.form-sheet .graph-opt {
+.dialog-panel .graph-opt {
   display: flex;
   align-items: center;
   gap: var(--space-8);
@@ -41,84 +105,43 @@
   white-space: nowrap;
 }
 
-.form-sheet textarea { resize: vertical; min-height: 88px; }
+.dialog-panel textarea { resize: vertical; min-height: 88px; }
+.dialog-panel fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
 
-.form-sheet .actions { justify-content: flex-end; }
-
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--layer-overlay);
-  background: var(--color-overlay);
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding: var(--space-48) 0 var(--space-24) var(--space-48);
-  overflow: auto;
-}
-
-.overlay.modal {
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-24);
-}
-
-.sheet {
-  width: min(var(--dialog-width-confirm), calc(100% - var(--space-24)));
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-dialog);
-  padding: var(--space-16) var(--space-16) var(--space-16);
-  animation: sheet-in var(--duration-normal) var(--ease-standard);
-}
-
-.sheet h2 { margin: 0 0 var(--space-12); font-size: var(--font-size-xl); }
-
-.sheet input[type="number"] {
+.dialog-panel input[type="number"] {
   width: 88px;
-  font: inherit;
-  color: inherit;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-6) var(--space-8);
 }
 
 .update-settings .update-status { margin: var(--space-8) 0 0; }
-
 .update-notes { max-height: 180px; overflow: auto; white-space: pre-wrap; line-height: 1.5; }
+.ui-progress progress { width: 100%; }
+.ui-progress p { margin-top: 0; }
+.progress-static { display: inline-block; letter-spacing: var(--space-4); }
 
-.update-dialog progress { width: 100%; }
-
-.pairing-sheet {
-  width: min(var(--dialog-width-form), calc(100% - var(--space-24)));
-  max-height: calc(100vh - 80px);
-  overflow: auto;
+.drawer-backdrop {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
 }
 
-.pairing-sheet input, .pairing-sheet textarea {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-8) var(--space-10);
-  margin: var(--space-4) 0 var(--space-8);
+.drawer-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(88vw, 360px);
+  max-height: 100dvh;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  overflow: hidden;
 }
 
-.pairing-sheet textarea { resize: vertical; min-height: 88px; }
-.pairing-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.ui-button-icon { display: inline-flex; }
+.ui-notice > p { margin: 0; }
+.ui-badge { display: inline-flex; align-items: center; }
 
-/* DIALOG_FULL_WIDTH (spec §5.3): at <= 600px dialogs fill the overlay width
-   with 12px side gutters. */
 @media (max-width: 600px) {
-  .sheet,
-  .form-sheet,
-  .form-sheet.launch-sheet,
-  .pairing-sheet {
-    width: calc(100% - var(--space-24));
-    max-width: calc(100% - var(--space-24));
+  .dialog-backdrop { padding: var(--space-12); }
+  .dialog-panel {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
   }
 }

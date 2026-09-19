@@ -59,7 +59,7 @@
     z-index: var(--layer-sticky);
   }
   .mobile-nav button { min-height: var(--touch-target-min); }
-  .mobile-scope-sheet { width: min(100%, 480px); max-height: 82vh; overflow: auto; }
+  .mobile-scope-sheet { max-height: 100dvh; }
   .mobile-scope-hosts, .mobile-scope-projects { display: grid; gap: var(--space-8); }
   .mobile-scope-hosts { margin-bottom: var(--space-12); }
   .mobile-scope-project {

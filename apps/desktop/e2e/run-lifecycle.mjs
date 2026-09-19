@@ -155,6 +155,7 @@ rpcFailure = null;
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lifted-terminal");
 await page.click(".lifted-terminal button[data-act='stop-run']");
+await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 await page.click("button[data-act='return-page']");
 try {
   await page.waitForSelector(".lanes", { timeout: 2000 });
@@ -185,6 +186,7 @@ if (!continueText.includes("隔离执行目录已经不在") || !continueText.in
   throw new Error(`missing isolated work directory must fall back with a recovery explanation: ${continueText}`);
 }
 await page.click(".run-dock button[data-act='stop-run']");
+await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 
 await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
