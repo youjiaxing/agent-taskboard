@@ -284,10 +284,18 @@ ui.app.addEventListener("input", (event) => {
 
 ui.app.addEventListener("toggle", (event) => {
   const details = event.target;
-  if (!(details instanceof HTMLDetailsElement)) return;
-  if (details.dataset.section !== "issue-maintenance" || !details.dataset.id) return;
-  if (details.open) ui.issueMaintenanceOpen.add(issueDraftKey(details.dataset.id));
-  else ui.issueMaintenanceOpen.delete(issueDraftKey(details.dataset.id));
+  if (!(details instanceof HTMLDetailsElement) || !details.dataset.id) return;
+  if (details.dataset.section === "issue-maintenance") {
+    if (details.open) ui.issueMaintenanceOpen.add(issueDraftKey(details.dataset.id));
+    else ui.issueMaintenanceOpen.delete(issueDraftKey(details.dataset.id));
+    return;
+  }
+  const section = details.dataset.workspaceSection as "actions" | "issue" | "runs" | undefined;
+  if (details.dataset.section !== "workspace-rail" || !section) return;
+  const open = ui.workspaceRailOpenSections.get(details.dataset.id) ?? new Set<"actions" | "issue" | "runs">();
+  if (details.open) open.add(section);
+  else open.delete(section);
+  ui.workspaceRailOpenSections.set(details.dataset.id, open);
 }, true);
 
 ui.app.addEventListener("change", async (event) => {
@@ -560,7 +568,6 @@ ui.app.addEventListener("submit", async (event) => {
     };
     await runFormOperation(launchFormKey(draft.projectId), async () => {
       await rpc("startUnboundRun", draft);
-      ui.terminalPanelVisible = true;
     });
     return;
   }

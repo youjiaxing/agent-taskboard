@@ -107,6 +107,7 @@ function mobileRunView(options: MobileRendererOptions): string {
     return `<section class="mobile-run-view"><p class="board-empty">${escapeHtml(copy.noItems)}</p></section>`;
   }
   const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
+  const liveTerminal = mobileLiveTerminal && run.status !== "ended";
   const outputKey = JSON.stringify([snapshot.focusedHostId, run.id]);
   return `<section class="mobile-run-view">
     <header class="run-dock-hd">
@@ -119,11 +120,11 @@ function mobileRunView(options: MobileRendererOptions): string {
     ${options.telemetryBar(copy, run)}
     <section class="mobile-output-panel">
       <div class="lane-hd">${escapeHtml(copy.mobileRecentOutput)}</div>
-      ${mobileLiveTerminal
+      ${liveTerminal
         ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>`
         : `<pre class="mobile-run-output" data-run="${escapeHtml(run.id)}">${escapeHtml(run.status === "ended" ? run.recentOutput ?? mobilePtyText.get(outputKey) ?? "" : mobilePtyText.get(outputKey) ?? run.recentOutput ?? "")}</pre>`}
     </section>
     ${run.status !== "ended" ? options.injectRunForm(copy, run) : ""}
-    ${mobileLiveTerminal ? "" : `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>`}
+    ${run.status !== "ended" && !liveTerminal ? `<button type="button" class="ghost mobile-terminal-escape" data-act="mobile-live-terminal">${escapeHtml(copy.mobileLiveTerminal)}</button>` : ""}
   </section>`;
 }

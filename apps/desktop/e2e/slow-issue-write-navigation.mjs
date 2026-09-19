@@ -24,6 +24,12 @@ page.on("console", (message) => {
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".project-board");
 
+const issueSection = '.workspace-rail-section[data-workspace-section="issue"]';
+const openRailSection = async (name) => {
+  const section = page.locator(`.workspace-rail-section[data-workspace-section="${name}"]`);
+  await section.waitFor({ state: "attached" });
+  if (!(await section.evaluate((node) => node.open))) await section.locator("summary").click();
+};
 const focusProject = async (projectId, expectedName) => {
   const started = Date.now();
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
@@ -33,11 +39,31 @@ const focusProject = async (projectId, expectedName) => {
     throw new Error(`Project focus waited ${elapsed}ms for the slow Issue write`);
   }
 };
+const focusIssue = async (issueId, expectedTitle, timeout) => {
+  const started = Date.now();
+  await page.click(`[data-act="focus-issue"][data-id="${issueId}"]`);
+  await page.waitForSelector(".focus-workspace-layout", { timeout });
+  await page.waitForSelector("[data-terminal-surface]", { timeout });
+  await page.waitForFunction(
+    (title) => document.querySelector("[data-current-identity]")?.textContent?.trim() === title,
+    expectedTitle,
+    { timeout },
+  );
+  return Date.now() - started;
+};
 
 await focusProject(gardenProjectId, "garden");
 await page.click('[data-act="focus-issue"][data-id="you/garden#1"]');
-await page.waitForSelector('.detail-hd:has-text("garden issue")');
-await page.waitForSelector("section.issue-document[data-document-state='ready']");
+await page.waitForSelector(".focus-workspace-layout");
+await page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "garden issue");
+const gardenSections = await page.$$eval(".workspace-rail-section", (sections) =>
+  sections.map((section) => section.dataset.workspaceSection),
+);
+if (gardenSections.join(",") !== "actions,issue,runs") {
+  throw new Error(`desktop Issue focus must use the three-section right rail: ${JSON.stringify(gardenSections)}`);
+}
+await page.waitForSelector(`${issueSection} section.issue-document[data-document-state="ready"]`);
+await openRailSection("actions");
 await page.click('button[data-act="edit-issue"]');
 await page.fill("#issue-edit-title", "garden issue after slow write");
 
@@ -52,10 +78,7 @@ await page.click('form[data-act="issue-edit"] button[type="submit"]');
 await page.waitForSelector('form[data-act="issue-edit"][aria-busy="true"]');
 
 await focusProject(notesProjectId, "notes");
-const issueFocusStarted = Date.now();
-await page.click('[data-act="focus-issue"][data-id="you/notes#1"]');
-await page.waitForSelector('.detail-hd:has-text("notes issue")', { timeout: navigationBudgetMs });
-const issueFocusElapsed = Date.now() - issueFocusStarted;
+const issueFocusElapsed = await focusIssue("you/notes#1", "notes issue", navigationBudgetMs);
 if (issueFocusElapsed >= navigationBudgetMs) {
   throw new Error(`Issue focus waited ${issueFocusElapsed}ms for the slow Issue write`);
 }
@@ -77,13 +100,13 @@ if (
 
 await page.waitForTimeout(100);
 const identityAfterWrite = await page.evaluate(() => ({
-  project: document.querySelector(".project-heading h1")?.textContent?.trim(),
-  selected: document.querySelector(".detail-hd")?.textContent?.replace(/\s+/g, " ").trim(),
+  project: document.querySelector(".project-row.active b")?.textContent?.trim(),
+  selected: document.querySelector("[data-current-identity]")?.textContent?.trim(),
   editForm: Boolean(document.querySelector('form[data-act="issue-edit"]')),
 }));
 if (
   identityAfterWrite.project !== "notes"
-  || !identityAfterWrite.selected?.includes("notes issue")
+  || identityAfterWrite.selected !== "notes issue"
   || identityAfterWrite.editForm
 ) {
   throw new Error(`slow write completion rolled back navigation: ${JSON.stringify(identityAfterWrite)}`);

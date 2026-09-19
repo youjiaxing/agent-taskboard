@@ -2,9 +2,9 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient } from "../view-helpers";
-import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "../workbench";
-import { projectMain } from "./board";
+import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient, workspaceRun } from "../view-helpers";
+import { fixedPanelResizeHandle } from "../workbench";
+import { focusWorkspaceIssueRail } from "./board";
 import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
@@ -397,8 +397,29 @@ export function injectRunForm(copy: ShellCopy, run: RunSummary): string {
   </form>`;
 }
 
+function focusWorkspaceLabels(): { openWindow: string; recentOutput: string; emptyTitle: string; emptyBody: string } {
+  return effectiveClientLanguage() === "zh-CN"
+    ? {
+        openWindow: "在独立窗口打开",
+        recentOutput: "最近输出（只读）",
+        emptyTitle: "还没有 Run",
+        emptyBody: "启动一个 Run 后，Embedded Terminal 会固定显示在这里。",
+      }
+    : {
+        openWindow: "Open in separate window",
+        recentOutput: "Recent output (read only)",
+        emptyTitle: "No Run yet",
+        emptyBody: "Start a Run to keep the Embedded Terminal fixed here.",
+      };
+}
+
 export function runControls(copy: ShellCopy, run: RunSummary): string {
+  const labels = focusWorkspaceLabels();
+  const openWindow = desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
+    ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(labels.openWindow)}</button>`
+    : "";
   return `<div class="actions">
+    ${openWindow}
     <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
     <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
   </div>`;
@@ -406,7 +427,7 @@ export function runControls(copy: ShellCopy, run: RunSummary): string {
 
 export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
   const identity = runIdentity(copy, run);
-  return `<div class="${className}" data-terminal-panel>
+  return `<div class="${className}" data-terminal-panel data-terminal-surface="live" data-run="${escapeHtml(run.id)}">
     <header class="run-dock-hd">
       <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(identity)}</span></div>
       ${runControls(copy, run)}
@@ -422,20 +443,49 @@ export function terminalPanel(copy: ShellCopy, run: RunSummary, className: strin
 
 export function runDock(copy: ShellCopy, snap: Snapshot): string {
   const run = focusedRun(snap);
-  if (!ui.terminalPanelVisible || !run || run.status === "ended") return "";
+  if (!run || run.status === "ended") return "";
   const selectedIssueId = snap.board?.selected?.id;
   if (!run.unbound && run.issueId !== selectedIssueId) return "";
   return terminalPanel(copy, run, "run-dock");
 }
 
-export function liftedRunView(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!run) return projectMain(copy, snap);
-  const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(snap.board?.selected);
-  const inspectorWidth = fixedPanelWidth("right-rail");
-  return `<section class="lifted-run ${inspectorOpen ? "" : "issue-collapsed"}" style="--inspector-panel-width:${Math.round(inspectorWidth)}px">
-    ${ui.terminalPanelVisible ? terminalPanel(copy, run, "lifted-terminal") : projectMain(copy, snap)}
-    ${inspectorOpen && snap.board ? workbenchIssuePanel(copy, snap.board) : ""}
+function readOnlyTerminal(copy: ShellCopy, run: RunSummary): string {
+  const labels = focusWorkspaceLabels();
+  return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
+    <header class="run-dock-hd">
+      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(runIdentity(copy, run))}</span></div>
+      ${runControls(copy, run)}
+    </header>
+    <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
+    <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
+  </div>`;
+}
+
+function emptyTerminalSurface(copy: ShellCopy, snap: Snapshot): string {
+  const labels = focusWorkspaceLabels();
+  const issue = snap.board?.selected;
+  return `<div class="focus-terminal-surface empty-terminal" data-terminal-surface="empty">
+    <div class="empty-terminal-content">
+      <h2>${escapeHtml(labels.emptyTitle)}</h2>
+      <p>${escapeHtml(labels.emptyBody)}</p>
+      ${issue ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>` : ""}
+    </div>
+  </div>`;
+}
+
+export function focusWorkspaceView(copy: ShellCopy, snap: Snapshot): string {
+  const run = workspaceRun(snap);
+  const main = run
+    ? run.status === "ended"
+      ? readOnlyTerminal(copy, run)
+      : terminalPanel(copy, run, "focus-terminal-surface lifted-terminal")
+    : emptyTerminalSurface(copy, snap);
+  const right = ui.clientView.panels.rightSide === "changes" && run
+    ? viewChangesPanel(copy)
+    : focusWorkspaceIssueRail(copy, snap);
+  return `<section class="lifted-run focus-workspace-layout ${right ? "with-right-side" : "right-side-hidden"}">
+    <div class="focus-workspace-main">${main}</div>
+    ${right}
   </section>`;
 }
 

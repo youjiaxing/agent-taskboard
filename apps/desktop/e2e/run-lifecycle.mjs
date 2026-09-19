@@ -80,6 +80,13 @@ await page.waitForFunction(() => document.querySelectorAll(".issue-card").length
 
 await card("active lifecycle issue").locator("button[data-act='focus-run']").click();
 await page.waitForSelector(".lifted-run .pty-slot");
+const initialRailSections = await page.$$eval(".workspace-rail-section", (sections) =>
+  Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
+);
+if (!initialRailSections.runs || initialRailSections.issue || initialRailSections.actions) {
+  throw new Error(`an active Run should default to Run history only: ${JSON.stringify(initialRailSections)}`);
+}
+await page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await page.waitForSelector(".lifted-run .issue-markdown:has-text('Keep the complete Issue beside the Terminal')");
 const liftedText = (await page.locator(".lifted-run").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecycle issue")) {
@@ -88,6 +95,7 @@ if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecyc
 await capture("issue-100-terminal-and-issue-1280x840.png");
 
 const activeRunId = await page.$eval(".lifted-terminal .pty-slot", (node) => node.dataset.run);
+await page.evaluate(() => { window.__FOCUS_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 await page.click(".lifted-terminal .pty-host");
 await page.keyboard.type("resume after approval");
 await page.keyboard.press("Enter");
@@ -101,6 +109,23 @@ await page.waitForFunction(async ({ protocol, runId }) => {
 
 await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector(".changes-sheet .change-file h4:has-text('notes.txt')");
+const terminalWhileChangesOpen = await page.evaluate(() => ({
+  sameHost: window.__FOCUS_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"),
+  visible: Boolean(document.querySelector(".focus-workspace-main")?.getClientRects().length),
+}));
+if (!terminalWhileChangesOpen.sameHost || !terminalWhileChangesOpen.visible) {
+  throw new Error(`opening changes must keep the live Terminal mounted: ${JSON.stringify(terminalWhileChangesOpen)}`);
+}
+await page.click(".lifted-terminal .pty-host");
+await page.keyboard.type("continuous while changes");
+await page.keyboard.press("Enter");
+await page.waitForFunction(async ({ protocol, runId }) => {
+  const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
+  if (!response.ok) return false;
+  const json = await response.json();
+  const bytes = Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0));
+  return new TextDecoder().decode(bytes).includes("continuous while changes");
+}, { protocol: url, runId: activeRunId });
 const diffText = (await page.locator(".changes-sheet").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!diffText.includes("changed during the Run")) {
   throw new Error(`view changes must show the live working-tree diff: ${diffText}`);
@@ -124,6 +149,14 @@ if (failure.requests !== 2) throw new Error(`change-note retry should issue one 
 rpcFailure = null;
 await capture("issue-100-view-changes-1280x840.png");
 await page.click("button[data-act='close-changes']");
+await page.waitForSelector('.workspace-rail-section[data-workspace-section="runs"]');
+const restoredWorkspaceState = await page.evaluate(() => ({
+  sameHost: window.__FOCUS_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"),
+  sections: Object.fromEntries([...document.querySelectorAll(".workspace-rail-section")].map((section) => [section.dataset.workspaceSection, section.open])),
+}));
+if (!restoredWorkspaceState.sameHost || !restoredWorkspaceState.sections.runs || !restoredWorkspaceState.sections.issue) {
+  throw new Error(`closing changes must restore the Terminal and rail expansion state: ${JSON.stringify(restoredWorkspaceState)}`);
+}
 
 await page.click(".lifted-terminal button[data-act='open-usage-run']");
 await page.waitForSelector(".usage-page");
@@ -172,32 +205,65 @@ try {
 }
 
 await closeInspectorIfOpen();
+let endedOutputRequests = 0;
+const countEndedOutput = (request) => {
+  if (request.url().includes("/runs/") && request.url().includes("/output")) endedOutputRequests += 1;
+};
+page.on("request", countEndedOutput);
 await card("continue lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".detail-hd:has-text('continue lifecycle issue')");
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+await new Promise((resolve) => setTimeout(resolve, 200));
+page.off("request", countEndedOutput);
+if (endedOutputRequests !== 0 || await page.$('[data-terminal-surface="readonly"] .pty-slot') || await page.$('[data-terminal-surface="readonly"] input')) {
+  throw new Error(`an ended Run must use recentOutput without PTY reads or input: ${endedOutputRequests}`);
+}
+const endedDefaults = await page.$$eval(".workspace-rail-section", (sections) =>
+  Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
+);
+if (!endedDefaults.issue || endedDefaults.runs || endedDefaults.actions) {
+  throw new Error(`an Issue without an active Run should default to its body: ${JSON.stringify(endedDefaults)}`);
+}
+await page.click(".chrome button[data-act='view-changes']");
+await page.waitForSelector(".changes-sheet .notice.bad");
+const missingIsolationChanges = await page.$eval(".changes-sheet .notice.bad", (node) => node.textContent ?? "");
+if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationChanges.includes("Project 主目录")) {
+  throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
+}
+await page.click("button[data-act='close-changes']");
+await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='continue-run']");
-await page.waitForSelector(".run-dock .pty-slot");
+await page.waitForSelector(".lifted-terminal .pty-slot");
 const continued = await hostSnapshot(page, url);
 const continuedRun = continued.runs.find((run) => run.issueId === "you/lifecycle#2" && run.status === "running");
 if (!continuedRun?.previousRunId) {
   throw new Error(`Continue must link a new Run to the stopped Run: ${JSON.stringify(continued.runs)}`);
 }
-const continueText = (await page.locator(".run-dock").textContent())?.replace(/\s+/g, " ") ?? "";
+const continueText = (await page.locator(".lifted-terminal").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!continueText.includes("隔离执行目录已经不在") || !continueText.includes("Project 主目录")) {
   throw new Error(`missing isolated work directory must fall back with a recovery explanation: ${continueText}`);
 }
-await page.click(".run-dock button[data-act='stop-run']");
+await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
 
 await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".detail-hd:has-text('release lifecycle issue')");
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='release-claim']");
+await page.click("button[data-act='return-page']");
 await page.waitForSelector('[data-lane="frontier"] .issue-card:has-text("release lifecycle issue")');
 if (await page.locator('[data-lane="recentlyCompleted"] .issue-card:has-text("release lifecycle issue")').count()) {
   throw new Error("ending or releasing a Run must not pretend that the Issue is complete");
 }
 if (!(await page.locator('[data-lane="inProgress"] .issue-card:has-text("continue lifecycle issue")').count())) {
   throw new Error("stopping a Run must leave the still-claimed open Issue in progress");
+}
+await card("never run lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector('[data-terminal-surface="empty"] button[data-act="execute-run"]');
+if (await page.$(".pty-slot") || await page.$('[data-global-action="changes"]')) {
+  throw new Error("an Issue that never ran must show only the Terminal empty state and its launch entry");
 }
 await capture("issue-100-run-ended-issue-open-1280x840.png");
 

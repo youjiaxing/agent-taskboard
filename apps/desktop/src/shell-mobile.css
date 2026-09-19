@@ -1,14 +1,11 @@
 @media (min-width: 640px) and (max-width: 899.98px) {
   .board-shell:not(.issue-collapsed),
-  .lifted-run:not(.issue-collapsed) { grid-template-columns: minmax(0, 1fr); }
+  .focus-workspace-layout.with-right-side { grid-template-columns: minmax(0, 1fr); }
   .board-shell:not(.issue-collapsed) > .board-main,
-  .lifted-run:not(.issue-collapsed) > .lifted-terminal { display: none; }
-  .fixed-right-rail { width: 100%; max-width: none; }
-  .fixed-right-rail > .fixed-panel-resize { display: none; }
-  .body.changes-open { grid-template-columns: var(--client-sidebar-width) minmax(0, 1fr); }
-  .body.side-collapsed.changes-open { grid-template-columns: 1fr; }
-  .body.changes-open > .workspace { display: none; }
+  .focus-workspace-layout.with-right-side > .focus-workspace-main { display: none; }
+  .fixed-right-rail,
   .fixed-changes-panel { width: 100%; max-width: none; }
+  .fixed-right-rail > .fixed-panel-resize,
   .fixed-changes-panel > .fixed-panel-resize { display: none; }
 }
 @media (max-width: 639.98px) {

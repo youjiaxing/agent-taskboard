@@ -7,9 +7,9 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
 const panelKey = (clientId) => `agent-taskboard-client-panels:v1:browser:${clientId}`;
 
-const openClient = async ({ clientId, panelState, legacy = false, tauriLabel = "" }) => {
+const openClient = async ({ clientId, panelState, tauriLabel = "", runId = "", hostId = "", projectId = "" }) => {
   const page = await context.newPage();
-  await page.addInitScript(({ protocol, id, state, legacyState, desktopLabel }) => {
+  await page.addInitScript(({ protocol, id, state, desktopLabel }) => {
     window.__HOST_PROTOCOL__ = protocol;
     sessionStorage.setItem("agent-taskboard-client-id", id);
     window.name = `agent-taskboard-client-window:${id}`;
@@ -21,15 +21,12 @@ const openClient = async ({ clientId, panelState, legacy = false, tauriLabel = "
       const identity = desktopLabel || id;
       localStorage.setItem(`agent-taskboard-client-panels:v1:${kind}:${identity}`, JSON.stringify(state));
     }
-    if (legacyState) {
-      localStorage.setItem("agent-taskboard-panel-layout:v2:browser:legacy", JSON.stringify({
-        inspector: { width: 999, height: 500, x: 24, y: 40, floating: true },
-      }));
-      localStorage.setItem("agent-taskboard-panel-layout-registry:v2", JSON.stringify({ legacy: Date.now() }));
-    }
-  }, { protocol: url, id: clientId, state: panelState, legacyState: legacy, desktopLabel: tauriLabel });
-  await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".lanes");
+  }, { protocol: url, id: clientId, state: panelState, desktopLabel: tauriLabel });
+  const query = new URLSearchParams({ runId, hostId, projectId }).toString();
+  const pageUrl = runId ? `${url}${url.includes("?") ? "&" : "?"}${query}` : url;
+  await page.goto(pageUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(runId ? '[data-terminal-surface="live"]' : ".lanes");
+  await page.waitForTimeout(100);
   await page.bringToFront();
   return page;
 };
@@ -61,6 +58,9 @@ const widthOf = async (page, selector) => {
       windowName: window.name,
       storage: Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.includes("client-panels"))),
       frame: document.querySelector(".frame")?.className,
+      frameRect: document.querySelector(".frame")?.getBoundingClientRect().toJSON(),
+      bodyRect: document.querySelector(".body")?.getBoundingClientRect().toJSON(),
+      targetRect: document.querySelector(target)?.getBoundingClientRect().toJSON(),
     }), selector);
     throw new Error(`missing region ${selector}: ${JSON.stringify(diagnostic)}`);
   }
@@ -93,10 +93,8 @@ const assertStoredContract = async (page, storageKey, expected = {}) => {
   return state;
 };
 
-const browserPage = await openClient({ clientId: "panel-browser-a", legacy: true });
+const browserPage = await openClient({ clientId: "panel-browser-a" });
 const browserKey = panelKey("panel-browser-a");
-const legacyKeys = await browserPage.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("agent-taskboard-panel-layout")));
-if (legacyKeys.length) throw new Error(`legacy free-layout keys must be removed without migration: ${JSON.stringify(legacyKeys)}`);
 assertNear(await widthOf(browserPage, ".side"), 248, "default sidebar width");
 
 await dragBy(browserPage, '[data-panel-resize="sidebar"]', 60);
@@ -104,24 +102,27 @@ assertNear(await widthOf(browserPage, ".side"), 308, "resized sidebar width");
 await browserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
 await browserPage.waitForSelector(".lifted-run");
 await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
+await browserPage.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await browserPage.waitForSelector('[data-document-state="ready"]');
 assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 320, "default right rail width");
 await dragBy(browserPage, '[data-panel-resize="right-rail"]', -80);
 assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 400, "resized right rail width");
+await browserPage.evaluate(() => { window.__PANEL_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 await browserPage.click('.chrome button[data-act="view-changes"]');
 await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
 assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 520, "default changes panel width");
 await browserPage.setViewportSize({ width: 899, height: 840 });
 await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "compact-desktop");
 const compactChangesLayout = await browserPage.evaluate(() => ({
-  workspaceDisplay: getComputedStyle(document.querySelector(".workspace")).display,
+  terminalMainDisplay: getComputedStyle(document.querySelector(".focus-workspace-main")).display,
+  terminalStillMounted: window.__PANEL_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"),
   panelWidth: document.querySelector('[data-fixed-panel="changes-panel"]')?.getBoundingClientRect().width ?? 0,
   sideWidth: document.querySelector(".side")?.getBoundingClientRect().width ?? 0,
   overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
 }));
 assertNear(compactChangesLayout.panelWidth, 899 - compactChangesLayout.sideWidth, "compact changes region", 4);
-if (compactChangesLayout.workspaceDisplay !== "none" || compactChangesLayout.overflow > 0) {
-  throw new Error(`compact desktop should show one fixed content region without overlap: ${JSON.stringify(compactChangesLayout)}`);
+if (compactChangesLayout.terminalMainDisplay !== "none" || !compactChangesLayout.terminalStillMounted || compactChangesLayout.overflow > 0) {
+  throw new Error(`compact desktop should keep the Terminal mounted behind one fixed content region: ${JSON.stringify(compactChangesLayout)}`);
 }
 await browserPage.setViewportSize({ width: 900, height: 840 });
 await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
@@ -141,7 +142,28 @@ await assertStoredContract(browserPage, browserKey, {
 });
 
 await browserPage.reload({ waitUntil: "domcontentloaded" });
-await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
+try {
+  await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
+} catch (error) {
+  const diagnostic = await browserPage.evaluate(async (protocol) => {
+    const response = await fetch(`${protocol}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "snapshot", clientInstanceId: sessionStorage.getItem("agent-taskboard-client-id") }),
+    });
+    const result = await response.json();
+    return {
+      body: document.querySelector(".body")?.className,
+      focus: Boolean(document.querySelector(".focus-workspace-layout")),
+      board: Boolean(document.querySelector(".lanes")),
+      changes: Boolean(document.querySelector('[data-fixed-panel="changes-panel"]')),
+      stored: Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.includes("client-panels"))),
+      clientId: sessionStorage.getItem("agent-taskboard-client-id"),
+      snapshot: { workspaceView: result.snapshot?.workspaceView, focusedRunId: result.snapshot?.focusedRunId },
+    };
+  }, url);
+  throw new Error(`failed to restore changes panel: ${JSON.stringify(diagnostic)}; ${error}`);
+}
 assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 600, "restored changes panel width");
 await browserPage.click('.chrome button[data-act="view-changes"]');
 await browserPage.waitForFunction(() => !document.querySelector('[data-fixed-panel="changes-panel"]'));
@@ -223,6 +245,55 @@ await assertStoredContract(desktopPage, "agent-taskboard-client-panels:v1:tauri:
   sidebarWidth: 248,
 });
 await desktopPage.close();
+
+const activeRunId = await browserPage.$eval('.lifted-terminal .pty-slot', (node) => node.dataset.run);
+const snapshotFor = async (page, clientId) => page.evaluate(async ({ protocol, id }) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot", clientInstanceId: id }),
+  });
+  return (await response.json()).snapshot;
+}, { protocol: url, id: clientId });
+const beforeRunWindow = await snapshotFor(browserPage, "run-window-check");
+await browserPage.evaluate(() => { window.__MAIN_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
+const runWindowPage = await openClient({
+  clientId: "run-window-client",
+  tauriLabel: "run-e2e",
+  runId: activeRunId,
+  hostId: beforeRunWindow.focusedHostId,
+  projectId: beforeRunWindow.focusedProjectId,
+  panelState: { sidebarVisible: true, sidebarWidth: 300, rightSide: "rail", rightRailWidth: 400, changesPanelWidth: 600 },
+});
+const runWindowContract = await runWindowPage.evaluate((runId) => ({
+  runId: document.querySelector('[data-terminal-surface="live"]')?.getAttribute("data-run"),
+  sidebar: Boolean(document.querySelector(".side")),
+  rail: Boolean(document.querySelector('[data-fixed-panel="right-rail"]')),
+  canOpenAnother: Boolean(document.querySelector('button[data-act="open-run-window"]')),
+  queryRunId: new URLSearchParams(location.search).get("runId"),
+  queryHostId: new URLSearchParams(location.search).get("hostId"),
+  queryProjectId: new URLSearchParams(location.search).get("projectId"),
+}), activeRunId);
+if (
+  runWindowContract.runId !== activeRunId
+  || runWindowContract.queryRunId !== activeRunId
+  || runWindowContract.queryHostId !== beforeRunWindow.focusedHostId
+  || runWindowContract.queryProjectId !== beforeRunWindow.focusedProjectId
+  || runWindowContract.sidebar
+  || runWindowContract.rail
+  || runWindowContract.canOpenAnother
+) {
+  throw new Error(`standalone Run window must bind one existing Run with a minimal shell: ${JSON.stringify(runWindowContract)}`);
+}
+await assertStoredContract(runWindowPage, "agent-taskboard-client-panels:v1:tauri:run-e2e", {
+  sidebarVisible: true,
+});
+await runWindowPage.close();
+const afterRunWindow = await snapshotFor(browserPage, "run-window-check");
+const mainTerminalUnaffected = await browserPage.evaluate(() => window.__MAIN_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"));
+if (afterRunWindow.runs.length !== beforeRunWindow.runs.length || !afterRunWindow.runs.some((run) => run.id === activeRunId && run.status !== "ended") || !mainTerminalUnaffected) {
+  throw new Error("opening and closing a standalone Run window must not add, restart, stop, or detach the main Run");
+}
 
 await browserPage.close();
 await browser.close();

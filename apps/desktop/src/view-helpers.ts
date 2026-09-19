@@ -113,6 +113,7 @@ export function syncClientPrimaryPage(snap: Snapshot): void {
     return;
   }
   if (ui.clientView.page !== "settings") {
+    if (ui.clientView.page === "focus-workspace" && snap.board?.selected) return;
     ui.clientView.page = primaryPageFromSnapshot(snap);
   }
 }
@@ -216,6 +217,15 @@ export function mobileMain(copy: ShellCopy, snap: Snapshot): string {
 
 export function focusedRun(snap: Snapshot): RunSummary | undefined {
   return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
+}
+
+export function workspaceRun(snap: Snapshot): RunSummary | undefined {
+  const focused = focusedRun(snap);
+  const issueId = snap.board?.selected?.id;
+  if (focused && (!issueId || focused.unbound || focused.issueId === issueId)) return focused;
+  if (!issueId) return focused;
+  const issueRuns = (snap.runs ?? []).filter((run) => run.issueId === issueId);
+  return issueRuns.find((run) => run.status !== "ended") ?? issueRuns[issueRuns.length - 1];
 }
 
 export function resetGraphUiState(): void {

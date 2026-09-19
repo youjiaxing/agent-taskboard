@@ -194,6 +194,16 @@ export function desktopShellAvailable(): boolean {
   return isTauri() || "__TAURI_INTERNALS__" in window;
 }
 
+export async function openRunWindow(
+  runId: string,
+  hostId: string,
+  projectId: string,
+  title: string,
+): Promise<void> {
+  if (!desktopShellAvailable()) return;
+  await invoke("open_run_window", { runId, hostId, projectId, title });
+}
+
 export function focusedHostIsLocal(): boolean {
   const snap = ui.snapshot;
   if (!snap) return false;

@@ -1,10 +1,10 @@
 import { completeDependencyGraphLabel, connectionPanel, pendingBar } from "../main";
-import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, mobileClient } from "../view-helpers";
+import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
+import { currentProject, effectiveClientLanguage, mobileClient } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
-import { fixedPanelWidth, workbenchIssuePanel } from "../workbench";
+import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
 import { badge, button, formField, selectControl, textArea, textInput } from "../components/primitives";
@@ -390,93 +390,124 @@ export function issueCard(
   </article>`;
 }
 
-export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
-  const issue = board.selected;
-  if (!issue) {
-    return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
-  }
-  const claim = issue.claimedBy.length
-    ? `${copy.claimed} ${issue.claimedBy.join(", ")}`
-    : "";
+function issueCanWrite(board: BoardSnapshot, issue: IssueDetail): boolean {
+  return !board.issueOptions.length || board.issueOptions.some((option) => option.id === issue.id);
+}
+
+function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
+  const claim = issue.claimedBy.length ? `${copy.claimed} ${issue.claimedBy.join(", ")}` : "";
   const hasActive = Boolean(issue.activeRunId) || (ui.snapshot?.runs ?? []).some(
     (run) => run.issueId === issue.id && run.status !== "ended",
   );
-  const actions = hasActive
+  const primaryActions = hasActive
     ? ""
     : issue.executionStopped
       ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
          <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
       : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
-  const canWrite = !board.issueOptions.length
-    || board.issueOptions.some((option) => option.id === issue.id);
+  const canWrite = issueCanWrite(board, issue);
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
+  return `<div class="detail-meta">
+    ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
+    ${issueMetadataTags(issue.labels, false)}
+    ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
+    ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
+    ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
+    ${primaryActions}
+    ${canStartEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
+    ${canWrite ? `<button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
+    <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
+  </div>${canWrite ? formFeedback(openKey) : ""}`;
+}
+
+function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
+  const canWrite = issueCanWrite(board, issue);
+  const canStartEdit = canWrite && issue.document.kind === "ready";
   const editOpen = ui.issueEditOpenIds.has(issueDraftKey(issue.id));
   const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issueDraftKey(issue.id)));
-  return `
-    <header class="detail-sticky">
-      <div class="detail-title-row">
-        <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
-      </div>
-      <div class="detail-meta">
-        ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-        ${issueMetadataTags(issue.labels, false)}
-        ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
-        ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
-        ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
-        ${actions}
-        ${canStartEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
-        ${canWrite ? `
-          <button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
-        <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
-      </div>
-      ${canWrite ? formFeedback(openKey) : ""}
-    </header>
-    <div class="detail-scroll">
-      ${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
-      ${showEditForm ? issueEditForm(copy, issue) : ""}
-      <section class="detail-block">
+  return `${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
+    ${showEditForm ? issueEditForm(copy, issue) : ""}
+    <section class="detail-block">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
       ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
       <div class="tiny">${escapeHtml(copy.children)}</div>
-      ${
-        issue.children.length
-          ? issue.children.map((child) => issueLink(copy, child)).join("")
-          : `<span class="muted">${escapeHtml(copy.noKids)}</span>`
-      }
-      ${
-        issue.children.length
-          ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>`
-          : ""
-      }
-      </section>
-      <section class="detail-block">
+      ${issue.children.length ? issue.children.map((child) => issueLink(copy, child)).join("") : `<span class="muted">${escapeHtml(copy.noKids)}</span>`}
+      ${issue.children.length ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>` : ""}
+    </section>
+    <section class="detail-block">
       <h4>${escapeHtml(copy.deps)}</h4>
       ${mobileClient() ? "" : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`}
       <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
-      ${
-        issue.blockedBy.length
-          ? issue.blockedBy.map((link) => issueLink(copy, link)).join("")
-          : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`
-      }
+      ${issue.blockedBy.length ? issue.blockedBy.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`}
       <div class="tiny">${escapeHtml(copy.blocking)}</div>
-      ${
-        issue.blocking.length
-          ? issue.blocking.map((link) => issueLink(copy, link)).join("")
-          : `<span class="muted">${escapeHtml(copy.none)}</span>`
-      }
-      </section>
-      ${canWrite
-        ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${ui.issueMaintenanceOpen.has(issueDraftKey(issue.id)) ? "open" : ""}>
-            <summary>${escapeHtml(copy.issueUpdates)}</summary>
-            ${issueCommentForm(copy, issue)}
-            ${issueRelationsForm(copy, board, issue)}
-          </details>`
-        : ""}
-    </div>`;
+      ${issue.blocking.length ? issue.blocking.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.none)}</span>`}
+    </section>
+    ${canWrite
+      ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${ui.issueMaintenanceOpen.has(issueDraftKey(issue.id)) ? "open" : ""}>
+          <summary>${escapeHtml(copy.issueUpdates)}</summary>
+          ${issueCommentForm(copy, issue)}
+          ${issueRelationsForm(copy, board, issue)}
+        </details>`
+      : ""}`;
+}
+
+export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
+  const issue = board.selected;
+  if (!issue) return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
+  return `<header class="detail-sticky">
+      <div class="detail-title-row">
+        <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
+      </div>
+      ${issueActions(copy, board, issue)}
+    </header>
+    <div class="detail-scroll">${issueBody(copy, board, issue)}</div>`;
+}
+
+function workspaceRailLabels(): { actions: string; issue: string; runs: string; emptyRuns: string } {
+  return effectiveClientLanguage() === "zh-CN"
+    ? { actions: "认领与操作", issue: "Issue 正文", runs: "运行记录", emptyRuns: "还没有运行记录" }
+    : { actions: "Claim and actions", issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
+}
+
+function workspaceRunHistory(copy: ShellCopy, runs: RunSummary[]): string {
+  const labels = workspaceRailLabels();
+  if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
+  return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
+    const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
+    return `<button type="button" class="workspace-run-history-item" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+      <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
+      ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
+    </button>`;
+  }).join("")}</div>`;
+}
+
+export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string {
+  const board = snap.board;
+  const issue = board?.selected;
+  if (!board || !issue || ui.clientView.panels.rightSide !== "rail") return "";
+  const runs = (snap.runs ?? []).filter((run) => run.issueId === issue.id);
+  const hasActive = runs.some((run) => run.status !== "ended");
+  let open = ui.workspaceRailOpenSections.get(issue.id);
+  if (!open) {
+    open = new Set<"actions" | "issue" | "runs">(hasActive ? ["runs"] : ["issue"]);
+    ui.workspaceRailOpenSections.set(issue.id, open);
+  }
+  const labels = workspaceRailLabels();
+  const section = (id: "actions" | "issue" | "runs", label: string, body: string, bodyClass = "") =>
+    `<details class="workspace-rail-section" data-section="workspace-rail" data-id="${escapeHtml(issue.id)}" data-workspace-section="${id}" ${open?.has(id) ? "open" : ""}>
+      <summary>${escapeHtml(label)}</summary>
+      <div class="workspace-rail-section-body ${bodyClass}">${body}</div>
+    </details>`;
+  return `<aside class="issue-detail fixed-right-rail workspace-right-rail" data-fixed-panel="right-rail">
+    ${fixedPanelResizeHandle("right-rail")}
+    ${section("actions", labels.actions, `<div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>${issueActions(copy, board, issue)}`)}
+    ${section("issue", labels.issue, issueBody(copy, board, issue), "detail-scroll")}
+    ${section("runs", labels.runs, workspaceRunHistory(copy, runs))}
+  </aside>`;
 }
 
 function issueConflictFieldLabel(copy: ShellCopy, field: string): string {

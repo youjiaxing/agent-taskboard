@@ -1,0 +1,6 @@
+{
+  "identifier": "run-window",
+  "description": "Standalone Run clients only receive shell appearance events; all Run data uses the shared loopback protocol.",
+  "windows": ["run-*"],
+  "permissions": ["core:event:allow-listen"]
+}
