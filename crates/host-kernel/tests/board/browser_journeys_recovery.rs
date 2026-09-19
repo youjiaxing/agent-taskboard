@@ -10,11 +10,11 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
             .child("you/garden", 2, "child ready")
             .child("you/garden", 3, "child blocked"),
     );
-    tracker.add_issue(IssueRecord::open("you/garden", 2, "child ready").parent(
-        "you/garden",
-        1,
-        "parent",
-    ));
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 2, "child ready")
+            .parent("you/garden", 1, "parent")
+            .label("ready-for-agent"),
+    );
     tracker.add_issue(
         IssueRecord::open("you/garden", 3, "child blocked")
             .parent("you/garden", 1, "parent")
@@ -22,7 +22,7 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
             .blocking("you/garden", 5, "waiting on history")
             .blocking("you/garden", 10, "active work"),
     );
-    tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready"));
+    tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready").label("ready-for-agent"));
     tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
     tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker").blocked_by(
         "you/garden",

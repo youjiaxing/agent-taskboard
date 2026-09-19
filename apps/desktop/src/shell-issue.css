@@ -119,6 +119,8 @@
 
 .detail-meta { display: flex; flex-wrap: wrap; gap: var(--space-6); margin: var(--space-8) 0 0; }
 
+.detail-meta .issue-state { margin-left: 0; }
+
 .detail-scroll { min-height: 0; overflow: auto; padding: 0 var(--space-12) var(--space-12); overscroll-behavior: contain; }
 
 .issue-document { padding-top: var(--space-12); }

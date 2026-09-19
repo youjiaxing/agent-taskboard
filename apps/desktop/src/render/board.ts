@@ -7,7 +7,8 @@ import { loopbackNotice } from "./run";
 import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "../workbench";
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
-import { badge, button, formField, selectControl, textArea, textInput } from "../components/primitives";
+import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
+import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
 
 export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
@@ -133,7 +134,7 @@ export function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = fa
 }
 
 export function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
-  const desktop: Array<["blocked" | "frontier" | "inProgress" | "recentlyCompleted", string, IssueCard[]]> = [
+  const desktop: Array<[IssueLaneState, string, IssueCard[]]> = [
     ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
     ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
     ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
@@ -155,7 +156,7 @@ export function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
                 : copy.noItems;
         return `<section class="lane" data-lane="${key}">
           <div class="lane-hd">${escapeHtml(name)} <span>${items.length}</span></div>
-          ${items.map((issue) => issueCard(copy, issue, board.selected?.id, key)).join("")}
+          ${items.map((issue) => laneCard(copy, issue, board.selected?.id, key)).join("")}
           ${items.length ? "" : `<div class="lane-empty">${escapeHtml(empty)}</div>`}
         </section>`;
       })
@@ -284,8 +285,7 @@ export function graphIndexRow(copy: ShellCopy, node: GraphNode, centerId: string
   return `<div class="graph-index-row ${node.open ? "" : "closed"}">
     <button type="button" class="graph-index-main" data-act="focus-issue" data-id="${escapeHtml(node.id)}">
       <span class="graph-relation">${escapeHtml(graphRelationMeta(node.relation).label(copy))}</span>
-      <span class="issue-id">#${node.number}</span>
-      <span class="issue-title">${escapeHtml(node.title)}</span>
+      ${issueIdentity(node)}
     </button>
     ${node.id === centerId ? "" : graphCenterButton(copy, node)}
   </div>`;
@@ -303,8 +303,7 @@ export function graphNode(
   const center = node.id === centerId ? "root" : "";
   return `<article class="graph-node ${selected} ${closed} ${center}" data-id="${escapeHtml(node.id)}">
     <button type="button" class="graph-node-main" data-act="${overview ? "center-graph" : "focus-issue"}" data-id="${escapeHtml(node.id)}">
-      <div class="issue-id">#${node.number}</div>
-      <div class="issue-title">${escapeHtml(node.title)}</div>
+      ${issueIdentity(node)}
     </button>
     ${center || centerId == null ? "" : graphCenterButton(copy, node)}
   </article>`;
@@ -343,51 +342,72 @@ export function issueActivityLabel(copy: ShellCopy, activity: IssueCard["activit
   return "";
 }
 
-export function issueMetadataTags(labels: string[] | undefined, includeStatus = true): string {
+export function issueMetadataTags(labels: string[] | undefined, includeStatus = true): IssueDisplayTag[] {
   return (labels ?? [])
     .filter((label) => label.startsWith("type:") || (includeStatus && label.startsWith("status:")))
     .map((label) => {
       const [kind, ...rest] = label.split(":");
-      return badge({ label: `${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}`, className: "tag" });
-    })
-    .join("");
+      return { label: `${kind === "type" ? "Type" : "Status"}: ${rest.join(":")}` };
+    });
 }
 
-export function issueCard(
+function laneActions(copy: ShellCopy, issue: IssueCard, lane: IssueLaneState): IssueCardAction[] {
+  if (lane === "frontier") {
+    return [{ action: { id: "execute-run", label: copy.executeRun, data: { id: issue.id } }, variant: "primary" }];
+  }
+  if (lane === "inProgress" && issue.runId) {
+    return [
+      { action: { id: "focus-run", label: copy.focusRun, data: { id: issue.runId } } },
+      { action: { id: "stop-run", label: copy.stopRun, data: { id: issue.runId } } },
+    ];
+  }
+  if (lane === "recentlyCompleted") {
+    return [{ action: { id: "open-issue", label: copy.openIssue, data: { url: issue.url } } }];
+  }
+  return [];
+}
+
+function laneTags(copy: ShellCopy, issue: IssueCard): IssueDisplayTag[] {
+  const activity = issueActivityLabel(copy, issue.activity);
+  const tags: IssueDisplayTag[] = [];
+  if (activity) {
+    tags.push({ label: activity, tone: activity === copy.executionStopped ? "danger" : "info" });
+  }
+  if (issue.triageRole) tags.push({ label: issue.triageRole });
+  tags.push(...issueMetadataTags(issue.labels));
+  if (issue.claimedBy.length) tags.push({ label: `${copy.claimed} ${issue.claimedBy.join(", ")}` });
+  return tags;
+}
+
+function laneCard(
   copy: ShellCopy,
   issue: IssueCard,
   selectedId: string | undefined,
-  lane: "blocked" | "frontier" | "inProgress" | "recentlyCompleted",
+  lane: IssueLaneState,
 ): string {
-  const activity = issueActivityLabel(copy, issue.activity);
-  const tags = [
-    activity ? badge({ label: activity, status: activity === copy.executionStopped ? "danger" : "info", className: "tag" }) : "",
-    issue.triageRole ? badge({ label: issue.triageRole, className: "tag" }) : "",
-    issueMetadataTags(issue.labels),
-    issue.claimedBy.length
-      ? badge({ label: `${copy.claimed} ${issue.claimedBy.join(", ")}`, className: "tag" })
-      : "",
-  ]
-    .filter(Boolean)
-    .join("");
-  const cardAction = "focus-issue";
-  const actionTargetId = issue.id;
-  const actions = lane === "frontier"
-    ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`
-    : lane === "inProgress" && issue.runId
-      ? `<button type="button" data-act="focus-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.focusRun)}</button>
-         <button type="button" data-act="stop-run" data-id="${escapeHtml(issue.runId)}">${escapeHtml(copy.stopRun)}</button>`
-      : lane === "recentlyCompleted"
-        ? `<button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`
-        : "";
-  return `<article class="issue-card ${issue.id === selectedId ? "sel" : ""} ${issue.activity ? escapeHtml(issue.activity) : ""} ${lane === "recentlyCompleted" ? "recently-completed subdued" : ""}" data-issue-id="${escapeHtml(issue.id)}">
-    <button type="button" class="issue-card-main" data-act="${cardAction}" data-id="${escapeHtml(actionTargetId)}" data-issue-id="${escapeHtml(issue.id)}">
-      <div class="issue-id">#${issue.number}</div>
-      <div class="issue-title">${escapeHtml(issue.title)}</div>
-      ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
-    </button>
-    ${actions ? `<div class="issue-card-actions">${actions}</div>` : ""}
-  </article>`;
+  return issueCard({
+    id: issue.id,
+    identity: { number: issue.number, title: issue.title },
+    state: lane,
+    activity: issue.activity,
+    selected: issue.id === selectedId,
+    tags: laneTags(copy, issue),
+    entry: { id: "focus-issue", label: issue.title, data: { id: issue.id } },
+    actions: laneActions(copy, issue, lane),
+  });
+}
+
+/** The page resolves which board column owns the selected Issue. */
+export function selectedIssueLane(board: BoardSnapshot): IssueLaneState | null {
+  const id = board.selected?.id;
+  if (!id || !board.columns) return null;
+  const lanes: Array<[IssueLaneState, IssueCard[]]> = [
+    ["blocked", board.columns.blocked],
+    ["frontier", board.columns.frontier],
+    ["inProgress", board.columns.inProgress],
+    ["recentlyCompleted", board.columns.recentlyCompleted],
+  ];
+  return lanes.find(([, items]) => items.some((item) => item.id === id))?.[0] ?? null;
 }
 
 function issueCanWrite(board: BoardSnapshot, issue: IssueDetail): boolean {
@@ -396,9 +416,8 @@ function issueCanWrite(board: BoardSnapshot, issue: IssueDetail): boolean {
 
 function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
   const claim = issue.claimedBy.length ? `${copy.claimed} ${issue.claimedBy.join(", ")}` : "";
-  const hasActive = Boolean(issue.activeRunId) || (ui.snapshot?.runs ?? []).some(
-    (run) => run.issueId === issue.id && run.status !== "ended",
-  );
+  const hasActive = Boolean(issue.activeRunId);
+  const lane = selectedIssueLane(board);
   const primaryActions = hasActive
     ? ""
     : issue.executionStopped
@@ -410,8 +429,9 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail)
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
   return `<div class="detail-meta">
+    ${lane ? issueStateBadge(copy, lane) : ""}
     ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-    ${issueMetadataTags(issue.labels, false)}
+    ${issueTags(issueMetadataTags(issue.labels, false))}
     ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
     ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
     ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}

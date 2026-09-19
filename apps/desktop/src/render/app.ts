@@ -1,5 +1,5 @@
-import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, restoreGraphAnchor, syncGraphSelection } from "../main";
-import { clientCopy } from "../view-helpers";
+import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, syncGraphSelection } from "../main";
+import { clientCopy, restoreGraphAnchor } from "../view-helpers";
 import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
 import type { ScrollPosition } from "../protocol";
 import {
