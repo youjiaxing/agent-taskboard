@@ -168,6 +168,61 @@ await session.page.selectOption(".issue-search select[name='state']", "all");
 await submitIssueSearch();
 await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
 
+// 标题 / 角色 / 开关筛选 + 列滚动 + 已选 Issue：进入专注工作区再返回必须完全一致
+const boardRoundTripStyle = await session.page.addStyleTag({ content: '[data-lane="frontier"] { max-height: 90px; }' });
+await session.page.fill("#issue-title-search", "ready");
+await session.page.selectOption(".issue-search select[name='triageRole']", "ready-for-agent");
+await session.page.selectOption(".issue-search select[name='state']", "open");
+const filteredSearchResponse = await submitIssueSearch();
+if (filteredSearchResponse.snapshot?.board?.search?.triageRole !== "ready-for-agent") {
+  throw new Error(`role filter should reach the Host search: ${JSON.stringify(filteredSearchResponse.snapshot?.board?.search)}`);
+}
+await session.page.waitForFunction(() => document.querySelectorAll('[data-lane="frontier"] .issue-card').length > 1);
+const boardRoundTripBefore = await session.page.evaluate(() => {
+  const lane = document.querySelector('[data-lane="frontier"]');
+  lane.scrollTop = lane.scrollHeight;
+  return {
+    title: document.querySelector("#issue-title-search")?.value ?? "",
+    triageRole: document.querySelector(".issue-search select[name='triageRole']")?.value ?? "",
+    state: document.querySelector(".issue-search select[name='state']")?.value ?? "",
+    scrollTop: lane.scrollTop,
+    cards: [...document.querySelectorAll(".issue-card .issue-title")].map((node) => node.textContent?.trim()),
+  };
+});
+if (boardRoundTripBefore.scrollTop <= 0) throw new Error("board round trip fixture needs a scrollable filtered lane");
+await session.clickCard(session.page.locator('[data-lane="frontier"] .issue-card .issue-card-main').first());
+await session.page.waitForSelector(".focus-workspace-layout");
+const roundTripIssue = await session.page.$eval("[data-current-identity]", (node) => node.textContent?.trim());
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
+const boardRoundTripAfter = await session.page.evaluate(() => ({
+  title: document.querySelector("#issue-title-search")?.value ?? "",
+  triageRole: document.querySelector(".issue-search select[name='triageRole']")?.value ?? "",
+  state: document.querySelector(".issue-search select[name='state']")?.value ?? "",
+  scrollTop: document.querySelector('[data-lane="frontier"]')?.scrollTop ?? -1,
+  cards: [...document.querySelectorAll(".issue-card .issue-title")].map((node) => node.textContent?.trim()),
+  selected: document.querySelector(".issue-card.sel .issue-title")?.textContent?.trim() ?? "",
+  inspector: document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.trim() ?? "",
+}));
+if (
+  boardRoundTripAfter.title !== boardRoundTripBefore.title
+  || boardRoundTripAfter.triageRole !== boardRoundTripBefore.triageRole
+  || boardRoundTripAfter.state !== boardRoundTripBefore.state
+  || Math.abs(boardRoundTripAfter.scrollTop - boardRoundTripBefore.scrollTop) > 1
+  || boardRoundTripAfter.cards.join("|") !== boardRoundTripBefore.cards.join("|")
+) {
+  throw new Error(`returning from the focus workspace must restore filters, lane scroll and the Issue set: ${JSON.stringify({ boardRoundTripBefore, boardRoundTripAfter })}`);
+}
+if (!roundTripIssue || boardRoundTripAfter.selected !== roundTripIssue || !boardRoundTripAfter.inspector.includes(roundTripIssue)) {
+  throw new Error(`returning from the focus workspace must keep the selected Issue: ${JSON.stringify({ roundTripIssue, boardRoundTripAfter })}`);
+}
+await boardRoundTripStyle.evaluate((node) => node.remove());
+await session.page.fill("#issue-title-search", "");
+await session.page.selectOption(".issue-search select[name='triageRole']", "");
+await session.page.selectOption(".issue-search select[name='state']", "all");
+await submitIssueSearch();
+await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
+
 const refreshText = await session.page.$eval(".refresh-bar", (node) => node.textContent.replace(/\s+/g, " ").trim());
 if (!refreshText.includes("数据截至") && !refreshText.includes("Data as of")) {
   throw new Error(`refresh bar missing as-of time: ${refreshText}`);

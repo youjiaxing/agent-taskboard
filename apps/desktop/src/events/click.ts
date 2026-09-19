@@ -1,5 +1,5 @@
-import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
-import { effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreReturnPointMemory } from "../view-helpers";
+import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
+import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
@@ -63,9 +63,6 @@ async function dismissDialog(dialogId: string): Promise<void> {
 
 export async function openSettingsPanel(): Promise<void> {
   if (!ui.snapshot) return;
-  if (ui.clientView.page === "dependency-graph" && ui.snapshot.board?.selected?.id) {
-    ui.pendingGraphAnchor = captureGraphAnchor(ui.snapshot.board.selected.id);
-  }
   enterPrimaryPage("settings", ui.snapshot);
   await loadStartupSettings();
   ui.pairingOpen = false;
@@ -563,6 +560,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
     await rpc("focusRun", { runId: target.dataset.id });
+    if (ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileView = "run";
@@ -1003,7 +1001,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "focus-issue" && target.dataset.id) {
     const desktopFocus = !mobileClient()
-      && (ui.clientView.page === "focus-workspace" || Boolean(target.closest(".issue-card")));
+      && (ui.clientView.page === "focus-workspace"
+        || Boolean(target.closest(".issue-card-main, .graph-node-main, .graph-index-main")));
     if (desktopFocus) enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: target.dataset.id });
@@ -1011,12 +1010,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (desktopFocus && run && (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run")) {
       await rpc("focusRun", { runId: run.id });
     }
+    if (desktopFocus && ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileView = "issue";
       ui.mobileLiveTerminal = false;
-    } else if (desktopFocus) {
-      ui.clientView.page = "focus-workspace";
     }
     render();
     return;

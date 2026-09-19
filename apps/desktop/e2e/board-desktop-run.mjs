@@ -143,11 +143,25 @@ await session.page.waitForSelector(".side");
 if (!(await session.page.$(".run-dock"))) {
   throw new Error("returning to the board should restore the active Issue terminal dock");
 }
+const hostRunCount = () =>
+  session.page.evaluate(async (protocol) => {
+    const response = await fetch(`${protocol}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "snapshot" }),
+    });
+    return (await response.json()).snapshot.runs.length;
+  }, session.url);
+
+const runsBeforeNeverRunEntry = await hostRunCount();
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
 await session.page.waitForSelector('[data-terminal-surface="empty"]');
 await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] [data-document-state="ready"]');
 if (await session.page.$(".run-dock")) {
   throw new Error("selecting an Issue without a Run should replace the board dock with the fixed Terminal empty state");
+}
+if ((await hostRunCount()) !== runsBeforeNeverRunEntry) {
+  throw new Error("selecting an Issue must not create a Run");
 }
 
 const issueToggleLeftBeforeSidebarFold = await session.page.$eval("button[data-act='toggle-issue']", (node) =>
@@ -174,6 +188,25 @@ if (await session.page.$(".side")) {
 }
 await session.page.click("button[data-act='toggle-sidebar']");
 await session.page.waitForSelector(".side");
+
+
+// 已有历史 Run 的 Issue：进入那次 Run 的只读画面，且选择 Issue 不得新建 Run
+const runsBeforeHistoryEntry = await hostRunCount();
+await session.clickCard(session.page.locator('[data-lane="recentlyCompleted"] .issue-card:has-text("just closed") .issue-card-main'));
+await session.page.waitForSelector('[data-terminal-surface="readonly"]');
+if (
+  await session.page.$('[data-terminal-surface="readonly"] .pty-slot')
+  || await session.page.$('[data-terminal-surface="readonly"] input')
+  || await session.page.$('[data-terminal-surface="live"]')
+) {
+  throw new Error("an Issue whose Run already ended must stay on the read-only history surface");
+}
+if ((await hostRunCount()) !== runsBeforeHistoryEntry) {
+  throw new Error("selecting an Issue must not create a Run");
+}
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
+
 
 await session.page.click("button[data-act='open-usage']");
 await session.page.waitForSelector(".usage-page");

@@ -62,10 +62,7 @@ import type {
   NotificationKind,
   HostEvent,
   RpcResult,
-  GraphViewportAnchor,
 } from "./protocol";
-
-
 
 ui.browserAppearance = loadBrowserAppearance();
 export function resetGraphUiState(): void {
@@ -280,60 +277,6 @@ export function centerGraphViewport(canvas: HTMLElement, centerId: string): void
   const centerY = centerRect.top - canvasRect.top + canvas.scrollTop + centerRect.height / 2;
   canvas.scrollLeft = Math.max(0, centerX - canvas.clientWidth / 2);
   canvas.scrollTop = Math.max(0, centerY - canvas.clientHeight / 2);
-}
-
-export function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
-  const canvas = ui.app?.querySelector<HTMLElement>(".graph-canvas");
-  const node = canvas
-    ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
-      .find((item) => item.dataset.id === issueId)
-    : null;
-  if (!canvas || !node) return null;
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  return {
-    issueId,
-    viewportX: nodeRect.left - canvasRect.left + nodeRect.width / 2,
-    viewportY: nodeRect.top - canvasRect.top + nodeRect.height / 2,
-  };
-}
-
-export function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
-  const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
-    .find((item) => item.dataset.id === anchor.issueId);
-  if (!node) return false;
-  const flow = canvas.querySelector<HTMLElement>(".graph-flow");
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  const currentX = nodeRect.left - canvasRect.left + nodeRect.width / 2;
-  const currentY = nodeRect.top - canvasRect.top + nodeRect.height / 2;
-  let nextLeft = canvas.scrollLeft + currentX - anchor.viewportX;
-  let nextTop = canvas.scrollTop + currentY - anchor.viewportY;
-  if (flow && nextLeft < 0) {
-    const padding = Number.parseFloat(getComputedStyle(flow).paddingLeft) || 0;
-    flow.style.paddingLeft = `${padding - nextLeft}px`;
-    nextLeft = 0;
-  }
-  if (flow && nextTop < 0) {
-    const padding = Number.parseFloat(getComputedStyle(flow).paddingTop) || 0;
-    flow.style.paddingTop = `${padding - nextTop}px`;
-    nextTop = 0;
-  }
-  let maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
-  let maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
-  if (flow && nextLeft > maxLeft) {
-    const padding = Number.parseFloat(getComputedStyle(flow).paddingRight) || 0;
-    flow.style.paddingRight = `${padding + nextLeft - maxLeft}px`;
-    maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
-  }
-  if (flow && nextTop > maxTop) {
-    const padding = Number.parseFloat(getComputedStyle(flow).paddingBottom) || 0;
-    flow.style.paddingBottom = `${padding + nextTop - maxTop}px`;
-    maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
-  }
-  canvas.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
-  canvas.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
-  return true;
 }
 
 export function renderStatusBarsOnly(): void {

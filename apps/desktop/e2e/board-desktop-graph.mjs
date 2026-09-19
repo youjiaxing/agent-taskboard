@@ -1,6 +1,36 @@
 import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
 
 export async function runDesktopBoardGraph(session) {
+const nodeViewport = (title) =>
+  session.page.$eval(`.graph-node:has-text('${title}')`, (node) => {
+    const canvas = node.closest(".graph-canvas");
+    const canvasRect = canvas.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    return {
+      x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+      y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+      scrollLeft: canvas.scrollLeft,
+      scrollTop: canvas.scrollTop,
+    };
+  });
+const assertViewportRestored = (before, after, message) => {
+  if (
+    Math.abs(after.x - before.x) > 2
+    || Math.abs(after.y - before.y) > 2
+    || Math.abs(after.scrollLeft - before.scrollLeft) > 1
+    || Math.abs(after.scrollTop - before.scrollTop) > 1
+  ) {
+    throw new Error(`${message}: ${JSON.stringify({ before, after })}`);
+  }
+};
+const graphViewport = async () => ({
+  ...(await session.page.$eval(".graph-canvas", (node) => ({ scrollLeft: node.scrollLeft, scrollTop: node.scrollTop }))),
+  ...(await nodeViewport("child blocked")),
+});
+const selectedGraphNodeTitle = async () =>
+  (await session.page.$$eval(".graph-node.sel .issue-title", (nodes) => nodes.map((node) => node.textContent?.trim()))).join("|");
+const graphCenterLabel = () => session.page.$eval(".graph-center-label", (node) => node.textContent?.trim());
+
 const boardActive = await session.page.$eval("button[data-act='center-view'][data-id='board']", (node) =>
   node.classList.contains("active"),
 );
@@ -88,80 +118,47 @@ if (await session.page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]
   throw new Error("graph should not draw parent/child as an edge");
 }
 
-const stableGraphCanvas = await session.page.$(".graph-canvas");
-await session.page.click(".graph-node:has-text('blocker') .graph-node-main");
-await session.page.waitForSelector(".detail-hd:has-text('blocker')");
+// 依赖图选中节点 → 专注工作区：返回后必须回到同一张图、同一中心与同一选中 Issue
+const graphPageAddress = session.page.url();
+await session.page.$eval(".graph-node:has-text('blocker') .graph-node-main", (node) => node.click());
+await session.page.waitForSelector(".focus-workspace-layout");
+if (await session.page.$(".dep-graph")) {
+  throw new Error("selecting a dependency graph node should enter the focus workspace");
+}
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
+if (session.page.url() !== graphPageAddress) {
+  throw new Error("entering the focus workspace from the graph must keep the browser address stable");
+}
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".dep-graph");
+if (await session.page.$(".lanes")) {
+  throw new Error("returning from the focus workspace must restore the dependency graph page");
+}
+if ((await graphCenterLabel()) !== "中心 Issue：#3 child blocked") {
+  throw new Error("returning from the focus workspace must restore the same graph center");
+}
+if ((await selectedGraphNodeTitle()) !== "blocker") {
+  throw new Error(`returning from the focus workspace must keep the chosen Issue selected, got ${await selectedGraphNodeTitle()}`);
+}
 if (await session.page.$("button[data-act='clear-filter']")) {
   throw new Error("clicking a graph node should not filter the board");
-}
-if ((await session.page.$eval(".graph-center-label", (node) => node.textContent?.trim())) !== "中心 Issue：#3 child blocked") {
-  throw new Error("clicking a graph node should only change details, not the graph center");
-}
-if (!stableGraphCanvas || !(await stableGraphCanvas.evaluate((node) => node.isConnected))) {
-  throw new Error("changing graph node details should preserve the graph canvas");
 }
 
 const expandFromWaiting = session.page.getByRole("button", { name: "从此处展开 #5" });
 if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
   throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
 }
-const waitingViewportBefore = await session.page.$eval(".graph-node:has-text('waiting on history')", (node) => {
-  const canvas = node.closest(".graph-canvas");
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  return {
-    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
-    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
-    scrollTop: canvas.scrollTop,
-  };
-});
+const waitingViewportBefore = await nodeViewport("waiting on history");
 await expandFromWaiting.click();
 await session.page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
 await session.page.waitForSelector(".detail-hd:has-text('waiting on history')");
-const waitingViewportAfter = await session.page.$eval(".graph-node:has-text('waiting on history')", (node) => {
-  const canvas = node.closest(".graph-canvas");
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  return {
-    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
-    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
-    scrollTop: canvas.scrollTop,
-  };
-});
-if (
-  Math.abs(waitingViewportAfter.x - waitingViewportBefore.x) > 2
-  || Math.abs(waitingViewportAfter.y - waitingViewportBefore.y) > 2
-) {
-  throw new Error(`expanding from an Issue should preserve its viewport anchor: ${JSON.stringify({ waitingViewportBefore, waitingViewportAfter })}`);
-}
+assertViewportRestored(waitingViewportBefore, await nodeViewport("waiting on history"), "expanding from an Issue should preserve its viewport anchor");
 
-const childViewportBefore = await session.page.$eval(".graph-node:has-text('child blocked')", (node) => {
-  const canvas = node.closest(".graph-canvas");
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  return {
-    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
-    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
-  };
-});
+const childViewportBefore = await nodeViewport("child blocked");
 await session.clickGraphAction(session.page.getByRole("button", { name: "从此处展开 #3" }));
 await session.page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await session.page.waitForSelector(".detail-hd:has-text('child blocked')");
-const childViewportAfter = await session.page.$eval(".graph-node:has-text('child blocked')", (node) => {
-  const canvas = node.closest(".graph-canvas");
-  const canvasRect = canvas.getBoundingClientRect();
-  const nodeRect = node.getBoundingClientRect();
-  return {
-    x: nodeRect.left - canvasRect.left + nodeRect.width / 2,
-    y: nodeRect.top - canvasRect.top + nodeRect.height / 2,
-  };
-});
-if (
-  Math.abs(childViewportAfter.x - childViewportBefore.x) > 2
-  || Math.abs(childViewportAfter.y - childViewportBefore.y) > 2
-) {
-  throw new Error(`repeated expansion should preserve the clicked Issue anchor: ${JSON.stringify({ childViewportBefore, childViewportAfter })}`);
-}
+assertViewportRestored(childViewportBefore, await nodeViewport("child blocked"), "repeated expansion should preserve the clicked Issue anchor");
 await session.page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await session.page.waitForSelector(".graph-index");
 const limitedGraphText = await session.page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
@@ -197,11 +194,32 @@ await session.clickGraphAction(session.page.getByRole("button", { name: "从此�
 await session.page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await session.page.waitForSelector(".graph-index");
 
-await session.page.click(".graph-node:has-text('active work') .graph-node-main");
-await session.page.waitForSelector(".detail-hd:has-text('active work')");
-await session.page.waitForSelector('.issue-markdown:has-text("Active Run Question")');
+// 完整上下游视图：滚动后的图视口在进入工作区再返回后必须一致
+await session.page.$eval(".graph-canvas", (node) => {
+  node.scrollLeft = Math.floor((node.scrollWidth - node.clientWidth) * 0.55);
+  node.scrollTop = Math.floor((node.scrollHeight - node.clientHeight) * 0.6);
+});
+const completeViewportBefore = await graphViewport();
+if (completeViewportBefore.scrollLeft <= 0) {
+  throw new Error(`complete graph viewport anchor fixture needs a scrolled canvas: ${JSON.stringify(completeViewportBefore)}`);
+}
+await session.page.$eval(".graph-node:has-text('active work') .graph-node-main", (node) => node.click());
+await session.page.waitForSelector(".focus-workspace-layout");
+await session.page.waitForSelector('[data-terminal-surface="live"]');
+if (await session.page.$(".dep-graph")) {
+  throw new Error("selecting a graph node with an active Run should enter that Run");
+}
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".dep-graph");
 if (await session.page.$(".lifted-run")) {
-  throw new Error("dependency graph nodes should only change Issue details");
+  throw new Error("returning from a graph Run must leave the focus workspace");
+}
+assertViewportRestored(completeViewportBefore, await graphViewport(), "returning from a graph Run must restore the scrolled graph viewport");
+if ((await graphCenterLabel()) !== "中心 Issue：#3 child blocked") {
+  throw new Error("returning from a graph Run must restore the same graph center");
+}
+if ((await selectedGraphNodeTitle()) !== "active work") {
+  throw new Error(`returning from a graph Run must keep the chosen Issue selected, got ${await selectedGraphNodeTitle()}`);
 }
 await assertShellRegionsDoNotOverlap(session.page);
 

@@ -5,6 +5,7 @@ import type {
   BoardSnapshot,
   BoardViewMemory,
   BrowserAppearance,
+  GraphViewportAnchor,
   PrimaryPage,
   Project,
   ResolvedTheme,
@@ -129,6 +130,95 @@ function cloneBoardMemory(memory: BoardViewMemory | undefined): BoardViewMemory 
   };
 }
 
+function graphCanvasNode(id: string): { canvas: HTMLElement; node: HTMLElement } | null {
+  const canvas = ui.app.querySelector<HTMLElement>(".graph-canvas");
+  const node = canvas
+    ? [...canvas.querySelectorAll<HTMLElement>(".graph-node")].find((item) => item.dataset.id === id)
+    : null;
+  return canvas && node ? { canvas, node } : null;
+}
+
+function nodeViewportAnchor(canvas: HTMLElement, node: HTMLElement): GraphViewportAnchor | null {
+  if (!node.dataset.id) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  return {
+    issueId: node.dataset.id,
+    viewportX: nodeRect.left - canvasRect.left + nodeRect.width / 2,
+    viewportY: nodeRect.top - canvasRect.top + nodeRect.height / 2,
+  };
+}
+
+/** Keeps one named node at its current viewport position while the graph re-renders. */
+export function captureGraphAnchor(issueId: string): GraphViewportAnchor | null {
+  const found = graphCanvasNode(issueId);
+  return found ? nodeViewportAnchor(found.canvas, found.node) : null;
+}
+
+/**
+ * The node the viewport is looking at: the center Issue while the graph is focused, otherwise
+ * the node nearest the viewport centre. Used to restore the graph after a page round trip.
+ */
+export function captureGraphViewportAnchor(centerId: string | null | undefined): GraphViewportAnchor | null {
+  const canvas = ui.app.querySelector<HTMLElement>(".graph-canvas");
+  if (!canvas) return null;
+  const nodes = [...canvas.querySelectorAll<HTMLElement>(".graph-node")];
+  const centered = centerId ? nodes.find((node) => node.dataset.id === centerId) : undefined;
+  if (centered) return nodeViewportAnchor(canvas, centered);
+  const canvasRect = canvas.getBoundingClientRect();
+  const centreX = canvasRect.left + canvasRect.width / 2;
+  const centreY = canvasRect.top + canvasRect.height / 2;
+  let nearest: HTMLElement | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect();
+    const distance = Math.hypot(rect.left + rect.width / 2 - centreX, rect.top + rect.height / 2 - centreY);
+    if (distance < nearestDistance) {
+      nearest = node;
+      nearestDistance = distance;
+    }
+  }
+  return nearest ? nodeViewportAnchor(canvas, nearest) : null;
+}
+
+export function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnchor): boolean {
+  const node = [...canvas.querySelectorAll<HTMLElement>(".graph-node")]
+    .find((item) => item.dataset.id === anchor.issueId);
+  if (!node) return false;
+  const flow = canvas.querySelector<HTMLElement>(".graph-flow");
+  const canvasRect = canvas.getBoundingClientRect();
+  const nodeRect = node.getBoundingClientRect();
+  const currentX = nodeRect.left - canvasRect.left + nodeRect.width / 2;
+  const currentY = nodeRect.top - canvasRect.top + nodeRect.height / 2;
+  let nextLeft = canvas.scrollLeft + currentX - anchor.viewportX;
+  let nextTop = canvas.scrollTop + currentY - anchor.viewportY;
+  if (flow && nextLeft < 0) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingLeft) || 0;
+    flow.style.paddingLeft = `${padding - nextLeft}px`;
+    nextLeft = 0;
+  }
+  if (flow && nextTop < 0) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingTop) || 0;
+    flow.style.paddingTop = `${padding - nextTop}px`;
+    nextTop = 0;
+  }
+  let maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
+  let maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
+  if (flow && nextLeft > maxLeft) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingRight) || 0;
+    flow.style.paddingRight = `${padding + nextLeft - maxLeft}px`;
+    maxLeft = Math.max(0, canvas.scrollWidth - canvas.clientWidth);
+  }
+  if (flow && nextTop > maxTop) {
+    const padding = Number.parseFloat(getComputedStyle(flow).paddingBottom) || 0;
+    flow.style.paddingBottom = `${padding + nextTop - maxTop}px`;
+    maxTop = Math.max(0, canvas.scrollHeight - canvas.clientHeight);
+  }
+  canvas.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+  canvas.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
+  return true;
+}
+
 export function captureReturnPoint(snap: Snapshot): ReturnPoint {
   const projectId = snap.focusedProjectId || null;
   const lanesNode = ui.app.querySelector<HTMLElement>(".lanes");
@@ -146,6 +236,9 @@ export function captureReturnPoint(snap: Snapshot): ReturnPoint {
     });
   }
   const boardScroll = projectId ? ui.boardScrollPositions.get(projectId) : undefined;
+  const graphAnchor = ui.clientView.page === "dependency-graph"
+    ? captureGraphViewportAnchor(snap.board?.graph?.centerId)
+    : null;
   return {
     page: ui.clientView.page,
     hostId: snap.focusedHostId,
@@ -162,7 +255,7 @@ export function captureReturnPoint(snap: Snapshot): ReturnPoint {
         : undefined,
     ),
     graph: projectId
-      ? { projectId, viewportAnchor: ui.pendingGraphAnchor ? { ...ui.pendingGraphAnchor } : null }
+      ? { projectId, viewportAnchor: graphAnchor ?? (ui.pendingGraphAnchor ? { ...ui.pendingGraphAnchor } : null) }
       : null,
   };
 }
@@ -173,6 +266,18 @@ export function enterPrimaryPage(page: PrimaryPage, snap: Snapshot): void {
     ui.clientView.returnPoint = captureReturnPoint(snap);
   }
   ui.clientView.page = page;
+}
+
+/**
+ * The Host navigation mirror owns the current Issue and Run, so choosing an Issue or Run moves
+ * that mirror after the return point was captured. Keep the return point on the mirror the
+ * user actually leaves behind.
+ */
+export function syncReturnPointNavigation(): void {
+  const returnPoint = ui.clientView.returnPoint;
+  if (!returnPoint || !ui.snapshot) return;
+  returnPoint.issueId = ui.snapshot.board?.selected?.id ?? null;
+  returnPoint.runId = ui.snapshot.focusedRunId || null;
 }
 
 export function restoreReturnPointMemory(returnPoint: ReturnPoint): void {

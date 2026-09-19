@@ -12,7 +12,7 @@ export type ActionDescriptor = {
   data?: Record<string, string | number | undefined>;
 };
 
-type AttributeValue = string | number | boolean | null | undefined;
+export type AttributeValue = string | number | boolean | null | undefined;
 
 export function htmlAttributes(values: Record<string, AttributeValue>): string {
   const booleanAttributes = new Set(["checked", "disabled", "hidden", "multiple", "open", "readonly", "required", "selected"]);
@@ -26,6 +26,18 @@ function actionData(action: ActionDescriptor): Record<string, AttributeValue> {
   return Object.fromEntries(
     Object.entries(action.data ?? {}).map(([name, value]) => [`data-${name}`, value]),
   );
+}
+
+/** Shared descriptor mapping so composite controls can own their own markup. */
+export function actionAttributes(action: ActionDescriptor): Record<string, AttributeValue> {
+  return {
+    "data-act": action.id,
+    "aria-label": action.ariaLabel,
+    "aria-busy": action.busy || undefined,
+    "aria-pressed": action.pressed,
+    disabled: action.disabled || action.busy || undefined,
+    ...actionData(action),
+  };
 }
 
 export function button(
@@ -45,12 +57,7 @@ export function button(
   return `<button${htmlAttributes({
     type: options.type ?? "button",
     class: className,
-    "data-act": action.id,
-    "aria-label": action.ariaLabel,
-    "aria-busy": action.busy || undefined,
-    "aria-pressed": action.pressed,
-    disabled: action.disabled || action.busy || undefined,
-    ...actionData(action),
+    ...actionAttributes(action),
     ...(options.attributes ?? {}),
   })}>${content}</button>`;
 }
