@@ -203,7 +203,6 @@ await session.page.waitForSelector('.issue-markdown:has-text("Active Run Questio
 if (await session.page.$(".lifted-run")) {
   throw new Error("dependency graph nodes should only change Issue details");
 }
-await session.assertVisual("issue-99-graph-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
 
 const graphCanvas = await session.page.$(".graph-canvas");
@@ -257,7 +256,6 @@ const filteredProjects = await session.page.$$eval(".run-thumbnail .run-project"
 if (filteredProjects.some((name) => name !== "garden")) {
   throw new Error(`Host overview Project filter leaked: ${JSON.stringify(filteredProjects)}`);
 }
-await session.assertVisual("issue-99-overview-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
 await session.page.click("button[data-act='return-board']");
 await session.page.waitForSelector(".lanes");

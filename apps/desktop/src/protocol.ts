@@ -1,5 +1,15 @@
 export type Language = "zh-CN" | "en";
-export type Theme = "warm-paper" | "plain-paper" | "plain-night";
+export type AppearancePreference = "system" | "light" | "dark" | "warm";
+export type ResolvedTheme = "light" | "dark" | "warm";
+export type SystemAppearance = "light" | "dark";
+export type AppearanceState = {
+  language: Language;
+  appearancePreference: AppearancePreference;
+  appearancePreferences: AppearancePreference[];
+};
+export type SetAppearancePreferenceRequest = {
+  appearancePreference: AppearancePreference;
+};
 
 export type ShellCopy = {
   appName: string;
@@ -24,17 +34,11 @@ export type ShellCopy = {
   updateInstalling: string;
   updateFailed: string;
   language: string;
-  theme: string;
   languageZh: string;
   languageEn: string;
-  themeWarmPaper: string;
-  themePlainPaper: string;
-  themePlainNight: string;
   hosts: string;
   projects: string;
   thisMachine: string;
-  shadeLight: string;
-  shadeDark: string;
   editMenu: string;
   windowMenu: string;
   helpMenu: string;
@@ -607,13 +611,7 @@ export type Snapshot = {
   focusedProjectId: string;
   hosts: { id: string; displayName: string; local: boolean }[];
   projects: Project[];
-  appearance: {
-    language: Language;
-    theme: Theme;
-    lastLightTheme: Theme;
-    languages: Language[];
-    themes: Theme[];
-  };
+  appearance: AppearanceState;
   copy: ShellCopy;
   copyCatalog: Record<Language, ShellCopy>;
   emptyActions: Array<"register-first-project" | "pair-another-host">;
@@ -954,4 +952,7 @@ export type BoardScrollPosition = ScrollPosition & {
   lanes: Record<string, ScrollPosition>;
 };
 export type GraphViewportAnchor = { issueId: string; viewportX: number; viewportY: number };
-export type MobileAppearance = { language: Language; theme: Theme; lastLightTheme: Theme };
+export type BrowserAppearance = {
+  language: Language;
+  appearancePreference: AppearancePreference;
+};

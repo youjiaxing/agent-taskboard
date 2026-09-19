@@ -1,6 +1,6 @@
 # 设置与数据分 Host 数据与 Client 设置，落在 Tauri Local，秘密用 JSON 文件
 
-桌面壳是 Tauri 2，Host 与本机窗口同一进程。持久数据走 Tauri `appLocalDataDir`（macOS：`~/Library/Application Support/<identifier>`；Windows：`%LOCALAPPDATA%\<identifier>`，不进漫游盘），其下固定两棵树：`host/` 是 **Host 数据**，`desktop-client/` 是本机窗口与托盘共用的 **Client 设置**。日志走 `appLogDir`（macOS：`~/Library/Logs/<identifier>`；Windows：实现为 Local 树下的 `logs`）。以后 Tracker 缓存若落盘，走 `appCacheDir`。目录按官方 path 解析，应用自己创建；桌面应用第一次启动就建好两棵树和日志目录，「本机不起 Host」只是开关，不改文件夹形状。
+桌面壳是 Tauri 2，Host 与本机窗口同一进程。持久数据走 Tauri `appLocalDataDir`（macOS：`~/Library/Application Support/<identifier>`；Windows：`%LOCALAPPDATA%\<identifier>`，不进漫游盘），其下固定两棵树：`host/` 是 **Host 数据**，`desktop-client/` 是本机窗口与托盘共用的 **Client 设置**。日志走 `appLogDir`（macOS：`~/Library/Logs/<identifier>`；Windows：实现为 Local 树下的 `logs`）。以后 Tracker 缓存若落盘，走 `appCacheDir`。目录按官方 path 解析，应用自己创建；桌面应用第一次启动就建好两棵树和日志目录，「本机不起 Host」只是开关，不改文件夹形状。外观设置只保存 `AppearancePreference`；旧具体主题值按跟随系统的默认偏好重置，不增加迁移或兼容路径。
 
 具体 identifier 跟 `tauri.conf`，本 ADR 不钉字符串。改 identifier 等于换一套空目录，不自动迁移。
 
@@ -8,7 +8,7 @@
 
 一份 Host = 这台电脑、这个系统用户的这一份。v1 不做备份/导出按钮。搬家 ≈ 复制 `appLocalDataDir` 下的 `host/`（以及要用的 `desktop-client/`）；Project 本机路径对不上要手改。日志和缓存不必一起搬。
 
-浏览器 Client：语言/主题/远程配对令牌记在该站点的持久存储。清站点数据或访问地址变了 = 重新配对，或粘贴事先复制的连接信息。本机浏览器打开 Host **自己端出来的**稳定回环页（规范为 `http://127.0.0.1:<固定端口>/`）免配对，和本机窗口一样；必须校验来源是这个源。用 Tailscale / 局域网地址打开，或本机上其它网站去打 Host，一律要长期令牌。具体端口归打包票，本 ADR 只钉「入口地址稳定、只认这一种本机 URL」。
+浏览器 Client：语言、外观偏好和远程配对令牌记在该来源站点的持久存储；桌面浏览器与手机浏览器都不使用 Host 快照中的桌面偏好决定自己的外观。清站点数据或访问地址变了 = 重新配对，或粘贴事先复制的连接信息。本机浏览器打开 Host **自己端出来的**稳定回环页（规范为 `http://127.0.0.1:<固定端口>/`）免配对，和本机窗口一样；必须校验来源是这个源。用 Tailscale / 局域网地址打开，或本机上其它网站去打 Host，一律要长期令牌。具体端口归打包票，本 ADR 只钉「入口地址稳定、只认这一种本机 URL」。
 
 这钉住了 [决策：设置与数据存放位置](https://github.com/youjiaxing/agent-taskboard/issues/27)。
 
@@ -32,5 +32,5 @@
 
 - `/to-spec` 按「`appLocalDataDir` 下 `host/` + `desktop-client/`，日志 `appLogDir`，缓存 `appCacheDir`」写目录职责。秘密与普通设置分文件，JSON，不用钥匙串。
 - Tracker 凭据顺序见改写后的 [0001](./0001-local-credentials-remote-auth.md)：专用覆盖（应用 env，其次文件里显式 PAT）→ `gh`/`glab` → 通用 env。
-- [界面语言](./0010-interface-language.md) 与 [主题](./0011-shell-theme.md) 落在 Client 设置；PATH 前缀落在 Host 数据，见 [0008](./0008-run-launch-environment.md)。
+- [界面语言](./0010-interface-language.md) 与 [外观偏好](./0011-shell-theme.md) 落在各自 Client 设置；桌面窗口与托盘共用 `desktop-client/`，浏览器按来源站点分别保存；PATH 前缀落在 Host 数据，见 [0008](./0008-run-launch-environment.md)。
 - 打包票必须给出稳定回环端口；Tracker 刷新票若要持久缓存，文件放 `appCacheDir`。

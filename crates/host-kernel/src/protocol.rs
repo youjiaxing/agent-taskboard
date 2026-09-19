@@ -9,7 +9,7 @@ use crate::board::{BoardSnapshot, CenterView, IssueSearch, ProjectIssueCounts};
 use crate::changes::ViewChanges;
 use crate::copy::ShellCopy;
 use crate::pairing::{IssuedPairing, PairedClient, PairingOffer};
-use crate::persist::{daytime_theme, StoredProject};
+use crate::persist::StoredProject;
 use crate::project::ProjectInference;
 use crate::run::{QuitOffer, RunSummary, UpdateInstallGate};
 use crate::tracker::TrackerKind;
@@ -53,12 +53,14 @@ pub enum Language {
     En,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Theme {
-    WarmPaper,
-    PlainPaper,
-    PlainNight,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AppearancePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+    Warm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +69,7 @@ pub enum Command {
     ShowWindow,
     QuitHost,
     SetLanguage(Language),
-    SetTheme(Theme),
+    SetAppearancePreference(AppearancePreference),
     BeginPairingOffer {
         address: String,
     },
@@ -552,8 +554,8 @@ impl ProjectRecord {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppearanceSelection {
     pub(crate) language: Language,
-    pub(crate) theme: Theme,
-    pub(crate) last_light_theme: Theme,
+    #[serde(default)]
+    pub(crate) appearance_preference: AppearancePreference,
 }
 
 impl AppearanceSelection {
@@ -561,14 +563,12 @@ impl AppearanceSelection {
         Self { language, ..self }
     }
 
-    pub(crate) fn with_theme(self, theme: Theme) -> Self {
+    pub(crate) fn with_appearance_preference(
+        self,
+        appearance_preference: AppearancePreference,
+    ) -> Self {
         Self {
-            theme,
-            last_light_theme: if matches!(theme, Theme::PlainNight) {
-                self.last_light_theme
-            } else {
-                daytime_theme(theme)
-            },
+            appearance_preference,
             ..self
         }
     }
@@ -578,20 +578,21 @@ impl AppearanceSelection {
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceState {
     pub language: Language,
-    pub theme: Theme,
-    pub last_light_theme: Theme,
-    pub languages: Vec<Language>,
-    pub themes: Vec<Theme>,
+    pub appearance_preference: AppearancePreference,
+    pub appearance_preferences: Vec<AppearancePreference>,
 }
 
 impl AppearanceState {
     pub(crate) fn from_selection(selection: AppearanceSelection) -> Self {
         Self {
             language: selection.language,
-            theme: selection.theme,
-            last_light_theme: selection.last_light_theme,
-            languages: vec![Language::ZhCn, Language::En],
-            themes: vec![Theme::WarmPaper, Theme::PlainPaper, Theme::PlainNight],
+            appearance_preference: selection.appearance_preference,
+            appearance_preferences: vec![
+                AppearancePreference::System,
+                AppearancePreference::Light,
+                AppearancePreference::Dark,
+                AppearancePreference::Warm,
+            ],
         }
     }
 }

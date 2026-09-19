@@ -8,9 +8,9 @@ mod common;
 
 use common::boot_req;
 use host_kernel::{
-    bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, Command, EmptyAction, HostKernel,
-    HostMode, IssueRecord, Language, LoopbackAssets, LoopbackPage, LoopbackServer, MemoryTracker,
-    ProcessIntent, SystemAppearance, Theme, LOCAL_RPC_PORT,
+    bind_local_rpc, local_client_origin_allowed, spawn_local_rpc, AppearancePreference, Command,
+    EmptyAction, HostKernel, HostMode, IssueRecord, Language, LoopbackAssets, LoopbackPage,
+    LoopbackServer, MemoryTracker, ProcessIntent, SystemAppearance, LOCAL_RPC_PORT,
 };
 use std::path::Path;
 

@@ -1,9 +1,9 @@
 import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
 import { effectiveClientLanguage, resetGraphUiState } from "../view-helpers";
-import type { CenterView, FormKey, Language, RpcResult, Snapshot, Theme } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
+import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
-import { ensureMobileAppearance, focusedRun, mobileClient, saveMobileAppearance } from "../view-helpers";
+import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance } from "../view-helpers";
 import { inspectorAnchorForIssue, panelIsFloating, positionInspectorAwayFromCard, setPanelFloating, workbenchPanelId } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
@@ -76,10 +76,18 @@ async function completeDeferredLaunchDiscovery(
 }
 
 export async function handleAppClick(event: MouseEvent): Promise<void> {
+  if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
-  if (!target || !ui.snapshot) return;
+  if (!target) {
+    if (ui.appearanceMenuOpen) {
+      ui.appearanceMenuOpen = false;
+      render();
+    }
+    return;
+  }
   if (target.dataset.stop) event.stopPropagation();
   const act = target.dataset.act;
+  if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
   if (act === "mobile-scope") {
     ui.mobileScopeOpen = true;
     render();
@@ -776,38 +784,34 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "language" && target.dataset.id) {
     if (mobileClient()) {
-      const appearance = ensureMobileAppearance();
-      saveMobileAppearance({ ...appearance, language: target.dataset.id as Language });
+      const appearance = ensureBrowserAppearance();
+      saveBrowserAppearance({ ...appearance, language: target.dataset.id as Language });
     } else {
       await rpc("setLanguage", { language: target.dataset.id });
     }
     render();
     return;
   }
-  if (act === "theme" && target.dataset.id) {
-    if (mobileClient()) {
-      const appearance = ensureMobileAppearance();
-      const theme = target.dataset.id as Theme;
-      saveMobileAppearance({
-        ...appearance,
-        theme,
-        lastLightTheme: theme === "plain-night" ? appearance.lastLightTheme : theme,
-      });
-    } else {
-      await rpc("setTheme", { theme: target.dataset.id });
-    }
+  if (act === "appearance-menu") {
+    ui.appearanceMenuOpen = !ui.appearanceMenuOpen;
     render();
+    if (ui.appearanceMenuOpen) {
+      ui.app.querySelector<HTMLButtonElement>(".appearance-menu button")?.focus();
+    }
     return;
   }
-  if (act === "shade") {
-    const current = mobileClient() ? ensureMobileAppearance() : ui.snapshot.appearance;
-    const next = target.dataset.id === "dark" ? "plain-night" : current.lastLightTheme;
-    if (mobileClient()) {
-      saveMobileAppearance({ ...current, theme: next });
+  if (act === "appearance" && target.dataset.id) {
+    const appearancePreference = target.dataset.id as AppearancePreference;
+    if (!APPEARANCE_PREFERENCES.includes(appearancePreference)) return;
+    if (desktopShellAvailable()) {
+      const request: SetAppearancePreferenceRequest = { appearancePreference };
+      await rpc("setAppearancePreference", request);
     } else {
-      await rpc("setTheme", { theme: next });
+      saveBrowserAppearance({ ...ensureBrowserAppearance(), appearancePreference });
     }
+    ui.appearanceMenuOpen = false;
     render();
+    ui.app.querySelector<HTMLButtonElement>("button[data-act='appearance-menu']")?.focus();
     return;
   }
   if (act === "quit") {

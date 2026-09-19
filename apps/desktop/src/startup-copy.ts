@@ -1,4 +1,11 @@
+import type { AppearancePreference } from "./protocol";
+
 export type StartupCopy = {
+  appearance: string;
+  appearanceSystem: string;
+  appearanceLight: string;
+  appearanceDark: string;
+  appearanceWarm: string;
   hostStartup: string;
   hostAndClient: string;
   clientOnly: string;
@@ -16,6 +23,11 @@ export type StartupCopy = {
 
 const catalog: Record<"zh-CN" | "en", StartupCopy> = {
   "zh-CN": {
+    appearance: "外观",
+    appearanceSystem: "跟随系统",
+    appearanceLight: "素纸",
+    appearanceDark: "素纸夜间",
+    appearanceWarm: "暖纸",
     hostStartup: "Host 启动",
     hostAndClient: "Host 与 Client",
     clientOnly: "仅作为 Client",
@@ -31,6 +43,11 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     launchEnvironmentFailed: "重新读取失败；已保留上一次可用的内存快照。",
   },
   en: {
+    appearance: "Appearance",
+    appearanceSystem: "Follow system",
+    appearanceLight: "Plain paper",
+    appearanceDark: "Plain paper night",
+    appearanceWarm: "Warm paper",
     hostStartup: "Host startup",
     hostAndClient: "Host and Client",
     clientOnly: "Client only",
@@ -49,4 +66,14 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
 
 export function startupCopy(language: "zh-CN" | "en"): StartupCopy {
   return catalog[language];
+}
+
+export function appearancePreferenceLabel(
+  copy: StartupCopy,
+  preference: AppearancePreference,
+): string {
+  if (preference === "system") return copy.appearanceSystem;
+  if (preference === "light") return copy.appearanceLight;
+  if (preference === "dark") return copy.appearanceDark;
+  return copy.appearanceWarm;
 }

@@ -1,11 +1,11 @@
 .form-sheet {
-  width: min(510px, calc(100% - 24px));
+  width: min(var(--dialog-width-form), calc(100% - var(--space-24)));
   max-height: calc(100vh - 80px);
   overflow: auto;
 }
 
 .form-sheet.launch-sheet {
-  width: min(900px, calc(100% - 24px));
+  width: min(var(--dialog-width-wide), calc(100% - var(--space-24)));
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
   overflow-x: hidden;
@@ -16,11 +16,11 @@
   width: 100%;
   font: inherit;
   color: inherit;
-  background: var(--btn);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  padding: 8px 10px;
-  margin: 4px 0 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-10);
+  margin: var(--space-4) 0 var(--space-8);
 }
 
 .form-sheet input[type="checkbox"] {
@@ -28,16 +28,16 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 0;
-  accent-color: var(--accent);
+  accent-color: var(--color-accent);
 }
 
 .form-sheet .graph-opt {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
   width: fit-content;
   max-width: 100%;
-  margin: 4px 0 8px;
+  margin: var(--space-4) 0 var(--space-8);
   white-space: nowrap;
 }
 
@@ -48,51 +48,51 @@
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
-  background: color-mix(in srgb, var(--desk) 35%, transparent);
+  z-index: var(--layer-overlay);
+  background: var(--color-overlay);
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 52px 0 24px 56px;
+  padding: var(--space-48) 0 var(--space-24) var(--space-48);
   overflow: auto;
 }
 
 .overlay.modal {
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-24);
 }
 
 .sheet {
-  width: min(420px, calc(100% - 24px));
-  background: var(--paper);
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  box-shadow: 0 16px 40px color-mix(in srgb, var(--ink) 16%, transparent);
-  padding: 16px 16px 18px;
-  animation: sheet-in 150ms ease-out;
+  width: min(var(--dialog-width-confirm), calc(100% - var(--space-24)));
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: var(--space-16) var(--space-16) var(--space-16);
+  animation: sheet-in var(--duration-normal) var(--ease-standard);
 }
 
-.sheet h2 { margin: 0 0 12px; font-size: 16px; }
+.sheet h2 { margin: 0 0 var(--space-12); font-size: var(--font-size-xl); }
 
 .sheet input[type="number"] {
   width: 88px;
   font: inherit;
   color: inherit;
-  background: var(--btn);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  padding: 6px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-8);
 }
 
-.update-settings .update-status { margin: 8px 0 0; }
+.update-settings .update-status { margin: var(--space-8) 0 0; }
 
 .update-notes { max-height: 180px; overflow: auto; white-space: pre-wrap; line-height: 1.5; }
 
 .update-dialog progress { width: 100%; }
 
 .pairing-sheet {
-  width: min(480px, calc(100% - 24px));
+  width: min(var(--dialog-width-form), calc(100% - var(--space-24)));
   max-height: calc(100vh - 80px);
   overflow: auto;
 }
@@ -101,12 +101,25 @@
   width: 100%;
   font: inherit;
   color: inherit;
-  background: var(--btn);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  padding: 8px 10px;
-  margin: 4px 0 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-10);
+  margin: var(--space-4) 0 var(--space-8);
 }
 
 .pairing-sheet textarea { resize: vertical; min-height: 88px; }
 .pairing-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+
+/* DIALOG_FULL_WIDTH (spec §5.3): at <= 600px dialogs fill the overlay width
+   with 12px side gutters. */
+@media (max-width: 600px) {
+  .sheet,
+  .form-sheet,
+  .form-sheet.launch-sheet,
+  .pairing-sheet,
+  .changes-sheet {
+    width: calc(100% - var(--space-24));
+    max-width: calc(100% - var(--space-24));
+  }
+}

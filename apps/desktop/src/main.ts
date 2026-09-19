@@ -1,4 +1,11 @@
-import { ensureMobileAppearance, focusedRun, loadMobileAppearance, mobileClient } from "./view-helpers";
+import {
+  currentSystemAppearance,
+  effectiveAppearancePreference,
+  ensureBrowserAppearance,
+  focusedRun,
+  loadBrowserAppearance,
+  mobileClient,
+} from "./view-helpers";
 import { loadSelectedIssueDocument, protocolBase, rpc, rpcDetached } from "./rpc";
 import { FitAddon } from "@xterm/addon-fit";
 import {
@@ -6,6 +13,7 @@ import {
   sendNotification as sendNativeNotification,
 } from "@tauri-apps/plugin-notification";
 
+import { listen } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import "./shell.css";
@@ -52,7 +60,6 @@ import {
 } from "./render/app";
 import type {
   Language,
-  Theme,
   ShellCopy,
   Project,
   DependencyGraph,
@@ -66,7 +73,7 @@ import type {
 
 
 
-ui.mobileAppearance = loadMobileAppearance();
+ui.browserAppearance = loadBrowserAppearance();
 export function resetGraphUiState(): void {
   ui.graphCanvasLimit = 48;
   ui.graphListLimit = 50;
@@ -163,18 +170,12 @@ export function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions
     : copy.pairAnotherHost;
 }
 
-export function themeLabel(copy: ShellCopy, theme: Theme): string {
-  if (theme === "warm-paper") return copy.themeWarmPaper;
-  if (theme === "plain-paper") return copy.themePlainPaper;
-  return copy.themePlainNight;
-}
-
 export function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
   return ui.snapshot?.copyCatalog?.[language] ?? fallback;
 }
 
 export function effectiveClientLanguage(): Language {
-  if (mobileClient()) return ensureMobileAppearance().language;
+  if (mobileClient()) return ensureBrowserAppearance().language;
   return ui.snapshot?.appearance.language ?? "en";
 }
 
@@ -352,11 +353,11 @@ export function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnc
 
 export function renderStatusBarsOnly(): void {
   if (!ui.snapshot) return;
-  const appearance = mobileClient()
-    ? { ...ui.snapshot.appearance, ...ensureMobileAppearance() }
-    : ui.snapshot.appearance;
-  const copy = mobileClient() && appearance.language !== ui.snapshot.appearance.language
-    ? clientCopy(appearance.language, ui.snapshot.copy)
+  const language = mobileClient()
+    ? ensureBrowserAppearance().language
+    : ui.snapshot.appearance.language;
+  const copy = language !== ui.snapshot.appearance.language
+    ? clientCopy(language, ui.snapshot.copy)
     : ui.snapshot.copy;
   const current = ui.app?.querySelector<HTMLElement>(".project-board > .refresh-bar");
   if (current) current.outerHTML = refreshBar(copy, ui.snapshot.board);
@@ -403,25 +404,28 @@ export function connectionPanel(copy: ShellCopy, project: Project): string {
   </div>`;
 }
 
-export function termTheme(theme: Theme): ConstructorParameters<typeof Terminal>[0] {
-  if (theme === "plain-night") {
-    return {
-      cursorBlink: true,
-      fontSize: 13,
-      theme: { background: "#181817", foreground: "#f4f2ee", cursor: "#e86a5c" },
-    };
-  }
+function designToken(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+export function termTheme(): ConstructorParameters<typeof Terminal>[0] {
   return {
     cursorBlink: true,
-    fontSize: 13,
-    theme: { background: "#1c1b19", foreground: "#f4f2ee", cursor: "#c45c26" },
+    fontFamily: designToken("--font-family-mono"),
+    fontSize: Number.parseFloat(designToken("--font-size-md")),
+    theme: {
+      background: designToken("--terminal-canvas"),
+      foreground: designToken("--terminal-text"),
+      cursor: designToken("--terminal-cursor"),
+      selectionBackground: designToken("--terminal-selection"),
+    },
   };
 }
 
-export function ensureTerminal(theme: Theme): void {
+export function ensureTerminal(): void {
   if (ui.term && ui.termHost && ui.fitAddon) return;
   ui.fitAddon = new FitAddon();
-  ui.term = new Terminal(termTheme(theme));
+  ui.term = new Terminal(termTheme());
   ui.term.loadAddon(ui.fitAddon);
   ui.termHost = document.createElement("div");
   ui.termHost.className = "pty-host";
@@ -441,7 +445,7 @@ export function attachTerminal(snap: Snapshot): void {
     ui.ptyPumping = false;
     return;
   }
-  ensureTerminal(snap.appearance.theme);
+  ensureTerminal();
   if (ui.termHost && ui.termHost.parentElement !== slot) {
     slot.appendChild(ui.termHost);
   }
@@ -787,6 +791,19 @@ export function typingTarget(target: EventTarget | null): boolean {
 
 document.addEventListener("keydown", (event) => {
   if (!ui.snapshot || terminalHasFocus()) return;
+  if (ui.appearanceMenuOpen && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const items = [...ui.app.querySelectorAll<HTMLButtonElement>(".appearance-menu button")];
+    if (!items.length) return;
+    const current = items.findIndex((item) => item === document.activeElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : (current + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+    items[next]?.focus();
+    return;
+  }
   if (event.key === "?" && !typingTarget(event.target)) {
     event.preventDefault();
     ui.keyboardHelpOpen = !ui.keyboardHelpOpen;
@@ -794,7 +811,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
-    if (ui.keyboardHelpOpen) {
+    if (ui.appearanceMenuOpen) {
+      event.preventDefault();
+      ui.appearanceMenuOpen = false;
+      render();
+      ui.app.querySelector<HTMLButtonElement>("button[data-act='appearance-menu']")?.focus();
+    } else if (ui.keyboardHelpOpen) {
       ui.keyboardHelpOpen = false;
       render();
     }
@@ -870,6 +892,24 @@ window.addEventListener("agent-taskboard:open-keyboard-help", () => {
 bindNativeMenuBridge();
 
 let wasMobileClient = mobileClient();
+
+function updateSystemAppearance(appearance: "light" | "dark"): void {
+  if (ui.systemAppearance === appearance) return;
+  ui.systemAppearance = appearance;
+  if (ui.snapshot && effectiveAppearancePreference(ui.snapshot) === "system") render();
+}
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  updateSystemAppearance(currentSystemAppearance());
+});
+
+if (desktopShellAvailable()) {
+  void listen<"light" | "dark">("system-appearance-changed", (event) => {
+    updateSystemAppearance(event.payload);
+  }).catch((error: unknown) => {
+    console.warn("system appearance events unavailable", error);
+  });
+}
 
 if (desktopShellAvailable()) {
   void onNativeNotificationAction((notification) => {

@@ -103,33 +103,42 @@ fn secrets_are_user_readable_json_not_keychain() {
 }
 
 #[test]
-fn language_and_theme_catalogs_have_no_follow_system() {
+fn appearance_state_exposes_the_preference_catalog_without_legacy_fields() {
     let tmp = tempfile::tempdir().unwrap();
     let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
     let snap = host.snapshot();
 
+    assert_eq!(snap.appearance.language, Language::ZhCn);
     assert_eq!(
-        snap.appearance.languages,
-        vec![Language::ZhCn, Language::En]
+        snap.appearance.appearance_preference,
+        AppearancePreference::System
     );
     assert_eq!(
-        snap.appearance.themes,
-        vec![Theme::WarmPaper, Theme::PlainPaper, Theme::PlainNight]
+        snap.appearance.appearance_preferences,
+        vec![
+            AppearancePreference::System,
+            AppearancePreference::Light,
+            AppearancePreference::Dark,
+            AppearancePreference::Warm,
+        ]
     );
+
     let appearance = serde_json::to_value(&snap.appearance).unwrap();
-    assert!(appearance.get("followSystem").is_none());
-    assert!(appearance.get("follow_system").is_none());
-    let dump = format!(
-        "{}{}",
-        appearance,
-        serde_json::to_value(&snap.copy).unwrap()
-    )
-    .to_ascii_lowercase();
-    assert!(!dump.contains("follow"));
+    assert_eq!(appearance["appearancePreference"], "system");
+    assert_eq!(
+        appearance["appearancePreferences"],
+        serde_json::json!(["system", "light", "dark", "warm"])
+    );
+    for legacy in ["theme", "lastLightTheme", "themes", "languages"] {
+        assert!(
+            appearance.get(legacy).is_none(),
+            "legacy field {legacy} leaked"
+        );
+    }
 }
 
 #[test]
-fn first_launch_matches_system_then_writes_concrete_values() {
+fn first_launch_defaults_to_system_regardless_of_system_appearance() {
     let tmp = tempfile::tempdir().unwrap();
     let mut req = boot_req(tmp.path());
     req.system_locale = "it-IT".into();
@@ -138,7 +147,13 @@ fn first_launch_matches_system_then_writes_concrete_values() {
     let host = HostKernel::boot(req.clone()).unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::En);
-    assert_eq!(snap.appearance.theme, Theme::PlainNight);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::System
+    );
+    let settings = std::fs::read_to_string(&snap.data.desktop_client_settings_path).unwrap();
+    let settings: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    assert_eq!(settings["appearance_preference"], "system");
     drop(host);
 
     req.system_locale = "zh-CN".into();
@@ -146,29 +161,39 @@ fn first_launch_matches_system_then_writes_concrete_values() {
     let host = HostKernel::boot(req).unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::En);
-    assert_eq!(snap.appearance.theme, Theme::PlainNight);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::System
+    );
 }
 
 #[test]
-fn chinese_locale_picks_simplified_chinese_and_light_picks_warm_paper() {
+fn chinese_locale_picks_simplified_chinese() {
     let tmp = tempfile::tempdir().unwrap();
     let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::ZhCn);
-    assert_eq!(snap.appearance.theme, Theme::WarmPaper);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::System
+    );
     assert_eq!(snap.copy.quit_host, "退出 Host");
 }
 
 #[test]
-fn window_and_tray_share_the_client_language_and_theme() {
+fn window_and_tray_share_the_client_language_and_appearance_preference() {
     let tmp = tempfile::tempdir().unwrap();
     let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
 
     host.dispatch(Command::SetLanguage(Language::En)).unwrap();
-    host.dispatch(Command::SetTheme(Theme::PlainPaper)).unwrap();
+    host.dispatch(Command::SetAppearancePreference(AppearancePreference::Warm))
+        .unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::En);
-    assert_eq!(snap.appearance.theme, Theme::PlainPaper);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::Warm
+    );
     assert_eq!(snap.copy.quit_host, "Quit Host");
     assert_eq!(snap.copy.show_window, "Open window");
     assert_eq!(snap.copy.window_menu, "Window");
@@ -180,7 +205,10 @@ fn window_and_tray_share_the_client_language_and_theme() {
     let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::En);
-    assert_eq!(snap.appearance.theme, Theme::PlainPaper);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::Warm
+    );
     assert_eq!(snap.copy.quit_host, "Quit Host");
 }
 
@@ -229,4 +257,81 @@ fn host_autonomous_tick_does_not_drive_shell_callbacks() {
         "Host tick must not rebuild the desktop shell from a background thread"
     );
     drop(server);
+}
+
+#[test]
+fn legacy_theme_settings_are_ignored_and_reset_to_system() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let path = host.snapshot().data.desktop_client_settings_path.clone();
+    drop(host);
+    std::fs::write(
+        &path,
+        r#"{"language":"en","theme":"plain-night","lastLightTheme":"warm-paper"}"#,
+    )
+    .unwrap();
+
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let snap = host.snapshot();
+    assert_eq!(snap.appearance.language, Language::En);
+    assert_eq!(
+        snap.appearance.appearance_preference,
+        AppearancePreference::System
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn repeating_the_same_appearance_preference_does_not_persist_again() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let client_dir = host.snapshot().data.desktop_client_dir.clone();
+
+    host.dispatch(Command::SetAppearancePreference(AppearancePreference::Dark))
+        .unwrap();
+
+    let writable = std::fs::metadata(&client_dir).unwrap().permissions();
+    let mut read_only = writable.clone();
+    read_only.set_mode(0o555);
+    std::fs::set_permissions(&client_dir, read_only).unwrap();
+
+    // 同值写入是空操作，只读目录下也不会尝试落盘。
+    host.dispatch(Command::SetAppearancePreference(AppearancePreference::Dark))
+        .unwrap();
+    assert_eq!(
+        host.snapshot().appearance.appearance_preference,
+        AppearancePreference::Dark
+    );
+
+    // 换值仍会落盘，只读目录让这次写入以错误返回。
+    assert!(host
+        .dispatch(Command::SetAppearancePreference(
+            AppearancePreference::Light
+        ))
+        .is_err());
+
+    std::fs::set_permissions(&client_dir, writable).unwrap();
+}
+
+#[test]
+fn set_appearance_preference_op_replaces_set_theme() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+
+    let out = host
+        .handle(serde_json::json!({
+            "op": "setAppearancePreference",
+            "appearancePreference": "warm",
+        }))
+        .unwrap();
+    assert_eq!(
+        out.snapshot.appearance.appearance_preference,
+        AppearancePreference::Warm
+    );
+
+    assert!(host
+        .handle(serde_json::json!({ "op": "setTheme", "theme": "plain-paper" }))
+        .is_err());
 }

@@ -19,13 +19,16 @@ use tauri::menu::{
 };
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_log::RotationStrategy;
 use tauri_plugin_opener::OpenerExt;
 
 const LOG_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
 const LOG_FILE_COUNT: usize = 5;
 const USAGE_GUIDE_URL: &str = "https://github.com/youjiaxing/agent-taskboard";
+
+/// Stable webview event carrying the resolved system appearance (`light` / `dark`).
+const SYSTEM_APPEARANCE_CHANGED: &str = "system-appearance-changed";
 
 struct AppState {
     kernel: Arc<Mutex<HostKernel>>,
@@ -180,8 +183,8 @@ pub fn run() {
                 let _ = webview.eval(format!("window.__HOST_PROTOCOL__ = {encoded};"));
             }
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
                 if let Some(state) = window.try_state::<AppState>() {
@@ -195,6 +198,14 @@ pub fn run() {
                     );
                 }
             }
+            WindowEvent::ThemeChanged(theme) => {
+                let appearance = match theme {
+                    tauri::Theme::Dark => "dark",
+                    _ => "light",
+                };
+                let _ = window.emit(SYSTEM_APPEARANCE_CHANGED, appearance);
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building Agent Taskboard")

@@ -1,55 +1,84 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { ui } from "./ui";
-import type { BoardSnapshot, MobileAppearance, Project, RunSummary, ShellCopy, Snapshot } from "./protocol";
+import type {
+  AppearancePreference,
+  BoardSnapshot,
+  BrowserAppearance,
+  Project,
+  ResolvedTheme,
+  SystemAppearance,
+  RunSummary,
+  ShellCopy,
+  Snapshot,
+} from "./protocol";
 import { mobileMain as renderMobileMain, mobileNavigation as renderMobileNavigation, mobileScopeSheet as renderMobileScopeSheet } from "./mobile-renderers";
 import { issueDetail, projectMain } from "./render/board";
 import { injectRunForm, telemetryBar } from "./render/shell";
 
-const MOBILE_BREAKPOINT = 640;
-const MOBILE_APPEARANCE_KEY = "agent-taskboard-mobile-appearance";
+export const MOBILE_BREAKPOINT = 640;
+export const APPEARANCE_PREFERENCES: AppearancePreference[] = ["system", "light", "dark", "warm"];
+const BROWSER_APPEARANCE_KEY = "agent-taskboard-browser-appearance";
 
 export function mobileClient(): boolean {
-  return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
+  return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 0.02}px)`).matches;
 }
 
-export function systemMobileAppearance(): MobileAppearance {
-  const language = navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+export function browserClient(): boolean {
+  return !(isTauri() || "__TAURI_INTERNALS__" in window);
+}
+
+export function currentSystemAppearance(): SystemAppearance {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+export function defaultBrowserAppearance(): BrowserAppearance {
   return {
-    language,
-    theme: dark ? "plain-night" : "warm-paper",
-    lastLightTheme: "warm-paper",
+    language: navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en",
+    appearancePreference: "system",
   };
 }
 
-export function loadMobileAppearance(): MobileAppearance | null {
+export function loadBrowserAppearance(): BrowserAppearance | null {
   try {
-    const raw = localStorage.getItem(MOBILE_APPEARANCE_KEY);
+    const raw = localStorage.getItem(BROWSER_APPEARANCE_KEY);
     if (!raw) return null;
-    const value = JSON.parse(raw) as Partial<MobileAppearance>;
+    const value = JSON.parse(raw) as Partial<BrowserAppearance>;
     if (
       (value.language === "zh-CN" || value.language === "en")
-      && (value.theme === "warm-paper" || value.theme === "plain-paper" || value.theme === "plain-night")
-      && (value.lastLightTheme === "warm-paper" || value.lastLightTheme === "plain-paper")
+      && APPEARANCE_PREFERENCES.includes(value.appearancePreference as AppearancePreference)
     ) {
-      return value as MobileAppearance;
+      return value as BrowserAppearance;
     }
   } catch {
-    // Use the browser defaults when local settings are invalid.
+    // Invalid local settings use the new defaults.
   }
   return null;
 }
 
-export function ensureMobileAppearance(): MobileAppearance {
-  if (!ui.mobileAppearance) {
-    ui.mobileAppearance = systemMobileAppearance();
-    saveMobileAppearance(ui.mobileAppearance);
+export function ensureBrowserAppearance(): BrowserAppearance {
+  if (!ui.browserAppearance) {
+    ui.browserAppearance = defaultBrowserAppearance();
+    saveBrowserAppearance(ui.browserAppearance);
   }
-  return ui.mobileAppearance;
+  return ui.browserAppearance;
 }
 
-export function saveMobileAppearance(appearance: MobileAppearance): void {
-  ui.mobileAppearance = appearance;
-  localStorage.setItem(MOBILE_APPEARANCE_KEY, JSON.stringify(appearance));
+export function saveBrowserAppearance(appearance: BrowserAppearance): void {
+  ui.browserAppearance = appearance;
+  localStorage.setItem(BROWSER_APPEARANCE_KEY, JSON.stringify(appearance));
+}
+
+export function resolveTheme(
+  preference: AppearancePreference,
+  systemAppearance: SystemAppearance,
+): ResolvedTheme {
+  return preference === "system" ? systemAppearance : preference;
+}
+
+export function effectiveAppearancePreference(snapshot: Snapshot): AppearancePreference {
+  return browserClient()
+    ? ensureBrowserAppearance().appearancePreference
+    : snapshot.appearance.appearancePreference;
 }
 
 
@@ -98,6 +127,6 @@ export function clientCopy(language: import("./protocol").Language, fallback: Sh
 }
 
 export function effectiveClientLanguage(): import("./protocol").Language {
-  if (mobileClient()) return ensureMobileAppearance().language;
+  if (mobileClient()) return ensureBrowserAppearance().language;
   return ui.snapshot?.appearance.language ?? "en";
 }

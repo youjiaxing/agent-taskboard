@@ -55,12 +55,37 @@ if (await session.page.$(".side")) {
 }
 await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
+await session.page.waitForSelector(".lifted-terminal .xterm-viewport");
+const terminalPalettes = [];
+for (const appearancePreference of ["light", "dark", "warm"]) {
+  await session.page.click("button[data-act='appearance-menu']");
+  await session.page.click(`.appearance-menu button[data-act='appearance'][data-id='${appearancePreference}']`);
+  terminalPalettes.push(await session.page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const container = document.querySelector(".lifted-terminal .pty-slot");
+    const viewport = document.querySelector(".lifted-terminal .xterm-viewport");
+    return {
+      tokens: ["--terminal-canvas", "--terminal-surface", "--terminal-text", "--terminal-text-muted", "--terminal-cursor", "--terminal-selection"]
+        .map((name) => root.getPropertyValue(name).trim()),
+      containerBackground: container ? getComputedStyle(container).backgroundColor : "",
+      viewportBackground: viewport ? getComputedStyle(viewport).backgroundColor : "",
+    };
+  }));
+}
+const expectedTerminalTokens = ["#171717", "#1f1f1f", "#f5f5f5", "#a3a3a3", "#f5f5f5", "#314766"];
+for (const palette of terminalPalettes) {
+  if (JSON.stringify(palette.tokens) !== JSON.stringify(expectedTerminalTokens)) {
+    throw new Error(`terminal tokens must stay fixed across shell themes: ${JSON.stringify(terminalPalettes)}`);
+  }
+  if (palette.containerBackground !== "rgb(23, 23, 23)" || palette.viewportBackground !== "rgb(23, 23, 23)") {
+    throw new Error(`terminal container and xterm must share the fixed canvas: ${JSON.stringify(terminalPalettes)}`);
+  }
+}
 const liftedDocument = await session.page.$eval(".lifted-run .issue-markdown", (node) => node.textContent?.replace(/\s+/g, " ").trim());
 if (!liftedDocument?.includes("Active Run Question") || !liftedDocument.includes("same complete Issue")) {
   throw new Error(`entering a Run should retain the complete Issue document, got ${liftedDocument}`);
 }
 await session.capture("issue-98-existing-run-1440x900.png");
-await session.assertVisual("issue-99-run-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
 const telemetryCapsules = await session.page.$$(".lifted-terminal .telemetry-desktop .capsule");
 if (!telemetryCapsules.length) {

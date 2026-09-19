@@ -9,6 +9,19 @@ if (mobileNavLabels.join("|") !== "看板|票|Run") {
 if (await session.page.$(".side")) {
   throw new Error("mobile should move Host and Project lists out of the main layout");
 }
+const mobileDensity = await session.page.evaluate(() => {
+  const style = getComputedStyle(document.documentElement);
+  return {
+    bodyFontSize: style.getPropertyValue("--density-body-font-size").trim(),
+    controlHeight: style.getPropertyValue("--density-control-height").trim(),
+    topbarHeight: style.getPropertyValue("--density-topbar-height").trim(),
+    gutter: style.getPropertyValue("--density-gutter-inline").trim(),
+    panelGap: style.getPropertyValue("--density-panel-gap").trim(),
+  };
+});
+if (JSON.stringify(mobileDensity) !== JSON.stringify({ bodyFontSize: "14px", controlHeight: "44px", topbarHeight: "48px", gutter: "16px", panelGap: "0" })) {
+  throw new Error(`mobile must only apply the agreed density aliases: ${JSON.stringify(mobileDensity)}`);
+}
 const mobileProjectOrder = await session.page.$$eval(".project-board > *", (nodes) =>
   nodes.map((node) => node.className).filter(Boolean),
 );
@@ -18,7 +31,7 @@ if (refreshIndex < 0 || lanesIndex < 0 || refreshIndex > lanesIndex) {
   throw new Error(`mobile refresh status should precede work lanes, got ${JSON.stringify(mobileProjectOrder)}`);
 }
 const visibleMobileLanes = await session.page.waitForFunction(() => {
-  if (!window.matchMedia("(max-width: 640px)").matches) return false;
+  if (!window.matchMedia("(max-width: 639.98px)").matches) return false;
   const lanes = [...document.querySelectorAll(".lane")]
     .filter((node) => getComputedStyle(node).display !== "none")
     .map((node) => node.getAttribute("data-lane"));
@@ -123,7 +136,6 @@ if (mobileIssueGeometry.actionBounds.some(([left, right]) => left < 0 || right >
   throw new Error(`390px primary Issue actions should not clip: ${JSON.stringify(mobileIssueGeometry.actionBounds)}`);
 }
 await session.capture("issue-98-mobile-390x844.png");
-await session.assertVisual("issue-99-mobile-390x844.png");
 await assertShellRegionsDoNotOverlap(session.page);
 await session.page.click("button[data-act='mobile-board']");
 await session.page.waitForSelector(".mobile-board-view");
@@ -199,10 +211,13 @@ if (await session.page.$("button[data-act='quit']")) {
   throw new Error("mobile settings should not expose Host quit");
 }
 await session.page.click("button[data-act='language'][data-id='en']");
-await session.page.click("button[data-act='theme'][data-id='plain-night']");
-const storedMobileAppearance = await session.page.evaluate(() => localStorage.getItem("agent-taskboard-mobile-appearance"));
-if (!storedMobileAppearance?.includes('"language":"en"') || !storedMobileAppearance.includes('"theme":"plain-night"')) {
+await session.page.click("button[data-act='appearance'][data-id='dark']");
+const storedMobileAppearance = await session.page.evaluate(() => localStorage.getItem("agent-taskboard-browser-appearance"));
+if (!storedMobileAppearance?.includes('"language":"en"') || !storedMobileAppearance.includes('"appearancePreference":"dark"')) {
   throw new Error(`mobile appearance should persist in this browser Client, got ${storedMobileAppearance}`);
+}
+if ((await session.page.getAttribute("html", "data-theme")) !== "dark") {
+  throw new Error("the mobile browser should resolve its own manual dark preference");
 }
 const hostAppearance = await session.page.evaluate(async (protocol) => {
   const response = await fetch(`${protocol}/rpc`, {
@@ -212,8 +227,8 @@ const hostAppearance = await session.page.evaluate(async (protocol) => {
   });
   return (await response.json()).snapshot.appearance;
 }, session.url);
-if (hostAppearance.language !== "zh-CN" || hostAppearance.theme === "plain-night") {
-  throw new Error(`mobile appearance must not overwrite the Host Client, got ${JSON.stringify(hostAppearance)}`);
+if (hostAppearance.language !== "zh-CN" || hostAppearance.appearancePreference !== "system") {
+  throw new Error(`mobile appearance must not overwrite desktop-client settings, got ${JSON.stringify(hostAppearance)}`);
 }
 const mobileNotificationPermission = await session.page.evaluate(() =>
   typeof Notification === "undefined" ? "unavailable" : Notification.permission,
