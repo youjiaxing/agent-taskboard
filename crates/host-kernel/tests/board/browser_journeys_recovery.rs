@@ -174,8 +174,12 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let remote_tmp = tempfile::tempdir().unwrap();
     let mut remote_req = boot_req(remote_tmp.path());
     remote_req.host_display_name = "Mini".into();
-    let mut remote_host = HostKernel::boot(remote_req).unwrap();
+    let remote_tracker = Arc::new(MemoryTracker::new());
+    remote_tracker.add_issue(IssueRecord::open("you/ledger", 1, "ledger ready"));
+    let mut remote_host = HostKernel::boot_with(remote_req, Arc::clone(&remote_tracker) as _).unwrap();
     pin_board_test_time(&mut remote_host);
+    let ledger_dir = make_dir(remote_tmp.path(), "work/ledger");
+    register(&mut remote_host, "ledger", &ledger_dir, "you/ledger");
     let remote = Arc::new(Mutex::new(remote_host));
     let _remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
     let remote_address = _remote_server

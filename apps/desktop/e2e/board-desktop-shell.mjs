@@ -8,6 +8,7 @@ try {
   console.error("page html", html.slice(0, 4000));
   throw error;
 }
+const originalHostName = await session.page.$eval(".host-line .host-name", (node) => node.textContent?.trim() ?? "");
 await session.page.click("button[data-act='toggle-hosts']");
 const visibleHosts = await session.page.$$eval(".host-picker button[data-act='focus-host']", (nodes) =>
   nodes.map((node) => ({
@@ -32,8 +33,46 @@ const otherHostScope = await session.page.evaluate(() => ({
 if (otherHostScope.projects.includes("garden") || otherHostScope.runs > 0) {
   throw new Error(`sidebar leaked Projects or Runs from another Host: ${JSON.stringify(otherHostScope)}`);
 }
-await session.page.click("button[data-act='toggle-hosts']");
-await session.page.click(`.host-picker button[data-id="${originalHost.id}"]`);
+
+// Host 总览与用量只属于当前 Host：从 Host 区域进入，返回恢复来源页面。
+// 产品壳按秒重绘，点击用合成事件落到当前节点上，避免重绘吞掉真实鼠标点击。
+const clickNode = (selector) => session.page.$eval(selector, (node) => node.click());
+const hostAreaEntries = await session.page.$$eval(".host-area [data-act]", (nodes) => nodes.map((node) => node.getAttribute("data-act")));
+if (!hostAreaEntries.includes("open-overview") || !hostAreaEntries.includes("open-usage")) {
+  throw new Error(`Host overview and usage must be reachable from the current Host area: ${JSON.stringify(hostAreaEntries)}`);
+}
+await clickNode('.side .project-main:has-text("ledger")');
+await session.page.waitForSelector('.project-board .project-heading h1:has-text("ledger")');
+await clickNode(".host-area button[data-act='open-overview']");
+await session.page.waitForSelector(".overview-page");
+const otherHostOverview = await session.page.evaluate(() => ({
+  projects: [...document.querySelectorAll(".overview-project .overview-project-head b")].map((node) => node.textContent?.trim()),
+  runs: [...document.querySelectorAll(".run-thumbnail .run-project")].map((node) => node.textContent?.trim()),
+  stacked: document.querySelectorAll(".lanes, .dep-graph, .focus-workspace-layout").length,
+}));
+if (JSON.stringify(otherHostOverview.projects) !== JSON.stringify(["ledger"]) || otherHostOverview.runs.length || otherHostOverview.stacked) {
+  throw new Error(`Host overview must show only the focused Host without stacking on the board: ${JSON.stringify(otherHostOverview)}`);
+}
+await clickNode("button[data-act='return-page']");
+await session.page.waitForSelector('.project-board .project-heading h1:has-text("ledger")');
+await clickNode(".host-area button[data-act='open-usage']");
+await session.page.waitForSelector(".usage-page");
+const otherHostUsage = await session.page.evaluate(() => ({
+  rows: document.querySelectorAll(".usage-row").length,
+  empty: document.querySelector(".usage-page .board-empty")?.textContent?.trim() ?? "",
+  projectOptions: [...document.querySelectorAll(".usage-page select[data-usage-filter='projectId'] option")].map((node) => node.textContent?.trim()),
+  stacked: document.querySelectorAll(".lanes, .dep-graph, .focus-workspace-layout, .overview-page").length,
+}));
+if (otherHostUsage.rows !== 0 || !otherHostUsage.empty || otherHostUsage.stacked || otherHostUsage.projectOptions.some((name) => name === "garden" || name === "tools")) {
+  throw new Error(`usage must show only the focused Host without stacking on the board: ${JSON.stringify(otherHostUsage)}`);
+}
+await clickNode("button[data-act='return-page']");
+await session.page.waitForSelector('.project-board .project-heading h1:has-text("ledger")');
+
+await clickNode("button[data-act='toggle-hosts']");
+await session.page.waitForSelector(".host-picker");
+await clickNode(`.host-picker button[data-id="${originalHost.id}"]`);
+await session.page.waitForFunction((name) => document.querySelector(".host-line .host-name")?.textContent?.trim() === name, originalHostName);
 await session.page.waitForSelector(".lanes");
 if (await session.page.$(".board-shell > .issue-detail")) {
   throw new Error("issue inspector should not occupy the board before an Issue is selected");
@@ -55,16 +94,77 @@ if (await session.page.$('.refresh-bar[data-kind="incomplete"]')) {
   await session.page.waitForSelector(".lanes");
 }
 
+// 键盘帮助必须与真实键位一致，每个快捷键都要触发它声称的动作，且不得占用系统或 Agent TUI 的组合键。
+const expectedShortcuts = [
+  { id: "help", keys: ["?"] },
+  { id: "search", keys: ["/"] },
+  { id: "next-card", keys: ["J", "↓"] },
+  { id: "previous-card", keys: ["K", "↑"] },
+  { id: "open-card", keys: ["⏎"] },
+  { id: "dismiss", keys: ["Esc"] },
+];
 await session.page.keyboard.press("?");
 await session.page.waitForSelector(".keyboard-help");
+const advertisedShortcuts = await session.page.$$eval(".keyboard-help .shortcut-list li", (nodes) =>
+  nodes.map((node) => ({
+    id: node.getAttribute("data-shortcut"),
+    keys: [...node.querySelectorAll("kbd")].map((kbd) => kbd.textContent?.trim()),
+    label: node.querySelector(".shortcut-label")?.textContent?.trim() ?? "",
+  })),
+);
+if (JSON.stringify(advertisedShortcuts.map(({ id, keys }) => ({ id, keys }))) !== JSON.stringify(expectedShortcuts)) {
+  throw new Error(`keyboard help must advertise every shell shortcut with its real keys: ${JSON.stringify(advertisedShortcuts)}`);
+}
+if (advertisedShortcuts.some((shortcut) => !shortcut.label || shortcut.keys.some((key) => /⌘|⌥|⌃|⇧|Ctrl|Alt|Meta|Cmd/i.test(key ?? "")))) {
+  throw new Error(`shell shortcuts must stay modifier-free and every row must explain itself: ${JSON.stringify(advertisedShortcuts)}`);
+}
 await session.page.keyboard.press("?");
 await session.page.waitForFunction(() => !document.querySelector(".keyboard-help"));
-await session.page.keyboard.press("j");
-await session.page.waitForFunction(() => document.activeElement?.classList.contains("issue-card-main"));
-const keyboardFocusedCard = await session.page.evaluate(() => document.activeElement?.classList.contains("issue-card-main"));
-if (!keyboardFocusedCard) {
-  throw new Error("j should focus a board card");
+
+// 每个快捷键都要触发它声称的动作；卡片导航的焦点观察放在同一次求值里，避免定时重绘清掉焦点。
+const pressShortcut = (key) => session.page.evaluate((nextKey) => {
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: nextKey, bubbles: true, cancelable: true }));
+  return {
+    activeId: document.activeElement?.dataset?.issueId ?? "",
+    activeClass: document.activeElement?.className ?? "",
+    searchFocused: document.activeElement?.id === "issue-title-search",
+  };
+}, key);
+
+await session.page.keyboard.press("/");
+if (!(await session.page.$eval("#issue-title-search", (node) => node === document.activeElement))) {
+  throw new Error("/ should focus the Issue search");
 }
+await session.page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+
+await session.page.click('.chrome button[data-act="more-menu"]');
+await session.page.waitForSelector(".more-menu");
+await session.page.keyboard.press("Escape");
+await session.page.waitForFunction(() => !document.querySelector(".more-menu"));
+
+const firstCard = await pressShortcut("j");
+if (!firstCard.activeClass.includes("issue-card-main") || !firstCard.activeId) {
+  throw new Error(`J should focus a board card: ${JSON.stringify(firstCard)}`);
+}
+const nextCard = await session.page.evaluate((current) => {
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+  return document.activeElement?.dataset?.issueId ?? "";
+}, firstCard.activeId);
+if (!nextCard || nextCard === firstCard.activeId) {
+  throw new Error(`J and the arrow keys should move between board cards: ${firstCard.activeId} -> ${nextCard}`);
+}
+const previousCard = await session.page.evaluate(() => {
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }));
+  return document.activeElement?.dataset?.issueId ?? "";
+});
+if (previousCard !== firstCard.activeId) {
+  throw new Error(`K and the arrow keys should move back between board cards: ${previousCard}`);
+}
+const searchAfterCardFocus = await pressShortcut("/");
+if (!searchAfterCardFocus.searchFocused) {
+  throw new Error(`/ should focus the Issue search from a focused card: ${JSON.stringify(searchAfterCardFocus)}`);
+}
+await session.page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
 const scrollRegressionStyle = await session.page.addStyleTag({
   content: '[data-lane="frontier"] { max-height: 120px; } .workspace-rail-section .detail-scroll { max-height: 180px; }',
 });
@@ -73,7 +173,10 @@ const frontierScrollBeforeFocus = await session.page.$eval('[data-lane="frontier
   return node.scrollTop;
 });
 if (frontierScrollBeforeFocus <= 0) throw new Error("focus workspace regression needs a scrollable board lane");
-await session.page.keyboard.press("Enter");
+await session.page.evaluate(() => {
+  document.querySelectorAll(".issue-card-main")[0]?.focus();
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+});
 await session.page.waitForSelector(".focus-workspace-layout");
 await session.page.waitForSelector('[data-terminal-surface]');
 await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] .issue-document[data-document-state="ready"]');

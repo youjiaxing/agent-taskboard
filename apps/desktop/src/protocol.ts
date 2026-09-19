@@ -233,7 +233,6 @@ export type ShellCopy = {
   searchClosed: string;
   searchSubmit: string;
   keyboardHelp: string;
-  keyboardHelpBody: string;
   thisRound: string;
   uncommitted: string;
   addChangeNote: string;

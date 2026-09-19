@@ -137,6 +137,31 @@
 .ui-notice > p { margin: 0; }
 .ui-badge { display: inline-flex; align-items: center; }
 
+.shortcut-list {
+  list-style: none;
+  margin: 0 0 var(--space-12);
+  padding: 0;
+  display: grid;
+  gap: var(--space-8);
+}
+
+.shortcut-list li { display: flex; align-items: center; gap: var(--space-10); }
+
+.shortcut-keys { display: flex; flex: 0 0 auto; gap: var(--space-4); min-width: 92px; }
+
+.shortcut-keys kbd {
+  min-width: 22px;
+  padding: var(--space-2) var(--space-6);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+
+.shortcut-label { min-width: 0; }
+
 @media (max-width: 600px) {
   .dialog-backdrop { padding: var(--space-12); }
   .dialog-panel {

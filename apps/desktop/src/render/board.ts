@@ -9,6 +9,7 @@ import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
 import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
 import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
+import { refreshStatus } from "../components/refresh-status";
 
 export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
@@ -698,14 +699,18 @@ export function issueLink(copy: ShellCopy, link: IssueLink): string {
 
 export function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string {
   const status = board?.refresh ?? { kind: "never-fetched" as const };
-  const kind = ui.refreshing ? "refreshing" : status.kind;
   const parts: string[] = [];
-  if (kind === "refreshing") {
+  // 手动刷新期间沿用 Host 已确认过的「数据截至」，不隐藏上一次成功读取的时间。
+  const asOf = status.kind === "never-fetched" || status.fetchedAtMs == null
+    ? ""
+    : `${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`;
+  if (ui.refreshing || status.kind === "refreshing") {
     parts.push(copy.refreshRefreshing);
+    if (asOf) parts.push(asOf);
   } else if (status.kind === "never-fetched") {
     parts.push(copy.refreshNever);
   } else if (status.kind === "offline") {
-    parts.push(`${copy.refreshOffline} · ${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    parts.push(`${copy.refreshOffline} · ${asOf}`);
     parts.push(copy.refreshOfflineRecovery);
     if (status.nextRefreshInMs != null) {
       parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
@@ -717,34 +722,29 @@ export function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string
     } else {
       parts.push(copy.refreshPaused);
     }
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
+    if (asOf) parts.push(asOf);
   } else if (status.kind === "auth-failed") {
     parts.push(copy.refreshAuth);
     parts.push(copy.refreshAuthRecovery);
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
+    if (asOf) parts.push(asOf);
   } else if (status.kind === "incomplete" || status.kind === "tracker-error") {
     parts.push(status.kind === "tracker-error" ? copy.refreshTrackerError : copy.refreshIncomplete);
     if (status.detail) {
       parts.push(status.detail);
     }
-    if (status.fetchedAtMs) {
-      parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
-    }
+    if (asOf) parts.push(asOf);
     if (status.nextRefreshInMs != null) {
       parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
     }
   } else if (status.kind === "ready") {
-    parts.push(`${copy.refreshAsOf} ${formatTime(status.fetchedAtMs)}`);
+    parts.push(asOf);
     if (status.nextRefreshInMs != null) {
       parts.push(`${copy.refreshNext} ${formatCountdown(status.nextRefreshInMs)}`);
     }
   }
-  return `<div class="refresh-bar" data-kind="${escapeHtml(kind)}">
-    <span>${escapeHtml(parts.join(" · "))}</span>
-    <button type="button" data-act="refresh">${escapeHtml(copy.refreshNow)}</button>
-  </div>`;
+  return refreshStatus({
+    kind: ui.refreshing ? "refreshing" : status.kind,
+    message: parts.filter(Boolean).join(" · "),
+    actions: [{ id: "refresh", label: copy.refreshNow }],
+  });
 }

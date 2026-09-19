@@ -221,7 +221,6 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 search_closed: "closed".into(),
                 search_submit: "搜索".into(),
                 keyboard_help: "键盘帮助".into(),
-                keyboard_help_body: "J / K 或方向键在看板卡片间移动；Enter 打开详情；/ 聚焦搜索；? 打开或关闭帮助；Escape 关闭帮助。终端聚焦时快捷键全部交给官方 TUI。".into(),
                 this_round: "这一轮".into(),
                 uncommitted: "未提交".into(),
                 add_change_note: "写下改动备注".into(),

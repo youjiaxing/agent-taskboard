@@ -29,7 +29,9 @@
   color: var(--color-text-secondary);
 }
 
-.refresh-bar span { min-width: 0; line-height: 1.45; }
+.refresh-bar > span { min-width: 0; line-height: 1.45; }
+
+.refresh-bar .refresh-action { flex: 0 0 auto; }
 
 .refresh-bar[data-kind="offline"],
 .refresh-bar[data-kind="never-fetched"] { border-color: var(--color-border-strong); }

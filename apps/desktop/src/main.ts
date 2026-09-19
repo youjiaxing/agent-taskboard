@@ -31,6 +31,7 @@ import {
   escapeHtml,
   formatCountdown,
 } from "./client-utils";
+import { shortcutHandles } from "./shortcuts";
 import { ui } from "./ui";
 import { handleAppClick, openKeyboardHelp, openSettingsPanel } from "./events/click";
 import { bindNativeMenuBridge, hookTerminalEditMenu } from "./edit-menu";
@@ -661,7 +662,7 @@ export function typingTarget(target: EventTarget | null): boolean {
 
 document.addEventListener("keydown", (event) => {
   if (!ui.snapshot) return;
-  if (event.key === "?" && document.querySelector("[data-dialog-id='keyboard-help']")) {
+  if (shortcutHandles("help", event.key) && document.querySelector("[data-dialog-id='keyboard-help']")) {
     event.preventDefault();
     document.querySelector<HTMLButtonElement>("[data-dialog-id='keyboard-help'] button[data-dialog-dismiss='true']")?.click();
     return;
@@ -683,7 +684,7 @@ document.addEventListener("keydown", (event) => {
     items[next]?.focus();
     return;
   }
-  if (event.key === "?" && !typingTarget(event.target)) {
+  if (shortcutHandles("help", event.key) && !typingTarget(event.target)) {
     event.preventDefault();
     if (!ui.keyboardHelpOpen && document.activeElement instanceof HTMLElement) {
       rememberDialogTrigger("keyboard-help", document.activeElement);
@@ -692,7 +693,7 @@ document.addEventListener("keydown", (event) => {
     render();
     return;
   }
-  if (event.key === "Escape") {
+  if (shortcutHandles("dismiss", event.key)) {
     if (ui.appearanceMenuOpen) {
       event.preventDefault();
       ui.appearanceMenuOpen = false;
@@ -712,7 +713,7 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  if (event.key === "/" && !typingTarget(event.target)) {
+  if (shortcutHandles("search", event.key) && !typingTarget(event.target)) {
     event.preventDefault();
     ui.app.querySelector<HTMLInputElement>("#issue-title-search")?.focus();
     return;
@@ -730,9 +731,9 @@ document.addEventListener("keydown", (event) => {
   ) return;
   const cards = [...ui.app.querySelectorAll<HTMLButtonElement>(".issue-card-main")];
   if (!cards.length) return;
-  if (["j", "J", "ArrowDown", "k", "K", "ArrowUp"].includes(event.key)) {
+  if (shortcutHandles("next-card", event.key) || shortcutHandles("previous-card", event.key)) {
     event.preventDefault();
-    const direction = ["k", "K", "ArrowUp"].includes(event.key) ? -1 : 1;
+    const direction = shortcutHandles("previous-card", event.key) ? -1 : 1;
     const focusedIndex = cards.findIndex((card) => card === document.activeElement);
     const rememberedIndex = cards.findIndex((card) => card.dataset.issueId === ui.keyboardCursorIssueId);
     const currentIndex = focusedIndex >= 0 ? focusedIndex : rememberedIndex;
@@ -742,7 +743,7 @@ document.addEventListener("keydown", (event) => {
     nextCard?.focus();
     return;
   }
-  if (event.key === "Enter" && document.activeElement?.classList.contains("issue-card-main")) {
+  if (shortcutHandles("open-card", event.key) && document.activeElement?.classList.contains("issue-card-main")) {
     event.preventDefault();
     (document.activeElement as HTMLButtonElement).click();
   }

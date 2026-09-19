@@ -1,4 +1,5 @@
 import type { AppearancePreference } from "./protocol";
+import type { ShellShortcutId } from "./shortcuts";
 
 export type StartupCopy = {
   back: string;
@@ -34,6 +35,8 @@ export type StartupCopy = {
   updateBlockedBody: string;
   updateRetry: string;
   updateInstallingBody: string;
+  shortcuts: Record<ShellShortcutId, string>;
+  shortcutsScope: string;
 };
 
 const catalog: Record<"zh-CN" | "en", StartupCopy> = {
@@ -71,6 +74,15 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     updateBlockedBody: "安装更新会影响当前 Host 上的活跃 Run。请先让这些 Run 结束或逐一停止，再重试安装。",
     updateRetry: "重新检查并安装",
     updateInstallingBody: "正在安装更新。此过程不能取消，请保持应用打开。",
+    shortcuts: {
+      help: "打开或关闭键盘帮助",
+      search: "聚焦 Issue 搜索",
+      "next-card": "在看板卡片间向后移动",
+      "previous-card": "在看板卡片间向前移动",
+      "open-card": "打开当前聚焦的卡片",
+      dismiss: "关闭菜单、弹层或帮助",
+    },
+    shortcutsScope: "这些快捷键只在产品壳中生效；焦点在 Embedded Terminal 时，按键全部交给官方 TUI。",
   },
   en: {
     back: "Back",
@@ -106,6 +118,15 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     updateBlockedBody: "Installing the update affects active Runs on this Host. Let them finish or stop them, then retry installation.",
     updateRetry: "Check and install again",
     updateInstallingBody: "The update is being installed. This cannot be cancelled; keep the app open.",
+    shortcuts: {
+      help: "Open or close keyboard help",
+      search: "Focus the Issue search",
+      "next-card": "Move to the next board card",
+      "previous-card": "Move to the previous board card",
+      "open-card": "Open the focused card",
+      dismiss: "Close a menu, dialog, or help",
+    },
+    shortcutsScope: "These shortcuts apply to the product shell only; while the Embedded Terminal has focus every key goes to the official TUI.",
   },
 };
 
