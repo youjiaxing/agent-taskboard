@@ -187,6 +187,7 @@ Wait-Until {
   $null -ne $script:settings
 } "Settings button was not exposed to UI Automation"
 Invoke-Element $settings
+Wait-Until { (Find-Visible-Element '^(Host startup|Host 启动)$') -ne $null } "Settings page did not render its startup section"
 Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -ne $null } "Start at login setting did not appear"
 $startAtLogin = Find-Visible-Element '^(Start at login|登录时自动启动)$'
 Toggle-Element $startAtLogin
@@ -197,10 +198,21 @@ if (-not $startAtLogin) { throw "Start at login setting disappeared after enabli
 Toggle-Element $startAtLogin
 Wait-Until { -not (Has-AgentTaskboard-StartupEntry) } "disabling Start at login did not remove the real HKCU Run entry"
 Save-Screen "01b-start-at-login-disabled.png"
-$process.Refresh()
-$windowBounds = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle).Current.BoundingRectangle
-[AgentTaskboardNativeUi]::Click([int]($windowBounds.Left + 20), [int]($windowBounds.Top + 140), $false)
-Wait-Until { (Find-Visible-Element '^(Start at login|登录时自动启动)$') -eq $null } "Settings overlay did not close"
+$back = $null
+Wait-Until {
+  $script:back = Find-Visible-Element '^(←\s*)?(Back|返回)$'
+  $null -ne $script:back
+} "Settings page did not expose its Back action"
+Invoke-Element $back
+Wait-Until {
+  (Find-Visible-Element '^(Start at login|登录时自动启动)$') -eq $null -and
+    (Find-Visible-Element '^(←\s*)?(Back|返回)$') -eq $null
+} "Settings page did not return to the main shell"
+Wait-Until {
+  (Find-Visible-Element '^(No Project on this Host yet|这台 Host 上还没有 Project)$') -ne $null
+} "main shell did not restore its empty Project page"
+Wait-Until { (Find-Visible-Element '^(Settings|设置)$') -ne $null } "main shell did not restore its Settings action"
+Save-Screen "01c-settings-returned.png"
 
 $process.Refresh()
 $windowHandle = [AgentTaskboardNativeUi]::GetAncestor($process.MainWindowHandle, 2)
