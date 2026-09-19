@@ -4,6 +4,7 @@ import {
   ensureBrowserAppearance,
   focusedRun,
   loadBrowserAppearance,
+  workspaceRun,
   mobileClient,
   viewportClass,
 } from "./view-helpers";
@@ -416,14 +417,13 @@ export function ensureTerminal(): void {
   ui.term.open(ui.termHost);
   hookTerminalEditMenu(ui.term);
   ui.term.onData((data) => {
-    const runId = ui.snapshot?.focusedRunId;
-    if (!runId) return;
-    void sendPtyInput(runId, data);
+    if (!ui.ptyRunId) return;
+    void sendPtyInput(ui.ptyRunId, data);
   });
 }
 
 export function attachTerminal(snap: Snapshot): void {
-  const run = focusedRun(snap);
+  const run = workspaceRun(snap);
   const slot = ui.app?.querySelector<HTMLElement>(".pty-slot");
   if (!run || !slot) {
     ui.ptyPumping = false;
@@ -895,9 +895,22 @@ window.addEventListener("resize", () => {
 
 rpc("snapshot")
   .then(async () => {
+    if (ui.nativeRunWindowRunId) {
+      ui.clientView.panels.sidebarVisible = false;
+      ui.clientView.panels.rightSide = "hidden";
+      ui.clientView.returnPoint = null;
+      if (ui.nativeRunWindowHostId && ui.snapshot?.focusedHostId !== ui.nativeRunWindowHostId) {
+        await rpc("focusHost", { hostId: ui.nativeRunWindowHostId });
+      }
+      if (ui.nativeRunWindowProjectId && ui.snapshot?.focusedProjectId !== ui.nativeRunWindowProjectId) {
+        await rpc("focusProject", { projectId: ui.nativeRunWindowProjectId });
+      }
+      await rpc("focusRun", { runId: ui.nativeRunWindowRunId });
+      ui.clientView.page = "focus-workspace";
+    }
     render();
-    const restoredChangesRun = ui.snapshot ? focusedRun(ui.snapshot) : undefined;
-    if (!mobileClient() && ui.clientView.panels.rightSide === "changes" && restoredChangesRun) {
+    const restoredChangesRun = ui.snapshot ? workspaceRun(ui.snapshot) : undefined;
+    if (!ui.nativeRunWindowRunId && !mobileClient() && ui.clientView.panels.rightSide === "changes" && restoredChangesRun) {
       try {
         await loadViewChanges(restoredChangesRun.id, ui.changesScope);
         render();

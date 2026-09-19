@@ -54,17 +54,6 @@ export function clientPanelStateStorageKey(): string {
   return `${CLIENT_PANEL_STATE_STORAGE_PREFIX}${clientKind}:${identity}`;
 }
 
-function removeLegacyWorkbenchState(): void {
-  try {
-    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-      const key = localStorage.key(index);
-      if (key?.startsWith("agent-taskboard-panel-layout")) localStorage.removeItem(key);
-    }
-  } catch {
-    // Restricted Clients can still use the in-memory defaults.
-  }
-}
-
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
@@ -99,7 +88,6 @@ export function normalizeClientPanelState(candidate: unknown): ClientPanelState 
 }
 
 export function loadClientPanelState(): ClientPanelState {
-  removeLegacyWorkbenchState();
   const key = clientPanelStateStorageKey();
   try {
     const raw = localStorage.getItem(key);

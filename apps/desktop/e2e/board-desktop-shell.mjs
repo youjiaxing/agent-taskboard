@@ -65,96 +65,66 @@ const keyboardFocusedCard = await session.page.evaluate(() => document.activeEle
 if (!keyboardFocusedCard) {
   throw new Error("j should focus a board card");
 }
-await session.page.keyboard.press("Enter");
-await session.page.waitForSelector(".issue-detail .detail-hd");
-await session.page.waitForSelector("button[data-act='toggle-issue']");
-await session.page.waitForSelector('.issue-document[data-document-state="ready"]');
-const rightmostIssueId = await session.page.$$eval(".issue-card", (nodes) => nodes
-  .map((node) => ({ id: node.getAttribute("data-issue-id"), left: node.getBoundingClientRect().left }))
-  .sort((left, right) => right.left - left.left)[0]?.id);
-if (rightmostIssueId) {
-  const leftmostIssueId = await session.page.$$eval(".issue-card", (nodes) => nodes
-    .map((node) => ({ id: node.getAttribute("data-issue-id"), left: node.getBoundingClientRect().left }))
-    .sort((left, right) => left.left - right.left)[0]?.id);
-  if (leftmostIssueId && leftmostIssueId !== rightmostIssueId) {
-    await session.clickCard(session.page.locator(`.issue-card[data-issue-id="${leftmostIssueId}"] .issue-card-main`));
-    await session.page.waitForSelector('.issue-document[data-document-state="ready"]');
-  }
-  const rightmostCard = session.page.locator(`.issue-card[data-issue-id="${rightmostIssueId}"] .issue-card-main`);
-  await rightmostCard.waitFor({ state: "visible" });
-  const rightmostBox = await rightmostCard.boundingBox();
-  if (!rightmostBox) throw new Error("rightmost Issue card has no clickable geometry");
-  await session.page.mouse.click(rightmostBox.x + rightmostBox.width / 2, rightmostBox.y + rightmostBox.height / 2);
-  await session.page.waitForFunction((id) => document.querySelector(`.issue-detail .detail-hd`)?.textContent?.includes(id.split("#").at(-1)), rightmostIssueId);
-  await session.page.waitForSelector('.issue-document[data-document-state="ready"]');
-  const overlap = await session.page.evaluate((id) => {
-    const card = document.querySelector(`.issue-card[data-issue-id="${CSS.escape(id)}"]`);
-    const detail = document.querySelector(".board-shell > .issue-detail");
-    if (!card || !detail || getComputedStyle(detail).position !== "absolute") return false;
-    const a = card.getBoundingClientRect();
-    const b = detail.getBoundingClientRect();
-    return a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1;
-  }, rightmostIssueId);
-  if (overlap) throw new Error("floating Issue Inspector must move away from the Issue card that was clicked");
-}
 const scrollRegressionStyle = await session.page.addStyleTag({
-  content: '[data-lane="frontier"] { max-height: 120px; } .issue-detail .detail-scroll { max-height: 180px; }',
+  content: '[data-lane="frontier"] { max-height: 120px; } .workspace-rail-section .detail-scroll { max-height: 180px; }',
 });
-const frontierScrollBeforeInspectorActions = await session.page.$eval('[data-lane="frontier"]', (node) => {
+const frontierScrollBeforeFocus = await session.page.$eval('[data-lane="frontier"]', (node) => {
   node.scrollTop = node.scrollHeight;
   return node.scrollTop;
 });
-if (frontierScrollBeforeInspectorActions <= 0) {
-  throw new Error("Issue Inspector regression needs a scrollable board lane");
+if (frontierScrollBeforeFocus <= 0) throw new Error("focus workspace regression needs a scrollable board lane");
+await session.page.keyboard.press("Enter");
+await session.page.waitForSelector(".focus-workspace-layout");
+await session.page.waitForSelector('[data-terminal-surface]');
+await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] .issue-document[data-document-state="ready"]');
+if (await session.page.$(".lanes")) throw new Error("selecting an Issue should enter the focus workspace instead of overlaying the board");
+const initialWorkspaceSections = await session.page.$$eval(".workspace-rail-section", (sections) =>
+  Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
+);
+if (!initialWorkspaceSections.issue || initialWorkspaceSections.actions || initialWorkspaceSections.runs) {
+  throw new Error(`an Issue without an active Run should default to its body section: ${JSON.stringify(initialWorkspaceSections)}`);
 }
-const lanesWithInspector = await session.page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
-const detailScrollBeforeCollapse = await session.page.$eval(".detail-scroll", (node) => {
+const detailScrollBeforeCollapse = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"] .detail-scroll', (node) => {
   node.scrollTop = node.scrollHeight;
   return node.scrollTop;
 });
-if (detailScrollBeforeCollapse <= 0) {
-  throw new Error("Issue Inspector regression needs a scrollable Issue document");
+if (detailScrollBeforeCollapse <= 0) throw new Error("focus workspace regression needs a scrollable Issue document");
+await session.page.click("button[data-act='toggle-issue']");
+await session.page.waitForFunction(() => !document.querySelector('[data-fixed-panel="right-rail"]'));
+if (!(await session.page.$('[data-terminal-surface]')) || !(await session.page.$("button[data-act='toggle-issue']"))) {
+  throw new Error("hiding the right rail must keep the fixed Terminal and its restore control");
 }
 await session.page.click("button[data-act='toggle-issue']");
-await session.page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
-const lanesWithoutInspector = await session.page.$eval(".lanes", (node) => node.getBoundingClientRect().width);
-if (lanesWithoutInspector <= lanesWithInspector + 100) {
-  throw new Error(`hiding the fixed right rail should release its width to the board: ${lanesWithInspector} -> ${lanesWithoutInspector}`);
-}
-const frontierScrollAfterCollapse = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
-if (Math.abs(frontierScrollAfterCollapse - frontierScrollBeforeInspectorActions) > 1) {
-  throw new Error(`collapsing the Inspector must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterCollapse}`);
-}
-if (!(await session.page.$("button[data-act='toggle-issue']"))) {
-  throw new Error("hiding the inspector should keep the restore control in the chrome");
-}
-await session.page.click("button[data-act='toggle-issue']");
-await session.page.waitForSelector(".issue-detail .detail-hd");
-const detailScrollAfterRestore = await session.page.$eval(".detail-scroll", (node) => node.scrollTop);
+await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open]');
+const detailScrollAfterRestore = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"] .detail-scroll', (node) => node.scrollTop);
 if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
-  throw new Error(`restoring the same Issue must preserve Inspector scroll: ${detailScrollBeforeCollapse} -> ${detailScrollAfterRestore}`);
+  throw new Error(`restoring the right rail must preserve Issue scroll: ${detailScrollBeforeCollapse} -> ${detailScrollAfterRestore}`);
 }
-await session.page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
-await session.page.waitForSelector(".detail-hd:has-text('unparented ready')");
-await session.page.waitForSelector('.issue-document[data-document-state="ready"]');
-const frontierScrollAfterSwitch = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
-if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeInspectorActions) > 1) {
-  throw new Error(`switching Issues must preserve board scroll: ${frontierScrollBeforeInspectorActions} -> ${frontierScrollAfterSwitch}`);
-}
-const inspectorHierarchy = await session.page.$eval(".issue-detail", (node) => ({
+const inspectorHierarchy = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"]', (node) => ({
   text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
   commentVisible: Boolean(node.querySelector('form[data-act="issue-comment"]')?.getClientRects().length),
 }));
 if (!inspectorHierarchy.text.includes("父子关系") || !inspectorHierarchy.text.includes("依赖关系")) {
-  throw new Error(`Inspector should use clear relationship headings: ${inspectorHierarchy.text}`);
+  throw new Error(`Issue body should use clear relationship headings: ${inspectorHierarchy.text}`);
 }
 for (const internalPhrase of ["属于 / 子票", "挡住它的 / 它挡住的", "无，可进 Frontier"]) {
-  if (inspectorHierarchy.text.includes(internalPhrase)) {
-    throw new Error(`Inspector should remove internal or explanatory copy: ${internalPhrase}`);
-  }
+  if (inspectorHierarchy.text.includes(internalPhrase)) throw new Error(`Issue body should remove internal copy: ${internalPhrase}`);
 }
-if (inspectorHierarchy.commentVisible) {
-  throw new Error("secondary Issue update forms should stay collapsed until requested");
+if (inspectorHierarchy.commentVisible) throw new Error("secondary Issue update forms should stay collapsed until requested");
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
+const frontierScrollAfterReturn = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (Math.abs(frontierScrollAfterReturn - frontierScrollBeforeFocus) > 1) {
+  throw new Error(`returning from focus must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterReturn}`);
+}
+await session.page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] .issue-document[data-document-state="ready"]');
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
+const frontierScrollAfterSwitch = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeFocus) > 1) {
+  throw new Error(`switching Issues through focus must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterSwitch}`);
 }
 await scrollRegressionStyle.evaluate((node) => node.remove());
 
@@ -508,30 +478,35 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
 await session.page.fill("#issue-title-search", "ready");
 await submitIssueSearch();
 await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length >= 2);
-await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector('.detail-hd:has-text("child ready")');
 const settingsReturnStyle = await session.page.addStyleTag({ content: '[data-lane="frontier"] { max-height: 70px; }' });
 const boardStateBeforeSettings = await session.page.evaluate(() => {
   const lane = document.querySelector('[data-lane="frontier"]');
   if (lane) lane.scrollTop = lane.scrollHeight;
-  return {
-    title: document.querySelector("#issue-title-search")?.value,
-    selected: document.querySelector(".detail-hd")?.textContent?.trim(),
-    scrollTop: lane?.scrollTop ?? 0,
-  };
+  return { title: document.querySelector("#issue-title-search")?.value, scrollTop: lane?.scrollTop ?? 0 };
 });
 if (boardStateBeforeSettings.scrollTop <= 0) throw new Error("settings return fixture needs non-zero board scroll");
+await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] [data-document-state="ready"]');
 await session.page.click("button[data-act='settings']");
 await session.page.waitForSelector(".settings-page");
 await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector('.detail-hd:has-text("child ready")');
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
+const focusStateAfterSettings = await session.page.evaluate(() => ({
+  title: document.querySelector("[data-current-identity]")?.textContent?.trim(),
+  issueOpen: document.querySelector('.workspace-rail-section[data-workspace-section="issue"]')?.open,
+}));
+if (focusStateAfterSettings.title !== "child ready" || !focusStateAfterSettings.issueOpen) {
+  throw new Error(`settings return must restore the focused Issue workspace: ${JSON.stringify(focusStateAfterSettings)}`);
+}
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
 const boardStateAfterSettings = await session.page.evaluate(() => ({
   title: document.querySelector("#issue-title-search")?.value,
-  selected: document.querySelector(".detail-hd")?.textContent?.trim(),
   scrollTop: document.querySelector('[data-lane="frontier"]')?.scrollTop ?? 0,
 }));
 if (JSON.stringify(boardStateAfterSettings) !== JSON.stringify(boardStateBeforeSettings)) {
-  throw new Error(`settings return must restore filter, selection and scroll: ${JSON.stringify({ boardStateBeforeSettings, boardStateAfterSettings })}`);
+  throw new Error(`returning from settings through focus must restore filter and scroll: ${JSON.stringify({ boardStateBeforeSettings, boardStateAfterSettings })}`);
 }
 await settingsReturnStyle.evaluate((node) => node.remove());
 await session.page.fill("#issue-title-search", "");
@@ -615,8 +590,9 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
 };
 await session.page.route("**/*", preserveCachedDocumentDuringRefresh);
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector(".detail-hd:has-text('child ready')");
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
 await session.page.waitForSelector('[data-document-state="stale"] .issue-markdown:has-text("Cached issue body")');
+await session.page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 if (await session.page.$('button[data-act="edit-issue"]')) {
   throw new Error("Issue editing must stay unavailable for a stale read-only document");
 }
@@ -653,67 +629,56 @@ if (!(await session.page.$(".issue-markdown .unsafe-link"))) {
   throw new Error("dangerous markdown link should be rendered as inert text");
 }
 const sectionOrder = await session.page.evaluate(() => {
-  const documentTop = document.querySelector(".issue-document")?.getBoundingClientRect().top ?? 0;
-  const family = document.querySelector(".detail-block")?.getBoundingClientRect().top ?? 0;
+  const body = document.querySelector('.workspace-rail-section[data-workspace-section="issue"]');
+  const documentTop = body?.querySelector(".issue-document")?.getBoundingClientRect().top ?? 0;
+  const family = body?.querySelector(".detail-block")?.getBoundingClientRect().top ?? 0;
   return { document: documentTop, family };
 });
 if (sectionOrder.family <= sectionOrder.document) {
   throw new Error(`family and Dependency sections should follow the document: ${JSON.stringify(sectionOrder)}`);
 }
-const headerTopBeforeScroll = await session.page.$eval(".detail-sticky", (node) => node.getBoundingClientRect().top);
-await session.page.$eval(".detail-scroll", (node) => { node.scrollTop = node.scrollHeight; });
-const headerTopAfterScroll = await session.page.$eval(".detail-sticky", (node) => node.getBoundingClientRect().top);
-if (Math.abs(headerTopAfterScroll - headerTopBeforeScroll) > 1) {
-  throw new Error("Issue title and actions should stay pinned while document content scrolls");
-}
-await session.page.$eval(".detail-scroll", (node) => { node.scrollTop = 0; });
 await session.capture("issue-98-desktop-detail-1440x900.png");
 await assertShellRegionsDoNotOverlap(session.page);
-const normalDetailWidth = await session.page.$eval(".board-shell > .issue-detail", (node) => node.getBoundingClientRect().width);
+const normalDetailWidth = await session.page.$eval('[data-fixed-panel="right-rail"]', (node) => node.getBoundingClientRect().width);
 if (Math.abs(normalDetailWidth - 320) > 2) {
   throw new Error(`Issue document should use the default fixed right-rail width, got ${normalDetailWidth}px`);
 }
-if (await session.page.$('button[data-act="toggle-issue-width"]')) {
-  throw new Error("Issue details should not expose a widen/narrow action");
-}
-if (await session.page.$('.issue-detail button[data-act="toggle-issue"]')) {
-  throw new Error("the right-rail toggle must exist only in the global top bar");
-}
+if (await session.page.$('button[data-act="toggle-issue-width"]')) throw new Error("Issue details should not expose a widen/narrow action");
+if (await session.page.$('.issue-detail button[data-act="toggle-issue"]')) throw new Error("the right-rail toggle must exist only in the global top bar");
 const detailHide = session.page.locator('.chrome button[data-act="toggle-issue"]');
 if ((await detailHide.count()) !== 1 || (await detailHide.getAttribute("aria-label")) !== "收起详情") {
   throw new Error("the global top bar should expose one right-rail hide control");
 }
 await detailHide.click();
-await session.page.waitForFunction(() => !document.querySelector(".board-shell > .issue-detail"));
+await session.page.waitForFunction(() => !document.querySelector('[data-fixed-panel="right-rail"]'));
+if (!(await session.page.$('[data-terminal-surface="empty"]'))) throw new Error("hiding Issue details must keep the fixed Terminal empty state");
 const restoreDetail = session.page.locator('button[data-act="toggle-issue"][aria-label="显示详情"]');
 if ((await restoreDetail.count()) !== 1 || (await restoreDetail.locator("svg").count()) !== 1) {
   throw new Error("collapsed Issue details should keep an icon-only restore control in chrome");
 }
 await restoreDetail.click();
-await session.page.waitForSelector(".board-shell > .issue-detail");
-await session.page.click(".issue-detail button[data-act='open-issue']");
+await session.page.waitForSelector('[data-fixed-panel="right-rail"]');
+await session.page.click('.workspace-rail-section[data-workspace-section="actions"] button[data-act="open-issue"]');
 const openedDetailUrl = await session.page.evaluate(() => window.__OPENED_URLS__.at(-1));
 if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
   throw new Error(`details should open the GitHub Issue, got ${openedDetailUrl}`);
 }
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
 const beforeFrontier = await session.page.$$eval('[data-lane="frontier"] .issue-card', (nodes) => nodes.length);
-
+await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
 await session.page.click(".name-btn:has-text('#1 parent')");
-await session.page.waitForSelector(".detail-hd:has-text('parent')");
-const stillFrontier = await session.page.$$eval('[data-lane="frontier"] .issue-card', (nodes) => nodes.length);
-if (stillFrontier !== beforeFrontier) {
-  throw new Error("clicking a parent link filtered the board");
-}
-
+await session.page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "parent");
+if (await session.page.$(".lanes")) throw new Error("clicking a parent link should stay in the focus workspace without filtering the board");
 await session.page.click("button:has-text('只看这些子票')");
+await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector("button:has-text('清除过滤')");
-const filtered = await session.page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) =>
-  nodes.map((node) => node.textContent),
-);
+const filtered = await session.page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) => nodes.map((node) => node.textContent));
 if (filtered.join(",") !== "child ready") {
   throw new Error(`parent filter should show only children, got ${JSON.stringify(filtered)}`);
 }
-
+if (beforeFrontier <= filtered.length) throw new Error("the parent filter should narrow the Frontier");
 await session.page.click("button:has-text('清除过滤')");
 await session.page.waitForFunction(() => !document.querySelector("button[data-act='clear-filter']"));
 }

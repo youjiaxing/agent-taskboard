@@ -19,7 +19,7 @@ use tauri::menu::{
 };
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_log::RotationStrategy;
 use tauri_plugin_opener::OpenerExt;
 
@@ -112,7 +112,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             set_host_mode,
-            set_edit_menu_context
+            set_edit_menu_context,
+            open_run_window
         ])
         .setup(|app| {
             signal::spawn_ctrl_c_handler(app.handle().clone());
@@ -184,20 +185,25 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
-                if let Some(state) = window.try_state::<AppState>() {
-                    if let Ok(mut kernel) = state.kernel.lock() {
-                        let _ = kernel.dispatch(Command::HideWindow);
+            WindowEvent::CloseRequested { api, .. } => match close_behavior(window.label()) {
+                CloseBehavior::HideMain => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    if let Some(state) = window.try_state::<AppState>() {
+                        if let Ok(mut kernel) = state.kernel.lock() {
+                            let _ = kernel.dispatch(Command::HideWindow);
+                        }
+                    }
+                    if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                        let _ = webview.eval(
+                            "window.dispatchEvent(new Event('agent-taskboard:host-window-hidden'));",
+                        );
                     }
                 }
-                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
-                    let _ = webview.eval(
-                        "window.dispatchEvent(new Event('agent-taskboard:host-window-hidden'));",
-                    );
-                }
-            }
+                // A Run window closes for real. It must stay out of the Host:
+                // no HideWindow command, no hiding `main`, no stopping the Run.
+                CloseBehavior::DestroyRunWindow | CloseBehavior::Native => {}
+            },
             WindowEvent::ThemeChanged(theme) => {
                 let appearance = match theme {
                     tauri::Theme::Dark => "dark",
@@ -291,6 +297,115 @@ fn set_edit_menu_context(context: EditMenuContext, app: AppHandle) -> Result<(),
         *cached = context;
     }
     apply_edit_menu_state(&app)
+}
+
+const RUN_WINDOW_LABEL_PREFIX: &str = "run-";
+const RUN_WINDOW_LABEL_SLUG_MAX: usize = 24;
+const RUN_WINDOW_PATH: &str = "index.html";
+const RUN_WINDOW_RUN_ID_PARAM: &str = "runId";
+const RUN_WINDOW_HOST_ID_PARAM: &str = "hostId";
+const RUN_WINDOW_PROJECT_ID_PARAM: &str = "projectId";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseBehavior {
+    HideMain,
+    DestroyRunWindow,
+    Native,
+}
+
+fn close_behavior(label: &str) -> CloseBehavior {
+    if label == "main" {
+        CloseBehavior::HideMain
+    } else if is_run_window_label(label) {
+        CloseBehavior::DestroyRunWindow
+    } else {
+        CloseBehavior::Native
+    }
+}
+
+fn is_run_window_label(label: &str) -> bool {
+    label.starts_with(RUN_WINDOW_LABEL_PREFIX)
+}
+
+// The digest distinguishes ids that collapse to the same safe readable slug.
+fn run_window_label(run_id: &str) -> String {
+    let slug: String = run_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(RUN_WINDOW_LABEL_SLUG_MAX)
+        .collect();
+    let digest = stable_digest(run_id);
+    if slug.is_empty() {
+        format!("{RUN_WINDOW_LABEL_PREFIX}{digest}")
+    } else {
+        format!("{RUN_WINDOW_LABEL_PREFIX}{slug}-{digest}")
+    }
+}
+
+fn stable_digest(value: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn normalize_run_id(run_id: &str) -> Option<&str> {
+    let trimmed = run_id.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn run_window_path(run_id: &str, host_id: &str, project_id: &str) -> String {
+    format!(
+        "{RUN_WINDOW_PATH}?{RUN_WINDOW_RUN_ID_PARAM}={}&{RUN_WINDOW_HOST_ID_PARAM}={}&{RUN_WINDOW_PROJECT_ID_PARAM}={}",
+        encode_query_value(run_id),
+        encode_query_value(host_id),
+        encode_query_value(project_id),
+    )
+}
+
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+// Building a webview from a synchronous command deadlocks on Windows.
+#[tauri::command]
+async fn open_run_window(
+    run_id: String,
+    host_id: String,
+    project_id: String,
+    title: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    let run_id = normalize_run_id(&run_id).ok_or_else(|| "run id is required".to_string())?;
+    let host_id = normalize_run_id(&host_id).ok_or_else(|| "Host id is required".to_string())?;
+    let project_id =
+        normalize_run_id(&project_id).ok_or_else(|| "Project id is required".to_string())?;
+    let label = run_window_label(run_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        label.as_str(),
+        WebviewUrl::App(run_window_path(run_id, host_id, project_id).into()),
+    )
+    .title(title)
+    .build()
+    .map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 fn boot_kernel(
@@ -725,4 +840,92 @@ fn quit_host(app: &AppHandle) {
         }
     }
     app.exit(0);
+}
+
+#[cfg(test)]
+mod run_window_tests {
+    use super::*;
+
+    const RUN_ID: &str = "5f2a9c1e4b7d8a30c6e1f4b2a9d3c0e7";
+
+    #[test]
+    fn label_is_stable_and_unique_per_run_id() {
+        assert_eq!(run_window_label(RUN_ID), run_window_label(RUN_ID));
+        assert_ne!(
+            run_window_label(RUN_ID),
+            run_window_label("5f2a9c1e4b7d8a30c6e1f4b2a9d3c0e8")
+        );
+        let label = run_window_label(RUN_ID);
+        assert!(is_run_window_label(&label));
+        assert_ne!(label, "main");
+    }
+
+    #[test]
+    fn label_stays_unique_when_run_ids_only_differ_in_unsafe_characters() {
+        assert_ne!(run_window_label("a/b"), run_window_label("a-b"));
+        assert_ne!(run_window_label("a/b"), run_window_label("a b"));
+        assert_ne!(run_window_label("a/b"), run_window_label("a:b"));
+    }
+
+    #[test]
+    fn label_of_a_hostile_run_id_keeps_to_the_safe_character_set() {
+        for run_id in [
+            "../../etc/passwd",
+            "a b/c:d",
+            "run\u{0}x",
+            "\u{65e5}\u{672c}\u{8a9e}",
+            "",
+        ] {
+            let label = run_window_label(run_id);
+            assert!(
+                label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-'),
+                "unsafe label {label} for {run_id:?}"
+            );
+            assert!(label.starts_with(RUN_WINDOW_LABEL_PREFIX), "{label}");
+            assert_ne!(close_behavior(&label), CloseBehavior::HideMain);
+        }
+    }
+
+    #[test]
+    fn label_length_stays_bounded_for_long_run_ids() {
+        let label = run_window_label(&"a".repeat(4096));
+        let budget = RUN_WINDOW_LABEL_PREFIX.len() + RUN_WINDOW_LABEL_SLUG_MAX + 1 + 16;
+        assert!(label.len() <= budget, "label too long: {}", label.len());
+    }
+
+    #[test]
+    fn path_carries_the_run_id_as_one_encoded_query_parameter() {
+        assert_eq!(
+            run_window_path(RUN_ID, "local", "garden"),
+            format!("{RUN_WINDOW_PATH}?{RUN_WINDOW_RUN_ID_PARAM}={RUN_ID}&{RUN_WINDOW_HOST_ID_PARAM}=local&{RUN_WINDOW_PROJECT_ID_PARAM}=garden")
+        );
+        assert_eq!(
+            run_window_path("run id/1", "host&one", "project=one"),
+            "index.html?runId=run%20id%2F1&hostId=host%26one&projectId=project%3Done"
+        );
+        assert_eq!(
+            run_window_path("\u{65e5}", "\u{672c}", "\u{8a9e}"),
+            "index.html?runId=%E6%97%A5&hostId=%E6%9C%AC&projectId=%E8%AA%9E"
+        );
+        assert_eq!(encode_query_value("~-._"), "~-._");
+    }
+
+    #[test]
+    fn blank_run_ids_are_rejected() {
+        assert_eq!(normalize_run_id(RUN_ID), Some(RUN_ID));
+        assert_eq!(normalize_run_id(""), None);
+        assert_eq!(normalize_run_id("   "), None);
+    }
+
+    #[test]
+    fn only_main_keeps_the_resident_hide_on_close() {
+        assert_eq!(close_behavior("main"), CloseBehavior::HideMain);
+        assert_eq!(
+            close_behavior(&run_window_label(RUN_ID)),
+            CloseBehavior::DestroyRunWindow
+        );
+        assert_eq!(close_behavior("unrelated"), CloseBehavior::Native);
+    }
 }

@@ -27,6 +27,11 @@ import type {
   ViewChanges,
 } from "./protocol";
 
+function nativeRunWindowParameter(name: "runId" | "hostId" | "projectId"): string {
+  if (!("__TAURI_INTERNALS__" in window)) return "";
+  return new URLSearchParams(window.location.search).get(name)?.trim() ?? "";
+}
+
 function sessionClientId(): string {
   const key = "agent-taskboard-client-id";
   const windowMarkerPrefix = "agent-taskboard-client-window:";
@@ -146,7 +151,10 @@ export const ui = {
   keyboardHelpOpen: false,
   keyboardCursorIssueId: "",
   moreMenuOpen: false,
-  terminalPanelVisible: true,
+  nativeRunWindowRunId: nativeRunWindowParameter("runId"),
+  nativeRunWindowHostId: nativeRunWindowParameter("hostId"),
+  nativeRunWindowProjectId: nativeRunWindowParameter("projectId"),
+  workspaceRailOpenSections: new Map<string, Set<"actions" | "issue" | "runs">>(),
   renderedDetailIssueId: "",
   renderedBoardProjectId: "",
   renderedMobileWorkspaceKey: "",

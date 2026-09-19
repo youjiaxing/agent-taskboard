@@ -54,6 +54,27 @@ const focusProject = async (page, projectId, expectedName) => {
   }
 };
 
+const enterIssueFocusWorkspace = async (page, expectedTitle) => {
+  await page.waitForSelector(".focus-workspace-layout");
+  await page.waitForSelector("[data-terminal-surface]");
+  await page.waitForFunction(
+    (title) => document.querySelector("[data-current-identity]")?.textContent?.trim() === title,
+    expectedTitle,
+  );
+  const sections = await page.$$eval(".workspace-rail-section", (nodes) =>
+    nodes.map((node) => node.dataset.workspaceSection),
+  );
+  if (sections.join(",") !== "actions,issue,runs") {
+    throw new Error(`clicking an Issue must show the fixed focus workspace rail: ${JSON.stringify(sections)}`);
+  }
+  await page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"] section.issue-document[data-document-state="ready"]');
+};
+
+const leaveFocusWorkspace = async (page) => {
+  await page.click("button[data-act='return-page']");
+  await page.waitForSelector(".lanes");
+};
+
 await focusProject(desktop, gardenProjectId, "garden");
 await desktop.waitForFunction(
   () => document.querySelectorAll('[data-lane="frontier"] .issue-card').length >= 18,
@@ -61,13 +82,15 @@ await desktop.waitForFunction(
   { timeout: 400 },
 );
 await desktop.click('[data-act="focus-issue"][data-id="you/garden#1"]');
-await desktop.waitForSelector('.detail-hd:has-text("garden issue 1")');
+await enterIssueFocusWorkspace(desktop, "garden issue 1");
+await leaveFocusWorkspace(desktop);
 await desktop.click('button[data-act="center-view"][data-id="graph"]');
 await desktop.waitForSelector('button[data-act="center-view"][data-id="graph"].active');
 
 await focusProject(web, notesProjectId, "notes");
 await web.click('[data-act="focus-issue"][data-id="you/notes#1"]');
-await web.waitForSelector('.detail-hd:has-text("notes issue")');
+await enterIssueFocusWorkspace(web, "notes issue");
+await leaveFocusWorkspace(web);
 
 await mobile.click('button[data-act="mobile-scope"]');
 await mobile.waitForSelector(".mobile-scope-sheet");

@@ -424,6 +424,11 @@ fn browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions() {
         3,
         "release lifecycle issue",
     ));
+    tracker.add_issue(IssueRecord::open(
+        "you/lifecycle",
+        4,
+        "never run lifecycle issue",
+    ));
     tracker.set_issue_body(
         "you/lifecycle#1",
         "# Active work\n\nKeep the complete Issue beside the Terminal while waiting for approval.",

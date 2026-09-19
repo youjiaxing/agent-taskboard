@@ -104,6 +104,8 @@
   gap: var(--space-10);
   padding: var(--space-8) var(--space-12);
   border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  background: var(--color-surface);
 }
 
 .run-dock-hd b { margin-right: var(--space-8); }

@@ -53,9 +53,12 @@ if (await session.page.$(".lanes")) {
 if (!(await session.page.$(".side"))) {
   throw new Error("the global shell should keep the current Host sidebar while a Run is focused");
 }
+await session.page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
+await session.page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
 await session.page.waitForSelector(".lifted-terminal .xterm-viewport");
+await session.page.evaluate(() => { window.__THEME_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 const focusedRunGlobalActions = await session.page.$$eval(
   "[data-global-actions] [data-global-action]",
   (nodes) => nodes.map((node) => node.getAttribute("data-global-action")),
@@ -80,6 +83,14 @@ for (const appearancePreference of ["light", "dark", "warm"]) {
     };
   }));
 }
+const terminalAfterThemes = await session.page.evaluate(() => window.__THEME_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"));
+if (!terminalAfterThemes) throw new Error("theme changes must keep the same Terminal mounted");
+await session.page.click("button[data-act='settings']");
+await session.page.waitForSelector(".settings-page");
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lifted-terminal .pty-host");
+const terminalAfterSettings = await session.page.evaluate(() => window.__THEME_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"));
+if (!terminalAfterSettings) throw new Error("returning from settings must restore the same mounted Terminal");
 const expectedTerminalTokens = ["#171717", "#1f1f1f", "#f5f5f5", "#a3a3a3", "#f5f5f5", "#314766"];
 for (const palette of terminalPalettes) {
   if (JSON.stringify(palette.tokens) !== JSON.stringify(expectedTerminalTokens)) {
@@ -133,9 +144,10 @@ if (!(await session.page.$(".run-dock"))) {
   throw new Error("returning to the board should restore the active Issue terminal dock");
 }
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector(".detail-hd:has-text('child ready')");
+await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] [data-document-state="ready"]');
 if (await session.page.$(".run-dock")) {
-  throw new Error("selecting an Issue without an active Run should remove the terminal dock");
+  throw new Error("selecting an Issue without a Run should replace the board dock with the fixed Terminal empty state");
 }
 
 const issueToggleLeftBeforeSidebarFold = await session.page.$eval("button[data-act='toggle-issue']", (node) =>
@@ -151,6 +163,8 @@ const issueToggleLeftAfterSidebarFold = await session.page.$eval("button[data-ac
 if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold) > 1) {
   throw new Error(`Issue detail toggle should keep its chrome coordinate when the sidebar folds: ${issueToggleLeftBeforeSidebarFold} -> ${issueToggleLeftAfterSidebarFold}`);
 }
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".lanes");
 await session.clickCard(session.page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
 await session.page.waitForSelector(".lifted-run");
 await session.page.click("button[data-act='return-page']");

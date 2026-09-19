@@ -1,9 +1,9 @@
 import { captureGraphAnchor, eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView, restoreGraphAnchor } from "../main";
 import { effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
-import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance } from "../view-helpers";
+import { APPEARANCE_PREFERENCES, ensureBrowserAppearance, focusedRun, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
@@ -230,19 +230,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "toggle-issue") {
     ui.clientView.panels.rightSide = ui.clientView.panels.rightSide === "rail" ? "hidden" : "rail";
-    ui.changesView = null;
     saveClientPanelState();
-    render();
-    return;
-  }
-  if (act === "hide-terminal") {
-    ui.terminalPanelVisible = false;
-    if (ui.snapshot.workspaceView === "run") await rpc("returnToBoard");
-    render();
-    return;
-  }
-  if (act === "show-terminal") {
-    ui.terminalPanelVisible = true;
     render();
     return;
   }
@@ -420,6 +408,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       baseBody: body,
     });
     ui.issueEditOpenIds.add(issueDraftKey(issue.id));
+    const workspaceSections = ui.workspaceRailOpenSections.get(issue.id);
+    workspaceSections?.add("issue");
     clearFormOperation(issueEditFormKey(issue.id));
     render();
     ui.app.querySelector<HTMLInputElement>("#issue-edit-title")?.focus();
@@ -571,8 +561,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "focus-run" && target.dataset.id) {
     enterPrimaryPage("focus-workspace", ui.snapshot);
-    ui.clientView.panels.rightSide = "rail";
-    ui.terminalPanelVisible = true;
+    ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
     await rpc("focusRun", { runId: target.dataset.id });
     await loadSelectedIssueDocument();
     if (mobileClient()) {
@@ -580,6 +569,21 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       ui.mobileLiveTerminal = false;
     }
     render();
+    return;
+  }
+  if (act === "open-run-window" && target.dataset.id) {
+    const run = (ui.snapshot.runs ?? []).find((item) => item.id === target.dataset.id);
+    if (!run || run.status === "ended") return;
+    try {
+      await openRunWindow(
+        run.id,
+        ui.snapshot.focusedHostId,
+        run.projectId,
+        `${run.agentName} · ${run.issueId ?? ui.snapshot.copy.unboundIssue}`,
+      );
+    } catch (error) {
+      console.warn("unable to open Run window", error);
+    }
     return;
   }
   if (act === "open-usage") {
@@ -607,7 +611,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "open-run-usage" && target.dataset.id) {
     enterPrimaryPage("focus-workspace", ui.snapshot);
-    ui.terminalPanelVisible = true;
     ui.clientView.panels.rightSide = "rail";
     await rpc("openRunFromUsage", { runId: target.dataset.id });
     render();
@@ -656,9 +659,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "view-changes" && target.dataset.id) {
     if (ui.clientView.panels.rightSide === "changes") {
       ui.clientView.panels.rightSide = "rail";
-      ui.changesView = null;
-      ui.noteTarget = null;
-      ui.noteDraft = "";
       saveClientPanelState();
       render();
       return;
@@ -666,8 +666,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.clientView.panels.rightSide = "changes";
     saveClientPanelState();
     ui.changesScope = "this-round";
-    ui.noteTarget = null;
-    ui.noteDraft = "";
+    if (ui.changesView?.runId !== target.dataset.id) ui.changesView = null;
+    render();
     await loadViewChanges(target.dataset.id, ui.changesScope);
     render();
     return;
@@ -675,16 +675,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "close-changes") {
     ui.clientView.panels.rightSide = "rail";
     saveClientPanelState();
-    ui.changesView = null;
-    ui.noteTarget = null;
-    ui.noteDraft = "";
     render();
     return;
   }
   if (act === "changes-scope" && target.dataset.id) {
     const scope = target.dataset.id === "uncommitted" ? "uncommitted" : "this-round";
     ui.changesScope = scope;
-    const runId = ui.changesView?.runId ?? ui.snapshot.focusedRunId;
+    const runId = ui.changesView?.runId ?? workspaceRun(ui.snapshot)?.id;
     if (runId) await loadViewChanges(runId, scope);
     render();
     return;
@@ -703,7 +700,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "delete-note" && target.dataset.id) {
     await rpc("deleteChangeNote", { noteId: target.dataset.id });
-    const runId = ui.changesView?.runId ?? ui.snapshot.focusedRunId;
+    const runId = ui.changesView?.runId ?? workspaceRun(ui.snapshot)?.id;
     if (runId) await loadViewChanges(runId, ui.changesScope);
     render();
     return;
@@ -1005,16 +1002,21 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-issue" && target.dataset.id) {
+    const desktopFocus = !mobileClient()
+      && (ui.clientView.page === "focus-workspace" || Boolean(target.closest(".issue-card")));
+    if (desktopFocus) enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: target.dataset.id });
-    render();
+    const run = workspaceRun(ui.snapshot);
+    if (desktopFocus && run && (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run")) {
+      await rpc("focusRun", { runId: run.id });
+    }
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileView = "issue";
       ui.mobileLiveTerminal = false;
-    } else if (target.closest(".issue-card") && ui.snapshot.focusedRunId) {
-      enterPrimaryPage("focus-workspace", ui.snapshot);
-      await rpc("focusRun", { runId: ui.snapshot.focusedRunId });
+    } else if (desktopFocus) {
+      ui.clientView.page = "focus-workspace";
     }
     render();
     return;

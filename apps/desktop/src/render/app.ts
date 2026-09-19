@@ -9,6 +9,7 @@ import {
   ensureBrowserAppearance,
   focusedRun,
   mobileClient,
+  workspaceRun,
   mobileMain,
   mobileNavigation,
   mobileScopeSheet,
@@ -16,10 +17,10 @@ import {
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { dangerConfirmationDialog, hostOverviewPage, keyboardHelpDialog, liftedRunView, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage, viewChangesPanel } from "./shell";
+import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage } from "./shell";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
-import { applyClientPanelWidths, fixedPanelResizeHandle, panelUiText } from "../workbench";
+import { applyClientPanelWidths, fixedPanelResizeHandle } from "../workbench";
 import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
@@ -84,8 +85,9 @@ export function render(): void {
 
   const host = hosts.find((item) => item.id === ui.snapshot?.focusedHostId) ?? hosts[0];
   const empty = ui.snapshot.emptyActions.length > 0;
-  const runLifted = !isMobile && snap.workspaceView === "run" && Boolean(focusedRun(snap));
-  const showSidebar = !isMobile && ui.clientView.panels.sidebarVisible;
+  const runWindow = Boolean(ui.nativeRunWindowRunId);
+  const focusRun = workspaceRun(snap);
+  const showSidebar = !isMobile && !runWindow && ui.clientView.panels.sidebarVisible;
   const selectedIssue = snap.board?.selected;
   const primaryIdentity = ui.clientView.page === "settings"
     ? copy.settings
@@ -126,11 +128,7 @@ export function render(): void {
     });
   }
   const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(selectedIssue);
-  const showChangesPanel = !isMobile
-    && ui.clientView.page !== "settings"
-    && ui.clientView.panels.rightSide === "changes"
-    && Boolean(focusedRun(snap));
-  const showIssueToggle = !isMobile
+  const showIssueToggle = !isMobile && !runWindow
     && Boolean(selectedIssue)
     && ["board", "dependency-graph", "focus-workspace"].includes(ui.clientView.page);
   const previousGraphCanvas = ui.app.querySelector<HTMLElement>(".graph-canvas");
@@ -184,8 +182,8 @@ export function render(): void {
             ${showIssueToggle
               ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" data-global-action="right-rail" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
               : ""}
-            ${!isMobile && focusedRun(snap) && ui.clientView.page !== "settings"
-              ? `<button type="button" class="chrome-button ${ui.clientView.panels.rightSide === "changes" ? "active" : ""}" data-act="view-changes" data-id="${escapeHtml(focusedRun(snap)?.id ?? "")}" data-global-action="changes">${escapeHtml(copy.viewChanges)}</button>`
+            ${!isMobile && !runWindow && focusRun && ui.clientView.page === "focus-workspace"
+              ? `<button type="button" class="chrome-button ${ui.clientView.panels.rightSide === "changes" ? "active" : ""}" data-act="view-changes" data-id="${escapeHtml(focusRun.id)}" data-global-action="changes">${escapeHtml(copy.viewChanges)}</button>`
               : ""}
             <div class="appearance-menu-wrap">
               <button type="button" class="chrome-button" data-act="appearance-menu" data-global-action="appearance" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
@@ -209,17 +207,14 @@ export function render(): void {
                 ? menu({
                     className: "more-menu",
                     label: localCopy.more,
-                    actions: [
-                      ...(focusedRun(snap) && !ui.terminalPanelVisible ? [{ id: "show-terminal", label: panelUiText().showTerminal }] : []),
-                      { id: "keyboard-help", label: copy.keyboardHelp },
-                    ],
+                    actions: [{ id: "keyboard-help", label: copy.keyboardHelp }],
                   })
                 : ""}
             </div>
           </div>
         </div>
       </header>
-      <div class="body ${showSidebar ? "" : "side-collapsed"}${showChangesPanel ? " changes-open" : ""}">
+      <div class="body ${showSidebar ? "" : "side-collapsed"}">
         ${showSidebar ? `<aside class="side" data-fixed-panel="sidebar">
           ${fixedPanelResizeHandle("sidebar")}
           <div class="host-area">
@@ -258,7 +253,7 @@ export function render(): void {
             }
           </div>
         </aside>` : ""}
-        <main class="workspace ${empty ? "" : "board-open"}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
+        <main class="workspace ${empty ? "" : "board-open"}${ui.clientView.page === "focus-workspace" ? " focus-workspace-open" : ""}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
           ${
             ui.clientView.page === "settings"
               ? settingsPage(copy, localCopy, snap, appearance, isMobile)
@@ -277,12 +272,11 @@ export function render(): void {
                     ? mobileMain(copy, snap)
                     : ui.clientView.page === "host-overview"
                       ? hostOverviewPage(copy, snap)
-                      : ui.clientView.page === "focus-workspace" && runLifted
-                        ? liftedRunView(copy, snap)
+                      : ui.clientView.page === "focus-workspace"
+                        ? focusWorkspaceView(copy, snap)
                         : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
           }
         </main>
-        ${showChangesPanel ? viewChangesPanel(copy) : ""}
       </div>
       ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNavigation(copy, snap) : ""}
     </div>
