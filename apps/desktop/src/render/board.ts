@@ -1,6 +1,6 @@
 import { completeDependencyGraphLabel, connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, effectiveClientLanguage, mobileClient } from "../view-helpers";
+import { currentProject, effectiveClientLanguage } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
@@ -100,20 +100,9 @@ export function createIssueForm(copy: ShellCopy, snap: Snapshot): string {
 }
 
 export function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
-  const board = snap.board;
-  if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
-    const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
-      ? board.refresh.detail
-      : null;
-    const message = board.empty === "tracker-error" ? copy.emptyTrackerError : copy.emptyIncomplete;
-    return `<div class="board-empty" data-empty="${board.empty}">
-      <b>${escapeHtml(message)}</b>
-      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
-    </div>`;
-  }
-  if (!board || board.empty === "no-data" || !board.columns) {
-    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
-  }
+  const unavailable = boardUnavailable(copy, snap);
+  if (unavailable) return unavailable;
+  const board = snap.board!;
   const onGraph = snap.centerView === "graph";
   const hint = onGraph ? copy.graphHint : board.parentFilter ? copy.childHint : "";
   const inspectorOpen = ui.clientView.panels.rightSide === "rail" && Boolean(board.selected);
@@ -134,16 +123,43 @@ export function boardView(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = fa
   </div>`;
 }
 
-export function boardLanes(copy: ShellCopy, board: BoardSnapshot): string {
-  const desktop: Array<[IssueLaneState, string, IssueCard[]]> = [
-    ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
-    ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
-    ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
-    ["recentlyCompleted", copy.colRecent, board.columns?.recentlyCompleted ?? []],
-  ];
-  const cols = mobileClient()
-    ? [desktop[2], desktop[1], desktop[0], desktop[3]] as typeof desktop
-    : desktop;
+/** The desktop order: blocked, Frontier, in progress, recently completed. */
+const DEFAULT_LANE_ORDER: IssueLaneState[] = ["blocked", "frontier", "inProgress", "recentlyCompleted"];
+
+/**
+ * The Board's own unreadable-data states, shared by every view that would draw its lanes.
+ * Returns null only when `snap.board` carries drawable columns.
+ */
+export function boardUnavailable(copy: ShellCopy, snap: Snapshot): string | null {
+  const board = snap.board;
+  if (board?.empty === "incomplete-read" || board?.empty === "tracker-error") {
+    const detail = board.refresh.kind === "incomplete" || board.refresh.kind === "tracker-error"
+      ? board.refresh.detail
+      : null;
+    const message = board.empty === "tracker-error" ? copy.emptyTrackerError : copy.emptyIncomplete;
+    return `<div class="board-empty" data-empty="${board.empty}">
+      <b>${escapeHtml(message)}</b>
+      ${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
+    </div>`;
+  }
+  if (!board || board.empty === "no-data" || !board.columns) {
+    return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
+  }
+  return null;
+}
+
+export function boardLanes(
+  copy: ShellCopy,
+  board: BoardSnapshot,
+  order: IssueLaneState[] = DEFAULT_LANE_ORDER,
+): string {
+  const byLane: Record<IssueLaneState, [IssueLaneState, string, IssueCard[]]> = {
+    blocked: ["blocked", copy.colBlocked, board.columns?.blocked ?? []],
+    frontier: ["frontier", copy.colFrontier, board.columns?.frontier ?? []],
+    inProgress: ["inProgress", copy.colInProgress, board.columns?.inProgress ?? []],
+    recentlyCompleted: ["recentlyCompleted", copy.colRecent, board.columns?.recentlyCompleted ?? []],
+  };
+  const cols = order.map((lane) => byLane[lane]);
   return `<div class="lanes">
     ${cols
       .map(([key, name, items]) => {
@@ -443,7 +459,7 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail)
   </div>${canWrite ? formFeedback(openKey) : ""}`;
 }
 
-function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
+function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, showDependencyGraph: boolean): string {
   const canWrite = issueCanWrite(board, issue);
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const editOpen = ui.issueEditOpenIds.has(issueDraftKey(issue.id));
@@ -460,7 +476,7 @@ function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): s
     </section>
     <section class="detail-block">
       <h4>${escapeHtml(copy.deps)}</h4>
-      ${mobileClient() ? "" : `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>`}
+      ${showDependencyGraph ? `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>` : ""}
       <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
       ${issue.blockedBy.length ? issue.blockedBy.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`}
       <div class="tiny">${escapeHtml(copy.blocking)}</div>
@@ -475,26 +491,32 @@ function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): s
       : ""}`;
 }
 
-export function issueDetail(copy: ShellCopy, board: BoardSnapshot, showPanelToggle = true): string {
+/** The page decides which inspector controls this Issue surface carries. */
+export type IssueDetailOptions = {
+  panelToggle?: boolean;
+  dependencyGraph?: boolean;
+};
+
+export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: IssueDetailOptions = {}): string {
   const issue = board.selected;
   if (!issue) return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
   return `<header class="detail-sticky">
       <div class="detail-title-row">
         <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        ${showPanelToggle ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
+        ${options.panelToggle ?? true ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
       </div>
       ${issueActions(copy, board, issue)}
     </header>
-    <div class="detail-scroll">${issueBody(copy, board, issue)}</div>`;
+    <div class="detail-scroll">${issueBody(copy, board, issue, options.dependencyGraph ?? true)}</div>`;
 }
 
-function workspaceRailLabels(): { actions: string; issue: string; runs: string; emptyRuns: string } {
+export function workspaceRailLabels(): { actions: string; issue: string; runs: string; emptyRuns: string } {
   return effectiveClientLanguage() === "zh-CN"
     ? { actions: "认领与操作", issue: "Issue 正文", runs: "运行记录", emptyRuns: "还没有运行记录" }
     : { actions: "Claim and actions", issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
 }
 
-function workspaceRunHistory(copy: ShellCopy, runs: RunSummary[]): string {
+export function workspaceRunHistory(copy: ShellCopy, runs: RunSummary[]): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
@@ -526,7 +548,7 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
   return `<aside class="issue-detail fixed-right-rail workspace-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
     ${section("actions", labels.actions, `<div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>${issueActions(copy, board, issue)}`)}
-    ${section("issue", labels.issue, issueBody(copy, board, issue), "detail-scroll")}
+    ${section("issue", labels.issue, issueBody(copy, board, issue, true), "detail-scroll")}
     ${section("runs", labels.runs, workspaceRunHistory(copy, runs))}
   </aside>`;
 }

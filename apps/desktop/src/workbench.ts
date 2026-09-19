@@ -165,7 +165,7 @@ export function fixedPanelResizeHandle(region: FixedPanelRegion): string {
 export function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
   return `<aside class="issue-detail fixed-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
-    ${issueDetail(copy, board, false)}
+    ${issueDetail(copy, board, { panelToggle: false })}
   </aside>`;
 }
 

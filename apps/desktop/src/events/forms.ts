@@ -3,6 +3,7 @@ import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRela
 import { CUSTOM_VALUE, launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { render } from "../render/app";
+import { restoreDialogTrigger } from "../components/dialog-controller";
 import { toLocalInput } from "../client-utils";
 import { ui } from "../ui";
 
@@ -171,6 +172,10 @@ ui.app.addEventListener("submit", async (event) => {
     if (success) {
       ui.issueSearchDraft = null;
       ui.keyboardCursorIssueId = "";
+      if (ui.mobileSearchOpen) {
+        ui.mobileSearchOpen = false;
+        restoreDialogTrigger("mobile-search");
+      }
       render();
     }
     return;

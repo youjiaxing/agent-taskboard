@@ -32,7 +32,8 @@ for (const page of [desktop, web, mobile]) {
     if (message.type() === "error") console.error("console", message.text());
   });
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".project-board");
+  // The 390px Client renders the mobile board composition, not the desktop board.
+  await page.waitForSelector(page === mobile ? ".mobile-board-view" : ".project-board");
 }
 
 const clientIds = await Promise.all(
@@ -92,11 +93,11 @@ await web.click('[data-act="focus-issue"][data-id="you/notes#1"]');
 await enterIssueFocusWorkspace(web, "notes issue");
 await leaveFocusWorkspace(web);
 
-await mobile.click('button[data-act="mobile-scope"]');
-await mobile.waitForSelector(".mobile-scope-sheet");
+await mobile.click('button[data-act="mobile-drawer"]');
+await mobile.waitForSelector("[data-dialog-id='mobile-drawer']");
 const mobileFocusStarted = Date.now();
-await mobile.click(`.mobile-scope-sheet button[data-act="focus-project"][data-id="${gardenProjectId}"]`);
-await mobile.waitForSelector('.project-heading h1:has-text("garden")', { timeout: 500 });
+await mobile.click(`[data-dialog-id='mobile-drawer'] button[data-act="focus-project"][data-id="${gardenProjectId}"]`);
+await mobile.waitForSelector('[data-current-identity]:has-text("garden")', { timeout: 500 });
 const mobileFocusElapsed = Date.now() - mobileFocusStarted;
 if (mobileFocusElapsed >= 500) {
   throw new Error(`mobile Project focus waited ${mobileFocusElapsed}ms for the slow Tracker`);

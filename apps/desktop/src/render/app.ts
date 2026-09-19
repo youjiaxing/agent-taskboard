@@ -6,18 +6,17 @@ import {
   APPEARANCE_DISPLAY_ORDER,
   APPEARANCE_PREFERENCES,
   browserClient,
+  currentProject,
   ensureBrowserAppearance,
   focusedRun,
   mobileClient,
   workspaceRun,
-  mobileMain,
-  mobileNavigation,
-  mobileScopeSheet,
   resolveTheme,
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
 import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage } from "./shell";
+import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileSearchDialog } from "./mobile";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
 import { applyClientPanelWidths, fixedPanelResizeHandle } from "../workbench";
@@ -67,7 +66,7 @@ export function render(): void {
   const browserAppearance = browserClient() ? ensureBrowserAppearance() : null;
   const appearance = {
     ...snap.appearance,
-    language: isMobile && browserAppearance ? browserAppearance.language : snap.appearance.language,
+    language: browserAppearance ? browserAppearance.language : snap.appearance.language,
     appearancePreference: browserAppearance?.appearancePreference ?? snap.appearance.appearancePreference,
     appearancePreferences: browserAppearance ? APPEARANCE_PREFERENCES : snap.appearance.appearancePreferences,
   };
@@ -97,7 +96,9 @@ export function render(): void {
         ? copy.usage
         : ui.clientView.page === "focus-workspace"
           ? selectedIssue?.title ?? focusedRun(snap)?.agentName ?? copy.appName
-          : host?.displayName ?? copy.appName;
+          : isMobile
+            ? currentProject(snap)?.name ?? host?.displayName ?? copy.appName
+            : host?.displayName ?? copy.appName;
   const showReturn = Boolean(ui.clientView.returnPoint && ui.clientView.page !== ui.clientView.returnPoint.page);
   const previousDetailScrollNode = ui.app.querySelector<HTMLElement>(".detail-scroll");
   if (previousDetailScrollNode && ui.renderedDetailIssueId) {
@@ -170,7 +171,7 @@ export function render(): void {
       <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
         <div class="chrome-lead">
           ${isMobile
-            ? `<button type="button" class="chrome-icon" data-act="mobile-scope" aria-label="${escapeHtml(copy.mobileSwitchScope)}">☰</button>`
+            ? `<button type="button" class="chrome-icon" data-act="mobile-drawer" aria-label="${escapeHtml(copy.mobileSwitchScope)}" aria-haspopup="dialog" aria-expanded="${ui.mobileDrawerOpen}">☰</button>`
             : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>`}
         </div>
         <div class="chrome-main">
@@ -179,10 +180,10 @@ export function render(): void {
             <span class="chrome-title" data-current-identity>${escapeHtml(primaryIdentity)}</span>
           </div>
           <div class="chrome-trail" data-global-actions>
-            ${showIssueToggle
+            ${isMobile ? "" : `${showIssueToggle
               ? `<button type="button" class="chrome-icon ${inspectorOpen ? "active" : ""}" data-act="toggle-issue" data-global-action="right-rail" aria-label="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}" title="${escapeHtml(inspectorOpen ? copy.hideIssueDetail : copy.showIssueDetail)}">${issuePanelIcon(inspectorOpen)}</button>`
               : ""}
-            ${!isMobile && !runWindow && focusRun && ui.clientView.page === "focus-workspace"
+            ${!runWindow && focusRun && ui.clientView.page === "focus-workspace"
               ? `<button type="button" class="chrome-button ${ui.clientView.panels.rightSide === "changes" ? "active" : ""}" data-act="view-changes" data-id="${escapeHtml(focusRun.id)}" data-global-action="changes">${escapeHtml(copy.viewChanges)}</button>`
               : ""}
             <div class="appearance-menu-wrap">
@@ -210,7 +211,7 @@ export function render(): void {
                     actions: [{ id: "keyboard-help", label: copy.keyboardHelp }],
                   })
                 : ""}
-            </div>
+            </div>`}
           </div>
         </div>
       </header>
@@ -268,19 +269,21 @@ export function render(): void {
                   })}`
                 : ui.clientView.page === "usage"
                   ? usagePage(copy, snap)
-                  : isMobile
-                    ? mobileMain(copy, snap)
-                    : ui.clientView.page === "host-overview"
-                      ? hostOverviewPage(copy, snap)
+                  : ui.clientView.page === "host-overview"
+                    ? hostOverviewPage(copy, snap)
+                    : isMobile
+                      ? mobilePage(copy, localCopy, snap)
                       : ui.clientView.page === "focus-workspace"
                         ? focusWorkspaceView(copy, snap)
                         : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
           }
         </main>
       </div>
-      ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNavigation(copy, snap) : ""}
+      ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNav(copy, localCopy, snap) : ""}
+      ${isMobile ? mobileRunInput(copy, snap) : ""}
     </div>
-    ${isMobile && ui.mobileScopeOpen ? mobileScopeSheet(copy, snap) : ""}
+    ${isMobile && ui.mobileDrawerOpen ? mobileDrawer(copy, localCopy, snap) : ""}
+    ${isMobile && ui.mobileSearchOpen ? mobileSearchDialog(copy, localCopy, snap) : ""}
     ${ui.pairingOpen ? pairingDialog(copy, localCopy, snap) : ""}
     ${ui.formOpen ? projectForm(copy) : ""}
     ${snap.launchForm ? launchForm(copy, snap) : ""}
@@ -354,7 +357,9 @@ export function render(): void {
     }
   }
   const nextWorkspace = ui.app.querySelector<HTMLElement>(".workspace");
-  const nextMobileWorkspaceKey = isMobile ? `${snap.focusedProjectId}:${ui.mobileView}` : "";
+  const nextMobileWorkspaceKey = isMobile
+    ? `${snap.focusedProjectId}:${ui.clientView.page}:${ui.mobileWorkspaceSection}`
+    : "";
   const savedMobileWorkspaceScroll = ui.mobileWorkspaceScrollPositions.get(nextMobileWorkspaceKey);
   if (nextWorkspace && savedMobileWorkspaceScroll) {
     nextWorkspace.scrollTop = savedMobileWorkspaceScroll.scrollTop;

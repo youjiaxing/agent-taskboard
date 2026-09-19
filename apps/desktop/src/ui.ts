@@ -1,7 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { Terminal } from "@xterm/xterm";
-import type { MobileView } from "./mobile-renderers";
 import type {
   BoardScrollPosition,
   ChangeScope,
@@ -14,6 +13,7 @@ import type {
   LaunchDraft,
   LaunchEnvironmentState,
   BrowserAppearance,
+  MobileWorkspaceSection,
   SystemAppearance,
   ClientLocalViewState,
   PanelPointerInteraction,
@@ -105,7 +105,7 @@ export const ui = {
   projectOperation: null as "save" | "remove" | null,
   removeProject: null as Project | null,
   dangerConfirmation: null as
-    | { kind: "stop-run"; runId: string; returnToMobileBoard: boolean }
+    | { kind: "stop-run"; runId: string }
     | { kind: "revoke-client"; clientId: string; clientName: string }
     | null,
   confirmationError: "",
@@ -170,8 +170,10 @@ export const ui = {
   graphListQuery: "",
   overviewProjectId: "",
   overviewShowEnded: false,
-  mobileView: "board" as MobileView,
-  mobileScopeOpen: false,
+  mobileDrawerOpen: false,
+  mobileDrawerAppearanceOpen: false,
+  mobileSearchOpen: false,
+  mobileWorkspaceSection: "terminal" as MobileWorkspaceSection,
   mobileLiveTerminal: false,
   mobilePtyOffset: 0,
   mobilePtyRunId: "",

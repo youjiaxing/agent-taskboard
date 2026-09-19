@@ -1,9 +1,11 @@
 import {
+  browserClient,
   currentSystemAppearance,
   effectiveAppearancePreference,
   ensureBrowserAppearance,
-  focusedRun,
   loadBrowserAppearance,
+  mobileOutputKey,
+  mobileReadableRun,
   workspaceRun,
   mobileClient,
   viewportClass,
@@ -282,15 +284,15 @@ export function centerGraphViewport(canvas: HTMLElement, centerId: string): void
 
 export function renderStatusBarsOnly(): void {
   if (!ui.snapshot) return;
-  const language = mobileClient()
+  const language = browserClient()
     ? ensureBrowserAppearance().language
     : ui.snapshot.appearance.language;
   const copy = language !== ui.snapshot.appearance.language
     ? clientCopy(language, ui.snapshot.copy)
     : ui.snapshot.copy;
-  const current = ui.app?.querySelector<HTMLElement>(".project-board [data-page-toolbar] > .refresh-bar");
+  const current = ui.app?.querySelector<HTMLElement>("[data-page-toolbar] > .refresh-bar");
   if (current) current.outerHTML = refreshBar(copy, ui.snapshot.board);
-  const pending = ui.app?.querySelector<HTMLElement>('.project-board > .refresh-bar[data-kind="pending"]');
+  const pending = ui.app?.querySelector<HTMLElement>('.refresh-bar[data-kind="pending"]');
   if (pending) pending.outerHTML = pendingBar(copy, ui.snapshot);
 }
 
@@ -395,13 +397,10 @@ export function attachTerminal(snap: Snapshot): void {
 }
 
 export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
-  const run = ui.mobileView === "run" ? focusedRun(snap) : undefined;
+  const run = mobileReadableRun(snap);
   const hostId = snap.focusedHostId;
-  const outputKey = JSON.stringify([hostId, run?.id]);
-  if (!run || run.status === "ended" || ui.mobileLiveTerminal) {
-    if (run?.status === "ended" && run.recentOutput) {
-      ui.mobilePtyText.set(outputKey, run.recentOutput);
-    }
+  const outputKey = mobileOutputKey(hostId, run?.id ?? "");
+  if (!run) {
     ui.mobilePtyPumping = false;
     return;
   }
@@ -413,19 +412,13 @@ export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
   ui.mobilePtyPumping = true;
   const runId = run.id;
   try {
-    while (
-      mobileClient()
-      && ui.mobileView === "run"
-      && !ui.mobileLiveTerminal
-      && ui.snapshot?.focusedHostId === hostId
-      && ui.snapshot?.focusedRunId === runId
-    ) {
+    while (ui.snapshot && mobileReadableRun(ui.snapshot)?.id === runId && ui.snapshot.focusedHostId === hostId) {
       const response = await fetch(
         `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.mobilePtyOffset}`,
       );
       if (!response.ok) break;
       const json = (await response.json()) as { offset: number; recentOutput?: string; exited: number | null };
-      if (ui.mobilePtyRunId !== outputKey || ui.snapshot?.focusedHostId !== hostId || ui.snapshot?.focusedRunId !== runId) break;
+      if (ui.mobilePtyRunId !== outputKey || ui.snapshot?.focusedHostId !== hostId || mobileReadableRun(ui.snapshot)?.id !== runId) break;
       if (typeof json.recentOutput === "string") {
         const recent = json.recentOutput;
         ui.mobilePtyText.set(outputKey, recent);
@@ -830,6 +823,10 @@ window.addEventListener("resize", () => {
   if (isMobile !== wasMobileClient) {
     wasMobileClient = isMobile;
     ui.mobileLiveTerminal = false;
+    ui.mobileDrawerOpen = false;
+    ui.mobileDrawerAppearanceOpen = false;
+    ui.mobileSearchOpen = false;
+    ui.mobileWorkspaceSection = "terminal";
     render();
   }
   ui.fitAddon?.fit();
