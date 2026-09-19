@@ -348,12 +348,6 @@ ui.app.addEventListener("change", async (event) => {
     ui.overviewShowEnded = (target as HTMLInputElement).checked;
     render();
   }
-  if (target.getAttribute("data-field") === "closedContext" && "checked" in target) {
-    await rpc("setShowClosedGraphContext", {
-      show: (target as HTMLInputElement).checked,
-    });
-    render();
-  }
   if (target.getAttribute("data-field") === "commandPreview" && "checked" in target) {
     await rpc("setShowCommandPreview", {
       show: (target as HTMLInputElement).checked,
@@ -580,6 +574,12 @@ ui.app.addEventListener("submit", async (event) => {
   if (!form || !ui.snapshot) return;
   event.preventDefault();
   if (ui.projectOperation) return;
+  for (const input of form.querySelectorAll<HTMLInputElement>("input[data-field]")) {
+    const field = input.dataset.field;
+    if (field === "name" || field === "localPath" || field === "githubHost" || field === "repository") {
+      ui.formDraft = { ...ui.formDraft, [field]: input.value };
+    }
+  }
   supersedeProjectInference();
   ui.formError = "";
   ui.projectOperation = "save";

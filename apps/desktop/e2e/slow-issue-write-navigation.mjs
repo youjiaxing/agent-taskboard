@@ -25,6 +25,20 @@ await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".project-board");
 
 const issueSection = '.workspace-rail-section[data-workspace-section="issue"]';
+const waitForRpcResponse = (op, timeout) => page.waitForResponse((response) => {
+  try {
+    const request = response.request();
+    return request.method() === "POST" && request.postDataJSON()?.op === op;
+  } catch {
+    return false;
+  }
+}, { timeout });
+const clickCard = async (locator) => {
+  await locator.waitFor({ state: "visible" });
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("card is not visible");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+};
 const openRailSection = async (name) => {
   const section = page.locator(`.workspace-rail-section[data-workspace-section="${name}"]`);
   await section.waitFor({ state: "attached" });
@@ -32,16 +46,25 @@ const openRailSection = async (name) => {
 };
 const focusProject = async (projectId, expectedName) => {
   const started = Date.now();
+  const responsePromise = waitForRpcResponse("focusProject", navigationBudgetMs);
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
+  const response = await responsePromise;
+  if (!response.ok()) throw new Error(`focusProject failed: ${response.status()} ${await response.text()}`);
   await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: navigationBudgetMs });
   const elapsed = Date.now() - started;
   if (elapsed >= navigationBudgetMs) {
     throw new Error(`Project focus waited ${elapsed}ms for the slow Issue write`);
   }
 };
+const clickIssue = async (issueId, timeout) => {
+  const responsePromise = waitForRpcResponse("focusIssue", timeout);
+  await clickCard(page.locator(`[data-act="focus-issue"][data-id="${issueId}"]`));
+  const response = await responsePromise;
+  if (!response.ok()) throw new Error(`focusIssue failed: ${response.status()} ${await response.text()}`);
+};
 const focusIssue = async (issueId, expectedTitle, timeout) => {
   const started = Date.now();
-  await page.click(`[data-act="focus-issue"][data-id="${issueId}"]`);
+  await clickIssue(issueId, timeout);
   await page.waitForSelector(".focus-workspace-layout", { timeout });
   await page.waitForSelector("[data-terminal-surface]", { timeout });
   await page.waitForFunction(
@@ -53,9 +76,7 @@ const focusIssue = async (issueId, expectedTitle, timeout) => {
 };
 
 await focusProject(gardenProjectId, "garden");
-await page.click('[data-act="focus-issue"][data-id="you/garden#1"]');
-await page.waitForSelector(".focus-workspace-layout");
-await page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "garden issue");
+await focusIssue("you/garden#1", "garden issue", 30_000);
 const gardenSections = await page.$$eval(".workspace-rail-section", (sections) =>
   sections.map((section) => section.dataset.workspaceSection),
 );
@@ -67,13 +88,7 @@ await openRailSection("actions");
 await page.click('button[data-act="edit-issue"]');
 await page.fill("#issue-edit-title", "garden issue after slow write");
 
-const updateResponsePromise = page.waitForResponse((response) => {
-  try {
-    return response.request().postDataJSON()?.op === "updateIssue";
-  } catch {
-    return false;
-  }
-});
+const updateResponsePromise = waitForRpcResponse("updateIssue", 30_000);
 await page.click('form[data-act="issue-edit"] button[type="submit"]');
 await page.waitForSelector('form[data-act="issue-edit"][aria-busy="true"]');
 

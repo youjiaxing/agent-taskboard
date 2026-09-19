@@ -7,7 +7,7 @@ import { ui } from "../ui";
 import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, mobileOutputKey, workspaceRun } from "../view-helpers";
 import { boardLanes, boardUnavailable, issueDetail, issueSearch, refreshBar, workspaceRailLabels, workspaceRunHistory } from "./board";
 import { loopbackNotice } from "./run";
-import { emptyTerminalSurface, injectRunForm, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
+import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
 import { button, optionGroup } from "../components/primitives";
 import { dialog, dialogDismissButton, drawer } from "../components/dialog";
 import type { IssueLaneState } from "../components/issue";
@@ -38,7 +38,7 @@ export function mobileDrawer(copy: ShellCopy, localCopy: StartupCopy, snap: Snap
     .join("");
   const projects = snap.projects
     .map((project) => `<div class="mobile-project-row ${project.id === snap.focusedProjectId ? "active" : ""}">
-      <button type="button" class="mobile-row" data-act="focus-project" data-id="${escapeHtml(project.id)}"><span class="mobile-row-label"><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span></button>
+      <button type="button" class="mobile-row" data-act="focus-project" data-id="${escapeHtml(project.id)}"><span class="mobile-row-label"><b>${escapeHtml(project.name)}</b><small>${escapeHtml(projectTrackerIdentity(project, localCopy.localMarkdownTracker))}</small></span></button>
       <button type="button" class="mobile-row-action" data-act="edit-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.editProject)}</button>
       <button type="button" class="mobile-row-action danger" data-act="remove-project" data-id="${escapeHtml(project.id)}">${escapeHtml(copy.removeProject)}</button>
     </div>`)
@@ -147,7 +147,7 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   const issueRuns = issue ? (snap.runs ?? []).filter((candidate) => candidate.issueId === issue.id) : [];
   const panel = section === "issue"
     ? issue
-      ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { panelToggle: false, dependencyGraph: false })}</aside>`
+      ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { dependencyGraph: false })}</aside>`
       : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`
     : section === "runs"
       ? (issue ? workspaceRunHistory(copy, issueRuns) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)

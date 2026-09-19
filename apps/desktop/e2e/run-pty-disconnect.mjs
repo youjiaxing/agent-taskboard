@@ -11,6 +11,15 @@ if (!issueBeforeLaunch || issueBeforeLaunch.claimedBy.length !== 0 || beforeLaun
   throw new Error(`the visible execution entry must start without a claim or Run: ${JSON.stringify({ issueBeforeLaunch, runs: beforeLaunch.runs })}`);
 }
 
+let releasePtyRead = () => {};
+const ptyReadGate = new Promise((resolve) => {
+  releasePtyRead = resolve;
+});
+await page.route("**/runs/*/output*", async (route) => {
+  await ptyReadGate;
+  await route.continue();
+});
+
 const issue = page.locator('[data-lane="frontier"] .issue-card', { hasText: "PTY disconnect issue" }).first();
 await issue.locator('button[data-act="execute-run"]').click();
 await page.waitForSelector(".launch-sheet");
@@ -27,6 +36,7 @@ const started = await hostSnapshot(page, url);
 const startedRun = started.runs.find((run) => run.issueId === "you/disconnect#1");
 const firstRunId = startedRun?.id;
 if (!firstRunId) throw new Error(`the UI-created Run must be observable after launch: ${JSON.stringify(started.runs)}`);
+releasePtyRead();
 
 // CI runners can briefly starve the Host tick loop while Chromium is painting
 // the shell. Keep the semantic assertion the same, but allow a bounded 30s

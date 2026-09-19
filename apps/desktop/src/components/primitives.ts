@@ -190,7 +190,7 @@ export function checkbox(options: {
   attributes?: Record<string, AttributeValue>;
   className?: string;
 }): string {
-  return `<label class="ui-checkbox graph-opt ${escapeHtml(options.className ?? "")}">
+  return `<label class="ui-checkbox ${escapeHtml(options.className ?? "")}">
     <input${htmlAttributes({ type: "checkbox", checked: options.checked, disabled: options.disabled, ...(options.attributes ?? {}) })} />
     <span>${escapeHtml(options.label)}</span>
   </label>`;

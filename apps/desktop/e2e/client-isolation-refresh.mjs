@@ -45,9 +45,21 @@ if (clientIds.some((id) => !id) || new Set(clientIds).size !== clientIds.length)
   throw new Error(`real Client tabs need distinct identities, got ${JSON.stringify(clientIds)}`);
 }
 
+const waitForRpcResponse = (page, op, timeout) => page.waitForResponse((response) => {
+  try {
+    const request = response.request();
+    return request.method() === "POST" && request.postDataJSON()?.op === op;
+  } catch {
+    return false;
+  }
+}, { timeout });
+
 const focusProject = async (page, projectId, expectedName) => {
   const started = Date.now();
+  const responsePromise = waitForRpcResponse(page, "focusProject", 500);
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
+  const response = await responsePromise;
+  if (!response.ok()) throw new Error(`focusProject failed: ${response.status()} ${await response.text()}`);
   await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`);
   const elapsed = Date.now() - started;
   if (elapsed >= 500) {
@@ -96,7 +108,12 @@ await leaveFocusWorkspace(web);
 await mobile.click('button[data-act="mobile-drawer"]');
 await mobile.waitForSelector("[data-dialog-id='mobile-drawer']");
 const mobileFocusStarted = Date.now();
+const mobileFocusResponsePromise = waitForRpcResponse(mobile, "focusProject", 500);
 await mobile.click(`[data-dialog-id='mobile-drawer'] button[data-act="focus-project"][data-id="${gardenProjectId}"]`);
+const mobileFocusResponse = await mobileFocusResponsePromise;
+if (!mobileFocusResponse.ok()) {
+  throw new Error(`mobile focusProject failed: ${mobileFocusResponse.status()} ${await mobileFocusResponse.text()}`);
+}
 await mobile.waitForSelector('[data-current-identity]:has-text("garden")', { timeout: 500 });
 const mobileFocusElapsed = Date.now() - mobileFocusStarted;
 if (mobileFocusElapsed >= 500) {
@@ -125,12 +142,20 @@ if (
 
 await desktop.click('button[data-act="center-view"][data-id="board"]');
 await desktop.waitForSelector(".lanes");
-await desktop.addStyleTag({ content: '[data-lane="frontier"] { max-height: 120px; }' });
-const scrollBefore = await desktop.$eval('[data-lane="frontier"]', (node) => {
+await desktop.addStyleTag({ content: '[data-lane="frontier"] { height: 120px; min-height: 0; }' });
+const scrollFixture = await desktop.$eval('[data-lane="frontier"]', (node) => {
   node.scrollTop = node.scrollHeight;
-  return node.scrollTop;
+  return {
+    scrollTop: node.scrollTop,
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+    cards: node.querySelectorAll(".issue-card").length,
+  };
 });
-if (scrollBefore <= 0) throw new Error("slow-refresh regression needs a scrollable board lane");
+if (scrollFixture.scrollTop <= 0) {
+  throw new Error(`slow-refresh regression needs a scrollable board lane: ${JSON.stringify(scrollFixture)}`);
+}
+const scrollBefore = scrollFixture.scrollTop;
 
 await desktop.click('button[data-act="new-issue"]');
 await desktop.fill("#issue-create-title", "draft survives slow refresh");

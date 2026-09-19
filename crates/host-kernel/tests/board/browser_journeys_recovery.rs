@@ -394,6 +394,56 @@ fn browser_registers_the_first_project_from_an_empty_host_and_retries_failures()
 }
 
 #[test]
+fn browser_registers_local_markdown_and_self_hosted_github_projects_through_the_form() {
+    let tmp = tempfile::tempdir().unwrap();
+    let local = make_dir(tmp.path(), "work/local-tracker");
+    let remote = make_dir(tmp.path(), "work/enterprise-project");
+    let fallback = make_dir(tmp.path(), "work/fallback-project");
+    for (dir, number, title) in [(&local, 1, "local issue"), (&fallback, 2, "fallback issue")] {
+        let issue_dir = dir.join(".scratch/feature/issues");
+        std::fs::create_dir_all(&issue_dir).unwrap();
+        std::fs::write(
+            issue_dir.join(format!("{number:02}-issue.md")),
+            format!("# {number} — {title}\n\nStatus: ready-for-agent\n\nBlocked by: None\n"),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir(remote.join(".git")).unwrap();
+    std::fs::write(
+        remote.join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.enterprise.example.com/acme/garden.git\n",
+    )
+    .unwrap();
+
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(IssueRecord::open(
+        "acme/garden",
+        3,
+        "self-hosted issue",
+    ));
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(TrackerRouter::new(Arc::clone(&tracker) as _)) as _,
+            agents: vec![Arc::new(host_kernel::MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(host_kernel::MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: host_kernel::MemorySessionFactory::new() as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    run_browser_e2e(
+        host,
+        "project-tracker-lifecycle.mjs",
+        &[
+            ("LOCAL_PROJECT_DIR", local.as_path()),
+            ("REMOTE_PROJECT_DIR", remote.as_path()),
+            ("FALLBACK_PROJECT_DIR", fallback.as_path()),
+        ],
+    );
+}
+
+#[test]
 fn browser_covers_local_markdown_issue_111_write_forms() {
     let tmp = tempfile::tempdir().unwrap();
     let local = make_dir(tmp.path(), "work/issue-111-ui");

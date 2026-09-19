@@ -21,6 +21,7 @@ export type StartupCopy = {
   mobileWorkspace: string;
   mobileNav: string;
   mobileHistory: string;
+  localMarkdownTracker: string;
   rereadLaunchEnvironment: string;
   launchEnvironmentIdle: string;
   launchEnvironmentReady: string;
@@ -63,6 +64,7 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     mobileWorkspace: "专注工作区",
     mobileNav: "手机一级视图",
     mobileHistory: "历史",
+    localMarkdownTracker: "本地 Markdown",
     rereadLaunchEnvironment: "重新读取启动环境",
     launchEnvironmentIdle: "尚未手动重新读取。",
     launchEnvironmentReady: "启动环境已更新；之后的 Agent 探测和 Run 会使用新环境。",
@@ -110,6 +112,7 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     mobileWorkspace: "Focus workspace",
     mobileNav: "Mobile primary views",
     mobileHistory: "History",
+    localMarkdownTracker: "Local Markdown",
     rereadLaunchEnvironment: "Reread launch environment",
     launchEnvironmentIdle: "The launch environment has not been manually reread yet.",
     launchEnvironmentReady: "The launch environment was updated. Later Agent probes and Runs use the new environment.",

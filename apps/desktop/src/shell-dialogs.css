@@ -95,7 +95,7 @@
   accent-color: var(--color-accent);
 }
 
-.dialog-panel .graph-opt {
+.dialog-panel .ui-checkbox {
   display: flex;
   align-items: center;
   gap: var(--space-8);

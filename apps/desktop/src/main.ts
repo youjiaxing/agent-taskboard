@@ -9,6 +9,7 @@ import {
   workspaceRun,
   mobileClient,
   viewportClass,
+  clientCopy,
 } from "./view-helpers";
 import { loadSelectedIssueDocument, loadViewChanges, protocolBase, rpc, rpcDetached } from "./rpc";
 import { FitAddon } from "@xterm/addon-fit";
@@ -56,10 +57,8 @@ import {
   render,
 } from "./render/app";
 import type {
-  Language,
   ShellCopy,
   Project,
-  DependencyGraph,
   BoardSnapshot,
   Snapshot,
   NotificationKind,
@@ -68,13 +67,6 @@ import type {
 } from "./protocol";
 
 ui.browserAppearance = loadBrowserAppearance();
-export function resetGraphUiState(): void {
-  ui.graphCanvasLimit = 48;
-  ui.graphListLimit = 50;
-  ui.graphListQuery = "";
-}
-
-
 
 export function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
   if (kind === "waiting") return copy.notifyWaiting;
@@ -164,10 +156,6 @@ export function emptyActionLabel(copy: ShellCopy, action: Snapshot["emptyActions
     : copy.pairAnotherHost;
 }
 
-export function clientCopy(language: Language, fallback: ShellCopy): ShellCopy {
-  return ui.snapshot?.copyCatalog?.[language] ?? fallback;
-}
-
 export function captureActiveField(): {
   selector: string;
   start: number | null;
@@ -220,15 +208,6 @@ export function restoreActiveField(field: {
 export function dependencyGraphRenderKey(board: BoardSnapshot | null | undefined): string {
   if (!board?.graph) return "";
   return JSON.stringify([board.graph, ui.graphCanvasLimit]);
-}
-
-export function completeDependencyGraphLabel(copy: ShellCopy, graph: DependencyGraph): string {
-  if (typeof graph.closedCount === "number") {
-    return copy.showClosedContext.replace("{count}", String(graph.closedCount));
-  }
-  return copy.showClosedContext
-    .replace(/\s*（[^）]*\{count\}[^）]*）/, "")
-    .replace(/\s*\([^)]*\{count\}[^)]*\)/, "");
 }
 
 export function paintGraphEdges(): void {
@@ -416,7 +395,11 @@ export async function pumpMobileOutput(snap: Snapshot): Promise<void> {
       const response = await fetch(
         `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.mobilePtyOffset}`,
       );
-      if (!response.ok) break;
+      if (!response.ok) {
+        await rpc("snapshot");
+        render();
+        break;
+      }
       const json = (await response.json()) as { offset: number; recentOutput?: string; exited: number | null };
       if (ui.mobilePtyRunId !== outputKey || ui.snapshot?.focusedHostId !== hostId || mobileReadableRun(ui.snapshot)?.id !== runId) break;
       if (typeof json.recentOutput === "string") {
@@ -475,27 +458,30 @@ export async function pumpPty(): Promise<void> {
       const response = await fetch(
         `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.ptyOffset}`,
       );
-      if (response.ok) {
-        const json = (await response.json()) as {
-          offset: number;
-          data: string;
-          exited: number | null;
-        };
-        if (ui.ptyRunId !== runId || ui.snapshot?.focusedRunId !== runId) {
-          break;
-        }
-        if (json.data) {
-          const raw = atob(json.data);
-          const bytes = new Uint8Array(raw.length);
-          for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-          ui.term?.write(bytes);
-        }
-        ui.ptyOffset = json.offset;
-        if (json.exited != null) {
-          await rpc("snapshot");
-          render();
-          break;
-        }
+      if (!response.ok) {
+        await rpc("snapshot");
+        render();
+        break;
+      }
+      const json = (await response.json()) as {
+        offset: number;
+        data: string;
+        exited: number | null;
+      };
+      if (ui.ptyRunId !== runId || ui.snapshot?.focusedRunId !== runId) {
+        break;
+      }
+      if (json.data) {
+        const raw = atob(json.data);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+        ui.term?.write(bytes);
+      }
+      ui.ptyOffset = json.offset;
+      if (json.exited != null) {
+        await rpc("snapshot");
+        render();
+        break;
       }
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 400));
