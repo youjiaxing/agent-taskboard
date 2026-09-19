@@ -1,4 +1,4 @@
-import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
 
 export async function runDesktopBoardShell(session) {
 try {
@@ -388,14 +388,17 @@ if (await session.page.$(".board-hint") || await session.page.$('[data-lane="rec
 }
 const recentHierarchy = await session.page.$eval('[data-lane="recentlyCompleted"] .issue-card', (node) => {
   const title = node.querySelector(".issue-title");
+  const root = getComputedStyle(document.documentElement);
   return {
     opacity: Number.parseFloat(getComputedStyle(node).opacity),
+    titleColor: title ? getComputedStyle(title).color : "",
+    secondaryColor: root.getPropertyValue("--color-text-secondary").trim(),
     decoration: title ? getComputedStyle(title).textDecorationLine : "",
     actionable: Boolean(node.querySelector("button:not([disabled])")),
   };
 });
-if (recentHierarchy.opacity > 0.65 || !recentHierarchy.decoration.includes("line-through") || !recentHierarchy.actionable) {
-  throw new Error(`recently completed Issues should be visibly subdued but actionable: ${JSON.stringify(recentHierarchy)}`);
+if (recentHierarchy.opacity !== 1 || recentHierarchy.titleColor !== "rgb(86, 87, 91)" || recentHierarchy.secondaryColor !== "#56575b" || !recentHierarchy.decoration.includes("line-through") || !recentHierarchy.actionable) {
+  throw new Error(`recently completed Issues should stay readable, visibly subdued and actionable: ${JSON.stringify(recentHierarchy)}`);
 }
 
 const dailyShellGeometry = await session.page.evaluate(() => {
@@ -456,6 +459,14 @@ if (shellControlOwnership.topLevelSwitches !== 0 || shellControlOwnership.toolba
 }
 if (shellControlOwnership.topProjectName === "garden") {
   throw new Error("the global identity must not duplicate the Project name from the content toolbar");
+}
+await session.page.focus('[data-global-actions] [data-global-action="right-rail"]');
+for (const expected of expectedGlobalOrder.slice(1)) {
+  await session.page.keyboard.press("Tab");
+  const focusedAction = await session.page.evaluate(() => document.activeElement?.getAttribute("data-global-action"));
+  if (focusedAction !== expected) {
+    throw new Error(`global actions must follow their visual keyboard order, expected ${expected}, got ${focusedAction}`);
+  }
 }
 await session.page.click('.chrome button[data-act="more-menu"]');
 await session.page.waitForSelector('.more-menu button[data-act="keyboard-help"]');
@@ -553,9 +564,13 @@ const initialStructure = await shellStructure();
 if ((await session.page.getAttribute("html", "data-theme")) !== "light") {
   throw new Error("a new browser Client should resolve system appearance to the current light color scheme");
 }
+await session.assertVisual("desktop-main-light.png");
+await assertNecessaryTextContrast(session.page, "light desktop board");
 await session.page.emulateMedia({ colorScheme: "dark" });
 await session.page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
 await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.dark[index]])), "dark theme");
+await session.assertVisual("desktop-main-dark.png");
+await assertNecessaryTextContrast(session.page, "dark desktop board");
 await session.page.click("button[data-act='appearance-menu']");
 const appearanceLabels = await session.page.$$eval(".appearance-menu [role='menuitemradio']", (nodes) =>
   nodes.map((node) => node.textContent?.trim()),
@@ -566,12 +581,16 @@ if (appearanceLabels.join("|") !== "暖纸|素纸|素纸夜间|跟随系统") {
 if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "warm") {
   throw new Error("opening the appearance menu should focus its first choice");
 }
+await session.assertVisual("appearance-menu.png");
+await assertNecessaryTextContrast(session.page, "appearance menu");
 await session.page.keyboard.press("ArrowDown");
 if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "light") {
   throw new Error("appearance menu arrow navigation should move between choices");
 }
 const focusRing = await session.page.evaluate(() => getComputedStyle(document.activeElement).boxShadow);
-if (!focusRing || focusRing === "none") throw new Error("keyboard-focused appearance choices need the shared focus ring");
+if (!focusRing || focusRing === "none" || !/0px 0px 0px 3px/.test(focusRing)) {
+  throw new Error(`keyboard-focused appearance choices need the shared 3px focus ring, got ${focusRing}`);
+}
 await session.page.keyboard.press("Escape");
 if (await session.page.$(".appearance-menu")) throw new Error("Escape should close the appearance menu");
 await session.page.click("button[data-act='appearance-menu']");
@@ -611,10 +630,12 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
       throw new Error(`settings page should retain all agreed sections: ${JSON.stringify(settingsSections)}`);
     }
   }
-  if (await session.page.$(".overlay[data-act='close-settings']")) {
-    throw new Error("settings must be a primary page, not an overlay");
-  }
   await session.page.click(`.settings-page button[data-act='appearance'][data-id='${appearancePreference}']`);
+  if (appearancePreference === "light") {
+    await session.page.waitForFunction(() => document.documentElement.dataset.theme === "light");
+    await session.assertVisual("settings-appearance.png");
+    await assertNecessaryTextContrast(session.page, "appearance settings");
+  }
   await session.page.click("button[data-act='return-page']");
   await session.page.waitForSelector(".lanes");
   if (session.page.url() !== stableAddress) throw new Error("internal page navigation must keep the browser address stable");
@@ -627,6 +648,7 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
     Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens[expectedTheme][index]])),
     `${appearancePreference} appearance`,
   );
+  await assertNecessaryTextContrast(session.page, `${appearancePreference} desktop board`);
   const themedStructure = await shellStructure();
   if (JSON.stringify(themedStructure) !== JSON.stringify(initialStructure)) {
     throw new Error(`appearance ${appearancePreference} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);

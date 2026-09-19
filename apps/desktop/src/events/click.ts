@@ -263,7 +263,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "return-page" || act === "close-settings") {
+  if (act === "return-page") {
     await returnToPreviousPage();
     return;
   }
@@ -709,12 +709,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (ui.changesView?.runId !== target.dataset.id) ui.changesView = null;
     render();
     await loadViewChanges(target.dataset.id, ui.changesScope);
-    render();
-    return;
-  }
-  if (act === "close-changes") {
-    ui.clientView.panels.rightSide = "rail";
-    saveClientPanelState();
     render();
     return;
   }

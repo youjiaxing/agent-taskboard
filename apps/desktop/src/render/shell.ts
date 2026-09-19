@@ -19,13 +19,19 @@ export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, 
   </div>`;
 }
 
+export function projectTrackerIdentity(project: Project, localMarkdownLabel: string): string {
+  return project.tracker === "local-markdown"
+    ? localMarkdownLabel
+    : `${project.githubHost}/${project.repository}`;
+}
+
 export function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
   const active = project.id === focusedId;
   const degraded = project.connection.status !== "ready";
   return `<div class="project-row ${active ? "active" : ""}">
     <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
       <b>${escapeHtml(project.name)}</b>
-      <span>${escapeHtml(project.githubHost)}/${escapeHtml(project.repository)}</span>
+      <span>${escapeHtml(projectTrackerIdentity(project, startupCopy(effectiveClientLanguage()).localMarkdownTracker))}</span>
     </button>
     ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
     <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
@@ -522,9 +528,6 @@ export function viewChangesPanel(copy: ShellCopy): string {
                 .map((repo) => changeRepoBlock(copy, view, repo))
                 .join("")
       }
-      <div class="actions">
-        <button type="button" data-act="close-changes">${escapeHtml(copy.cancel)}</button>
-      </div>
     </div>
   </aside>`;
 }

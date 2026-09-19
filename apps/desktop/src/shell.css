@@ -36,6 +36,7 @@
   --color-info: #1d5db8;
   --color-info-surface: #eaf2ff;
   --color-overlay: rgb(0 0 0 / 48%);
+  --color-qr-canvas: #ffffff;
 
   /* §5.1 Embedded Terminal — fixed dark palette shared by the CSS container
      and the xterm constructor (INV-11); never re-resolved per shell theme. */
@@ -68,6 +69,11 @@
   --line-height-3xl: 32px;
   --letter-spacing-heading: -0.01em;
   --letter-spacing-body: 0;
+  --prose-heading-margin: 1.35em 0 .55em;
+  --prose-block-margin: .7em 0;
+  --prose-list-indent: 1.5em;
+  --prose-list-item-gap: .25em;
+  --prose-code-padding: .1em .35em;
 
   /* §5.2 spacing */
   --space-0: 0;
@@ -83,6 +89,7 @@
   --space-32: 32px;
   --space-40: 40px;
   --space-48: 48px;
+  --a11y-hidden-offset: -1px;
 
   /* §5.2 radii */
   --radius-xs: 4px;
@@ -234,7 +241,7 @@ button.primary {
 
 button.ghost { background: transparent; }
 
-button.active { background: var(--color-selection); border-color: var(--color-accent); color: var(--color-accent); }
+button.active { background: var(--color-selection); border-color: var(--color-accent); color: var(--color-text); }
 
 button:disabled { opacity: .45; cursor: default; }
 
@@ -528,7 +535,7 @@ button.danger.primary {
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: var(--a11y-hidden-offset);
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
@@ -639,7 +646,7 @@ button.danger.primary {
 
 .folded summary { cursor: pointer; color: var(--color-text-secondary); font-size: var(--font-size-md); }
 
-.isolation-off { margin: var(--space-4) 0; opacity: .7; }
+.isolation-off { margin: var(--space-4) 0; color: var(--color-text-secondary); }
 
 .isolation-why { margin: 0 0 var(--space-8); color: var(--color-text-secondary); font-size: var(--font-size-md); }
 
@@ -904,7 +911,7 @@ button.danger.primary {
   height: 128px;
   padding: var(--space-6);
   /* QR keeps its intrinsic colors (spec §5.1). */
-  background: #fff;
+  background: var(--color-qr-canvas);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
 }

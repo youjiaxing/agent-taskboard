@@ -148,7 +148,7 @@ await page.waitForSelector(".changes-sheet .change-note:has-text('check this lin
 if (failure.requests !== 2) throw new Error(`change-note retry should issue one new request: ${failure.requests}`);
 rpcFailure = null;
 await capture("issue-100-view-changes-1280x840.png");
-await page.click("button[data-act='close-changes']");
+await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector('.workspace-rail-section[data-workspace-section="runs"]');
 const restoredWorkspaceState = await page.evaluate(() => ({
   sameHost: window.__FOCUS_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"),
@@ -229,7 +229,7 @@ const missingIsolationChanges = await page.$eval(".changes-sheet .notice.bad", (
 if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationChanges.includes("Project 主目录")) {
   throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
 }
-await page.click("button[data-act='close-changes']");
+await page.click(".chrome button[data-act='view-changes']");
 await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='continue-run']");
 await page.waitForSelector(".lifted-terminal .pty-slot");

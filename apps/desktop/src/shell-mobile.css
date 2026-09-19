@@ -150,7 +150,7 @@
     text-align: left;
   }
   .mobile-row.active { background: var(--color-selection); }
-  .mobile-row-label { display: grid; gap: 2px; min-width: 0; flex: 1; }
+  .mobile-row-label { display: grid; gap: var(--space-2); min-width: 0; flex: 1; }
   .mobile-row-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
   .mobile-project-row {
     display: grid;
@@ -179,7 +179,7 @@
 @media (min-width: 640px) {
   .mobile-nav, .mobile-drawer, .mobile-board-view, .mobile-workspace-view { display: none; }
 }
-@media (max-width: 600px) {
+@media (max-width: 639.98px) {
   .lifted-run { grid-template-columns: 1fr; overflow: auto; }
   .lifted-terminal { min-height: 56vh; }
   .run-thumbnails { grid-template-columns: 1fr; }

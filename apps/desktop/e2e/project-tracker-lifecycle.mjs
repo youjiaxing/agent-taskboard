@@ -43,7 +43,7 @@ await page.click("form[data-form='project'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await projectRow("local-tracker").waitFor();
 await page.waitForSelector('.issue-card:has-text("local issue")');
-if (!(await projectRow("local-tracker").textContent()).includes("Local Markdown")) {
+if (!/本地 Markdown|Local Markdown/.test(await projectRow("local-tracker").textContent())) {
   throw new Error("Local Markdown registration should be visible in the Project row");
 }
 
@@ -64,23 +64,27 @@ await page.waitForFunction(() => !document.querySelector("form[data-form='projec
 await page.click("button[data-act='register']");
 await page.fill("#project-path", remoteProjectDir);
 await page.locator("#project-path").dispatchEvent("change");
+await page.waitForSelector("[data-inference='candidate']");
+await page.click("[data-inference='candidate'] button[data-act='apply-infer']");
 await page.waitForFunction(
   () =>
-    document.querySelector("#project-host")?.value === "gitlab.example.com" &&
-    document.querySelector("#project-repo")?.value === "acme/platform/garden",
+    document.querySelector("#project-host")?.value === "github.enterprise.example.com" &&
+    document.querySelector("#project-repo")?.value === "acme/garden",
 );
-await page.fill("#project-name", "gitlab-project");
+await page.fill("#project-name", "enterprise-project");
 await page.click("form[data-form='project'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
-await projectRow("gitlab-project").waitFor();
+await projectRow("enterprise-project").waitFor();
 await page.waitForSelector('.issue-card:has-text("self-hosted issue")');
-if (!(await projectRow("gitlab-project").textContent()).includes("gitlab.example.com/acme/platform/garden")) {
-  throw new Error("self-hosted Git remote registration should preserve its full namespace");
+if (!(await projectRow("enterprise-project").textContent()).includes("github.enterprise.example.com/acme/garden")) {
+  throw new Error("self-hosted GitHub remote registration should preserve its full namespace");
 }
 
 await page.click("button[data-act='register']");
 await page.fill("#project-path", fallbackProjectDir);
 await page.locator("#project-path").dispatchEvent("change");
+await page.waitForSelector("[data-inference='candidate']");
+await page.click("[data-inference='candidate'] button[data-act='apply-infer']");
 await page.waitForFunction(
   (expected) =>
     document.querySelector("#project-host")?.value === "local" &&
@@ -92,22 +96,22 @@ await page.click("form[data-form='project'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
 await projectRow("fallback-project").waitFor();
 
-let row = await openProjectMenu("gitlab-project");
+let row = await openProjectMenu("enterprise-project");
 await row.locator("button[data-act='edit-project']").click();
 await page.waitForSelector("form[data-form='project']");
-await page.fill("#project-name", "gitlab-renamed");
+await page.fill("#project-name", "enterprise-renamed");
 await page.click("form[data-form='project'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector("form[data-form='project']"));
-await projectRow("gitlab-renamed").waitFor();
+await projectRow("enterprise-renamed").waitFor();
 
-await page.locator(".side .project-main", { hasText: "gitlab-renamed" }).click();
-row = await openProjectMenu("gitlab-renamed");
+await page.locator(".side .project-main", { hasText: "enterprise-renamed" }).click();
+row = await openProjectMenu("enterprise-renamed");
 await row.locator("button[data-act='remove-project']").click();
 await page.waitForSelector("button[data-act='confirm-remove']");
 await page.click("button[data-act='confirm-remove']");
 await page.waitForFunction(() => !document.querySelector("[data-dialog-id='remove-project']"));
-if (await projectRow("gitlab-renamed").count()) {
-  throw new Error("removed self-hosted Project should leave the sidebar");
+if (await projectRow("enterprise-renamed").count()) {
+  throw new Error("removed self-hosted GitHub Project should leave the sidebar");
 }
 const heading = (await page.locator(".project-heading h1").textContent())?.trim();
 if (heading !== "fallback-project") {

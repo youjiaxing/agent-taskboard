@@ -557,13 +557,13 @@ export type GraphEdge = {
 export type DependencyGraph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  mode?: "overview" | "focused";
-  centerId?: string | null;
-  totalCount?: number;
-  complete?: boolean;
-  maxDistance?: number;
-  truncated?: boolean;
-  closedCount?: number;
+  mode: "overview" | "focused";
+  centerId: string | null;
+  totalCount: number;
+  complete: boolean;
+  maxDistance: number;
+  truncated: boolean;
+  closedCount: number;
 };
 
 export type CenterView = "board" | "graph";

@@ -1,4 +1,4 @@
-import { completeDependencyGraphLabel, connectionPanel, pendingBar } from "../main";
+import { connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
 import { currentProject, effectiveClientLanguage } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
@@ -187,7 +187,6 @@ export function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuse
     return `<div class="board-empty">${escapeHtml(copy.emptyNoData)}</div>`;
   }
   const overview = graph.mode === "overview";
-  const legacyGraph = graph.mode == null && graph.centerId == null;
   const canvasNodeLimit = overview ? graph.nodes.length : ui.graphCanvasLimit;
   const projectedNodes = [...graph.nodes]
     .sort((a, b) =>
@@ -204,7 +203,7 @@ export function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuse
   }
   const ranks = [...columns.keys()].sort((a, b) => a - b);
   const center = graph.nodes.find((node) => node.id === graph.centerId);
-  const totalCount = graph.totalCount ?? graph.nodes.length;
+  const totalCount = graph.totalCount;
   const centerLabel = copy.graphCenter.replace(
     "{issue}",
     center ? `#${center.number} ${center.title}` : graph.centerId ?? "—",
@@ -217,29 +216,24 @@ export function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuse
     .replace("{shown}", String(graph.nodes.length))
     .replace("{total}", String(totalCount));
   return `<div class="dep-graph">
-    ${legacyGraph
-      ? `<label class="graph-opt">
-          <input type="checkbox" data-field="closedContext" ${board.showClosedGraphContext ? "checked" : ""} />
-          ${escapeHtml(completeDependencyGraphLabel(copy, graph))}
-        </label>`
-      : `<div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
-          <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
-          <div class="actions">
-            ${overview
-              ? ""
-              : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
-                ${graph.complete
-                  ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
-                  : totalCount > graph.nodes.length
-                    ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
-                    : ""}`}
-          </div>
-        </div>
-        ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
-        ${projectedNodes.length < graph.nodes.length
-          ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
-          : ""}
-        ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}`}
+    <div class="graph-toolbar" data-graph-mode="${overview ? "overview" : "focused"}">
+      <span class="graph-center-label">${escapeHtml(overview ? copy.graphOverview : centerLabel)}</span>
+      <div class="actions">
+        ${overview
+          ? ""
+          : `<button type="button" data-act="graph-overview">${escapeHtml(copy.graphReturnOverview)}</button>
+            ${graph.complete
+              ? `<button type="button" data-act="graph-neighborhood">${escapeHtml(copy.graphShowNeighborhood)}</button>`
+              : totalCount > graph.nodes.length
+                ? `<button type="button" data-act="graph-complete">${escapeHtml(completeLabel)}</button>`
+                : ""}`}
+      </div>
+    </div>
+    ${graph.truncated ? `<div class="graph-limit graph-truncated">${escapeHtml(truncated)}</div>` : ""}
+    ${projectedNodes.length < graph.nodes.length
+      ? `<div class="graph-limit"><span>${escapeHtml(canvasLimit)}</span><button type="button" data-act="graph-more">${escapeHtml(copy.graphShowMore)}</button></div>`
+      : ""}
+    ${graph.edges.length === 0 ? `<div class="graph-empty-dependencies">${escapeHtml(copy.graphNoDependencies)}</div>` : ""}
     ${reuseCanvas
       ? `<div class="graph-canvas" data-preserve-graph-canvas></div>`
       : `<div class="graph-canvas">
@@ -254,7 +248,7 @@ export function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuse
                     copy,
                     node,
                     board.selected?.id,
-                    legacyGraph ? null : graph.centerId ?? null,
+                    graph.centerId,
                     overview,
                   ),
                 )
@@ -263,7 +257,7 @@ export function dependencyGraphView(copy: ShellCopy, board: BoardSnapshot, reuse
           .join("")}
       </div>
     </div>`}
-    ${!legacyGraph && graph.complete ? dependencyGraphIndex(copy, graph) : ""}
+    ${graph.complete ? dependencyGraphIndex(copy, graph) : ""}
   </div>`;
 }
 
@@ -388,7 +382,7 @@ function laneTags(copy: ShellCopy, issue: IssueCard): IssueDisplayTag[] {
   const activity = issueActivityLabel(copy, issue.activity);
   const tags: IssueDisplayTag[] = [];
   if (activity) {
-    tags.push({ label: activity, tone: activity === copy.executionStopped ? "danger" : "info" });
+    tags.push({ label: activity, tone: issue.activity === "execution-stopped" ? "danger" : "info" });
   }
   if (issue.triageRole) tags.push({ label: issue.triageRole });
   tags.push(...issueMetadataTags(issue.labels));
@@ -491,9 +485,8 @@ function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, sh
       : ""}`;
 }
 
-/** The page decides which inspector controls this Issue surface carries. */
+/** The page decides whether this Issue surface includes dependency controls. */
 export type IssueDetailOptions = {
-  panelToggle?: boolean;
   dependencyGraph?: boolean;
 };
 
@@ -503,7 +496,6 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: Issu
   return `<header class="detail-sticky">
       <div class="detail-title-row">
         <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
-        ${options.panelToggle ?? true ? `<button type="button" class="chrome-icon detail-panel-toggle" data-act="toggle-issue" aria-label="${escapeHtml(copy.hideIssueDetail)}" title="${escapeHtml(copy.hideIssueDetail)}">${issuePanelIcon(true)}</button>` : ""}
       </div>
       ${issueActions(copy, board, issue)}
     </header>

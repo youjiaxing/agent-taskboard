@@ -11,7 +11,17 @@ try {
     if (!(await section.evaluate((node) => node.open))) await section.locator("summary").click();
   };
   const focusProject = async (projectId) => {
+    const responsePromise = page.waitForResponse((response) => {
+      try {
+        const request = response.request();
+        return request.method() === "POST" && request.postDataJSON()?.op === "focusProject";
+      } catch {
+        return false;
+      }
+    });
     await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
+    const response = await responsePromise;
+    assert.equal(response.ok(), true, `focusProject failed with ${response.status()}`);
     const name = projectId === process.env.FIRST_PROJECT_ID ? "first" : "second";
     await page.waitForFunction((expected) => document.querySelector(".project-heading h1")?.textContent === expected, name);
   };

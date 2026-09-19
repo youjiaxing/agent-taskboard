@@ -146,7 +146,6 @@ export function applyClientPanelWidths(): void {
   frame.style.setProperty("--client-changes-panel-width", `${Math.round(ui.clientView.panels.changesPanelWidth)}px`);
   const rightRailWidth = `${Math.round(ui.clientView.panels.rightRailWidth)}px`;
   ui.app.querySelector<HTMLElement>(".board-shell")?.style.setProperty("--issue-detail-width", rightRailWidth);
-  ui.app.querySelector<HTMLElement>(".lifted-run")?.style.setProperty("--inspector-panel-width", rightRailWidth);
 }
 
 export function panelUiText() {
@@ -165,7 +164,7 @@ export function fixedPanelResizeHandle(region: FixedPanelRegion): string {
 export function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
   return `<aside class="issue-detail fixed-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
-    ${issueDetail(copy, board, { panelToggle: false })}
+    ${issueDetail(copy, board)}
   </aside>`;
 }
 

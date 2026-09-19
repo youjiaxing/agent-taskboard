@@ -1,4 +1,4 @@
-import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
 
 /** The mobile Client is one full-screen task at a time: a drawer, a two-item view bar, and a fixed Run input. */
 export async function runMobileBoard(session) {
@@ -143,6 +143,15 @@ if (navShape.some((item) => item.act !== "mobile-nav") || navShape[0].pressed !=
 
 await session.page.click("button[data-act='mobile-drawer']");
 await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
+await session.page.waitForTimeout(180);
+const drawerGeometry = await session.page.$eval("[data-dialog-id='mobile-drawer'] .drawer-panel", (node) => ({
+  width: node.getBoundingClientRect().width,
+  viewportWidth: document.documentElement.clientWidth,
+}));
+const expectedDrawerWidth = Math.min(drawerGeometry.viewportWidth * 0.88, 360);
+if (Math.abs(drawerGeometry.width - expectedDrawerWidth) > 1) {
+  throw new Error(`mobile drawer must use min(88vw, 360px): ${JSON.stringify({ drawerGeometry, expectedDrawerWidth })}`);
+}
 const drawerActions = await session.page.$$eval("[data-dialog-id='mobile-drawer'] [data-act]", (nodes) => nodes.map((node) => node.dataset.act));
 for (const act of [
   "focus-host",
@@ -316,6 +325,8 @@ const startedRun = (await snapshot()).runs.find((run) => run.issueId === mobileF
 if (!startedRun) throw new Error("mobile should start a Frontier Run through the normal launch form");
 
 await session.page.waitForSelector("[data-mobile-run-input]");
+await session.assertVisual("mobile-focus-workspace.png");
+await assertNecessaryTextContrast(session.page, "mobile focus workspace");
 await assertTouchTargets("mobile running workspace");
 const inputGeometry = await session.page.evaluate(() => {
   const row = document.querySelector(".mobile-input-row")?.getBoundingClientRect();
