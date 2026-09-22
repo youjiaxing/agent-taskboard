@@ -1,12 +1,9 @@
 @media (min-width: 640px) and (max-width: 899.98px) {
-  .board-shell:not(.issue-collapsed),
-  .focus-workspace-layout.with-right-side { grid-template-columns: minmax(0, 1fr); }
-  .board-shell:not(.issue-collapsed) > .board-main,
-  .focus-workspace-layout.with-right-side > .focus-workspace-main { display: none; }
+  .frame { --client-sidebar-width: var(--sidebar-width-min) !important; }
+  .board-shell:not(.issue-collapsed) { grid-template-columns: minmax(0, 1fr); }
+  .board-shell:not(.issue-collapsed) > .board-main { display: none; }
   .fixed-right-rail,
-  .fixed-changes-panel { width: 100%; max-width: none; }
-  .fixed-right-rail > .fixed-panel-resize,
-  .fixed-changes-panel > .fixed-panel-resize { display: none; }
+  .fixed-changes-panel { max-width: none; }
 }
 @media (max-width: 639.98px) {
   :root {

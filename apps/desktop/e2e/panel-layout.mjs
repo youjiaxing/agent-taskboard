@@ -48,6 +48,22 @@ const dragBy = async (page, selector, dx) => {
 const widthOf = async (page, selector) => {
   const box = await page.locator(selector).boundingBox();
   if (!box) {
+    const visibleDomWidth = await page.$eval(selector, (node) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      const hit = document.elementFromPoint(
+        Math.min(innerWidth - 1, Math.max(0, rect.left + rect.width / 2)),
+        Math.min(innerHeight - 1, Math.max(0, rect.top + rect.height / 2)),
+      );
+      return style.display !== "none"
+        && style.visibility !== "hidden"
+        && rect.width > 0
+        && rect.height > 0
+        && Boolean(hit && node.contains(hit))
+        ? rect.width
+        : 0;
+    });
+    if (visibleDomWidth > 0) return visibleDomWidth;
     const diagnostic = await page.evaluate((target) => ({
       targetExists: Boolean(document.querySelector(target)),
       targetDisplay: document.querySelector(target) ? getComputedStyle(document.querySelector(target)).display : "missing",
@@ -93,6 +109,72 @@ const assertStoredContract = async (page, storageKey, expected = {}) => {
   return state;
 };
 
+const workspaceGeometry = (page, panelSelector, terminalMarker) => page.evaluate(({ panelSelector, terminalMarker }) => {
+  const terminalMain = document.querySelector(".focus-workspace-main");
+  const terminalHost = document.querySelector(".lifted-terminal .pty-host");
+  const screen = terminalHost?.querySelector(".xterm-screen")?.getBoundingClientRect();
+  const measureNode = terminalHost?.querySelector(".xterm-char-measure-element");
+  const measure = measureNode?.getBoundingClientRect();
+  const measuredCharacters = measureNode?.textContent?.length ?? 0;
+  const panel = document.querySelector(panelSelector);
+  const resizeHandle = panel?.querySelector("[data-panel-resize]");
+  const handle = resizeHandle?.getBoundingClientRect();
+  const handleHitWidth = resizeHandle && handle
+    ? [...Array(8).keys()].filter((offset) => {
+        const hit = document.elementFromPoint(
+          handle.left + offset + 0.5,
+          handle.top + Math.min(handle.height / 2, 80),
+        );
+        return hit?.closest("[data-panel-resize]") === resizeHandle;
+      }).length
+    : 0;
+  const side = document.querySelector(".side");
+  return {
+    runId: document.querySelector('[data-terminal-surface="live"]')?.getAttribute("data-run"),
+    terminalMainDisplay: terminalMain ? getComputedStyle(terminalMain).display : "missing",
+    terminalStillMounted: window[terminalMarker] === terminalHost,
+    terminalColumns: screen && measure?.width && measuredCharacters
+      ? Math.floor(screen.width / (measure.width / measuredCharacters))
+      : 0,
+    terminalRows: screen && measure?.height ? Math.floor(screen.height / measure.height) : 0,
+    terminalScreenSize: screen ? [screen.width, screen.height] : [],
+    terminalCellSize: measure && measuredCharacters ? [measure.width / measuredCharacters, measure.height] : [],
+    panelWidth: panel?.getBoundingClientRect().width ?? 0,
+    panelControls: panel?.querySelectorAll("button, summary").length ?? 0,
+    handleWidth: handle?.width ?? 0,
+    handleHitWidth,
+    handleInsideViewport: Boolean(handle && handle.left >= 0 && handle.right <= innerWidth),
+    sideOverflow: side ? side.scrollWidth - side.clientWidth : 0,
+    pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  };
+}, { panelSelector, terminalMarker });
+
+const assertMinimumWorkspace = (geometry, label, runId) => {
+  if (
+    geometry.runId !== runId
+    || geometry.terminalMainDisplay === "none"
+    || !geometry.terminalStillMounted
+    || geometry.terminalColumns < 40
+    || geometry.terminalRows < 8
+    || geometry.panelControls < 2
+    || geometry.handleWidth < 8
+    || geometry.handleHitWidth < 8
+    || !geometry.handleInsideViewport
+    || geometry.sideOverflow > 0
+    || geometry.pageOverflow > 0
+  ) {
+    throw new Error(`${label} must keep the Run, Terminal, panel controls and resize handle operable: ${JSON.stringify(geometry)}`);
+  }
+};
+
+const waitForRunOutput = (page, runId, text) => page.waitForFunction(async ({ protocol, runId, text }) => {
+  const response = await fetch(`${protocol}/runs/${encodeURIComponent(runId)}/output?after=0`);
+  if (!response.ok) return false;
+  const json = await response.json();
+  const bytes = Uint8Array.from(atob(json.data), (byte) => byte.charCodeAt(0));
+  return new TextDecoder().decode(bytes).includes(text);
+}, { protocol: url, runId, text });
+
 const browserPage = await openClient({ clientId: "panel-browser-a" });
 const browserKey = panelKey("panel-browser-a");
 assertNear(await widthOf(browserPage, ".side"), 248, "default sidebar width");
@@ -107,26 +189,37 @@ await browserPage.waitForSelector('[data-document-state="ready"]');
 assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 320, "default right rail width");
 await dragBy(browserPage, '[data-panel-resize="right-rail"]', -80);
 assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 400, "resized right rail width");
+const activeWorkspaceRunId = await browserPage.$eval('[data-terminal-surface="live"]', (node) => node.getAttribute("data-run"));
 await browserPage.evaluate(() => { window.__PANEL_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
+await browserPage.setViewportSize({ width: 880, height: 560 });
+await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "compact-desktop");
+const compactRailLayout = await workspaceGeometry(browserPage, '[data-fixed-panel="right-rail"]', "__PANEL_TERMINAL_HOST__");
+assertMinimumWorkspace(compactRailLayout, "880x560 right rail layout", activeWorkspaceRunId);
+await browserPage.click(".lifted-terminal .pty-host");
+await browserPage.keyboard.type("compact draft ");
+await dragBy(browserPage, '[data-panel-resize="right-rail"]', 100);
+assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 300, "compact resized right rail width");
+await dragBy(browserPage, '[data-panel-resize="right-rail"]', -100);
+const resizedCompactRail = await workspaceGeometry(browserPage, '[data-fixed-panel="right-rail"]', "__PANEL_TERMINAL_HOST__");
+assertMinimumWorkspace(resizedCompactRail, "resized 880x560 right rail layout", activeWorkspaceRunId);
 await browserPage.click('.chrome button[data-act="view-changes"]');
 await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
-assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 520, "default changes panel width");
-await browserPage.setViewportSize({ width: 899, height: 840 });
-await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "compact-desktop");
-const compactChangesLayout = await browserPage.evaluate(() => ({
-  terminalMainDisplay: getComputedStyle(document.querySelector(".focus-workspace-main")).display,
-  terminalStillMounted: window.__PANEL_TERMINAL_HOST__ === document.querySelector(".lifted-terminal .pty-host"),
-  panelWidth: document.querySelector('[data-fixed-panel="changes-panel"]')?.getBoundingClientRect().width ?? 0,
-  sideWidth: document.querySelector(".side")?.getBoundingClientRect().width ?? 0,
-  overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-}));
-assertNear(compactChangesLayout.panelWidth, 899 - compactChangesLayout.sideWidth, "compact changes region", 4);
-if (compactChangesLayout.terminalMainDisplay !== "none" || !compactChangesLayout.terminalStillMounted || compactChangesLayout.overflow > 0) {
-  throw new Error(`compact desktop should keep the Terminal mounted behind one fixed content region: ${JSON.stringify(compactChangesLayout)}`);
-}
-await browserPage.setViewportSize({ width: 900, height: 840 });
+const compactChangesLayout = await workspaceGeometry(browserPage, '[data-fixed-panel="changes-panel"]', "__PANEL_TERMINAL_HOST__");
+assertMinimumWorkspace(compactChangesLayout, "880x560 changes layout", activeWorkspaceRunId);
+await browserPage.click('.chrome button[data-act="view-changes"]');
+await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
+const compactRailAfterClose = await workspaceGeometry(browserPage, '[data-fixed-panel="right-rail"]', "__PANEL_TERMINAL_HOST__");
+assertMinimumWorkspace(compactRailAfterClose, "closed 880x560 changes layout", activeWorkspaceRunId);
+await browserPage.click(".lifted-terminal .pty-host");
+await browserPage.keyboard.type("survives panels");
+await browserPage.keyboard.press("Enter");
+await waitForRunOutput(browserPage, activeWorkspaceRunId, "compact draft survives panels");
+await browserPage.click('.chrome button[data-act="view-changes"]');
+await browserPage.waitForSelector('[data-fixed-panel="changes-panel"] .changes-sheet[data-view-state="loaded"]');
+await browserPage.setViewportSize({ width: 900, height: 640 });
 await browserPage.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
-assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 520, "900px changes panel boundary");
+const fullDesktopBoundary = await workspaceGeometry(browserPage, '[data-fixed-panel="changes-panel"]', "__PANEL_TERMINAL_HOST__");
+assertMinimumWorkspace(fullDesktopBoundary, "900x640 desktop boundary", activeWorkspaceRunId);
 await browserPage.setViewportSize({ width: 1280, height: 840 });
 await dragBy(browserPage, '[data-panel-resize="changes-panel"]', -80);
 assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 600, "resized changes panel width");
@@ -185,6 +278,29 @@ if (await browserPage.$(".side")) throw new Error("the same Client must restore 
 await browserPage.click('button[data-act="toggle-sidebar"]');
 await browserPage.waitForSelector(".side");
 assertNear(await widthOf(browserPage, ".side"), 308, "restored sidebar width");
+
+await browserPage.setViewportSize({ width: 390, height: 844 });
+await browserPage.waitForFunction(() => document.documentElement.dataset.mobile === "true" && document.querySelector(".mobile-workspace-view"));
+const mobileMainWindow = await browserPage.evaluate(() => ({
+  mobileWorkspace: Boolean(document.querySelector(".mobile-workspace-view")),
+  mobileNav: Boolean(document.querySelector(".mobile-nav")),
+  mobileInput: Boolean(document.querySelector(".mobile-input-row")),
+  desktopSidebar: Boolean(document.querySelector(".side")),
+  desktopRail: Boolean(document.querySelector('[data-fixed-panel="right-rail"], [data-fixed-panel="changes-panel"]')),
+  horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+}));
+if (
+  !mobileMainWindow.mobileWorkspace
+  || !mobileMainWindow.mobileNav
+  || !mobileMainWindow.mobileInput
+  || mobileMainWindow.desktopSidebar
+  || mobileMainWindow.desktopRail
+  || mobileMainWindow.horizontalOverflow > 0
+) {
+  throw new Error(`390x844 main window must keep the mobile single-task workspace: ${JSON.stringify(mobileMainWindow)}`);
+}
+await browserPage.setViewportSize({ width: 1280, height: 840 });
+await browserPage.waitForFunction(() => document.documentElement.dataset.mobile === "false" && document.querySelector('.lifted-terminal .pty-host'));
 
 const secondBrowserPage = await openClient({
   clientId: "panel-browser-b",
@@ -265,6 +381,40 @@ const runWindowPage = await openClient({
   projectId: beforeRunWindow.focusedProjectId,
   panelState: { sidebarVisible: true, sidebarWidth: 300, rightSide: "rail", rightRailWidth: 400, changesPanelWidth: 600 },
 });
+await runWindowPage.setViewportSize({ width: 390, height: 640 });
+await runWindowPage.waitForTimeout(100);
+const narrowRunWindow = await runWindowPage.evaluate(() => ({
+  mobile: document.documentElement.dataset.mobile,
+  liveTerminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
+  mobileNav: Boolean(document.querySelector(".mobile-nav")),
+  mobileInput: Boolean(document.querySelector(".mobile-input-row")),
+}));
+if (
+  narrowRunWindow.mobile !== "false"
+  || !narrowRunWindow.liveTerminal
+  || narrowRunWindow.mobileNav
+  || narrowRunWindow.mobileInput
+) {
+  throw new Error(`native Run window must keep its operable desktop terminal when narrow: ${JSON.stringify(narrowRunWindow)}`);
+}
+await runWindowPage.setViewportSize({ width: 900, height: 640 });
+await runWindowPage.waitForTimeout(100);
+const minimumRunWindow = await runWindowPage.evaluate(() => ({
+  liveTerminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
+  horizontalOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  verticalOverflow: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+}));
+if (
+  !minimumRunWindow.liveTerminal
+  || minimumRunWindow.horizontalOverflow > 0
+  || minimumRunWindow.verticalOverflow > 0
+) {
+  throw new Error(`native Run window minimum size must remain operable without page overflow: ${JSON.stringify(minimumRunWindow)}`);
+}
+await runWindowPage.click(".lifted-terminal .pty-host");
+await runWindowPage.keyboard.type("minimum run window input");
+await runWindowPage.keyboard.press("Enter");
+await waitForRunOutput(runWindowPage, activeRunId, "minimum run window input");
 const runWindowContract = await runWindowPage.evaluate((runId) => ({
   runId: document.querySelector('[data-terminal-surface="live"]')?.getAttribute("data-run"),
   sidebar: Boolean(document.querySelector(".side")),

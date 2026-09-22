@@ -26,6 +26,10 @@ use tauri_plugin_opener::OpenerExt;
 const LOG_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
 const LOG_FILE_COUNT: usize = 5;
 const USAGE_GUIDE_URL: &str = "https://github.com/youjiaxing/agent-taskboard";
+const RUN_WINDOW_WIDTH: f64 = 1180.0;
+const RUN_WINDOW_HEIGHT: f64 = 760.0;
+const RUN_WINDOW_MIN_WIDTH: f64 = 900.0;
+const RUN_WINDOW_MIN_HEIGHT: f64 = 640.0;
 
 /// Stable webview event carrying the resolved system appearance (`light` / `dark`).
 const SYSTEM_APPEARANCE_CHANGED: &str = "system-appearance-changed";
@@ -403,6 +407,8 @@ async fn open_run_window(
         WebviewUrl::App(run_window_path(run_id, host_id, project_id).into()),
     )
     .title(title)
+    .inner_size(RUN_WINDOW_WIDTH, RUN_WINDOW_HEIGHT)
+    .min_inner_size(RUN_WINDOW_MIN_WIDTH, RUN_WINDOW_MIN_HEIGHT)
     .build()
     .map_err(|err| err.to_string())?;
     Ok(())
@@ -927,5 +933,14 @@ mod run_window_tests {
             CloseBehavior::DestroyRunWindow
         );
         assert_eq!(close_behavior("unrelated"), CloseBehavior::Native);
+    }
+
+    #[test]
+    fn run_window_starts_and_stays_in_the_desktop_layout_range() {
+        assert_eq!((RUN_WINDOW_WIDTH, RUN_WINDOW_HEIGHT), (1180.0, 760.0));
+        assert_eq!(
+            (RUN_WINDOW_MIN_WIDTH, RUN_WINDOW_MIN_HEIGHT),
+            (900.0, 640.0)
+        );
     }
 }
