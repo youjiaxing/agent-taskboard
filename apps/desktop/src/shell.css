@@ -390,7 +390,12 @@ body {
 
 .side > .fixed-panel-resize {
   left: auto;
-  right: -4px;
+  right: 0;
+}
+
+.fixed-right-rail > .fixed-panel-resize,
+.fixed-changes-panel > .fixed-panel-resize {
+  left: 0;
 }
 
 .fixed-panel-resize:hover,
@@ -701,8 +706,8 @@ button.danger.primary {
 .fixed-changes-panel {
   position: relative;
   min-width: 0;
-  width: var(--client-changes-panel-width);
-  max-width: var(--changes-panel-width-max);
+  width: 100%;
+  max-width: none;
   height: 100%;
   overflow: auto;
   border-left: 1px solid var(--color-border);
@@ -725,6 +730,20 @@ button.danger.primary {
   gap: 0;
   padding: 0;
   position: relative;
+}
+
+.focus-workspace-layout.with-right-side:has(.fixed-right-rail) {
+  grid-template-columns: minmax(340px, 1fr) minmax(0, var(--client-right-rail-width));
+}
+
+.focus-workspace-layout.with-right-side:has(.fixed-changes-panel) {
+  grid-template-columns: minmax(340px, 1fr) minmax(0, var(--client-changes-panel-width));
+}
+
+.focus-workspace-layout > .fixed-right-rail {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
 }
 
 .focus-workspace-layout.right-side-hidden { grid-template-columns: minmax(0, 1fr); }

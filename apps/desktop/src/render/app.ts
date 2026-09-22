@@ -61,7 +61,8 @@ function pairingDialog(copy: import("../protocol").ShellCopy, localCopy: ReturnT
 export function render(): void {
   if (!ui.snapshot || !ui.app) return;
   const snap = ui.snapshot;
-  const isMobile = mobileClient();
+  const runWindow = Boolean(ui.nativeRunWindowRunId);
+  const isMobile = mobileClient() && !runWindow;
   const activeField = captureActiveField();
   const browserAppearance = browserClient() ? ensureBrowserAppearance() : null;
   const appearance = {
@@ -84,7 +85,6 @@ export function render(): void {
 
   const host = hosts.find((item) => item.id === ui.snapshot?.focusedHostId) ?? hosts[0];
   const empty = ui.snapshot.emptyActions.length > 0;
-  const runWindow = Boolean(ui.nativeRunWindowRunId);
   const focusRun = workspaceRun(snap);
   const showSidebar = !isMobile && !runWindow && ui.clientView.panels.sidebarVisible;
   const selectedIssue = snap.board?.selected;
