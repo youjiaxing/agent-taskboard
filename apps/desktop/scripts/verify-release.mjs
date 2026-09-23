@@ -1,8 +1,18 @@
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 
-const [config, desktopPackage, packageLock, cargo, hostCargo, renderedSettings, formEvents] = await Promise.all([
+const [
+  config,
+  acceptanceConfig,
+  desktopPackage,
+  packageLock,
+  cargo,
+  hostCargo,
+  renderedSettings,
+  formEvents,
+] = await Promise.all([
   readJson(new URL("../src-tauri/tauri.conf.json", import.meta.url)),
+  readJson(new URL("../src-tauri/tauri.acceptance.conf.json", import.meta.url)),
   readJson(new URL("../package.json", import.meta.url)),
   readJson(new URL("../package-lock.json", import.meta.url)),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
@@ -34,6 +44,19 @@ for (const platformPackage of [
 }
 
 if (config.bundle?.active !== true) fail("bundle.active must be true");
+if (!acceptanceConfig.identifier || acceptanceConfig.identifier === config.identifier) {
+  fail("acceptance candidate must use an isolated identifier");
+}
+if (
+  JSON.stringify(acceptanceConfig.bundle?.resources) !==
+  JSON.stringify([
+    "../dist",
+    "acceptance/manifest.json",
+    "acceptance/manifest.sha256",
+  ])
+) {
+  fail("acceptance candidate must bundle the Client and acceptance manifest");
+}
 if (JSON.stringify(config.bundle.targets) !== JSON.stringify(["dmg", "nsis"])) {
   fail("bundle.targets must contain only dmg and nsis");
 }

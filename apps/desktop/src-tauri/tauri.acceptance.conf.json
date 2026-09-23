@@ -1,0 +1,11 @@
+{
+  "productName": "Agent Taskboard Acceptance",
+  "identifier": "com.youjiaxing.agent-taskboard.acceptance167",
+  "bundle": {
+    "resources": [
+      "../dist",
+      "acceptance/manifest.json",
+      "acceptance/manifest.sha256"
+    ]
+  }
+}
