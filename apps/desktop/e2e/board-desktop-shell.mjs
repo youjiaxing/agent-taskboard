@@ -793,10 +793,26 @@ const documentText = await session.page.$eval(".issue-markdown", (node) => node.
 if (!documentText?.includes("Can the operator read every constraint") || !documentText.includes("Paragraph six")) {
   throw new Error(`Issue document should render the complete long body, got ${documentText}`);
 }
-for (const selector of [".issue-markdown h1", ".issue-markdown h2", ".issue-markdown strong", ".issue-markdown code", ".issue-markdown ul"]) {
+for (const selector of [
+  ".issue-markdown h1",
+  ".issue-markdown h2",
+  ".issue-markdown strong",
+  ".issue-markdown code",
+  ".issue-markdown .unsafe-image",
+  ".issue-markdown blockquote",
+  ".issue-markdown pre > code.language-ts",
+  ".issue-markdown input[type='checkbox'][disabled]",
+  ".issue-markdown table > thead",
+  ".issue-markdown table > tbody",
+  ".issue-markdown ul ul",
+  ".issue-markdown ul ol",
+]) {
   if (!(await session.page.$(selector))) throw new Error(`Markdown rendering missing ${selector}`);
 }
-if (await session.page.$(".issue-markdown script") || await session.page.evaluate(() => window.__ISSUE_HTML_EXECUTED__ === true)) {
+if (
+  await session.page.$(".issue-markdown script, .issue-markdown [onclick], .issue-markdown [onerror]")
+  || await session.page.evaluate(() => window.__ISSUE_HTML_EXECUTED__ === true)
+) {
   throw new Error("raw Issue HTML must stay escaped and inert");
 }
 if (!(await session.page.$('.issue-markdown a[data-url="https://github.com/you/garden/issues/2"]'))) {
@@ -805,8 +821,15 @@ if (!(await session.page.$('.issue-markdown a[data-url="https://github.com/you/g
 if (await session.page.$('.issue-markdown [data-url^="javascript:"]')) {
   throw new Error("dangerous markdown URLs must not become actions");
 }
-if (!(await session.page.$(".issue-markdown .unsafe-link"))) {
-  throw new Error("dangerous markdown link should be rendered as inert text");
+if (await session.page.$('.issue-markdown [data-url^="data:"]')) {
+  throw new Error("data markdown URLs must not become actions");
+}
+if ((await session.page.$$(".issue-markdown .unsafe-link")).length !== 2) {
+  throw new Error("dangerous markdown links should be rendered as inert text");
+}
+const imageLabel = await session.page.$eval(".issue-markdown .unsafe-image", (node) => node.textContent?.trim());
+if (imageLabel !== "the Tracker image label" || await session.page.$(".issue-markdown img")) {
+  throw new Error(`Markdown images must stay inert with readable labels, got ${JSON.stringify(imageLabel)}`);
 }
 const sectionOrder = await session.page.evaluate(() => {
   const body = document.querySelector('.workspace-rail-section[data-workspace-section="issue"]');

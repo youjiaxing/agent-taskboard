@@ -32,7 +32,50 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     ));
     tracker.set_issue_body(
         "you/garden#2",
-        "# Question\n\nCan the operator read **every constraint** beside the official TUI?\n\n## Constraints\n\n- Keep Tracker markdown unchanged\n- Render `inline code` clearly\n- Keep [the GitHub Issue](https://github.com/you/garden/issues/2) available\n- Reject [dangerous links](javascript:alert(1))\n\n<script>window.__ISSUE_HTML_EXECUTED__ = true</script>\n\n## Long document\n\nParagraph one explains why the Issue document remains the source material while the board stays read-only.\n\nParagraph two is intentionally long enough to require scrolling in the inspector at 1440 by 900.\n\nParagraph three keeps family and Dependency sections below the complete document.\n\nParagraph four verifies that the title and primary actions remain available while this content scrolls.\n\nParagraph five provides enough vertical depth for the mobile Issue view at 390 by 844.\n\nParagraph six confirms that entering a Run must retain this same complete Issue document.",
+        r##"# Question
+
+Can the operator read **every constraint** beside the official TUI?
+
+> Tracker Markdown stays the source of truth while the client renders a safe document.
+
+## Constraints
+
+- Keep Tracker markdown unchanged
+  - Preserve nested unordered context
+    1. Preserve nested ordered steps
+- Render `inline code` clearly
+- Keep [the GitHub Issue](https://github.com/you/garden/issues/2) available
+- Reject [dangerous links](javascript:alert(1)) and [data links](data:text/plain;base64,SGVsbG8=)
+- Keep ![the **Tracker image** label](https://example.com/image.png) inert
+
+- [x] Render completed tasks
+- [ ] Render pending tasks
+
+| Structure | Expected result |
+| --- | --- |
+| Table | Semantic rows and cells |
+| Long value | WrapWithoutCreatingHorizontalPageOverflowAtMobileWidth |
+
+```ts
+const trackerBody = "<script>code stays inert</script>";
+```
+
+<script>window.__ISSUE_HTML_EXECUTED__ = true</script>
+<button onclick="window.__ISSUE_HTML_EXECUTED__ = true">unsafe button</button>
+
+## Long document
+
+Paragraph one explains why the Issue document remains the source material while the board stays read-only.
+
+Paragraph two is intentionally long enough to require scrolling in the inspector at 1440 by 900.
+
+Paragraph three keeps family and Dependency sections below the complete document.
+
+Paragraph four verifies that the title and primary actions remain available while this content scrolls.
+
+Paragraph five provides enough vertical depth for the mobile Issue view at 390 by 844.
+
+Paragraph six confirms that entering a Run must retain this same complete Issue document."##,
     );
     tracker.set_issue_body(
         "you/garden#10",

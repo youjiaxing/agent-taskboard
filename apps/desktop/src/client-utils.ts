@@ -1,3 +1,5 @@
+import { Marked, Renderer, type Tokens } from "marked";
+
 export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -16,70 +18,56 @@ export function safeHttpUrl(raw: string, baseUrl?: string): string | null {
 }
 
 export function renderMarkdown(markdown: string, baseUrl: string): string {
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  const blocks: string[] = [];
-  let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    blocks.push(`<p>${renderInlineMarkdown(paragraph.join(" "), baseUrl)}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list) return;
-    const tag = list.ordered ? "ol" : "ul";
-    blocks.push(`<${tag}>${list.items.map((item) => `<li>${renderInlineMarkdown(item, baseUrl)}</li>`).join("")}</${tag}>`);
-    list = null;
-  };
-  for (const line of lines) {
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    const item = /^\s*([-*+] |\d+\. )(.+)$/.exec(line);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = heading[1].length;
-      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2], baseUrl)}</h${level}>`);
-    } else if (item) {
-      flushParagraph();
-      const ordered = /^\d/.test(item[1]);
-      if (list && list.ordered !== ordered) flushList();
-      list ??= { ordered, items: [] };
-      list.items.push(item[2]);
-    } else if (!line.trim()) {
-      flushParagraph();
-      flushList();
-    } else {
-      flushList();
-      paragraph.push(line.trim());
-    }
-  }
-  flushParagraph();
-  flushList();
-  return blocks.join("");
+  const parser = new Marked<string, string>({
+    async: false,
+    gfm: true,
+    breaks: false,
+  });
+  return parser.parse(markdown, {
+    async: false,
+    renderer: new IssueMarkdownRenderer(baseUrl),
+  });
 }
 
-function renderInlineMarkdown(source: string, baseUrl: string): string {
-  const token = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\n)]+\))/g;
-  let html = "";
-  let offset = 0;
-  for (const match of source.matchAll(token)) {
-    const index = match.index ?? 0;
-    html += escapeHtml(source.slice(offset, index));
-    const value = match[0];
-    if (value.startsWith("`")) {
-      html += `<code>${escapeHtml(value.slice(1, -1))}</code>`;
-    } else if (value.startsWith("**")) {
-      html += `<strong>${escapeHtml(value.slice(2, -2))}</strong>`;
-    } else {
-      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(value);
-      const href = link ? safeHttpUrl(link[2], baseUrl) : null;
-      html += href
-        ? `<a href="${escapeHtml(href)}" data-act="open-external" data-url="${escapeHtml(href)}">${escapeHtml(link?.[1] ?? "")}</a>`
-        : `<span class="unsafe-link">${escapeHtml(link?.[1] ?? value)}</span>`;
-    }
-    offset = index + value.length;
+/**
+ * Renders Tracker Markdown as inert HTML.
+ *
+ * Issue bodies are untrusted: raw HTML is escaped instead of passed through,
+ * images never load remote content, and links only survive as the existing
+ * safe http/https product action.
+ */
+class IssueMarkdownRenderer extends Renderer {
+  constructor(private readonly baseUrl: string) {
+    super();
   }
-  return html + escapeHtml(source.slice(offset));
+
+  override html({ text }: Tokens.HTML | Tokens.Tag): string {
+    return escapeHtml(text);
+  }
+
+  override image({ text, tokens }: Tokens.Image): string {
+    const label = this.parser.parseInline(tokens, this.parser.textRenderer);
+    return `<span class="unsafe-image">${escapeHtml(label || text)}</span>`;
+  }
+
+  override listitem(item: Tokens.ListItem): string {
+    const rendered = super.listitem(item);
+    return item.task ? rendered.replace("<li>", '<li class="task-list-item">') : rendered;
+  }
+
+  override table(token: Tokens.Table): string {
+    return `<div class="issue-table-scroll">${super.table(token)}</div>`;
+  }
+
+  override link({ href, title, tokens }: Tokens.Link): string {
+    const label = this.parser.parseInline(tokens);
+    const safe = safeHttpUrl(href, this.baseUrl);
+    if (!safe) {
+      return `<span class="unsafe-link">${label}</span>`;
+    }
+    const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+    return `<a href="${escapeHtml(safe)}" data-act="open-external" data-url="${escapeHtml(safe)}"${titleAttribute}>${label}</a>`;
+  }
 }
 
 export function formatTime(ms: number): string {
