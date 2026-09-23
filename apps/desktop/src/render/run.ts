@@ -133,7 +133,11 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
     busy: false,
     className: "launch-sheet",
     panelTag: "form",
-    panelAttributes: { "data-form": "launch", "aria-busy": pending ? "true" : "false" },
+    panelAttributes: {
+      "data-form": "launch",
+      "aria-busy": pending ? "true" : "false",
+      novalidate: true,
+    },
   });
 }
 

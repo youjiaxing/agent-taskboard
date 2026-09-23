@@ -27,6 +27,8 @@ export type StartupCopy = {
   launchEnvironmentReady: string;
   launchEnvironmentFailed: string;
   close: string;
+  openRunWindow: string;
+  openRunWindowFailed: string;
   activeRunCount: string;
   interruptedRunCount: string;
   removeProjectBlocked: string;
@@ -70,6 +72,8 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     launchEnvironmentReady: "启动环境已更新；之后的 Agent 探测和 Run 会使用新环境。",
     launchEnvironmentFailed: "重新读取失败；已保留上一次可用的内存快照。",
     close: "关闭",
+    openRunWindow: "在独立窗口打开",
+    openRunWindowFailed: "无法打开独立 Run 窗口",
     activeRunCount: "Host 报告的活跃 Run：{count}",
     interruptedRunCount: "将被中断的活跃 Run：{count}",
     removeProjectBlocked: "这个 Project 仍有活跃 Run，当前不能移除。请先让这些 Run 结束或逐一停止。",
@@ -118,6 +122,8 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     launchEnvironmentReady: "The launch environment was updated. Later Agent probes and Runs use the new environment.",
     launchEnvironmentFailed: "Rereading failed. The last usable in-memory snapshot was kept.",
     close: "Close",
+    openRunWindow: "Open in separate window",
+    openRunWindowFailed: "Unable to open separate Run window",
     activeRunCount: "Active Runs reported by the Host: {count}",
     interruptedRunCount: "Active Runs that will be interrupted: {count}",
     removeProjectBlocked: "This Project still has active Runs and cannot be removed. Let them finish or stop them first.",

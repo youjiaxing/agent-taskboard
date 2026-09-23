@@ -24,7 +24,7 @@ import { ui } from "../ui";
 import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
 import { dialog, dialogDismissButton } from "../components/dialog";
-import { button, emptyState, formField, menu, notice, textArea, textInput } from "../components/primitives";
+import { button, emptyState, formField, iconButton, menu, notice, textArea, textInput } from "../components/primitives";
 import { syncDialogFocus } from "../components/dialog-controller";
 
 function pairingDialog(copy: import("../protocol").ShellCopy, localCopy: ReturnType<typeof startupCopy>, snap: import("../protocol").Snapshot): string {
@@ -282,6 +282,19 @@ export function render(): void {
       ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNav(copy, localCopy, snap) : ""}
       ${isMobile ? mobileRunInput(copy, snap) : ""}
     </div>
+    ${ui.runWindowError
+      ? notice({
+          status: "danger",
+          role: "alert",
+          className: "run-window-error",
+          message: ui.runWindowError.message,
+          actions: iconButton(
+            { id: "dismiss-run-window-error", label: localCopy.close, icon: "×" },
+            { className: "run-window-error-dismiss", attributes: { title: localCopy.close } },
+          ),
+          attributes: { "data-run": ui.runWindowError.runId },
+        })
+      : ""}
     ${isMobile && ui.mobileDrawerOpen ? mobileDrawer(copy, localCopy, snap) : ""}
     ${isMobile && ui.mobileSearchOpen ? mobileSearchDialog(copy, localCopy, snap) : ""}
     ${ui.pairingOpen ? pairingDialog(copy, localCopy, snap) : ""}

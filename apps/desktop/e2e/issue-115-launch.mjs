@@ -26,6 +26,12 @@ if (!(await page.locator("button[data-act='select-agent'][data-id='grok-build']"
 }
 await page.click("button[data-act='next-agent']");
 await page.waitForSelector("textarea[data-field='openingText']");
+await page.click(".launch-sheet button[type='submit']");
+await page.waitForSelector(".launch-sheet [role='alert']");
+const emptyOpeningError = (await page.locator(".launch-sheet [role='alert']").textContent())?.trim() ?? "";
+if (!emptyOpeningError.includes("请填写要 Agent 做什么。")) {
+  throw new Error(`empty opening text should show the Host validation error, got ${JSON.stringify(emptyOpeningError)}`);
+}
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
 const sheet = page.locator(".launch-sheet");
 const scrollArea = page.locator(".launch-sheet .dialog-content");

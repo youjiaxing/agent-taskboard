@@ -45,6 +45,99 @@ const failFirstRpc = (op, message, matches = () => true) => {
   return rpcFailure;
 };
 
+await page.evaluate(() => {
+  window.__RUN_WINDOW_INVOKES__ = [];
+  window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: "run-actions-e2e" } },
+    invoke: async (command, args) => {
+      window.__RUN_WINDOW_INVOKES__.push({ command, args });
+      if (command === "open_run_window") throw new Error("simulated Run window failure");
+      return null;
+    },
+  };
+});
+await page.click("button[data-act='appearance-menu']");
+await page.click("button[data-act='appearance-menu']");
+
+let activeSidebarRun = page.locator(".side .run-row.waiting").first();
+const activeSidebarActions = await activeSidebarRun.locator(".run-row-actions button").evaluateAll((nodes) =>
+  nodes.map((node) => node.dataset.act),
+);
+if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
+  throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
+}
+const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
+for (const runId of endedRunIds) {
+  const endedActions = await page.locator(`.side .run-row[data-run="${runId}"] .run-row-actions button`).evaluateAll((nodes) =>
+    nodes.map((node) => node.dataset.act),
+  );
+  if (endedActions.join("|") !== "open-usage-run") {
+    throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
+  }
+}
+
+await activeSidebarRun.hover();
+const hoverVisibility = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
+  opacity: getComputedStyle(node).opacity,
+  visibility: getComputedStyle(node).visibility,
+}));
+if (hoverVisibility.opacity !== "1" || hoverVisibility.visibility !== "visible") {
+  throw new Error(`pointer hover must reveal sidebar Run actions: ${JSON.stringify(hoverVisibility)}`);
+}
+
+await activeSidebarRun.locator(".run-main").focus();
+const focusVisibility = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
+  opacity: getComputedStyle(node).opacity,
+  visibility: getComputedStyle(node).visibility,
+}));
+if (focusVisibility.opacity !== "1" || focusVisibility.visibility !== "visible") {
+  throw new Error(`keyboard focus must reveal sidebar Run actions: ${JSON.stringify(focusVisibility)}`);
+}
+await activeSidebarRun.locator(".run-main").press("Enter");
+await page.waitForSelector(".lifted-run .pty-slot");
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
+
+activeSidebarRun = page.locator(".side .run-row.waiting").first();
+await activeSidebarRun.locator(".run-main").focus();
+await page.keyboard.press("Tab");
+const keyboardAction = await page.evaluate(() => document.activeElement?.getAttribute("data-act"));
+if (keyboardAction !== "open-run-window") {
+  throw new Error(`first keyboard-reachable Run action should open the standalone window, got ${keyboardAction}`);
+}
+const beforeWindowFailure = await hostSnapshot(page, url);
+await page.keyboard.press("Enter");
+await page.waitForSelector(".run-window-error[role='alert']");
+const windowError = (await page.locator(".run-window-error").textContent())?.replace(/\s+/g, " ").trim() ?? "";
+if (!windowError.includes("simulated Run window failure")) {
+  throw new Error(`standalone Run window failure should be visible, got ${windowError}`);
+}
+const afterWindowFailure = await hostSnapshot(page, url);
+if (
+  afterWindowFailure.runs.length !== beforeWindowFailure.runs.length
+  || afterWindowFailure.runs.some((run, index) => run.id !== beforeWindowFailure.runs[index]?.id || run.status !== beforeWindowFailure.runs[index]?.status)
+) {
+  throw new Error("standalone Run window failure must not add, stop, restart, or replace a Run");
+}
+activeSidebarRun = page.locator(".side .run-row.waiting").first();
+await activeSidebarRun.hover();
+await activeSidebarRun.locator("button[data-act='open-run-window']").click();
+await page.waitForFunction(() => window.__RUN_WINDOW_INVOKES__?.filter((call) => call.command === "open_run_window").length === 2);
+await page.waitForSelector(".run-window-error[role='alert']");
+await activeSidebarRun.locator("button[data-act='open-usage-run']").click();
+await page.waitForSelector(".usage-page");
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
+activeSidebarRun = page.locator(".side .run-row.waiting").first();
+await activeSidebarRun.hover();
+await activeSidebarRun.locator("button[data-act='stop-run']").click();
+await page.waitForSelector("[data-dialog-id='stop-run']");
+await page.click("[data-dialog-id='stop-run'] button[data-act='dismiss-dialog']");
+await page.click("button[data-act='dismiss-run-window-error']");
+await page.evaluate(() => { delete window.__TAURI_INTERNALS__; });
+await page.click("button[data-act='appearance-menu']");
+await page.click("button[data-act='appearance-menu']");
+
 let failure = failFirstRpc(
   "searchIssues",
   "search temporarily unavailable",

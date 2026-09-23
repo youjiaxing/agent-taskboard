@@ -88,7 +88,7 @@ try {
   await page.waitForFunction(() => document.activeElement?.getAttribute("data-act") === "quit");
   await page.click("button[data-act='return-page']");
 
-  const stop = page.locator("button[data-act='stop-run']").first();
+  const stop = page.locator("[data-lane='inProgress'] .issue-card button[data-act='stop-run']").first();
   await stop.click();
   const stopDialog = await assertDialogSemantics("stop-run");
   assert.match((await stopDialog.panel.textContent()) ?? "", /Grok Build.*you\/dialogs#1|you\/dialogs#1.*Grok Build/);
@@ -130,7 +130,7 @@ try {
   await compact.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
 
   await page.setViewportSize({ width: 1280, height: 840 });
-  await page.locator("button[data-act='stop-run']").first().click();
+  await page.locator("[data-lane='inProgress'] .issue-card button[data-act='stop-run']").first().click();
   await page.click("[data-dialog-root='true'][data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
   await page.waitForFunction(() => !document.querySelector("[data-dialog-root='true'][data-dialog-id='stop-run']"));
 

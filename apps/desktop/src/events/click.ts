@@ -10,6 +10,7 @@ import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
 import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialog-controller";
+import { startupCopy } from "../startup-copy";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
@@ -619,6 +620,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "open-run-window" && target.dataset.id) {
     const run = (ui.snapshot.runs ?? []).find((item) => item.id === target.dataset.id);
     if (!run || run.status === "ended") return;
+    ui.runWindowError = null;
+    render();
     try {
       await openRunWindow(
         run.id,
@@ -627,8 +630,18 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
         `${run.agentName} · ${run.issueId ?? ui.snapshot.copy.unboundIssue}`,
       );
     } catch (error) {
-      console.warn("unable to open Run window", error);
+      const message = error instanceof Error ? error.message : String(error);
+      ui.runWindowError = {
+        runId: run.id,
+        message: `${startupCopy(effectiveClientLanguage()).openRunWindowFailed}: ${message}`,
+      };
+      render();
     }
+    return;
+  }
+  if (act === "dismiss-run-window-error") {
+    ui.runWindowError = null;
+    render();
     return;
   }
   if (act === "open-usage") {

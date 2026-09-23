@@ -9,7 +9,7 @@ import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
+import { button, checkbox, formField, iconButton, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
@@ -57,6 +57,7 @@ export function runIdentity(copy: ShellCopy, run: RunSummary): string {
 
 export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
   const identity = runIdentity(copy, run);
+  const localCopy = startupCopy(effectiveClientLanguage());
   const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
   const stateClass =
     run.waitingForUser && run.status !== "ended"
@@ -72,14 +73,35 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
         : run.status === "running"
           ? copy.running
           : "";
-  return `<button type="button" class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-    <b>${escapeHtml(run.agentName)}</b>
-    <span>${escapeHtml(identity)}</span>
-    ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
-    ${action ? `<span class="run-action">${action}</span>` : ""}
-    ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
-    ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
-  </button>`;
+  const actions = [
+    desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
+      ? iconButton(
+          { id: "open-run-window", label: localCopy.openRunWindow, icon: "↗", data: { id: run.id } },
+          { className: "run-row-action", attributes: { title: localCopy.openRunWindow } },
+        )
+      : "",
+    iconButton(
+      { id: "open-usage-run", label: copy.openHostUsage, icon: "▥", data: { id: run.id } },
+      { className: "run-row-action", attributes: { title: copy.openHostUsage } },
+    ),
+    run.status !== "ended"
+      ? iconButton(
+          { id: "stop-run", label: copy.stopRun, icon: "■", data: { id: run.id } },
+          { className: "run-row-action danger", attributes: { title: copy.stopRun } },
+        )
+      : "",
+  ].join("");
+  return `<div class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-run="${escapeHtml(run.id)}">
+    <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+      <b>${escapeHtml(run.agentName)}</b>
+      <span>${escapeHtml(identity)}</span>
+      ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
+      ${action ? `<span class="run-action">${action}</span>` : ""}
+      ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
+      ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
+    </button>
+    <div class="run-row-actions" role="group" aria-label="${escapeHtml(`${run.agentName} · ${identity}`)}">${actions}</div>
+  </div>`;
 }
 
 export function dash(value?: number | null): string {
@@ -411,16 +433,14 @@ export function injectRunForm(copy: ShellCopy, run: RunSummary): string {
   </form>`;
 }
 
-function focusWorkspaceLabels(): { openWindow: string; recentOutput: string; emptyTitle: string; emptyBody: string } {
+function focusWorkspaceLabels(): { recentOutput: string; emptyTitle: string; emptyBody: string } {
   return effectiveClientLanguage() === "zh-CN"
     ? {
-        openWindow: "在独立窗口打开",
         recentOutput: "最近输出（只读）",
         emptyTitle: "还没有 Run",
         emptyBody: "启动一个 Run 后，Embedded Terminal 会固定显示在这里。",
       }
     : {
-        openWindow: "Open in separate window",
         recentOutput: "Recent output (read only)",
         emptyTitle: "No Run yet",
         emptyBody: "Start a Run to keep the Embedded Terminal fixed here.",
@@ -428,9 +448,9 @@ function focusWorkspaceLabels(): { openWindow: string; recentOutput: string; emp
 }
 
 export function runControls(copy: ShellCopy, run: RunSummary): string {
-  const labels = focusWorkspaceLabels();
+  const localCopy = startupCopy(effectiveClientLanguage());
   const openWindow = desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
-    ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(labels.openWindow)}</button>`
+    ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.openRunWindow)}</button>`
     : "";
   return `<div class="actions">
     ${openWindow}

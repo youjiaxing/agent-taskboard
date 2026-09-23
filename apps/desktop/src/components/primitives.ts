@@ -15,7 +15,7 @@ export type ActionDescriptor = {
 export type AttributeValue = string | number | boolean | null | undefined;
 
 export function htmlAttributes(values: Record<string, AttributeValue>): string {
-  const booleanAttributes = new Set(["checked", "disabled", "hidden", "multiple", "open", "readonly", "required", "selected"]);
+  const booleanAttributes = new Set(["checked", "disabled", "hidden", "multiple", "novalidate", "open", "readonly", "required", "selected"]);
   const attributes = Object.entries(values)
     .filter(([name, value]) => value != null && !(value === false && booleanAttributes.has(name)))
     .map(([name, value]) => value === true && booleanAttributes.has(name) ? name : `${name}="${escapeHtml(String(value))}"`);
