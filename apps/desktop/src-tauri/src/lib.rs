@@ -30,6 +30,8 @@ const RUN_WINDOW_WIDTH: f64 = 1180.0;
 const RUN_WINDOW_HEIGHT: f64 = 760.0;
 const RUN_WINDOW_MIN_WIDTH: f64 = 900.0;
 const RUN_WINDOW_MIN_HEIGHT: f64 = 640.0;
+const ACCEPTANCE_MANIFEST_SHA256: Option<&str> =
+    option_env!("AGENT_TASKBOARD_ACCEPTANCE_MANIFEST_SHA256");
 
 /// Stable webview event carrying the resolved system appearance (`light` / `dark`).
 const SYSTEM_APPEARANCE_CHANGED: &str = "system-appearance-changed";
@@ -156,7 +158,7 @@ pub fn run() {
                 LoopbackServer::attach_with(
                     Arc::clone(&kernel),
                     LOCAL_RPC_PORT,
-                    loopback_assets(app.handle()),
+                    loopback_assets(app.handle())?,
                     on_outcome,
                 )?
             };
@@ -228,24 +230,45 @@ pub fn run() {
         });
 }
 
-fn loopback_assets(app: &AppHandle) -> LoopbackAssets {
+fn loopback_assets(app: &AppHandle) -> Result<LoopbackAssets, String> {
     if cfg!(debug_assertions) {
-        return LoopbackAssets::DevProxy {
+        return Ok(LoopbackAssets::DevProxy {
             origin: "http://127.0.0.1:1420".into(),
-        };
+        });
     }
-    let mut candidates = Vec::new();
-    if let Ok(dir) = app.path().resource_dir() {
-        candidates.push(dir.clone());
-        candidates.push(dir.join("dist"));
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    packaged_loopback_assets(packaged_client_candidates(resource_dir))
+}
+
+fn packaged_client_candidates(resource_dir: PathBuf) -> [PathBuf; 3] {
+    [
+        resource_dir.join("_up_").join("dist"),
+        resource_dir.join("dist"),
+        resource_dir,
+    ]
+}
+
+fn packaged_loopback_assets(
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Result<LoopbackAssets, String> {
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    if let Some(dir) = candidates
+        .iter()
+        .find(|dir| dir.join("index.html").is_file())
+    {
+        return Ok(LoopbackAssets::Directory(dir.clone()));
     }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dist"));
-    for dir in candidates {
-        if dir.join("index.html").exists() {
-            return LoopbackAssets::Directory(dir);
-        }
-    }
-    LoopbackAssets::Builtin
+    let searched = candidates
+        .iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "packaged Client assets are missing; searched: {searched}"
+    ))
 }
 
 fn inject_protocol_url(window: &tauri::WebviewWindow, url: &str) {
@@ -522,17 +545,35 @@ fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<
     Ok(())
 }
 
+fn about_name(app_name: &str, acceptance_digest: Option<&str>) -> String {
+    match acceptance_digest {
+        Some(digest) => format!(
+            "{app_name} Acceptance {}",
+            digest.chars().take(12).collect::<String>()
+        ),
+        None => app_name.to_string(),
+    }
+}
+
+fn about_version(version: &str, acceptance_digest: Option<&str>) -> String {
+    match acceptance_digest {
+        Some(digest) => format!("{version} · acceptance manifest SHA-256 {digest}"),
+        None => version.to_string(),
+    }
+}
+
 fn rebuild_app_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
     let copy = &snapshot.copy;
     let enabled = current_edit_enabled(app);
     let (show, quit) = resident_items(app, snapshot, Some("CmdOrCtrl+Q"))?;
     let settings = MenuItem::with_id(app, "settings", &copy.settings, true, Some("CmdOrCtrl+,"))?;
+    let version = app.package_info().version.to_string();
     let about = PredefinedMenuItem::about(
         app,
         None,
         Some(AboutMetadata {
-            name: Some(copy.app_name.clone()),
-            version: Some(app.package_info().version.to_string()),
+            name: Some(about_name(&copy.app_name, ACCEPTANCE_MANIFEST_SHA256)),
+            version: Some(about_version(&version, ACCEPTANCE_MANIFEST_SHA256)),
             ..Default::default()
         }),
     )?;
@@ -942,5 +983,51 @@ mod run_window_tests {
             (RUN_WINDOW_MIN_WIDTH, RUN_WINDOW_MIN_HEIGHT),
             (900.0, 640.0)
         );
+    }
+
+    #[test]
+    fn packaged_client_candidates_include_tauri_parent_resource_layout() {
+        let root = PathBuf::from("/Resources");
+        assert_eq!(
+            packaged_client_candidates(root.clone()),
+            [root.join("_up_/dist"), root.join("dist"), root,]
+        );
+    }
+
+    #[test]
+    fn packaged_loopback_uses_only_a_candidate_with_a_complete_client_entrypoint() {
+        let empty = tempfile::tempdir().unwrap();
+        let packaged = tempfile::tempdir().unwrap();
+        fs::write(packaged.path().join("index.html"), "<main>Client</main>").unwrap();
+
+        match packaged_loopback_assets([empty.path().to_path_buf(), packaged.path().to_path_buf()])
+            .unwrap()
+        {
+            LoopbackAssets::Directory(path) => assert_eq!(path, packaged.path()),
+            _ => panic!("packaged Client must use directory assets"),
+        }
+    }
+
+    #[test]
+    fn packaged_loopback_rejects_a_candidate_without_client_assets() {
+        let empty = tempfile::tempdir().unwrap();
+        let error = packaged_loopback_assets([empty.path().to_path_buf()]).unwrap_err();
+        assert!(error.contains("packaged Client assets are missing"));
+        assert!(error.contains(empty.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn acceptance_about_information_contains_the_complete_manifest_digest() {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            about_name("Agent Taskboard", Some(digest)),
+            "Agent Taskboard Acceptance 0123456789ab"
+        );
+        assert_eq!(
+            about_version("0.1.2", Some(digest)),
+            format!("0.1.2 · acceptance manifest SHA-256 {digest}")
+        );
+        assert_eq!(about_name("Agent Taskboard", None), "Agent Taskboard");
+        assert_eq!(about_version("0.1.2", None), "0.1.2");
     }
 }
