@@ -224,6 +224,9 @@ pub fn start_unbound(
                     env.vars.insert(key.clone(), value.clone());
                 }
             }
+            let opening_text = config.opening_text.trim();
+            let opening_submitted_at_launch =
+                !opening_text.is_empty() && agent.append_opening_prompt(&mut argv, opening_text);
             let request = SpawnRequest {
                 argv,
                 cwd: cwd.to_path_buf(),
@@ -233,8 +236,8 @@ pub fn start_unbound(
             };
             match sessions.spawn(request) {
                 Ok(session) => {
-                    if !config.opening_text.trim().is_empty() {
-                        let opening = submitted_input(config.opening_text.trim());
+                    if !opening_text.is_empty() && !opening_submitted_at_launch {
+                        let opening = submitted_input(opening_text);
                         if let Err(err) = session.write(&opening) {
                             session.stop();
                             record.status = RunStatus::Ended;

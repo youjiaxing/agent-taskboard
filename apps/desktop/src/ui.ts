@@ -110,6 +110,7 @@ export const ui = {
     | null,
   confirmationError: "",
   confirmationPending: false,
+  runWindowError: null as { runId: string; message: string } | null,
   refreshing: false,
   tickTimer: undefined as number | undefined,
   activePointers: new Set<number>(),

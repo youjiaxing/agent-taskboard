@@ -195,6 +195,12 @@ impl AgentPort for CodexAdapter {
         argv
     }
 
+    fn append_opening_prompt(&self, argv: &mut Vec<String>, prompt: &str) -> bool {
+        argv.push("--".into());
+        argv.push(prompt.to_string());
+        true
+    }
+
     fn isolation_unavailable_reason(&self, language: Language) -> String {
         match language {
             Language::ZhCn => "Codex CLI 没有原生 --worktree，隔离不可用。".into(),

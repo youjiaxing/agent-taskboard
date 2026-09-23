@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use host_kernel::{
-    AgentFieldKind, AgentPort, CodexAdapter, Language, LaunchEnvironment, CODEX_BIN, CODEX_ID,
-    CODEX_NAME,
+    AgentFieldKind, AgentPort, AgentSession, BootRequest, CodexAdapter, HostKernel, KernelPorts,
+    Language, LaunchEnvironment, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker,
+    SystemAppearance, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
 
 fn make_discoverable_codex(dir: &std::path::Path) -> PathBuf {
@@ -254,6 +257,83 @@ fn codex_adapter_omits_empty_profile_and_effort() {
         .iter()
         .any(|arg| arg == "-c" || arg.contains("model_reasoning_effort")));
     assert!(!argv.iter().any(|arg| arg == "--profile"));
+}
+
+#[test]
+fn codex_opening_prompt_is_submitted_as_a_launch_argument() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    make_discoverable_codex(tmp.path());
+    let sessions = MemorySessionFactory::new();
+    let path = tmp.path().to_string_lossy().into_owned();
+    let launch_env = Arc::new(MemoryLaunchEnv::with_path(&path));
+    let mut host = HostKernel::boot_with_ports(
+        BootRequest {
+            app_local_data_dir: tmp.path().join("data"),
+            app_log_dir: tmp.path().join("logs"),
+            system_locale: "zh-Hans-CN".into(),
+            system_appearance: SystemAppearance::Light,
+            host_display_name: "Studio".into(),
+        },
+        KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()),
+            agents: vec![Arc::new(CodexAdapter)],
+            launch_env,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    let project_id = host
+        .handle(serde_json::json!({
+            "op": "registerProject",
+            "name": "project",
+            "localPath": project,
+            "repository": "you/project",
+        }))
+        .unwrap()
+        .snapshot
+        .projects[0]
+        .id
+        .clone();
+    let opening = "--help";
+
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "codex",
+        "values": {
+            "model": "gpt-5.6-luna",
+            "effort": "high",
+            "approval": "never",
+            "sandbox": "danger-full-access",
+            "initial-instruction": opening,
+            "profile": "",
+            "additional-args": ""
+        },
+        "openingText": opening,
+    }))
+    .unwrap();
+
+    let spawn = sessions.last_spawn().unwrap();
+    assert_eq!(spawn.argv.last().map(String::as_str), Some(opening));
+    assert_eq!(
+        spawn
+            .argv
+            .get(spawn.argv.len().saturating_sub(2))
+            .map(String::as_str),
+        Some("--"),
+        "a leading dash in the prompt must not be parsed as a Codex option"
+    );
+    assert!(
+        sessions
+            .last_session()
+            .unwrap()
+            .read_after(0, Duration::ZERO)
+            .data
+            .is_empty(),
+        "Codex launch prompts must not race TUI startup through PTY input"
+    );
 }
 
 #[test]

@@ -235,6 +235,10 @@ pub trait AgentPort: Send + Sync {
         self.assemble_argv_for(executable, values)
     }
 
+    fn append_opening_prompt(&self, _argv: &mut Vec<String>, _prompt: &str) -> bool {
+        false
+    }
+
     fn native_isolation(&self) -> bool {
         false
     }
