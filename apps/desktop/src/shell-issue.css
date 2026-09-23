@@ -125,7 +125,7 @@
 
 .issue-document > h4 { margin: 0 0 var(--space-10); font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 
-.issue-markdown { color: var(--color-text); font-size: var(--font-size-md); line-height: 1.62; overflow-wrap: anywhere; }
+.issue-markdown { min-width: 0; max-width: 100%; color: var(--color-text); font-size: var(--font-size-md); line-height: 1.62; overflow-wrap: anywhere; }
 
 .issue-markdown > :first-child { margin-top: 0; }
 
@@ -150,7 +150,31 @@
 
 .issue-markdown ul, .issue-markdown ol { margin: var(--prose-block-margin); padding-left: var(--prose-list-indent); }
 
+.issue-markdown li > ul, .issue-markdown li > ol { margin: var(--prose-list-item-gap) 0 0; }
+
 .issue-markdown li + li { margin-top: var(--prose-list-item-gap); }
+
+.issue-markdown li.task-list-item { list-style: none; }
+
+.issue-markdown li.task-list-item > input[type="checkbox"] {
+  width: 1em;
+  height: 1em;
+  margin: 0 var(--space-6) 0 0;
+  vertical-align: -0.12em;
+  accent-color: var(--color-accent);
+  pointer-events: none;
+}
+
+.issue-markdown blockquote {
+  margin: var(--prose-block-margin);
+  padding: var(--space-4) 0 var(--space-4) var(--space-12);
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+.issue-markdown blockquote > :first-child { margin-top: 0; }
+
+.issue-markdown blockquote > :last-child { margin-bottom: 0; }
 
 .issue-markdown code {
   padding: var(--prose-code-padding);
@@ -159,6 +183,41 @@
   background: var(--color-surface-subtle);
   font: .92em/1.45 var(--font-family-mono);
 }
+
+.issue-markdown pre {
+  max-width: 100%;
+  margin: var(--prose-block-margin);
+  padding: var(--space-10) var(--space-12);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+  overflow-x: auto;
+}
+
+.issue-markdown pre > code {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font: var(--font-size-sm)/1.5 var(--font-family-mono);
+  white-space: pre;
+}
+
+.issue-table-scroll { width: 100%; max-width: 100%; margin: var(--prose-block-margin); overflow-x: auto; }
+
+.issue-markdown table { border-collapse: collapse; min-width: 100%; font-size: var(--font-size-sm); }
+
+.issue-markdown th, .issue-markdown td {
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.issue-markdown th { background: var(--color-surface-subtle); font-weight: var(--font-weight-semibold); }
+
+.issue-markdown .unsafe-link, .issue-markdown .unsafe-image { color: var(--color-text-secondary); }
 
 .issue-markdown a { color: var(--color-accent); text-underline-offset: var(--space-2); }
 

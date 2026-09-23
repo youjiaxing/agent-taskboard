@@ -270,6 +270,17 @@ const mobileDocument = await session.page.$eval(".mobile-issue-panel .issue-mark
 if (!mobileDocument?.includes("Can the operator read every constraint") || !mobileDocument.includes("Paragraph six")) {
   throw new Error(`390px Issue view should expose the complete document, got ${mobileDocument}`);
 }
+for (const selector of [
+  ".mobile-issue-panel .issue-markdown blockquote",
+  ".mobile-issue-panel .issue-markdown pre > code.language-ts",
+  ".mobile-issue-panel .issue-markdown .unsafe-image",
+  ".mobile-issue-panel .issue-markdown input[type='checkbox'][disabled]",
+  ".mobile-issue-panel .issue-markdown table",
+  ".mobile-issue-panel .issue-markdown ul ul",
+  ".mobile-issue-panel .issue-markdown ul ol",
+]) {
+  if (!(await session.page.$(selector))) throw new Error(`390px Markdown rendering missing ${selector}`);
+}
 const issueSectionActions = await session.page.$$eval(".mobile-issue-panel .detail-meta [data-act]", (nodes) => nodes.map((node) => node.dataset.act));
 for (const act of ["execute-run", "edit-issue", "toggle-issue-open", "open-issue"]) {
   if (!issueSectionActions.includes(act)) throw new Error(`mobile Issue panel should keep the ${act} action, got ${JSON.stringify(issueSectionActions)}`);
