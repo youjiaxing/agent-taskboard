@@ -600,7 +600,10 @@ export async function renderAfterTick(fullRender: boolean): Promise<void> {
     ui.tickFullRenderPending ||= fullRender;
     return;
   }
-  if (ui.snapshot?.board?.selected?.document.kind === "unloaded") {
+  const deferMobileHistoryIssue = mobileClient()
+    && (ui.mobileProjectHistoryRunOpen
+      || (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs"));
+  if (!deferMobileHistoryIssue && ui.snapshot?.board?.selected?.document.kind === "unloaded") {
     await loadSelectedIssueDocument();
     fullRender = true;
   }
@@ -813,6 +816,8 @@ window.addEventListener("resize", () => {
     ui.mobileDrawerAppearanceOpen = false;
     ui.mobileSearchOpen = false;
     ui.mobileWorkspaceSection = "terminal";
+    ui.mobileRunHistoryScope = "issue";
+    ui.mobileProjectHistoryRunOpen = false;
     render();
   }
   ui.fitAddon?.fit();

@@ -184,6 +184,34 @@ Paragraph six confirms that entering a Run must retain this same complete Issue 
         .expect("stopped Run")
         .recent_output
         .ends_with("ended recent output"));
+    let garden_unbound_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": garden_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "garden unbound history integration",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .expect("garden unbound Run session")
+        .push_output(b"garden unbound history output\n");
+    host.handle(serde_json::json!({
+        "op": "stopRun",
+        "runId": garden_unbound_run_id,
+    }))
+    .unwrap();
     let tools_dir = make_dir(tmp.path(), "work/tools");
     tracker.add_issue(IssueRecord::open("you/tools", 1, "tool ready"));
     host.handle(serde_json::json!({

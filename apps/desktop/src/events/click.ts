@@ -33,6 +33,7 @@ async function openMobilePage(page: "board" | "focus-workspace"): Promise<void> 
   ui.clientView.page = page;
   ui.mobileLiveTerminal = false;
   if (page === "board") {
+    ui.mobileProjectHistoryRunOpen = false;
     // The Host mirror also owns the workspace view; leaving it set would pull the client back in.
     if (ui.snapshot.workspaceView !== "project") await rpc("returnToBoard");
   } else if (!ui.snapshot.board?.selected) {
@@ -225,11 +226,24 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "mobile-workspace-section" && target.dataset.id) {
     ui.mobileWorkspaceSection = target.dataset.id as MobileWorkspaceSection;
+    if (target.dataset.id === "runs") ui.mobileRunHistoryScope = "issue";
+    ui.mobileLiveTerminal = false;
+    const run = workspaceRun(ui.snapshot);
+    if (target.dataset.id === "issue" && !(ui.mobileProjectHistoryRunOpen && run?.unbound)) {
+      await loadSelectedIssueDocument();
+    }
+    render();
+    return;
+  }
+  if (act === "mobile-project-history-return") {
+    ui.mobileWorkspaceSection = "runs";
+    ui.mobileRunHistoryScope = "project";
+    ui.mobileProjectHistoryRunOpen = false;
     ui.mobileLiveTerminal = false;
     render();
     return;
   }
-  if (act === "mobile-issue-entry" || act === "mobile-history-entry") {
+  if (act === "mobile-issue-entry") {
     rememberDialogTrigger(
       "mobile-drawer",
       target,
@@ -237,7 +251,24 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     );
     closeMobileDrawer();
     enterPrimaryPage("focus-workspace", ui.snapshot);
-    ui.mobileWorkspaceSection = act === "mobile-issue-entry" ? "issue" : "runs";
+    ui.mobileWorkspaceSection = "issue";
+    ui.mobileRunHistoryScope = "issue";
+    ui.mobileProjectHistoryRunOpen = false;
+    ui.mobileLiveTerminal = false;
+    render();
+    return;
+  }
+  if (act === "mobile-history-entry") {
+    rememberDialogTrigger(
+      "mobile-drawer",
+      target,
+      "button[data-act='mobile-drawer']",
+    );
+    closeMobileDrawer();
+    enterPrimaryPage("focus-workspace", ui.snapshot);
+    ui.mobileWorkspaceSection = "runs";
+    ui.mobileRunHistoryScope = "project";
+    ui.mobileProjectHistoryRunOpen = false;
     ui.mobileLiveTerminal = false;
     render();
     return;
@@ -495,6 +526,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     ui.clientView.page = "board";
     ui.clientView.returnPoint = null;
     ui.returnPointHistory.length = 0;
+    ui.mobileProjectHistoryRunOpen = false;
     await rpc("focusProject", { projectId: target.dataset.id });
     render();
     return;
@@ -605,13 +637,19 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
+    const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
+    const fromProjectHistory = mobileClient() && Boolean(target.closest("[data-run-history-scope='project']"));
     enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
     await rpc("focusRun", { runId: target.dataset.id });
     if (ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
-    await loadSelectedIssueDocument();
+    if (!fromProjectHistory && run?.issueId && ui.snapshot.board?.selected?.id === run.issueId) {
+      await loadSelectedIssueDocument();
+    }
     if (mobileClient()) {
       ui.mobileWorkspaceSection = "terminal";
+      ui.mobileProjectHistoryRunOpen = fromProjectHistory;
+      if (!fromProjectHistory) ui.mobileRunHistoryScope = "issue";
       ui.mobileLiveTerminal = false;
     }
     render();
@@ -1062,6 +1100,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileWorkspaceSection = "issue";
+      ui.mobileRunHistoryScope = "issue";
+      ui.mobileProjectHistoryRunOpen = false;
       ui.mobileLiveTerminal = false;
     }
     render();

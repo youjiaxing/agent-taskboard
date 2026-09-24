@@ -18,7 +18,10 @@ const MOBILE_LANE_ORDER: IssueLaneState[] = ["inProgress", "frontier", "blocked"
 /** Mobile has one bottom area: the views the user switches between, never a setting or a business confirmation. */
 export function mobileNav(copy: ShellCopy, localCopy: StartupCopy, snap: Snapshot): string {
   const page = ui.clientView.page;
-  const workspaceAvailable = Boolean(workspaceRun(snap) ?? focusedRun(snap) ?? snap.board?.selected);
+  const projectHistoryAvailable = ui.mobileRunHistoryScope === "project"
+    && ui.mobileWorkspaceSection === "runs"
+    && snap.projects.some((project) => project.id === snap.focusedProjectId);
+  const workspaceAvailable = Boolean(workspaceRun(snap) ?? focusedRun(snap) ?? snap.board?.selected ?? projectHistoryAvailable);
   const item = (id: "board" | "focus-workspace", label: string, disabled = false) =>
     button(
       { id: "mobile-nav", label, disabled, pressed: page === id, data: { id } },
@@ -46,6 +49,7 @@ export function mobileDrawer(copy: ShellCopy, localCopy: StartupCopy, snap: Snap
   const entry = (id: string, label: string, disabled = false) =>
     button({ id, label, disabled }, { variant: "ghost", className: "mobile-entry" });
   const issueSelected = Boolean(snap.board?.selected);
+  const projectSelected = snap.projects.some((project) => project.id === snap.focusedProjectId);
   const body = `<div class="mobile-drawer-body">
     <section class="mobile-drawer-group">
       <div class="group-head"><div class="group-name">${escapeHtml(copy.hosts)}</div></div>
@@ -61,11 +65,11 @@ export function mobileDrawer(copy: ShellCopy, localCopy: StartupCopy, snap: Snap
         ${entry("register", copy.addProject)}
       </div>
       ${projects || `<div class="nested">${escapeHtml(copy.noProjectTitle)}</div>`}
+      ${entry("mobile-history-entry", localCopy.mobileHistory, !projectSelected)}
     </section>
     <section class="mobile-drawer-group">
       <div class="group-head"><div class="group-name">${escapeHtml(copy.mobileIssue)}</div></div>
       ${entry("mobile-issue-entry", copy.mobileIssue, !issueSelected)}
-      ${entry("mobile-history-entry", localCopy.mobileHistory, !issueSelected)}
       ${entry("mobile-search-entry", copy.searchSubmit)}
       <div class="mobile-drawer-appearance">
         ${entry("mobile-appearance-entry", localCopy.appearance)}
@@ -135,8 +139,11 @@ export function mobileBoardPage(copy: ShellCopy, snap: Snapshot): string {
 /** One panel at a time: the Run's terminal, the Issue it works on, or its Run history. */
 export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, snap: Snapshot): string {
   const board = snap.board;
-  const issue = board?.selected;
   const run = workspaceRun(snap);
+  if (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs") {
+    return mobileProjectHistoryPage(copy, localCopy, snap);
+  }
+  const issue = ui.mobileProjectHistoryRunOpen && run?.unbound ? undefined : board?.selected;
   const labels = workspaceRailLabels();
   const sections: Array<[MobileWorkspaceSection, string]> = [
     ["terminal", copy.mobileRun],
@@ -153,6 +160,12 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
       ? (issue ? workspaceRunHistory(copy, issueRuns) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
       : mobileTerminalPanel(copy, snap, run);
   return `<section class="mobile-workspace-view">
+    ${ui.mobileProjectHistoryRunOpen
+      ? button(
+          { id: "mobile-project-history-return", label: `${localCopy.back} ${localCopy.mobileHistory}` },
+          { variant: "ghost", className: "mobile-project-history-return" },
+        )
+      : ""}
     ${optionGroup({
       label: localCopy.mobileWorkspace,
       className: "mobile-section-switch",
@@ -167,9 +180,24 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   </section>`;
 }
 
+function mobileProjectHistoryPage(copy: ShellCopy, localCopy: StartupCopy, snap: Snapshot): string {
+  const project = snap.projects.find((candidate) => candidate.id === snap.focusedProjectId);
+  const runs = (snap.runs ?? []).filter((run) => run.projectId === snap.focusedProjectId);
+  return `<section class="mobile-workspace-view mobile-project-history" data-focused-run="${escapeHtml(snap.focusedRunId)}">
+    <header class="mobile-project-history-head">
+      <div><span>${escapeHtml(localCopy.mobileHistory)}</span><h2>${escapeHtml(project?.name ?? copy.projects)}</h2></div>
+      <small>${runs.length}</small>
+    </header>
+    <div class="mobile-workspace-panel" data-run-history-scope="project">
+      ${workspaceRunHistory(copy, runs, { showIdentity: true })}
+    </div>
+  </section>`;
+}
+
 /** The active Run's input is the last frame row, so it carries the device bottom gap; it stays available across the focus workspace sections, like the desktop terminal. */
 export function mobileRunInput(copy: ShellCopy, snap: Snapshot): string {
   if (ui.clientView.page !== "focus-workspace") return "";
+  if (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs") return "";
   const run = workspaceRun(snap);
   if (!run || run.status === "ended") return "";
   return `<div class="mobile-input-row" data-mobile-run-input>${injectRunForm(copy, run)}</div>`;
