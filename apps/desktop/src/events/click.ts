@@ -1,8 +1,8 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
-import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
+import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
-import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
 import { loadArchivedRuns, loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
@@ -24,6 +24,15 @@ function leaveSettingsPage(): void {
 function closeMobileDrawer(): void {
   ui.mobileDrawerOpen = false;
   ui.mobileDrawerAppearanceOpen = false;
+}
+
+function clearRunOrganizationContext(): void {
+  ui.mobileRunMenuId = "";
+  ui.archiveProjectFilter = "";
+  ui.archiveSelectedRunId = "";
+  ui.recentlyRestoredRunId = "";
+  ui.runOrganizationRetry = null;
+  ui.restoreRunDialog = null;
 }
 
 /** The mobile bottom navigation switches primary views; it is not a return-point stack. */
@@ -105,8 +114,10 @@ export async function openSettingsPanel(): Promise<void> {
 
 export async function returnToPreviousPage(): Promise<void> {
   if (!ui.snapshot) return;
+  const leavingRunOrganization = ui.clientView.page === "run-archive";
   const returnPoint = ui.clientView.returnPoint;
   if (!returnPoint) {
+    if (leavingRunOrganization) clearRunOrganizationContext();
     ui.clientView.page = primaryPageFromSnapshot(ui.snapshot);
     ui.returnPointHistory.length = 0;
     render();
@@ -139,6 +150,7 @@ export async function returnToPreviousPage(): Promise<void> {
   }
   if (ui.clientView.returnPoint !== returnPoint) return;
   restoreReturnPointMemory(returnPoint);
+  if (leavingRunOrganization) clearRunOrganizationContext();
   render();
 }
 
@@ -173,6 +185,15 @@ function clearArchivedRunClientReferences(runId: string, wasFocused: boolean): v
     ui.ptyRunId = "";
     ui.ptyOffset = 0;
   }
+  if (ui.mobilePtyRunId === runId) {
+    ui.mobilePtyPumping = false;
+    ui.mobilePtyRunId = "";
+    ui.mobilePtyOffset = 0;
+  }
+  if (ui.snapshot) ui.mobilePtyText.delete(mobileOutputKey(ui.snapshot.focusedHostId, runId));
+  ui.terminalInputDrafts.delete(runId);
+  clearFormOperation(injectFormKey(runId));
+  ui.mobileRunMenuId = "";
   if (!wasFocused || ui.clientView.page !== "focus-workspace") return;
   const returnToArchive = ui.clientView.returnPoint?.page === "run-archive";
   ui.clientView.page = returnToArchive ? "run-archive" : "board";
@@ -354,10 +375,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target) {
-    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId) {
+    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId || ui.mobileRunMenuId) {
       ui.appearanceMenuOpen = false;
       ui.moreMenuOpen = false;
       ui.projectMenuId = "";
+      ui.mobileRunMenuId = "";
       render();
     }
     return;
@@ -374,9 +396,15 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
   if (act !== "more-menu") ui.moreMenuOpen = false;
   if (act !== "project-menu") ui.projectMenuId = "";
+  if (act !== "mobile-run-menu") ui.mobileRunMenuId = "";
   if (act === "mobile-drawer") {
     rememberDialogTrigger("mobile-drawer", target);
     ui.mobileDrawerOpen = true;
+    render();
+    return;
+  }
+  if (act === "mobile-run-menu" && target.dataset.id) {
+    ui.mobileRunMenuId = ui.mobileRunMenuId === target.dataset.id ? "" : target.dataset.id;
     render();
     return;
   }
@@ -478,11 +506,31 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "open-run-archive") {
-    if (!ui.snapshot.capabilities.runOrganization || mobileClient()) return;
+  if (act === "open-run-pinned") {
+    if (!ui.snapshot.capabilities.runOrganization) return;
     closeMobileDrawer();
+    clearRunOrganizationContext();
+    ui.mobileRunOrganizationSection = "pinned";
+    enterPrimaryPage("run-archive", ui.snapshot);
+    render();
+    return;
+  }
+  if (act === "open-run-archive") {
+    if (!ui.snapshot.capabilities.runOrganization) return;
+    closeMobileDrawer();
+    clearRunOrganizationContext();
+    if (mobileClient()) ui.mobileRunOrganizationSection = "archive";
     enterPrimaryPage("run-archive", ui.snapshot);
     await loadArchivedRuns();
+    render();
+    return;
+  }
+  if (act === "mobile-run-organization-section" && target.dataset.id) {
+    ui.mobileRunOrganizationSection = target.dataset.id === "archive" ? "archive" : "pinned";
+    ui.mobileRunMenuId = "";
+    ui.archiveSelectedRunId = "";
+    ui.restoreRunDialog = null;
+    if (ui.mobileRunOrganizationSection === "archive") await loadArchivedRuns();
     render();
     return;
   }
@@ -700,6 +748,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "focus-project" && target.dataset.id) {
     ui.projectMenuId = "";
     closeMobileDrawer();
+    clearRunOrganizationContext();
     ui.clientView.page = "board";
     ui.clientView.returnPoint = null;
     ui.returnPointHistory.length = 0;
@@ -1147,6 +1196,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "focus-host" && target.dataset.id) {
     await reportClientView(false);
+    clearRunOrganizationContext();
     await rpc("focusHost", { hostId: target.dataset.id });
     ui.hostPickerOpen = false;
     await reportClientView();

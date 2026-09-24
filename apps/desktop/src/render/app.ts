@@ -1,5 +1,5 @@
 import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, syncGraphSelection } from "../main";
-import { clientCopy, primaryPageFromSnapshot, restoreGraphAnchor } from "../view-helpers";
+import { clientCopy, restoreGraphAnchor } from "../view-helpers";
 import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
 import type { ScrollPosition } from "../protocol";
 import {
@@ -17,7 +17,7 @@ import {
 import { escapeHtml } from "../client-utils";
 import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, runRow, settingsPage, updateDialog, usagePage } from "./shell";
 import { restoreRunDialog, runArchivePage, runOrganizationLabels, runPersistenceBanner } from "./run-organization";
-import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileSearchDialog } from "./mobile";
+import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileRunOrganizationPage, mobileSearchDialog } from "./mobile";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
 import { applyClientPanelWidths, fixedPanelResizeHandle } from "../workbench";
@@ -64,11 +64,6 @@ export function render(): void {
   const snap = ui.snapshot;
   const runWindow = Boolean(ui.nativeRunWindowRunId);
   const isMobile = mobileClient() && !runWindow;
-  if (isMobile && ui.clientView.page === "run-archive") {
-    ui.clientView.page = primaryPageFromSnapshot(snap);
-    ui.clientView.returnPoint = null;
-    ui.returnPointHistory.length = 0;
-  }
   const activeField = captureActiveField();
   const browserAppearance = browserClient() ? ensureBrowserAppearance() : null;
   const appearance = {
@@ -105,7 +100,9 @@ export function render(): void {
     : ui.clientView.page === "host-overview"
       ? copy.hostOverview
       : ui.clientView.page === "run-archive"
-        ? runOrganizationLabels().archive
+        ? isMobile && ui.mobileRunOrganizationSection === "pinned"
+          ? runOrganizationLabels().pinnedRuns
+          : runOrganizationLabels().archive
       : ui.clientView.page === "usage"
         ? copy.usage
         : ui.clientView.page === "focus-workspace"
@@ -285,7 +282,7 @@ export function render(): void {
             ui.clientView.page === "settings"
               ? settingsPage(copy, localCopy, snap, appearance, isMobile)
               : ui.clientView.page === "run-archive"
-                ? runArchivePage(copy, snap)
+                ? isMobile ? mobileRunOrganizationPage(copy, snap) : runArchivePage(copy, snap)
               : empty
                 ? `${loopbackNotice(snap.loopbackPage)}${emptyState({
                     title: copy.noProjectTitle,
@@ -307,7 +304,7 @@ export function render(): void {
           }
         </main>
       </div>
-      ${isMobile && !empty && !["settings", "usage", "host-overview"].includes(ui.clientView.page) ? mobileNav(copy, localCopy, snap) : ""}
+      ${isMobile && !empty && !["settings", "usage", "host-overview", "run-archive"].includes(ui.clientView.page) ? mobileNav(copy, localCopy, snap) : ""}
       ${isMobile ? mobileRunInput(copy, snap) : ""}
     </div>
     ${ui.runWindowError

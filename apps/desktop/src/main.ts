@@ -692,6 +692,12 @@ document.addEventListener("keydown", (event) => {
       ui.projectMenuId = "";
       render();
       ui.app.querySelector<HTMLButtonElement>(`button[data-act='project-menu'][data-id='${CSS.escape(projectId)}']`)?.focus();
+    } else if (ui.mobileRunMenuId) {
+      event.preventDefault();
+      const runId = ui.mobileRunMenuId;
+      ui.mobileRunMenuId = "";
+      render();
+      ui.app.querySelector<HTMLButtonElement>(`button[data-act='mobile-run-menu'][data-id='${CSS.escape(runId)}']`)?.focus();
     }
     return;
   }
@@ -818,6 +824,7 @@ window.addEventListener("resize", () => {
     ui.mobileWorkspaceSection = "terminal";
     ui.mobileRunHistoryScope = "issue";
     ui.mobileProjectHistoryRunOpen = false;
+    ui.mobileRunMenuId = "";
     render();
   }
   ui.fitAddon?.fit();

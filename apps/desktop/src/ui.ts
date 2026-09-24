@@ -181,6 +181,8 @@ export const ui = {
   archiveProjectFilter: "",
   archiveSelectedRunId: "",
   recentlyRestoredRunId: "",
+  mobileRunOrganizationSection: "pinned" as "pinned" | "archive",
+  mobileRunMenuId: "",
   runOrganizationPending: new Set<string>(),
   runOrganizationRetry: null as null | {
     action:

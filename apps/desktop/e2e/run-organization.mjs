@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./visual-regression.mjs";
+import { runMobileRunOrganizationJourney } from "./mobile-run-organization.mjs";
 
 const url = process.env.BOARD_URL;
 const pendingRunId = process.env.PENDING_RUN_ID;
@@ -10,7 +11,14 @@ const removedRunId = process.env.REMOVED_RUN_ID;
 const removedProjectId = process.env.REMOVED_PROJECT_ID;
 const remoteHostId = process.env.REMOTE_HOST_ID;
 const remoteRunId = process.env.REMOTE_RUN_ID;
-if (!url || !pendingRunId || !activeRunId || !archivedRunId || !removedRunId || !removedProjectId || !remoteHostId || !remoteRunId) {
+const mobileProjectId = process.env.MOBILE_PROJECT_ID;
+const mobileBoundRunId = process.env.MOBILE_BOUND_RUN_ID;
+const mobileActiveRunId = process.env.MOBILE_ACTIVE_RUN_ID;
+const mobileEndedRunId = process.env.MOBILE_ENDED_RUN_ID;
+const mobileRemovedProjectId = process.env.MOBILE_REMOVED_PROJECT_ID;
+const mobileRemovedRunId = process.env.MOBILE_REMOVED_RUN_ID;
+if (!url || !pendingRunId || !activeRunId || !archivedRunId || !removedRunId || !removedProjectId || !remoteHostId || !remoteRunId
+  || !mobileProjectId || !mobileBoundRunId || !mobileActiveRunId || !mobileEndedRunId || !mobileRemovedProjectId || !mobileRemovedRunId) {
   throw new Error("missing Run organization browser fixture environment");
 }
 
@@ -260,7 +268,20 @@ try {
   await page.waitForSelector(".overview-page");
   assert.equal(await page.locator(".overview-page [data-run-organization]").count(), 0, "#183 must not add Run organization actions to mobile Host overview");
 
-  console.log("Run organization desktop e2e ok");
+  await runMobileRunOrganizationJourney(page, {
+    url,
+    activeRunId,
+    remoteHostId,
+    remoteRunId,
+    mobileProjectId,
+    mobileBoundRunId,
+    mobileActiveRunId,
+    mobileEndedRunId,
+    mobileRemovedProjectId,
+    mobileRemovedRunId,
+  });
+
+  console.log("Run organization desktop and mobile e2e ok");
 } finally {
   await browser.close();
 }
