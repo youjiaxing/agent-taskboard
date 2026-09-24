@@ -256,6 +256,8 @@ export type ShellCopy = {
   showIssueDetail: string;
   hideIssueDetail: string;
   showEndedRuns: string;
+  activeRuns: string;
+  filteredRuns: string;
   runGroupWaiting: string;
   runGroupRunning: string;
   runGroupStopped: string;

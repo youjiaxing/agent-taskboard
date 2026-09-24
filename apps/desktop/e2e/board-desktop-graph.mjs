@@ -257,13 +257,17 @@ await session.page.waitForSelector(".overview-page");
 if (await session.page.$(".lanes")) {
   throw new Error("Host overview should replace the Project board");
 }
-for (const group of ["running", "stopped"]) {
-  if (!(await session.page.$(`[data-run-group="${group}"]`))) {
-    throw new Error(`Host overview missing ${group} group`);
+if (!(await session.page.$('[data-run-group="running"]'))) {
+  throw new Error("Host overview missing running group");
+}
+for (const group of ["stopped", "ended"]) {
+  if (await session.page.$(`[data-run-group="${group}"]`)) {
+    throw new Error(`${group} Runs should be hidden by default`);
   }
 }
-if (await session.page.$('[data-run-group="ended"]')) {
-  throw new Error("ended Runs should be hidden by default");
+await session.page.check('input[data-field="showEndedRuns"]');
+if (!(await session.page.$('[data-run-group="stopped"]'))) {
+  throw new Error("Host overview should reveal execution-stopped Runs with the ended toggle");
 }
 const overviewProjects = await session.page.$$eval(".run-thumbnail .run-project", (nodes) => nodes.map((node) => node.textContent));
 if (!overviewProjects.includes("garden") || !overviewProjects.includes("tools")) {

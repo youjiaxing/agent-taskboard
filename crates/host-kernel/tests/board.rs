@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use common::{
     boot_board as boot, boot_board_seam as boot_seam, boot_req, browser_e2e_guard, make_dir,
     pin_board_test_time, register_project as register, start_bound_grok, ReadMode, SeamTracker,
+    BOARD_TEST_NOW_MS,
 };
 use host_kernel::{
     AgentField, AgentFieldKind, BoardEmptyReason, CenterView, DependencyGraph, DependencyGraphMode,

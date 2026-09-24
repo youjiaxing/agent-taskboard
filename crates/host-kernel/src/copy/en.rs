@@ -244,6 +244,8 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 show_issue_detail: "Show details".into(),
                 hide_issue_detail: "Hide details".into(),
                 show_ended_runs: "Show ended Runs".into(),
+                active_runs: "Active Runs".into(),
+                filtered_runs: "Filtered Runs".into(),
                 run_group_waiting: "Waiting".into(),
                 run_group_running: "In progress".into(),
                 run_group_stopped: "Execution stopped".into(),

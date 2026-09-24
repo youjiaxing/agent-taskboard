@@ -263,9 +263,10 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
   const visibleProjects = snap.projects.filter(
     (project) => !ui.overviewProjectId || project.id === ui.overviewProjectId,
   );
-  const visibleRuns = (snap.runs ?? []).filter(
+  const projectRuns = (snap.runs ?? []).filter(
     (run) => !ui.overviewProjectId || run.projectId === ui.overviewProjectId,
   );
+  const visibleRuns = projectRuns.filter((run) => ui.overviewShowEnded || run.status !== "ended");
   const groups: Array<[string, string, RunSummary[]]> = [
     ["waiting", copy.runGroupWaiting, visibleRuns.filter((run) => run.status !== "ended" && Boolean(run.waitingForUser))],
     ["running", copy.runGroupRunning, visibleRuns.filter((run) => run.status !== "ended" && !run.waitingForUser)],
@@ -312,7 +313,7 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       <div><b>${visibleProjects.length}</b><span>${escapeHtml(copy.projects)}</span></div>
       <div><b>${allCountsAvailable ? totalCounts.open : "—"}</b><span>Open Issue</span></div>
       <div><b>${allCountsAvailable ? totalCounts.frontier : "—"}</b><span>Frontier</span></div>
-      <div><b>${activeRuns}</b><span>Run</span></div>
+      <div><b>${activeRuns}</b><span>${escapeHtml(copy.activeRuns)}</span></div>
     </div>
     <section class="overview-project-section">
       <div class="lane-hd">${escapeHtml(copy.projects)} <span>${visibleProjects.length}</span></div>
@@ -321,12 +322,12 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
       </div>
     </section>
     <section class="overview-run-section">
-      <div class="lane-hd">Run <span>${visibleRuns.length}</span></div>
+      <div class="lane-hd">${escapeHtml(copy.filteredRuns)} <span>${visibleRuns.length}</span></div>
       ${visibleRuns.length === 0
         ? `<div class="overview-runs-empty">${escapeHtml((snap.runs ?? []).length === 0 ? copy.hostOverviewEmpty : copy.noItems)}</div>`
         : `<div class="overview-groups">
           ${groups
-            .filter(([id]) => id !== "ended" || ui.overviewShowEnded)
+            .filter(([id]) => ui.overviewShowEnded || (id !== "stopped" && id !== "ended"))
             .map(
               ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
                 <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
@@ -387,11 +388,17 @@ export function usageTrend(
   buckets: UsageBucket[],
   field: "ttftMs" | "tokensPerSec",
 ): string {
-  const max = Math.max(...buckets.map((bucket) => bucket[field] ?? 0), 1);
+  const values = buckets.flatMap((bucket) => {
+    const value = bucket[field];
+    return value == null ? [] : [value];
+  });
+  const max = Math.max(...values, 1);
   return `<div class="usage-trend-block"><span class="tiny">${escapeHtml(label)}</span><div class="usage-trend">${buckets
     .map((bucket) => {
-      const height = Math.max(4, Math.round(((bucket[field] ?? 0) / max) * 48));
-      return `<i class="${bucket.slow ? "slow" : ""}" style="height:${height}px" title="${dash(bucket[field])}"></i>`;
+      const value = bucket[field];
+      if (value == null) return `<span class="usage-trend-missing" title="—">—</span>`;
+      const height = Math.max(4, Math.round((value / max) * 48));
+      return `<i class="${bucket.slow ? "slow" : ""}" style="height:${height}px" title="${dash(value)}"></i>`;
     })
     .join("")}</div></div>`;
 }

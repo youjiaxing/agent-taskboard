@@ -6,6 +6,7 @@ import {
 
 const url = process.env.BOARD_URL;
 const state = process.env.SHELL_EDGE_STATE;
+const gardenProjectId = process.env.GARDEN_PROJECT_ID;
 if (!url || !state) {
   console.error("missing BOARD_URL or SHELL_EDGE_STATE");
   process.exit(1);
@@ -72,6 +73,93 @@ if (state === "empty-host") {
     }
     if (JSON.stringify(usagePage.filters) !== JSON.stringify(["projectId", "agentId", "model"]) || !["全部", "All"].includes(usagePage.allFilterLabel)) {
       throw new Error(`usage filters must offer Project, Agent, and model choices: ${JSON.stringify(usagePage)}`);
+    }
+    await page.click("button[data-act='return-page']");
+    await page.waitForSelector(".lanes");
+  } else if (state === "overview-usage-truth") {
+    if (!gardenProjectId) throw new Error("missing GARDEN_PROJECT_ID");
+    await page.click("button[data-act='open-overview']");
+    await page.waitForSelector(".overview-page");
+    const readOverview = () => page.evaluate(() => ({
+      stats: [...document.querySelectorAll(".overview-stats > div")].map((node) => ({
+        value: Number(node.querySelector("b")?.textContent ?? "NaN"),
+        label: node.querySelector("span")?.textContent?.trim() ?? "",
+      })),
+      runTotal: {
+        label: document.querySelector(".overview-run-section > .lane-hd")?.childNodes[0]?.textContent?.trim() ?? "",
+        value: Number(document.querySelector(".overview-run-section > .lane-hd span")?.textContent ?? "NaN"),
+      },
+      groups: [...document.querySelectorAll(".overview-group")].map((node) => ({
+        id: node.getAttribute("data-run-group"),
+        count: Number(node.querySelector(".lane-hd span")?.textContent ?? "NaN"),
+        runs: node.querySelectorAll(".run-thumbnail").length,
+      })),
+      runs: document.querySelectorAll(".overview-group .run-thumbnail").length,
+    }));
+    const assertOverview = (actual, expected) => {
+      const active = actual.stats.find((item) => item.label === "活跃 Run");
+      if (active?.value !== expected.active) {
+        throw new Error(`active Run KPI must use the filtered Run collection: ${JSON.stringify(actual)}`);
+      }
+      if (actual.runTotal.label !== "筛选后的 Run" || actual.runTotal.value !== expected.total || actual.runs !== expected.total) {
+        throw new Error(`filtered Run heading and rendered groups must agree: ${JSON.stringify(actual)}`);
+      }
+      const groups = Object.fromEntries(actual.groups.map((group) => [group.id, group]));
+      for (const [id, count] of Object.entries(expected.groups)) {
+        if (groups[id]?.count !== count || groups[id]?.runs !== count) {
+          throw new Error(`Run group ${id} must contain ${count} Runs: ${JSON.stringify(actual)}`);
+        }
+      }
+      for (const id of expected.absent) {
+        if (groups[id]) throw new Error(`Run group ${id} must be hidden: ${JSON.stringify(actual)}`);
+      }
+    };
+
+    assertOverview(await readOverview(), {
+      active: 3,
+      total: 3,
+      groups: { waiting: 1, running: 2 },
+      absent: ["stopped", "ended"],
+    });
+    await page.check('input[data-field="showEndedRuns"]');
+    assertOverview(await readOverview(), {
+      active: 3,
+      total: 6,
+      groups: { waiting: 1, running: 2, stopped: 1, ended: 2 },
+      absent: [],
+    });
+    await page.selectOption('select[data-overview-filter="project"]', gardenProjectId);
+    assertOverview(await readOverview(), {
+      active: 2,
+      total: 4,
+      groups: { waiting: 1, running: 1, stopped: 1, ended: 1 },
+      absent: [],
+    });
+    await page.uncheck('input[data-field="showEndedRuns"]');
+    assertOverview(await readOverview(), {
+      active: 2,
+      total: 2,
+      groups: { waiting: 1, running: 1 },
+      absent: ["stopped", "ended"],
+    });
+
+    await page.click("button[data-act='return-page']");
+    await page.click(".host-area button[data-act='open-usage']");
+    await page.waitForSelector(".usage-page");
+    const trends = await page.evaluate(() => [...document.querySelectorAll(".usage-trend-block")].map((block) => ({
+      label: block.querySelector(".tiny")?.textContent?.trim() ?? "",
+      bars: [...block.querySelectorAll(".usage-trend > i")].map((bar) => ({
+        title: bar.getAttribute("title"),
+        slow: bar.classList.contains("slow"),
+      })),
+      missing: [...block.querySelectorAll(".usage-trend-missing")].map((node) => node.textContent?.trim()),
+    })));
+    const [ttft, generationRate] = trends;
+    if (ttft.bars.length !== 1 || ttft.bars[0]?.title !== "180" || ttft.missing.length === 0 || ttft.missing.some((value) => value !== "—")) {
+      throw new Error(`mixed TTFT data must render only the real sample as a bar: ${JSON.stringify(trends)}`);
+    }
+    if (generationRate.bars.length !== 0 || generationRate.missing.length === 0 || generationRate.missing.some((value) => value !== "—")) {
+      throw new Error(`missing generation-rate data must render no bars and keep missing semantics: ${JSON.stringify(trends)}`);
     }
     await page.click("button[data-act='return-page']");
     await page.waitForSelector(".lanes");
