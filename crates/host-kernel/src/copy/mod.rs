@@ -252,6 +252,8 @@ pub struct ShellCopy {
     pub show_issue_detail: String,
     pub hide_issue_detail: String,
     pub show_ended_runs: String,
+    pub active_runs: String,
+    pub filtered_runs: String,
     pub run_group_waiting: String,
     pub run_group_running: String,
     pub run_group_stopped: String,

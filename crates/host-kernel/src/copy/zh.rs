@@ -244,6 +244,8 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 show_issue_detail: "显示详情".into(),
                 hide_issue_detail: "收起详情".into(),
                 show_ended_runs: "显示已结束".into(),
+                active_runs: "活跃 Run".into(),
+                filtered_runs: "筛选后的 Run".into(),
                 run_group_waiting: "等待操作".into(),
                 run_group_running: "进行中".into(),
                 run_group_stopped: "执行已停".into(),

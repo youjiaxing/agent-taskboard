@@ -420,6 +420,112 @@ fn browser_renders_shell_edge_state_fixtures() {
     run_degraded_shell_edge_state("auth-failed", "you/auth", |tracker, repository| {
         tracker.fail_auth(repository);
     });
+
+    let truth_tmp = tempfile::tempdir().unwrap();
+    let garden_dir = make_dir(truth_tmp.path(), "work/garden");
+    let tools_dir = make_dir(truth_tmp.path(), "work/tools");
+    let truth_tracker = Arc::new(MemoryTracker::new());
+    for number in 1..=4 {
+        truth_tracker.add_issue(IssueRecord::open(
+            "you/garden",
+            number,
+            format!("garden run {number}"),
+        ));
+    }
+    for number in 1..=2 {
+        truth_tracker.add_issue(IssueRecord::open(
+            "you/tools",
+            number,
+            format!("tools run {number}"),
+        ));
+    }
+    let sessions = MemorySessionFactory::new();
+    let agent = Arc::new(MemoryAgent::installed_grok());
+    let mut truth_host = HostKernel::boot_with_ports(
+        boot_req(truth_tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: truth_tracker,
+            agents: vec![Arc::clone(&agent) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut truth_host);
+    let garden_id = register(&mut truth_host, "garden", &garden_dir, "you/garden");
+    let waiting_run_id = start_bound_grok(&mut truth_host, &garden_id, "you/garden#1")
+        .snapshot
+        .focused_run_id;
+    sessions.last_session().unwrap().set_waiting(true);
+    let running_run_id = start_bound_grok(&mut truth_host, &garden_id, "you/garden#2")
+        .snapshot
+        .focused_run_id;
+    let stopped_run_id = start_bound_grok(&mut truth_host, &garden_id, "you/garden#3")
+        .snapshot
+        .focused_run_id;
+    truth_host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": stopped_run_id,
+        }))
+        .unwrap();
+    start_bound_grok(&mut truth_host, &garden_id, "you/garden#4");
+    sessions.last_session().unwrap().finish(0);
+    truth_host
+        .handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+
+    let tools_id = register(&mut truth_host, "tools", &tools_dir, "you/tools");
+    start_bound_grok(&mut truth_host, &tools_id, "you/tools#1");
+    start_bound_grok(&mut truth_host, &tools_id, "you/tools#2");
+    sessions.last_session().unwrap().finish(0);
+    agent.push_telemetry(host_kernel::TelemetrySample {
+        run_id: waiting_run_id,
+        project_id: String::new(),
+        agent_id: String::new(),
+        model: "grok-4.6".into(),
+        lane: host_kernel::TelemetryLane::Main,
+        tokens: host_kernel::TokenCounts {
+            input: Some(4),
+            output: Some(2),
+            cache_read: None,
+            cache_write: None,
+            reasoning: None,
+            total: Some(6),
+        },
+        ttft_ms: None,
+        tokens_per_sec: None,
+        at_ms: BOARD_TEST_NOW_MS - 3_600_000,
+    });
+    agent.push_telemetry(host_kernel::TelemetrySample {
+        run_id: running_run_id,
+        project_id: String::new(),
+        agent_id: String::new(),
+        model: "grok-4.6".into(),
+        lane: host_kernel::TelemetryLane::Main,
+        tokens: host_kernel::TokenCounts {
+            input: Some(8),
+            output: Some(4),
+            cache_read: None,
+            cache_write: None,
+            reasoning: None,
+            total: Some(12),
+        },
+        ttft_ms: Some(180),
+        tokens_per_sec: None,
+        at_ms: BOARD_TEST_NOW_MS,
+    });
+    truth_host
+        .handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    run_browser_e2e(
+        truth_host,
+        "shell-edge-state.mjs",
+        &[
+            ("SHELL_EDGE_STATE", Path::new("overview-usage-truth")),
+            ("GARDEN_PROJECT_ID", Path::new(&garden_id)),
+        ],
+    );
 }
 
 #[test]

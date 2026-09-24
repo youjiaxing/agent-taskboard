@@ -1088,6 +1088,15 @@ button.danger.primary {
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
 }
 
+.usage-trend-missing {
+  display: block;
+  width: 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  text-align: center;
+}
+
 .usage-trend i.slow, .spark i.slow { background: var(--color-accent); }
 
 .usage-list { display: grid; gap: var(--space-8); }
