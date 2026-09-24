@@ -613,6 +613,8 @@ export type Snapshot = {
   hostMode: "host-and-client" | "client-only";
   focusedHostId: string;
   focusedProjectId: string;
+  capabilities: { runOrganization?: boolean; projectRestore?: boolean };
+  dataConflicts?: { kind: "project-id-tombstone"; projectId: string }[];
   hosts: { id: string; displayName: string; local: boolean }[];
   projects: Project[];
   appearance: AppearanceState;
@@ -786,6 +788,44 @@ export type RunSummary = {
   recentOutput?: string;
 };
 
+export type ProjectTombstone = {
+  projectId: string;
+  name: string;
+  localPath: string;
+  tracker: "github" | "local-markdown";
+  githubHost: string;
+  repository: string;
+  revision: string;
+};
+
+export type RunRestoreResult =
+  | { status: "ready"; runId: string; projectId: string }
+  | {
+      status: "project-recreate-required";
+      runId: string;
+      projectId: string;
+      tombstone: ProjectTombstone;
+    }
+  | {
+      status: "restored";
+      runId: string;
+      projectId: string;
+      projectRecreated: boolean;
+    }
+  | {
+      status: "conflict";
+      runId: string;
+      projectId: string;
+      reason:
+        | "tombstone-missing"
+        | "directory-missing"
+        | "directory-in-use"
+        | "tombstone-revision-changed"
+        | "active-project-tombstone-conflict";
+      tombstone?: ProjectTombstone;
+      conflictingProjectId?: string;
+    };
+
 export type TokenCounts = {
   input?: number | null;
   output?: number | null;
@@ -926,6 +966,7 @@ export type RpcResult = {
   updateInstallGate?: UpdateInstallGate;
   events?: HostEvent[];
   viewChanges?: ViewChanges;
+  runRestore?: RunRestoreResult;
 };
 
 export type PrimaryPage =

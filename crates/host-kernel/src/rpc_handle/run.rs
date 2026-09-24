@@ -156,12 +156,29 @@ impl HostKernel {
                     run_id: required_string(&request, "runId")?,
                 })
             }
+            "prepareRestoreRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::PrepareRestoreRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
             "restoreRun" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
                 }
                 self.dispatch(Command::RestoreRun {
                     run_id: required_string(&request, "runId")?,
+                    confirm_project_recreate: request
+                        .get("confirmProjectRecreate")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    expected_tombstone_revision: request
+                        .get("expectedTombstoneRevision")
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned),
                 })
             }
             "listArchivedRuns" => {

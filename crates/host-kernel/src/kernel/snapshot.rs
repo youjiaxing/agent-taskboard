@@ -12,6 +12,7 @@ impl HostKernel {
             focused_host_id: self.focused_host_id.clone(),
             focused_project_id: focused_project_id.clone(),
             capabilities: self.capabilities_for_focus(),
+            data_conflicts: self.data_conflicts_for_focus(),
             hosts: self.connected_hosts(),
             projects,
             appearance: AppearanceState::from_selection(self.appearance),
@@ -81,6 +82,7 @@ impl HostKernel {
             view_changes,
             launch_environment: None,
             archived_runs: None,
+            run_restore: None,
         }
     }
 
@@ -125,6 +127,7 @@ impl HostKernel {
         if self.focused_host_id == LOCAL_HOST_ID {
             return HostCapabilities {
                 run_organization: true,
+                project_restore: true,
             };
         }
         self.remote_view
@@ -132,6 +135,28 @@ impl HostKernel {
             .filter(|view| view.host_id == self.focused_host_id)
             .map(|view| view.capabilities)
             .unwrap_or_default()
+    }
+
+    pub(crate) fn data_conflicts_for_focus(&self) -> Vec<HostDataConflict> {
+        if self.focused_host_id != LOCAL_HOST_ID {
+            return self
+                .remote_view
+                .as_ref()
+                .filter(|view| view.host_id == self.focused_host_id)
+                .map(|view| view.data_conflicts.clone())
+                .unwrap_or_default();
+        }
+        self.projects
+            .iter()
+            .filter(|project| {
+                self.project_tombstones
+                    .iter()
+                    .any(|tombstone| tombstone.id == project.id)
+            })
+            .map(|project| HostDataConflict::ProjectIdTombstone {
+                project_id: project.id.clone(),
+            })
+            .collect()
     }
 
     pub(crate) fn board_for_focus(&self) -> (Vec<ProjectSummary>, String, Vec<EmptyAction>) {

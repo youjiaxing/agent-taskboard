@@ -104,6 +104,24 @@ impl HostKernel {
 }
 
 impl HostKernel {
+    pub(crate) fn apply_forwarded_outcome_fields(
+        outcome: &mut CommandOutcome,
+        response: &serde_json::Value,
+    ) {
+        if let Some(inference) = response.get("inference").cloned() {
+            outcome.inference = serde_json::from_value(inference).ok();
+        }
+        if let Some(view) = response.get("viewChanges").cloned() {
+            outcome.view_changes = serde_json::from_value(view).ok();
+        }
+        if let Some(runs) = response.get("archivedRuns").cloned() {
+            outcome.archived_runs = serde_json::from_value(runs).ok();
+        }
+        if let Some(run_restore) = response.get("runRestore").cloned() {
+            outcome.run_restore = serde_json::from_value(run_restore).ok();
+        }
+    }
+
     pub(crate) fn capture_client_navigation(&self) -> ClientNavigationState {
         ClientNavigationState {
             focused_host_id: self.focused_host_id.clone(),
@@ -302,6 +320,12 @@ impl HostKernel {
             .map(serde_json::from_value)
             .transpose()?
             .unwrap_or_default();
+        let data_conflicts = snapshot
+            .get("dataConflicts")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
         let board = match snapshot.get("board") {
             Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
             _ => None,
@@ -332,6 +356,7 @@ impl HostKernel {
             projects,
             focused_project_id,
             capabilities,
+            data_conflicts,
             empty_actions,
             board,
             runs,
@@ -469,18 +494,24 @@ impl HostKernel {
     }
 
     pub(crate) fn persist_host_settings(&self) -> Result<(), KernelError> {
-        self.persist_host_settings_state(&self.projects, self.focused_project_id.as_deref())
+        self.persist_host_settings_state(
+            &self.projects,
+            &self.project_tombstones,
+            self.focused_project_id.as_deref(),
+        )
     }
 
     pub(crate) fn persist_host_settings_state(
         &self,
         projects: &[ProjectRecord],
+        project_tombstones: &[StoredProjectTombstone],
         focused_project_id: Option<&str>,
     ) -> Result<(), KernelError> {
         let file = HostSettingsFile {
             id: self.host_id.clone(),
             focused_project_id: focused_project_id.map(ToOwned::to_owned),
             projects: projects.iter().map(ProjectRecord::stored).collect(),
+            project_tombstones: project_tombstones.to_vec(),
             refresh_interval_ms: self.refresh_interval_ms,
             agent_launch_defaults: self.launch_defaults.clone(),
             last_successful_agent: self.last_successful_agent.clone(),
@@ -529,6 +560,7 @@ mod tests {
         )
         .unwrap();
         assert!(!host.snapshot().capabilities.run_organization);
+        assert!(!host.snapshot().capabilities.project_restore);
 
         host.apply_remote_view(
             "remote",
@@ -544,5 +576,43 @@ mod tests {
         )
         .unwrap();
         assert!(host.snapshot().capabilities.run_organization);
+        assert!(!host.snapshot().capabilities.project_restore);
+    }
+
+    #[test]
+    fn forwarded_outcome_fields_preserve_run_restore_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "en".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Client".into(),
+            },
+            Arc::new(MemoryTracker::new()),
+        )
+        .unwrap();
+        let mut outcome = host.outcome();
+
+        HostKernel::apply_forwarded_outcome_fields(
+            &mut outcome,
+            &serde_json::json!({
+                "runRestore": {
+                    "status": "conflict",
+                    "runId": "run-1",
+                    "projectId": "project-1",
+                    "reason": "tombstone-missing"
+                }
+            }),
+        );
+
+        assert!(matches!(
+            outcome.run_restore,
+            Some(RunRestoreResult::Conflict {
+                reason: RunRestoreConflictReason::TombstoneMissing,
+                ..
+            })
+        ));
     }
 }

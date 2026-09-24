@@ -58,6 +58,8 @@ pub(crate) struct HostSettingsFile {
     pub(crate) focused_project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) projects: Vec<StoredProject>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) project_tombstones: Vec<StoredProjectTombstone>,
     #[serde(default = "default_refresh_interval_ms")]
     pub(crate) refresh_interval_ms: u64,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -74,6 +76,7 @@ impl Default for HostSettingsFile {
             id: String::new(),
             focused_project_id: None,
             projects: Vec::new(),
+            project_tombstones: Vec::new(),
             refresh_interval_ms: refresh::DEFAULT_REFRESH_INTERVAL_MS,
             agent_launch_defaults: BTreeMap::new(),
             last_successful_agent: BTreeMap::new(),
@@ -107,6 +110,18 @@ pub(crate) struct StoredProject {
     pub(crate) restore_auto_advance: bool,
     #[serde(default = "advance::default_restore_delay_ms")]
     pub(crate) restore_delay_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StoredProjectTombstone {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) local_path: PathBuf,
+    pub(crate) tracker: TrackerKind,
+    pub(crate) github_host: String,
+    pub(crate) repository: String,
+    pub(crate) revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -63,15 +63,7 @@ impl HostKernel {
         let host_id = self.focused_host_id.clone();
         self.apply_remote_view(&host_id, &response)?;
         let mut outcome = self.outcome();
-        if let Some(inference) = response.get("inference").cloned() {
-            outcome.inference = serde_json::from_value(inference).ok();
-        }
-        if let Some(view) = response.get("viewChanges").cloned() {
-            outcome.view_changes = serde_json::from_value(view).ok();
-        }
-        if let Some(runs) = response.get("archivedRuns").cloned() {
-            outcome.archived_runs = serde_json::from_value(runs).ok();
-        }
+        Self::apply_forwarded_outcome_fields(&mut outcome, &response);
         Ok(Some(outcome))
     }
 
@@ -100,8 +92,19 @@ impl HostKernel {
         }
         let tracker_kind = tracker_kind_for_host(&github_host);
         let connection = self.probe_tracker(tracker_kind, &github_host, &repository);
+        let project_id = loop {
+            let candidate = pairing::random_id();
+            if !self.projects.iter().any(|project| project.id == candidate)
+                && !self
+                    .project_tombstones
+                    .iter()
+                    .any(|tombstone| tombstone.id == candidate)
+            {
+                break candidate;
+            }
+        };
         let record = ProjectRecord {
-            id: pairing::random_id(),
+            id: project_id,
             name,
             local_path,
             tracker: tracker_kind,
@@ -117,7 +120,7 @@ impl HostKernel {
         let project_id = record.id.clone();
         let mut projects = self.projects.clone();
         projects.push(record);
-        self.persist_host_settings_state(&projects, Some(&project_id))?;
+        self.persist_host_settings_state(&projects, &self.project_tombstones, Some(&project_id))?;
         self.projects = projects;
         self.focused_project_id = Some(project_id.clone());
         self.selected_issue_id = None;
@@ -191,7 +194,11 @@ impl HostKernel {
             project.connection = connection.expect("changed registration connection");
             project.tracker_synced = false;
         }
-        self.persist_host_settings_state(&projects, self.focused_project_id.as_deref())?;
+        self.persist_host_settings_state(
+            &projects,
+            &self.project_tombstones,
+            self.focused_project_id.as_deref(),
+        )?;
         self.projects = projects;
         if registration_changed {
             self.loaded_issues.remove(project_id);
@@ -224,9 +231,29 @@ impl HostKernel {
                 "cannot remove a Project with an active Run".into(),
             ));
         }
+        if self
+            .project_tombstones
+            .iter()
+            .any(|tombstone| tombstone.id == project_id)
+        {
+            return Err(KernelError::Denied(
+                "Project conflicts with an existing tombstone".into(),
+            ));
+        }
+        let removed = self.projects[index].clone();
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let mut projects = self.projects.clone();
         projects.remove(index);
+        let mut project_tombstones = self.project_tombstones.clone();
+        project_tombstones.push(StoredProjectTombstone {
+            id: removed.id,
+            name: removed.name,
+            local_path: removed.local_path,
+            tracker: removed.tracker,
+            github_host: removed.github_host,
+            repository: removed.repository,
+            revision: pairing::random_id(),
+        });
         let focused_project_id = if was_current {
             if projects.is_empty() {
                 None
@@ -236,9 +263,14 @@ impl HostKernel {
         } else {
             self.focused_project_id.clone()
         };
-        self.persist_host_settings_state(&projects, focused_project_id.as_deref())?;
+        self.persist_host_settings_state(
+            &projects,
+            &project_tombstones,
+            focused_project_id.as_deref(),
+        )?;
 
         self.projects = projects;
+        self.project_tombstones = project_tombstones;
         self.focused_project_id = focused_project_id;
         self.refresh.remove(project_id);
         self.local_tracker_revisions.remove(project_id);
@@ -279,6 +311,51 @@ impl HostKernel {
         let local_path =
             project::require_local_directory(local_path).map_err(KernelError::Protocol)?;
         Ok(project::infer_github_project(&local_path))
+    }
+
+    pub(crate) fn recreate_project_from_tombstone(
+        &mut self,
+        project_id: &str,
+        expected_revision: &str,
+    ) -> Result<(), KernelError> {
+        let tombstone_position = self
+            .project_tombstones
+            .iter()
+            .position(|candidate| {
+                candidate.id == project_id && candidate.revision == expected_revision
+            })
+            .ok_or_else(|| KernelError::Denied("Project tombstone changed".into()))?;
+        let tombstone = self.project_tombstones[tombstone_position].clone();
+        let stored = StoredProject {
+            id: tombstone.id,
+            name: tombstone.name,
+            local_path: tombstone.local_path,
+            tracker: tombstone.tracker,
+            github_host: tombstone.github_host,
+            repository: tombstone.repository,
+            auto_advance: false,
+            restore_auto_advance: false,
+            restore_delay_ms: advance::DEFAULT_RESTORE_DELAY_MS,
+        };
+        let record = probe_record(
+            stored,
+            self.tracker.as_ref(),
+            &self.data.host_secrets_path,
+            self.appearance.language,
+        );
+        let mut projects = self.projects.clone();
+        projects.push(record);
+        let mut project_tombstones = self.project_tombstones.clone();
+        project_tombstones.remove(tombstone_position);
+        self.persist_host_settings_state(
+            &projects,
+            &project_tombstones,
+            self.focused_project_id.as_deref(),
+        )?;
+        self.projects = projects;
+        self.project_tombstones = project_tombstones;
+        self.load_persisted_snapshot(project_id);
+        Ok(())
     }
 }
 
