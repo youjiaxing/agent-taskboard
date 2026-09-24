@@ -11,11 +11,12 @@ use edit_menu::{
     EDIT_REDO, EDIT_SELECT_ALL, EDIT_UNDO,
 };
 use host_kernel::{
-    BootRequest, Command, HostKernel, HostMode, HostSnapshot, LoopbackAssets, LoopbackServer,
-    ProcessIntent, SystemAppearance, LOCAL_RPC_PORT,
+    BootRequest, Command, HostKernel, HostMode, HostSnapshot, LoopbackAssets, LoopbackPage,
+    LoopbackServer, ProcessIntent, SystemAppearance, LOCAL_RPC_PORT,
 };
 use tauri::menu::{
-    AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
+    AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
+    WINDOW_SUBMENU_ID,
 };
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
@@ -32,6 +33,9 @@ const RUN_WINDOW_MIN_WIDTH: f64 = 900.0;
 const RUN_WINDOW_MIN_HEIGHT: f64 = 640.0;
 const ACCEPTANCE_MANIFEST_SHA256: Option<&str> =
     option_env!("AGENT_TASKBOARD_ACCEPTANCE_MANIFEST_SHA256");
+const SHOW_MENU_ID: &str = "show";
+const OPEN_WEB_PAGE_MENU_ID: &str = "open-web-page";
+const QUIT_MENU_ID: &str = "quit";
 
 /// Stable webview event carrying the resolved system appearance (`light` / `dark`).
 const SYSTEM_APPEARANCE_CHANGED: &str = "system-appearance-changed";
@@ -55,10 +59,26 @@ struct EditMenuItems {
     select_all: MenuItem<tauri::Wry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrayMenuItemSpec<'a> {
+    id: &'static str,
+    label: &'a str,
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrayMenuAction {
+    ShowWindow,
+    OpenWebPage(String),
+    QuitHost,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShellMenuSignature {
     app_name: String,
     show_window: String,
+    open_web_page: String,
+    web_page_available: bool,
     quit_host: String,
     settings: String,
     edit_menu: String,
@@ -80,6 +100,8 @@ impl ShellMenuSignature {
         Self {
             app_name: copy.app_name.clone(),
             show_window: copy.show_window.clone(),
+            open_web_page: copy.open_web_page.clone(),
+            web_page_available: loopback_page_target(&snapshot.loopback_page).is_some(),
             quit_host: copy.quit_host.clone(),
             settings: copy.settings.clone(),
             edit_menu: copy.edit_menu.clone(),
@@ -502,6 +524,49 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn loopback_page_target(page: &LoopbackPage) -> Option<&str> {
+    match page {
+        LoopbackPage::Serving { url } => Some(url),
+        LoopbackPage::Occupied { .. } | LoopbackPage::HostNotRunning { .. } => None,
+    }
+}
+
+fn tray_menu_item_specs<'a>(
+    show_window: &'a str,
+    open_web_page: &'a str,
+    quit_host: &'a str,
+    page: &LoopbackPage,
+) -> [TrayMenuItemSpec<'a>; 3] {
+    [
+        TrayMenuItemSpec {
+            id: SHOW_MENU_ID,
+            label: show_window,
+            enabled: true,
+        },
+        TrayMenuItemSpec {
+            id: OPEN_WEB_PAGE_MENU_ID,
+            label: open_web_page,
+            enabled: loopback_page_target(page).is_some(),
+        },
+        TrayMenuItemSpec {
+            id: QUIT_MENU_ID,
+            label: quit_host,
+            enabled: true,
+        },
+    ]
+}
+
+fn tray_menu_action(id: &str, page: Option<&LoopbackPage>) -> Option<TrayMenuAction> {
+    match id {
+        SHOW_MENU_ID => Some(TrayMenuAction::ShowWindow),
+        OPEN_WEB_PAGE_MENU_ID => page
+            .and_then(loopback_page_target)
+            .map(|url| TrayMenuAction::OpenWebPage(url.to_owned())),
+        QUIT_MENU_ID => Some(TrayMenuAction::QuitHost),
+        _ => None,
+    }
+}
+
 fn refresh_shell(app: &AppHandle, snapshot: &HostSnapshot) -> Result<(), String> {
     let signature = ShellMenuSignature::from_snapshot(snapshot);
     if let Some(state) = app.try_state::<AppState>() {
@@ -524,10 +589,16 @@ fn resident_items(
     snapshot: &HostSnapshot,
     quit_accelerator: Option<&str>,
 ) -> tauri::Result<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)> {
-    let show = MenuItem::with_id(app, "show", &snapshot.copy.show_window, true, None::<&str>)?;
+    let show = MenuItem::with_id(
+        app,
+        SHOW_MENU_ID,
+        &snapshot.copy.show_window,
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(
         app,
-        "quit",
+        QUIT_MENU_ID,
         &snapshot.copy.quit_host,
         true,
         quit_accelerator,
@@ -536,8 +607,21 @@ fn resident_items(
 }
 
 fn rebuild_tray_menu(app: &AppHandle, snapshot: &HostSnapshot) -> tauri::Result<()> {
-    let (show, quit) = resident_items(app, snapshot, None)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let specs = tray_menu_item_specs(
+        &snapshot.copy.show_window,
+        &snapshot.copy.open_web_page,
+        &snapshot.copy.quit_host,
+        &snapshot.loopback_page,
+    );
+    let items = specs
+        .into_iter()
+        .map(|spec| MenuItem::with_id(app, spec.id, spec.label, spec.enabled, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let item_refs = items
+        .iter()
+        .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
+        .collect::<Vec<_>>();
+    let menu = Menu::with_items(app, &item_refs)?;
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(menu))?;
         tray.set_tooltip(Some(&snapshot.copy.app_name))?;
@@ -809,13 +893,34 @@ fn apply_edit_menu_state(app: &AppHandle) -> Result<(), String> {
 }
 
 fn handle_shell_menu(app: &AppHandle, id: &str) {
+    let loopback_page = app.try_state::<AppState>().and_then(|state| {
+        state
+            .kernel
+            .lock()
+            .ok()
+            .map(|kernel| kernel.snapshot().loopback_page)
+    });
+    match tray_menu_action(id, loopback_page.as_ref()) {
+        Some(TrayMenuAction::ShowWindow) => {
+            show_main(app);
+            return;
+        }
+        Some(TrayMenuAction::OpenWebPage(url)) => {
+            let _ = app.opener().open_url(url, None::<&str>);
+            return;
+        }
+        Some(TrayMenuAction::QuitHost) => {
+            quit_host(app);
+            return;
+        }
+        None => {}
+    }
+
     match id {
-        "show" => show_main(app),
         "settings" => {
             show_main(app);
             dispatch_webview_event(app, "agent-taskboard:open-settings");
         }
-        "quit" => quit_host(app),
         EDIT_UNDO => dispatch_webview_event(app, "agent-taskboard:edit-undo"),
         EDIT_REDO => dispatch_webview_event(app, "agent-taskboard:edit-redo"),
         EDIT_CUT => dispatch_webview_event(app, "agent-taskboard:edit-cut"),
@@ -887,6 +992,88 @@ fn quit_host(app: &AppHandle) {
         }
     }
     app.exit(0);
+}
+
+#[cfg(test)]
+mod shell_menu_tests {
+    use super::*;
+    use host_kernel::LoopbackPage;
+
+    #[test]
+    fn tray_menu_keeps_web_page_between_window_and_quit_and_tracks_availability() {
+        let serving = LoopbackPage::Serving {
+            url: "http://127.0.0.1:10529/".into(),
+        };
+        let serving_specs = tray_menu_item_specs("打开窗口", "打开网页", "退出 Host", &serving);
+        assert_eq!(
+            serving_specs,
+            [
+                TrayMenuItemSpec {
+                    id: SHOW_MENU_ID,
+                    label: "打开窗口",
+                    enabled: true,
+                },
+                TrayMenuItemSpec {
+                    id: OPEN_WEB_PAGE_MENU_ID,
+                    label: "打开网页",
+                    enabled: true,
+                },
+                TrayMenuItemSpec {
+                    id: QUIT_MENU_ID,
+                    label: "退出 Host",
+                    enabled: true,
+                },
+            ]
+        );
+
+        let occupied = LoopbackPage::Occupied {
+            url: "http://127.0.0.1:10529/".into(),
+            reason: "occupied".into(),
+        };
+        assert!(
+            !tray_menu_item_specs("Open window", "Open web page", "Quit Host", &occupied)[1]
+                .enabled
+        );
+    }
+
+    #[test]
+    fn tray_menu_click_maps_serving_web_page_to_the_opener_action() {
+        let serving = LoopbackPage::Serving {
+            url: "http://127.0.0.1:10529/".into(),
+        };
+        assert_eq!(
+            tray_menu_action(OPEN_WEB_PAGE_MENU_ID, Some(&serving)),
+            Some(TrayMenuAction::OpenWebPage(
+                "http://127.0.0.1:10529/".into()
+            ))
+        );
+        assert_eq!(
+            tray_menu_action(SHOW_MENU_ID, None),
+            Some(TrayMenuAction::ShowWindow)
+        );
+        assert_eq!(
+            tray_menu_action(QUIT_MENU_ID, None),
+            Some(TrayMenuAction::QuitHost)
+        );
+
+        let occupied = LoopbackPage::Occupied {
+            url: "http://127.0.0.1:10529/".into(),
+            reason: "occupied".into(),
+        };
+        assert_eq!(
+            tray_menu_action(OPEN_WEB_PAGE_MENU_ID, Some(&occupied)),
+            None
+        );
+
+        let host_not_running = LoopbackPage::HostNotRunning {
+            url: "http://127.0.0.1:10529/".into(),
+            reason: "host not running".into(),
+        };
+        assert_eq!(
+            tray_menu_action(OPEN_WEB_PAGE_MENU_ID, Some(&host_not_running)),
+            None
+        );
+    }
 }
 
 #[cfg(test)]
