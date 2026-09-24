@@ -7,6 +7,7 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 no_project_body: "Register a local folder and pick an Issue Tracker.".into(),
                 quit_host: "Quit Host".into(),
                 show_window: "Open window".into(),
+                open_web_page: "Open web page".into(),
                 settings: "Settings".into(),
                 updates: "App updates".into(),
                 check_for_updates: "Check for updates".into(),

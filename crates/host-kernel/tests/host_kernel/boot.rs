@@ -178,6 +178,7 @@ fn chinese_locale_picks_simplified_chinese() {
         AppearancePreference::System
     );
     assert_eq!(snap.copy.quit_host, "退出 Host");
+    assert_eq!(snap.copy.open_web_page, "打开网页");
 }
 
 #[test]
@@ -196,6 +197,7 @@ fn window_and_tray_share_the_client_language_and_appearance_preference() {
     );
     assert_eq!(snap.copy.quit_host, "Quit Host");
     assert_eq!(snap.copy.show_window, "Open window");
+    assert_eq!(snap.copy.open_web_page, "Open web page");
     assert_eq!(snap.copy.window_menu, "Window");
     assert_eq!(snap.copy.help_menu, "Help");
     assert_eq!(snap.copy.edit_undo, "Undo typing");

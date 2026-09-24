@@ -15,6 +15,7 @@ pub struct ShellCopy {
     pub no_project_body: String,
     pub quit_host: String,
     pub show_window: String,
+    pub open_web_page: String,
     pub settings: String,
     pub updates: String,
     pub check_for_updates: String,

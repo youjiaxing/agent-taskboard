@@ -7,6 +7,7 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 no_project_body: "先登记一个本地目录，并选好 Issue Tracker。".into(),
                 quit_host: "退出 Host".into(),
                 show_window: "打开窗口".into(),
+                open_web_page: "打开网页".into(),
                 settings: "设置".into(),
                 updates: "应用更新".into(),
                 check_for_updates: "检查更新".into(),

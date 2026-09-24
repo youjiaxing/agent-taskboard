@@ -19,6 +19,7 @@ export type ShellCopy = {
   noProjectBody: string;
   quitHost: string;
   showWindow: string;
+  openWebPage: string;
   settings: string;
   updates: string;
   checkForUpdates: string;
