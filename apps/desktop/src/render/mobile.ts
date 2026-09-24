@@ -7,7 +7,8 @@ import { ui } from "../ui";
 import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, mobileOutputKey, workspaceRun } from "../view-helpers";
 import { boardLanes, boardUnavailable, issueDetail, issueSearch, refreshBar, workspaceRailLabels, workspaceRunHistory } from "./board";
 import { loopbackNotice } from "./run";
-import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
+import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runIdentity, runNotices, telemetryBar, terminalPanel } from "./shell";
+import { runArchivePage, runOrganizationActions, runOrganizationLabels, runPersistenceBanner } from "./run-organization";
 import { button, optionGroup } from "../components/primitives";
 import { dialog, dialogDismissButton, drawer } from "../components/dialog";
 import type { IssueLaneState } from "../components/issue";
@@ -57,6 +58,7 @@ export function mobileDrawer(copy: ShellCopy, localCopy: StartupCopy, snap: Snap
       <div class="mobile-drawer-group-actions">
         ${entry("open-overview", copy.hostOverview)}
         ${entry("open-usage", copy.usage)}
+        ${snap.capabilities.runOrganization ? `${entry("open-run-pinned", runOrganizationLabels().pinnedRuns)}${entry("open-run-archive", runOrganizationLabels().archive)}` : ""}
       </div>
     </section>
     <section class="mobile-drawer-group">
@@ -96,6 +98,56 @@ export function mobileDrawer(copy: ShellCopy, localCopy: StartupCopy, snap: Snap
     className: "mobile-drawer",
     body,
   });
+}
+
+function mobilePinnedRuns(copy: ShellCopy, snap: Snapshot): string {
+  const labels = runOrganizationLabels();
+  const runs = (snap.runs ?? [])
+    .filter((run) => run.pinnedAtMs)
+    .sort((left, right) => (right.pinnedAtMs ?? 0) - (left.pinnedAtMs ?? 0));
+  if (!runs.length) return `<p class="archive-empty">${escapeHtml(labels.pinnedEmpty)}</p>`;
+  return `<div class="mobile-run-library-list">${runs.map((run) => {
+    const project = snap.projects.find((candidate) => candidate.id === run.projectId);
+    const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
+    return `<article class="mobile-run-library-item" data-pinned-run="${escapeHtml(run.id)}">
+      <button type="button" class="mobile-run-library-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+        <span>${escapeHtml(project?.name ?? run.projectId)}</span>
+        <b>${escapeHtml(run.agentName)} · ${escapeHtml(runIdentity(copy, run))}</b>
+        <small>${escapeHtml(status)}${run.recentAction ? ` · ${escapeHtml(run.recentAction)}` : ""}</small>
+      </button>
+      ${runOrganizationActions(snap, run, "menu")}
+    </article>`;
+  }).join("")}</div>`;
+}
+
+/** Run organization remains one full-screen mobile task while sharing Host actions and restore contracts with desktop. */
+export function mobileRunOrganizationPage(copy: ShellCopy, snap: Snapshot): string {
+  const labels = runOrganizationLabels();
+  const section = ui.mobileRunOrganizationSection;
+  const switcher = optionGroup({
+    label: labels.archive,
+    className: "mobile-run-organization-switch",
+    actions: [
+      { id: "mobile-run-organization-section", label: labels.pinnedRuns, pressed: section === "pinned", data: { id: "pinned" } },
+      { id: "mobile-run-organization-section", label: labels.archive, pressed: section === "archive", data: { id: "archive" } },
+    ],
+  });
+  if (section === "archive") {
+    return `<section class="mobile-run-organization-view">
+      ${switcher}
+      ${runPersistenceBanner(copy, snap)}
+      ${runArchivePage(copy, snap, true)}
+    </section>`;
+  }
+  return `<section class="mobile-run-organization-view" data-primary-page="run-pinned">
+    ${switcher}
+    ${runPersistenceBanner(copy, snap)}
+    <header class="mobile-run-organization-head">
+      <h1>${escapeHtml(labels.pinnedRuns)}</h1>
+      <p>${escapeHtml(labels.pinnedHint)}</p>
+    </header>
+    ${mobilePinnedRuns(copy, snap)}
+  </section>`;
 }
 
 /** Issue search stays a short-lived form; its result lands on the board it filters. */
@@ -157,7 +209,7 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
       ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { dependencyGraph: false })}</aside>`
       : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`
     : section === "runs"
-      ? (issue ? workspaceRunHistory(copy, issueRuns) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
+      ? (issue ? workspaceRunHistory(copy, issueRuns, { organizationSnapshot: snap, organizationMode: "menu" }) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
       : mobileTerminalPanel(copy, snap, run);
   return `<section class="mobile-workspace-view">
     ${ui.mobileProjectHistoryRunOpen
@@ -189,7 +241,7 @@ function mobileProjectHistoryPage(copy: ShellCopy, localCopy: StartupCopy, snap:
       <small>${runs.length}</small>
     </header>
     <div class="mobile-workspace-panel" data-run-history-scope="project">
-      ${workspaceRunHistory(copy, runs, { showIdentity: true })}
+      ${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, organizationMode: "menu" })}
     </div>
   </section>`;
 }

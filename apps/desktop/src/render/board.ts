@@ -516,20 +516,20 @@ export function workspaceRailLabels(): { actions: string; issue: string; runs: s
 export function workspaceRunHistory(
   copy: ShellCopy,
   runs: RunSummary[],
-  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot } = {},
+  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot; organizationMode?: "text" | "menu" } = {},
 ): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
     const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
-    return `<article class="workspace-run-history-item" data-id="${escapeHtml(run.id)}">
+    return `<article class="workspace-run-history-item" data-act="focus-run" data-id="${escapeHtml(run.id)}">
       <button type="button" class="workspace-run-history-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
         <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
         ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
         ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
       </button>
-      ${options.organizationSnapshot ? runOrganizationActions(options.organizationSnapshot, run) : ""}
+      ${options.organizationSnapshot ? runOrganizationActions(options.organizationSnapshot, run, options.organizationMode ?? "text") : ""}
     </article>`;
   }).join("")}</div>`;
 }

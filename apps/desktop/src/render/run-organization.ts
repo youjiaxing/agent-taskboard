@@ -1,16 +1,18 @@
 import { escapeHtml } from "../client-utils";
 import { confirmationDialog } from "../components/dialog";
-import { button, iconButton, notice, selectControl, type ActionDescriptor, type SelectOption } from "../components/primitives";
+import { button, iconButton, menu, notice, selectControl, type ActionDescriptor, type SelectOption } from "../components/primitives";
 import type { RunRestoreResult, RunSummary, ShellCopy, Snapshot } from "../protocol";
 import { effectiveClientLanguage } from "../view-helpers";
 import { ui } from "../ui";
 
-type OrganizationActionMode = "icons" | "text";
+type OrganizationActionMode = "icons" | "text" | "menu";
 
 export function runOrganizationLabels() {
   return effectiveClientLanguage() === "zh-CN"
     ? {
         pinnedRuns: "置顶 Run",
+        pinnedHint: "当前 Host 上置顶的未归档 Run，跨 Project 展示。",
+        pinnedEmpty: "还没有置顶 Run",
         archive: "Run 归档",
         archiveHint: "当前 Host 上已归档的 Run。恢复不会启动进程，也不会自动打开 Run。",
         archiveEmpty: "还没有归档 Run",
@@ -25,6 +27,7 @@ export function runOrganizationLabels() {
         telemetryEmpty: "没有 telemetry 数据",
         totalTokens: "总 token",
         archivedAt: "归档于",
+        runMenu: "管理 Run",
         pin: "置顶",
         unpin: "取消置顶",
         archiveRun: "归档",
@@ -51,6 +54,8 @@ export function runOrganizationLabels() {
       }
     : {
         pinnedRuns: "Runs kept on top",
+        pinnedHint: "Unarchived Runs kept on top across Projects on the current Host.",
+        pinnedEmpty: "No Runs kept on top yet",
         archive: "Run archive",
         archiveHint: "Archived Runs on the current Host. Restoring does not start a process or open the Run.",
         archiveEmpty: "No archived Runs yet",
@@ -65,6 +70,7 @@ export function runOrganizationLabels() {
         telemetryEmpty: "No telemetry data",
         totalTokens: "Total tokens",
         archivedAt: "Archived",
+        runMenu: "Manage Run",
         pin: "Keep on top",
         unpin: "Remove from top",
         archiveRun: "Archive",
@@ -104,19 +110,22 @@ function actionKey(action: "pin" | "archive" | "restore", runId: string): string
   return `${action}:${runId}`;
 }
 
-export function runOrganizationActions(
+function runMenuLabel(snap: Snapshot, run: RunSummary): string {
+  const identity = run.unbound || !run.issueId ? snap.copy.unboundIssue : run.issueId;
+  return `${runOrganizationLabels().runMenu} · ${run.agentName} · ${identity}`;
+}
+
+export function runOrganizationActionDescriptors(
   snap: Snapshot,
   run: RunSummary,
-  mode: OrganizationActionMode = "text",
-): string {
-  if (!snap.capabilities.runOrganization || run.archivedAtMs) return "";
+): ActionDescriptor[] {
+  if (!snap.capabilities.runOrganization || run.archivedAtMs) return [];
   const labels = runOrganizationLabels();
   const writable = runOrganizationWritable(snap);
-  const disabledReason = writable ? "" : snap.copy.runPersistenceWriteBlocked;
   const pinLabel = run.pinnedAtMs ? labels.unpin : labels.pin;
   const pinPending = ui.runOrganizationPending.has(actionKey("pin", run.id));
   const archivePending = ui.runOrganizationPending.has(actionKey("archive", run.id));
-  const pin = {
+  const pin: ActionDescriptor = {
     id: "set-run-pinned",
     label: pinLabel,
     icon: run.pinnedAtMs ? "↓" : "↑",
@@ -125,7 +134,7 @@ export function runOrganizationActions(
     pressed: Boolean(run.pinnedAtMs),
     data: { id: run.id, pinned: run.pinnedAtMs ? "false" : "true" },
   };
-  const archive = run.status === "ended"
+  const archive: ActionDescriptor | null = run.status === "ended"
     ? {
         id: "archive-run",
         label: labels.archiveRun,
@@ -135,6 +144,27 @@ export function runOrganizationActions(
         data: { id: run.id },
       }
     : null;
+  return archive ? [pin, archive] : [pin];
+}
+
+export function runOrganizationActions(
+  snap: Snapshot,
+  run: RunSummary,
+  mode: OrganizationActionMode = "text",
+): string {
+  const actions = runOrganizationActionDescriptors(snap, run);
+  if (!actions.length) return "";
+  const disabledReason = runOrganizationWritable(snap) ? "" : snap.copy.runPersistenceWriteBlocked;
+  if (mode === "menu") {
+    const open = ui.mobileRunMenuId === run.id;
+    return `<div class="run-organization-actions run-organization-menu-wrap">
+      ${iconButton(
+        { id: "mobile-run-menu", label: runMenuLabel(snap, run), icon: "…", data: { id: run.id } },
+        { className: "run-row-action", attributes: { "aria-haspopup": "menu", "aria-expanded": open } },
+      )}
+      ${open ? menu({ label: `${run.agentName} Run`, className: "run-organization-menu", actions }) : ""}
+    </div>`;
+  }
   const renderAction = (action: ActionDescriptor) => mode === "icons"
     ? iconButton(action, {
         className: "run-row-action",
@@ -146,8 +176,7 @@ export function runOrganizationActions(
         attributes: { title: disabledReason || action.label, "data-run-organization": action.id },
       });
   return `<div class="run-organization-actions" role="group" aria-label="${escapeHtml(`${run.agentName} Run`)}">
-    ${renderAction(pin)}
-    ${archive ? renderAction(archive) : ""}
+    ${actions.map(renderAction).join("")}
   </div>`;
 }
 
@@ -193,7 +222,7 @@ function archivedAt(run: RunSummary): string {
   }).format(new Date(run.archivedAtMs));
 }
 
-export function runArchivePage(copy: ShellCopy, snap: Snapshot): string {
+export function runArchivePage(copy: ShellCopy, snap: Snapshot, mobile = false): string {
   const labels = runOrganizationLabels();
   const archivedRuns = ui.archivedRunsHostId === snap.focusedHostId ? ui.archivedRuns : [];
   const projectIds = [...new Set(archivedRuns.map((run) => run.projectId))];
@@ -233,7 +262,21 @@ export function runArchivePage(copy: ShellCopy, snap: Snapshot): string {
                   <b>${escapeHtml(run.unbound || !run.issueId ? copy.unboundIssue : run.issueId)}</b>
                   <small>${escapeHtml(run.agentName)} · ${escapeHtml(labels.archivedAt)} ${escapeHtml(archivedAt(run))}</small>
                 </button>
-                ${button({ id: "restore-run", label: labels.restore, disabled: !restoreAllowed, busy: restorePending, data: { id: run.id } }, { variant: "secondary", className: "archive-restore" })}
+                ${mobile
+                  ? `<div class="run-organization-actions run-organization-menu-wrap">
+                      ${iconButton(
+                        { id: "mobile-run-menu", label: runMenuLabel(snap, run), icon: "…", data: { id: run.id } },
+                        { className: "run-row-action", attributes: { "aria-haspopup": "menu", "aria-expanded": ui.mobileRunMenuId === run.id } },
+                      )}
+                      ${ui.mobileRunMenuId === run.id
+                        ? menu({
+                            label: `${run.agentName} Run`,
+                            className: "run-organization-menu",
+                            actions: [{ id: "restore-run", label: labels.restore, disabled: !restoreAllowed, busy: restorePending, data: { id: run.id } }],
+                          })
+                        : ""}
+                    </div>`
+                  : button({ id: "restore-run", label: labels.restore, disabled: !restoreAllowed, busy: restorePending, data: { id: run.id } }, { variant: "secondary", className: "archive-restore" })}
               </article>`;
             }).join("");
   const detail = selected
@@ -243,7 +286,7 @@ export function runArchivePage(copy: ShellCopy, snap: Snapshot): string {
         <section class="archive-output"><h3>${escapeHtml(labels.recentOutput)}</h3><pre aria-readonly="true">${escapeHtml(selected.recentOutput ?? "")}</pre></section>
       </section>`
     : `<section class="archive-run-detail archive-detail-empty"><p>${escapeHtml(labels.selectRun)}</p></section>`;
-  return `<section class="run-archive-page" data-primary-page="run-archive">
+  return `<section class="run-archive-page ${mobile ? "mobile-run-archive-page" : ""}" data-primary-page="run-archive">
     <div class="content-toolbar" data-page-toolbar>
       <div class="board-head"><div class="board-head-row"><div><h1>${escapeHtml(labels.archive)}</h1><p>${escapeHtml(labels.archiveHint)}</p></div></div></div>
     </div>

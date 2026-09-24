@@ -296,6 +296,7 @@ fn browser_delivers_desktop_run_organization_workflows() {
     tracker.add_issue(IssueRecord::open("you/garden", 2, "next ready").label("ready-for-agent"));
     tracker.add_issue(IssueRecord::open("you/tools", 1, "tools ready"));
     tracker.add_issue(IssueRecord::open("you/legacy", 1, "legacy history"));
+    tracker.add_issue(IssueRecord::open("you/mobile", 1, "mobile history"));
     let agent = Arc::new(MemoryAgent::installed_grok());
     let sessions = MemorySessionFactory::new();
     let mut host = HostKernel::boot_with_ports(
@@ -398,6 +399,108 @@ fn browser_delivers_desktop_run_organization_workflows() {
         .unwrap();
     host.handle(
         serde_json::json!({ "op": "setRunPinned", "runId": active_run_id, "pinned": true }),
+    )
+    .unwrap();
+
+    let mobile_dir = make_dir(tmp.path(), "work/mobile");
+    let mobile_project_id = register(&mut host, "mobile", &mobile_dir, "you/mobile");
+    let mobile_bound_run_id = start_bound_grok(&mut host, &mobile_project_id, "you/mobile#1")
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"mobile bound history output\n");
+    host.handle(serde_json::json!({ "op": "stopRun", "runId": mobile_bound_run_id }))
+        .unwrap();
+    let mobile_active_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": mobile_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "mobile active waiting Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"mobile active output\n");
+    sessions.last_session().unwrap().set_waiting(true);
+    host.handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    let mobile_ended_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": mobile_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "mobile ended Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"mobile ended output\n");
+    host.handle(serde_json::json!({ "op": "stopRun", "runId": mobile_ended_run_id }))
+        .unwrap();
+
+    let mobile_removed_dir = make_dir(tmp.path(), "work/mobile-removed");
+    let mobile_removed_project_id = register(
+        &mut host,
+        "mobile-removed",
+        &mobile_removed_dir,
+        "you/mobile-removed",
+    );
+    let mobile_removed_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": mobile_removed_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "mobile removed Project archived Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"mobile removed archived output\n");
+    host.handle(serde_json::json!({ "op": "stopRun", "runId": mobile_removed_run_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "archiveRun", "runId": mobile_removed_run_id }))
+        .unwrap();
+    host.handle(
+        serde_json::json!({ "op": "removeProject", "projectId": mobile_removed_project_id }),
     )
     .unwrap();
 
@@ -518,6 +621,15 @@ fn browser_delivers_desktop_run_organization_workflows() {
             ("REMOVED_PROJECT_ID", Path::new(&legacy_project_id)),
             ("REMOTE_HOST_ID", Path::new(&remote_host_id)),
             ("REMOTE_RUN_ID", Path::new(&remote_run_id)),
+            ("MOBILE_PROJECT_ID", Path::new(&mobile_project_id)),
+            ("MOBILE_BOUND_RUN_ID", Path::new(&mobile_bound_run_id)),
+            ("MOBILE_ACTIVE_RUN_ID", Path::new(&mobile_active_run_id)),
+            ("MOBILE_ENDED_RUN_ID", Path::new(&mobile_ended_run_id)),
+            (
+                "MOBILE_REMOVED_PROJECT_ID",
+                Path::new(&mobile_removed_project_id),
+            ),
+            ("MOBILE_REMOVED_RUN_ID", Path::new(&mobile_removed_run_id)),
         ],
     );
 }
