@@ -23,6 +23,8 @@ import type {
   ProjectInferenceState,
   ScrollPosition,
   Snapshot,
+  RunRestoreResult,
+  RunSummary,
   UpdateState,
   UsageCustomDraft,
   ViewChanges,
@@ -172,6 +174,32 @@ export const ui = {
   graphListQuery: "",
   overviewProjectId: "",
   overviewShowEnded: false,
+  archivedRuns: [] as RunSummary[],
+  archivedRunsHostId: "",
+  archivedRunsLoading: false,
+  archivedRunsError: "",
+  archiveProjectFilter: "",
+  archiveSelectedRunId: "",
+  recentlyRestoredRunId: "",
+  runOrganizationPending: new Set<string>(),
+  runOrganizationRetry: null as null | {
+    action:
+      | { op: "setRunPinned"; runId: string; pinned: boolean }
+      | { op: "archiveRun"; runId: string }
+      | { op: "prepareRestoreRun"; runId: string }
+      | {
+          op: "restoreRun";
+          runId: string;
+          confirmProjectRecreate?: boolean;
+          expectedTombstoneRevision?: string;
+        };
+    message: string;
+  },
+  restoreRunDialog: null as null | {
+    result: Extract<RunRestoreResult, { status: "project-recreate-required" | "conflict" }>;
+    error: string;
+    pending: boolean;
+  },
   mobileDrawerOpen: false,
   mobileDrawerAppearanceOpen: false,
   mobileSearchOpen: false,

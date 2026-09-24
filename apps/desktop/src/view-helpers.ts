@@ -109,7 +109,13 @@ export function syncClientPrimaryPage(snap: Snapshot): void {
     ui.clientViewInitialized = true;
     return;
   }
-  if (ui.clientView.page !== "settings") {
+  if (ui.clientView.page === "run-archive" && !snap.capabilities.runOrganization) {
+    ui.clientView.page = primaryPageFromSnapshot(snap);
+    ui.clientView.returnPoint = null;
+    ui.returnPointHistory.length = 0;
+    return;
+  }
+  if (ui.clientView.page !== "settings" && ui.clientView.page !== "run-archive") {
     const mobileProjectHistoryOpen = mobileClient()
       && ui.mobileRunHistoryScope === "project"
       && ui.mobileWorkspaceSection === "runs";
@@ -243,7 +249,7 @@ export function captureReturnPoint(snap: Snapshot): ReturnPoint {
     hostId: snap.focusedHostId,
     projectId,
     issueId: snap.board?.selected?.id ?? null,
-    runId: snap.focusedRunId || null,
+    runId: ui.clientView.page === "run-archive" ? null : snap.focusedRunId || null,
     board: cloneBoardMemory(
       projectId && boardScroll
         ? {

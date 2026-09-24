@@ -1,4 +1,4 @@
-import { effectiveClientLanguage } from "../view-helpers";
+import { effectiveClientLanguage, mobileClient } from "../view-helpers";
 import type { AgentField, LoopbackPage, Project, ShellCopy, Snapshot } from "../protocol";
 import { escapeHtml } from "../client-utils";
 import { focusedHostIsLocal, prefillHint } from "../launch-session";
@@ -7,11 +7,13 @@ import { startupCopy } from "../startup-copy";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, notice, optionGroup, textArea, textInput } from "../components/primitives";
 import { ui } from "../ui";
+import { runPersistenceWritesBlocked } from "./run-organization";
 
 export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const form = snap.launchForm;
   if (!form) return "";
   const localCopy = startupCopy(effectiveClientLanguage());
+  const persistenceBlocked = !mobileClient() && runPersistenceWritesBlocked(snap);
   if (!form.skipAgentPicker) {
     const selected = form.agents.find((agent) => agent.id === ui.launchPickerAgentId);
     const selection = selected ? `${copy.pickAgent}：${selected.name}` : copy.noAgentSelected;
@@ -113,12 +115,13 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
     </details>
     ${notice({ status: "warning", className: "launch-warnings", message: (form.warnings ?? []).join(" "), attributes: { hidden: !form.warnings?.length } })}
     ${form.optionDiscoveryError ? notice({ message: form.optionDiscoveryError }) : ""}
+    ${persistenceBlocked ? notice({ status: "danger", role: "alert", message: copy.runPersistenceWriteBlocked }) : ""}
     ${error ? notice({ status: "danger", role: "alert", className: "form-feedback", message: error }) : ""}
   </fieldset>`;
   const actions = `${dialogDismissButton(copy.cancel, { disabled: pending })}${dialogActionButton({
     id: "submit-launch",
     label: pending ? copy.startRunPending : copy.startRun,
-    disabled: pending,
+    disabled: pending || persistenceBlocked,
     busy: pending,
   }, { primary: true, type: "submit" })}`;
   return dialog({

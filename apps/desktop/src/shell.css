@@ -421,6 +421,11 @@ body {
 
 .group-head .group-name { padding-bottom: 0; }
 
+.pinned-run-section { display: grid; gap: var(--space-4); }
+.pinned-run-section > .group-head > span { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.pinned-run-entry { min-width: 0; }
+.pinned-run-project { display: block; padding: 0 var(--space-8) var(--space-2) var(--space-20); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+
 .host-line {
   display: flex;
   align-items: center;

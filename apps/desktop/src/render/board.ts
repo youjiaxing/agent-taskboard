@@ -1,6 +1,6 @@
 import { connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, effectiveClientLanguage } from "../view-helpers";
+import { currentProject, effectiveClientLanguage, mobileClient } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
@@ -10,6 +10,8 @@ import { GRAPH_RELATION_META } from "../graph-meta";
 import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
 import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
 import { refreshStatus } from "../components/refresh-status";
+import { runOrganizationActions } from "./run-organization";
+import { runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
   const project = currentProject(snap);
@@ -363,13 +365,14 @@ export function issueMetadataTags(labels: string[] | undefined, includeStatus = 
 }
 
 function laneActions(copy: ShellCopy, issue: IssueCard, lane: IssueLaneState): IssueCardAction[] {
+  const writesBlocked = !mobileClient() && Boolean(ui.snapshot && runPersistenceWritesBlocked(ui.snapshot));
   if (lane === "frontier") {
-    return [{ action: { id: "execute-run", label: copy.executeRun, data: { id: issue.id } }, variant: "primary" }];
+    return [{ action: { id: "execute-run", label: copy.executeRun, disabled: writesBlocked, data: { id: issue.id } }, variant: "primary" }];
   }
   if (lane === "inProgress" && issue.runId) {
     return [
       { action: { id: "focus-run", label: copy.focusRun, data: { id: issue.runId } } },
-      { action: { id: "stop-run", label: copy.stopRun, data: { id: issue.runId } } },
+      { action: { id: "stop-run", label: copy.stopRun, disabled: writesBlocked, data: { id: issue.runId } } },
     ];
   }
   if (lane === "recentlyCompleted") {
@@ -429,12 +432,14 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail)
   const claim = issue.claimedBy.length ? `${copy.claimed} ${issue.claimedBy.join(", ")}` : "";
   const hasActive = Boolean(issue.activeRunId);
   const lane = selectedIssueLane(board);
+  const writesBlocked = !mobileClient() && Boolean(ui.snapshot && runPersistenceWritesBlocked(ui.snapshot));
+  const blockedAttributes = writesBlocked ? ` disabled title="${escapeHtml(copy.runPersistenceWriteBlocked)}"` : "";
   const primaryActions = hasActive
     ? ""
     : issue.executionStopped
-      ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.continueRun)}</button>
+      ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.continueRun)}</button>
          <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
-      : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>`;
+      : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.executeRun)}</button>`;
   const canWrite = issueCanWrite(board, issue);
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
@@ -511,18 +516,21 @@ export function workspaceRailLabels(): { actions: string; issue: string; runs: s
 export function workspaceRunHistory(
   copy: ShellCopy,
   runs: RunSummary[],
-  options: { showIdentity?: boolean } = {},
+  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot } = {},
 ): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
     const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
-    return `<button type="button" class="workspace-run-history-item" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-      <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
-      ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
-      ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
-    </button>`;
+    return `<article class="workspace-run-history-item" data-id="${escapeHtml(run.id)}">
+      <button type="button" class="workspace-run-history-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+        <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
+        ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
+        ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
+      </button>
+      ${options.organizationSnapshot ? runOrganizationActions(options.organizationSnapshot, run) : ""}
+    </article>`;
   }).join("")}</div>`;
 }
 
@@ -547,7 +555,20 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
     ${fixedPanelResizeHandle("right-rail")}
     ${section("actions", labels.actions, `<div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>${issueActions(copy, board, issue)}`)}
     ${section("issue", labels.issue, issueBody(copy, board, issue, true), "detail-scroll")}
-    ${section("runs", labels.runs, workspaceRunHistory(copy, runs))}
+    ${section("runs", labels.runs, workspaceRunHistory(copy, runs, { organizationSnapshot: snap }))}
+  </aside>`;
+}
+
+export function focusWorkspaceProjectRail(copy: ShellCopy, snap: Snapshot): string {
+  if (ui.clientView.panels.rightSide !== "rail") return "";
+  const project = currentProject(snap);
+  if (!project) return "";
+  const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
+  const labels = workspaceRailLabels();
+  return `<aside class="issue-detail fixed-right-rail workspace-right-rail project-run-rail" data-fixed-panel="right-rail">
+    ${fixedPanelResizeHandle("right-rail")}
+    <header class="detail-sticky"><div class="detail-hd">${escapeHtml(project.name)}</div><p class="muted">${escapeHtml(project.localPath)}</p></header>
+    <div class="workspace-rail-section-body"><h3>${escapeHtml(labels.runs)}</h3>${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap })}</div>
   </aside>`;
 }
 

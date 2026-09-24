@@ -2,14 +2,15 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
-import { focusWorkspaceIssueRail } from "./board";
+import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
 import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, iconButton, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
+import { runOrganizationActions, runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
@@ -28,13 +29,14 @@ export function projectTrackerIdentity(project: Project, localMarkdownLabel: str
 export function projectRow(copy: ShellCopy, project: Project, focusedId: string): string {
   const active = project.id === focusedId;
   const degraded = project.connection.status !== "ready";
+  const runWritesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   return `<div class="project-row ${active ? "active" : ""}">
     <button type="button" class="project-main" data-act="focus-project" data-id="${escapeHtml(project.id)}">
       <b>${escapeHtml(project.name)}</b>
       <span>${escapeHtml(projectTrackerIdentity(project, startupCopy(effectiveClientLanguage()).localMarkdownTracker))}</span>
     </button>
     ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
-    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}">＋</button>
+    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}" title="${escapeHtml(runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.newRun)}" ${runWritesBlocked ? "disabled" : ""}>＋</button>
     <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
     ${
       ui.projectMenuId === project.id
@@ -59,6 +61,7 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
   const identity = runIdentity(copy, run);
   const localCopy = startupCopy(effectiveClientLanguage());
   const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
+  const runWritesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const stateClass =
     run.waitingForUser && run.status !== "ended"
       ? "waiting"
@@ -74,6 +77,7 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
           ? copy.running
           : "";
   const actions = [
+    ui.snapshot ? runOrganizationActions(ui.snapshot, run, "icons") : "",
     desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
       ? iconButton(
           { id: "open-run-window", label: localCopy.openRunWindow, icon: "↗", data: { id: run.id } },
@@ -86,8 +90,8 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
     ),
     run.status !== "ended"
       ? iconButton(
-          { id: "stop-run", label: copy.stopRun, icon: "■", data: { id: run.id } },
-          { className: "run-row-action danger", attributes: { title: copy.stopRun } },
+          { id: "stop-run", label: copy.stopRun, icon: "■", disabled: runWritesBlocked, data: { id: run.id } },
+          { className: "run-row-action danger", attributes: { title: runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.stopRun } },
         )
       : "",
   ].join("");
@@ -256,7 +260,7 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
   </div>`;
 }
 
-export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
+export function hostOverviewPage(copy: ShellCopy, snap: Snapshot, includeOrganization = true): string {
   if (ui.overviewProjectId && !snap.projects.some((project) => project.id === ui.overviewProjectId)) {
     ui.overviewProjectId = "";
   }
@@ -331,7 +335,7 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot): string {
             .map(
               ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
                 <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
-                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap, includeOrganization)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
               </section>`,
             )
             .join("")}
@@ -373,14 +377,17 @@ export function overviewProjectCard(copy: ShellCopy, project: Project): string {
   </button>`;
 }
 
-export function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
+export function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot, includeOrganization = true): string {
   const project = snap.projects.find((item) => item.id === run.projectId);
   const action = run.recentAction?.trim() || run.failure?.trim() || "";
-  return `<button type="button" class="run-thumbnail" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-    <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
-    <b>${escapeHtml(runIdentity(copy, run))}</b>
-    <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
-  </button>`;
+  return `<article class="run-thumbnail">
+    <button type="button" class="run-thumbnail-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
+      <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
+      <b>${escapeHtml(runIdentity(copy, run))}</b>
+      <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
+    </button>
+    ${includeOrganization ? runOrganizationActions(snap, run) : ""}
+  </article>`;
 }
 
 export function usageTrend(
@@ -454,7 +461,7 @@ function focusWorkspaceLabels(): { recentOutput: string; emptyTitle: string; emp
       };
 }
 
-export function runControls(copy: ShellCopy, run: RunSummary): string {
+export function runControls(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
   const localCopy = startupCopy(effectiveClientLanguage());
   const openWindow = desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
     ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.openRunWindow)}</button>`
@@ -462,15 +469,16 @@ export function runControls(copy: ShellCopy, run: RunSummary): string {
   return `<div class="actions">
     ${openWindow}
     <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
-    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" ${run.status === "ended" ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" title="${escapeHtml(includeOrganization && runPersistenceWritesBlocked(ui.snapshot!) ? copy.runPersistenceWriteBlocked : copy.stopRun)}" ${run.status === "ended" || (includeOrganization && runPersistenceWritesBlocked(ui.snapshot!)) ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+    ${includeOrganization && ui.snapshot ? runOrganizationActions(ui.snapshot, run) : ""}
   </div>`;
 }
 
 /** Run identity and actions, shared by every terminal surface. */
-export function runHeader(copy: ShellCopy, run: RunSummary): string {
+export function runHeader(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
   return `<header class="run-dock-hd">
       <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(runIdentity(copy, run))}</span></div>
-      ${runControls(copy, run)}
+      ${runControls(copy, run, includeOrganization)}
     </header>`;
 }
 
@@ -481,9 +489,9 @@ export function runNotices(copy: ShellCopy, run: RunSummary): string {
     ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}`;
 }
 
-export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string): string {
+export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string, includeOrganization = false): string {
   return `<div class="${className}" data-terminal-panel data-terminal-surface="live" data-run="${escapeHtml(run.id)}">
-    ${runHeader(copy, run)}
+    ${runHeader(copy, run, includeOrganization)}
     ${telemetryBar(copy, run)}
     ${runNotices(copy, run)}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
@@ -495,26 +503,27 @@ export function runDock(copy: ShellCopy, snap: Snapshot): string {
   if (!run || run.status === "ended") return "";
   const selectedIssueId = snap.board?.selected?.id;
   if (!run.unbound && run.issueId !== selectedIssueId) return "";
-  return terminalPanel(copy, run, "run-dock");
+  return terminalPanel(copy, run, "run-dock", true);
 }
 
-export function readOnlyTerminal(copy: ShellCopy, run: RunSummary): string {
+export function readOnlyTerminal(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
   const labels = focusWorkspaceLabels();
   return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
-    ${runHeader(copy, run)}
+    ${runHeader(copy, run, includeOrganization)}
     <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
     <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
   </div>`;
 }
 
-export function emptyTerminalSurface(copy: ShellCopy, snap: Snapshot): string {
+export function emptyTerminalSurface(copy: ShellCopy, snap: Snapshot, respectPersistenceWrites = false): string {
   const labels = focusWorkspaceLabels();
   const issue = snap.board?.selected;
+  const writesBlocked = respectPersistenceWrites && runPersistenceWritesBlocked(snap);
   return `<div class="focus-terminal-surface empty-terminal" data-terminal-surface="empty">
     <div class="empty-terminal-content">
       <h2>${escapeHtml(labels.emptyTitle)}</h2>
       <p>${escapeHtml(labels.emptyBody)}</p>
-      ${issue ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.executeRun)}</button>` : ""}
+      ${issue ? `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}" title="${escapeHtml(writesBlocked ? copy.runPersistenceWriteBlocked : copy.executeRun)}" ${writesBlocked ? "disabled" : ""}>${escapeHtml(copy.executeRun)}</button>` : ""}
     </div>
   </div>`;
 }
@@ -523,12 +532,14 @@ export function focusWorkspaceView(copy: ShellCopy, snap: Snapshot): string {
   const run = workspaceRun(snap);
   const main = run
     ? run.status === "ended"
-      ? readOnlyTerminal(copy, run)
-      : terminalPanel(copy, run, "focus-terminal-surface lifted-terminal")
-    : emptyTerminalSurface(copy, snap);
+      ? readOnlyTerminal(copy, run, true)
+      : terminalPanel(copy, run, "focus-terminal-surface lifted-terminal", true)
+    : emptyTerminalSurface(copy, snap, true);
   const right = ui.clientView.panels.rightSide === "changes" && run
     ? viewChangesPanel(copy)
-    : focusWorkspaceIssueRail(copy, snap);
+    : run?.unbound
+      ? focusWorkspaceProjectRail(copy, snap)
+      : focusWorkspaceIssueRail(copy, snap) || focusWorkspaceProjectRail(copy, snap);
   return `<section class="lifted-run focus-workspace-layout ${right ? "with-right-side" : "right-side-hidden"}">
     <div class="focus-workspace-main">${main}</div>
     ${right}
@@ -663,7 +674,13 @@ export function dangerConfirmationDialog(copy: ShellCopy): string {
       body: `${notice({ status: "danger", message: localCopy.stopRunBody })}<p class="hint"><strong>Run</strong> · ${escapeHtml(runIdentity)}</p>`,
       closeLabel: localCopy.close,
       cancelLabel: copy.cancel,
-      confirm: { id: "confirm-stop-run", label: localCopy.stopRunConfirm, destructive: true, busy: ui.confirmationPending },
+      confirm: {
+        id: "confirm-stop-run",
+        label: localCopy.stopRunConfirm,
+        destructive: true,
+        busy: ui.confirmationPending,
+        disabled: Boolean(!mobileClient() && ui.snapshot && runPersistenceWritesBlocked(ui.snapshot)),
+      },
       error: ui.confirmationError,
     });
   }

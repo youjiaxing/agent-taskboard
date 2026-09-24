@@ -1,16 +1,17 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
-import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
+import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
-import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
+import { loadArchivedRuns, loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { parsePairingPayload, safeHttpUrl } from "../client-utils";
 import { render } from "../render/app";
 import { emptyDraft, ui } from "../ui";
 import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialog-controller";
 import { startupCopy } from "../startup-copy";
+import { runPersistenceWritesBlocked } from "../render/run-organization";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
@@ -81,6 +82,9 @@ async function dismissDialog(dialogId: string): Promise<void> {
     ui.dangerConfirmation = null;
     ui.confirmationError = "";
     ui.confirmationPending = false;
+  } else if (dialogId === "restore-run") {
+    if (ui.restoreRunDialog?.pending) return;
+    ui.restoreRunDialog = null;
   } else {
     return;
   }
@@ -114,7 +118,10 @@ export async function returnToPreviousPage(): Promise<void> {
   if (returnPoint.projectId && returnPoint.projectId !== ui.snapshot.focusedProjectId) {
     await rpc("focusProject", { projectId: returnPoint.projectId });
   }
-  if (returnPoint.page === "host-overview") {
+  if (returnPoint.page === "run-archive") {
+    ui.clientView.page = "run-archive";
+    await loadArchivedRuns();
+  } else if (returnPoint.page === "host-overview") {
     await rpc("openHostOverview");
   } else if (returnPoint.page === "usage") {
     await rpc("openUsage");
@@ -138,6 +145,159 @@ export async function returnToPreviousPage(): Promise<void> {
 export function openKeyboardHelp(): void {
   ui.keyboardHelpOpen = true;
   render();
+}
+
+function desktopRunWritesBlocked(): boolean {
+  return !mobileClient() && Boolean(ui.snapshot && runPersistenceWritesBlocked(ui.snapshot));
+}
+
+type RunOrganizationAction = NonNullable<typeof ui.runOrganizationRetry>["action"];
+
+function runOrganizationActionKey(action: RunOrganizationAction): string {
+  if (action.op === "setRunPinned") return `pin:${action.runId}`;
+  if (action.op === "archiveRun") return `archive:${action.runId}`;
+  return `restore:${action.runId}`;
+}
+
+function clearArchivedRunClientReferences(runId: string, wasFocused: boolean): void {
+  if (ui.clientView.returnPoint?.runId === runId) ui.clientView.returnPoint.runId = null;
+  for (const returnPoint of ui.returnPointHistory) {
+    if (returnPoint.runId === runId) returnPoint.runId = null;
+  }
+  if (ui.changesView?.runId === runId) {
+    ui.changesView = null;
+    if (ui.clientView.panels.rightSide === "changes") ui.clientView.panels.rightSide = "rail";
+  }
+  if (ui.ptyRunId === runId) {
+    ui.ptyPumping = false;
+    ui.ptyRunId = "";
+    ui.ptyOffset = 0;
+  }
+  if (!wasFocused || ui.clientView.page !== "focus-workspace") return;
+  const returnToArchive = ui.clientView.returnPoint?.page === "run-archive";
+  ui.clientView.page = returnToArchive ? "run-archive" : "board";
+  ui.clientView.returnPoint = null;
+  ui.returnPointHistory.length = 0;
+}
+
+async function refreshSnapshotAfterRunOrganizationError(): Promise<void> {
+  try {
+    await rpc("snapshot");
+  } catch {
+    // Keep the original operation error visible when even snapshot refresh fails.
+  }
+}
+
+async function performRunOrganizationAction(action: RunOrganizationAction): Promise<boolean> {
+  if (!ui.snapshot?.capabilities.runOrganization) return false;
+  const key = runOrganizationActionKey(action);
+  if (ui.runOrganizationPending.has(key)) return false;
+  ui.runOrganizationRetry = null;
+  ui.runOrganizationPending.add(key);
+  const wasFocused = ui.snapshot.focusedRunId === action.runId;
+  render();
+  try {
+    if (action.op === "setRunPinned") {
+      await rpc(action.op, { runId: action.runId, pinned: action.pinned });
+    } else {
+      await rpc(action.op, { runId: action.runId });
+    }
+    if (action.op === "archiveRun") clearArchivedRunClientReferences(action.runId, wasFocused);
+    ui.runOrganizationRetry = null;
+    if (ui.clientView.page === "run-archive") await loadArchivedRuns();
+    return true;
+  } catch (error) {
+    ui.runOrganizationRetry = {
+      action,
+      message: error instanceof Error ? error.message : String(error),
+    };
+    await refreshSnapshotAfterRunOrganizationError();
+    return false;
+  } finally {
+    ui.runOrganizationPending.delete(key);
+    render();
+  }
+}
+
+function showRestoreConflict(result: Extract<RunRestoreResult, { status: "conflict" }>, error = ""): void {
+  ui.restoreRunDialog = { result, error, pending: false };
+  render();
+}
+
+async function finishRunRestore(
+  runId: string,
+  options: { confirmProjectRecreate?: boolean; expectedTombstoneRevision?: string } = {},
+): Promise<boolean> {
+  const key = `restore:${runId}`;
+  const action: RunOrganizationAction = { op: "restoreRun", runId, ...options };
+  ui.runOrganizationRetry = null;
+  ui.runOrganizationPending.add(key);
+  render();
+  try {
+    const result = await rpc("restoreRun", { runId, ...options });
+    if (result.runRestore?.status === "conflict") {
+      showRestoreConflict(result.runRestore);
+      return false;
+    }
+    if (result.runRestore?.status !== "restored" && result.runRestore?.status !== "ready") {
+      throw new Error("Host did not confirm the Run restore");
+    }
+    ui.restoreRunDialog = null;
+    ui.recentlyRestoredRunId = runId;
+    ui.runOrganizationRetry = null;
+    await loadArchivedRuns();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (ui.restoreRunDialog) {
+      ui.restoreRunDialog.error = message;
+      ui.restoreRunDialog.pending = false;
+    }
+    ui.runOrganizationRetry = { action, message };
+    await refreshSnapshotAfterRunOrganizationError();
+    return false;
+  } finally {
+    ui.runOrganizationPending.delete(key);
+    render();
+  }
+}
+
+async function prepareRunRestore(runId: string, trigger: HTMLElement): Promise<void> {
+  const key = `restore:${runId}`;
+  if (ui.runOrganizationPending.has(key)) return;
+  rememberDialogTrigger("restore-run", trigger);
+  ui.runOrganizationRetry = null;
+  ui.runOrganizationPending.add(key);
+  render();
+  try {
+    const result = await rpc("prepareRestoreRun", { runId });
+    const restore = result.runRestore;
+    if (!restore) throw new Error("Host did not return a Run restore preflight");
+    if (restore.status === "ready") {
+      ui.runOrganizationPending.delete(key);
+      await finishRunRestore(runId);
+      return;
+    }
+    if (restore.status === "restored") {
+      ui.recentlyRestoredRunId = runId;
+      await loadArchivedRuns();
+      return;
+    }
+    if (restore.status === "conflict") {
+      showRestoreConflict(restore);
+      return;
+    }
+    ui.restoreRunDialog = { result: restore, error: "", pending: false };
+  } catch (error) {
+    ui.runOrganizationRetry = {
+      action: { op: "prepareRestoreRun", runId },
+      message: error instanceof Error ? error.message : String(error),
+    };
+    await refreshSnapshotAfterRunOrganizationError();
+  } finally {
+    ui.runOrganizationPending.delete(key);
+    render();
+  }
 }
 
 let deferredLaunchDiscoverySequence = 0;
@@ -315,6 +475,23 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     closeMobileDrawer();
     enterPrimaryPage("host-overview", ui.snapshot);
     await rpc("openHostOverview");
+    render();
+    return;
+  }
+  if (act === "open-run-archive") {
+    if (!ui.snapshot.capabilities.runOrganization || mobileClient()) return;
+    closeMobileDrawer();
+    enterPrimaryPage("run-archive", ui.snapshot);
+    await loadArchivedRuns();
+    render();
+    return;
+  }
+  if (act === "reload-run-archive") {
+    await loadArchivedRuns();
+    return;
+  }
+  if (act === "select-archived-run" && target.dataset.id) {
+    ui.archiveSelectedRunId = target.dataset.id;
     render();
     return;
   }
@@ -532,6 +709,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "new-run" && target.dataset.id) {
+    if (desktopRunWritesBlocked()) return;
     rememberDialogTrigger("launch", target);
     const projectId = target.dataset.id;
     ui.projectMenuId = "";
@@ -552,6 +730,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "execute-run" && target.dataset.id && ui.snapshot.focusedProjectId) {
+    if (desktopRunWritesBlocked()) return;
     rememberDialogTrigger("launch", target);
     leaveSettingsPage();
     ui.pairingOpen = false;
@@ -576,6 +755,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "continue-run" && target.dataset.id) {
+    if (desktopRunWritesBlocked()) return;
     await rpc("continueRun", { issueId: target.dataset.id });
     render();
     return;
@@ -655,6 +835,16 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
+  if (act === "open-restored-run" && target.dataset.id) {
+    const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
+    if (!run) return;
+    enterPrimaryPage("focus-workspace", ui.snapshot);
+    ui.clientView.panels.rightSide = "rail";
+    await rpc("focusRun", { runId: run.id });
+    syncReturnPointNavigation();
+    render();
+    return;
+  }
   if (act === "open-run-window" && target.dataset.id) {
     const run = (ui.snapshot.runs ?? []).find((item) => item.id === target.dataset.id);
     if (!run || run.status === "ended") return;
@@ -718,6 +908,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "stop-run" && target.dataset.id) {
+    if (desktopRunWritesBlocked()) return;
     rememberDialogTrigger("stop-run", target);
     ui.dangerConfirmation = {
       kind: "stop-run",
@@ -728,7 +919,66 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
+  if (act === "set-run-pinned" && target.dataset.id) {
+    await performRunOrganizationAction({
+      op: "setRunPinned",
+      runId: target.dataset.id,
+      pinned: target.dataset.pinned === "true",
+    });
+    return;
+  }
+  if (act === "archive-run" && target.dataset.id) {
+    await performRunOrganizationAction({ op: "archiveRun", runId: target.dataset.id });
+    return;
+  }
+  if (act === "restore-run" && target.dataset.id) {
+    await prepareRunRestore(target.dataset.id, target);
+    return;
+  }
+  if (act === "confirm-restore-run" && ui.restoreRunDialog?.result.status === "project-recreate-required") {
+    if (ui.restoreRunDialog.pending) return;
+    const state = ui.restoreRunDialog;
+    const tombstone = state.result.status === "project-recreate-required" ? state.result.tombstone : null;
+    if (!tombstone) return;
+    state.pending = true;
+    state.error = "";
+    render();
+    await finishRunRestore(state.result.runId, {
+      confirmProjectRecreate: true,
+      expectedTombstoneRevision: tombstone.revision,
+    });
+    return;
+  }
+  if (act === "retry-run-persistence") {
+    if (ui.runOrganizationPending.has("persistence:retry")) return;
+    ui.runOrganizationPending.add("persistence:retry");
+    render();
+    try {
+      await rpc("retryRunPersistenceLoad");
+      ui.runOrganizationRetry = null;
+      if (ui.clientView.page === "run-archive") await loadArchivedRuns();
+    } finally {
+      ui.runOrganizationPending.delete("persistence:retry");
+      render();
+    }
+    return;
+  }
+  if (act === "retry-run-organization" && ui.runOrganizationRetry) {
+    const action = ui.runOrganizationRetry.action;
+    if (action.op === "prepareRestoreRun") {
+      await prepareRunRestore(action.runId, target);
+    } else if (action.op === "restoreRun") {
+      await finishRunRestore(action.runId, {
+        confirmProjectRecreate: action.confirmProjectRecreate,
+        expectedTombstoneRevision: action.expectedTombstoneRevision,
+      });
+    } else {
+      await performRunOrganizationAction(action);
+    }
+    return;
+  }
   if (act === "confirm-stop-run" && ui.dangerConfirmation?.kind === "stop-run") {
+    if (desktopRunWritesBlocked()) return;
     if (ui.confirmationPending) return;
     const confirmation = ui.dangerConfirmation;
     ui.confirmationPending = true;
@@ -900,6 +1150,9 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     await rpc("focusHost", { hostId: target.dataset.id });
     ui.hostPickerOpen = false;
     await reportClientView();
+    if (ui.clientView.page === "run-archive" && ui.snapshot.capabilities.runOrganization) {
+      await loadArchivedRuns();
+    }
     render();
     return;
   }

@@ -6,6 +6,8 @@ import { render } from "../render/app";
 import { restoreDialogTrigger } from "../components/dialog-controller";
 import { toLocalInput } from "../client-utils";
 import { ui } from "../ui";
+import { mobileClient } from "../view-helpers";
+import { runPersistenceWritesBlocked } from "../render/run-organization";
 
 export function bindFormEvents(): void {
 ui.app.addEventListener("submit", async (event) => {
@@ -517,6 +519,12 @@ ui.app.addEventListener("change", async (event) => {
     render();
     return;
   }
+  if (target?.getAttribute("data-archive-filter") === "project" && target instanceof HTMLSelectElement) {
+    ui.archiveProjectFilter = target.value;
+    ui.archiveSelectedRunId = "";
+    render();
+    return;
+  }
   const filter = target?.getAttribute("data-usage-filter");
   if (!filter || !ui.snapshot?.usage || !(target instanceof HTMLSelectElement)) return;
   const next = {
@@ -558,6 +566,7 @@ ui.app.addEventListener("submit", async (event) => {
   const launch = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='launch']");
   if (launch && ui.snapshot && ui.launchDraft) {
     event.preventDefault();
+    if (!mobileClient() && runPersistenceWritesBlocked(ui.snapshot)) return;
     const draft = {
       projectId: ui.launchDraft.projectId,
       issueId: ui.launchDraft.issueId,
