@@ -250,6 +250,7 @@ pub struct UsageRun {
     pub agent_name: String,
     pub issue_id: Option<String>,
     pub started_at_ms: u64,
+    pub archived: bool,
 }
 
 pub fn local_offset_secs() -> i64 {
@@ -529,7 +530,7 @@ pub fn build_usage_page(
         })
         .collect();
 
-    let mut rows: Vec<UsageRunRow> = runs
+    let rows = runs
         .iter()
         .filter_map(|run| {
             let highlighted = query.highlighted_run_id.as_deref() == Some(run.id.as_str());
@@ -561,20 +562,28 @@ pub fn build_usage_page(
                 .collect();
             models.sort();
             models.dedup();
-            Some(UsageRunRow {
-                run_id: run.id.clone(),
-                project_id: run.project_id.clone(),
-                project_name: run.project_name.clone(),
-                agent_id: run.agent_id.clone(),
-                agent_name: run.agent_name.clone(),
-                issue_id: run.issue_id.clone(),
-                started_at_ms: run.started_at_ms,
-                models,
-                tokens: TokenCounts::sum_rows(run_samples.iter().map(|sample| sample.tokens)),
-                highlighted,
-            })
+            Some((
+                UsageRunRow {
+                    run_id: run.id.clone(),
+                    project_id: run.project_id.clone(),
+                    project_name: run.project_name.clone(),
+                    agent_id: run.agent_id.clone(),
+                    agent_name: run.agent_name.clone(),
+                    issue_id: run.issue_id.clone(),
+                    started_at_ms: run.started_at_ms,
+                    models,
+                    tokens: TokenCounts::sum_rows(run_samples.iter().map(|sample| sample.tokens)),
+                    highlighted,
+                },
+                run.archived,
+            ))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let totals = TokenCounts::sum_rows(rows.iter().map(|(row, _)| row.tokens));
+    let mut rows = rows
+        .into_iter()
+        .filter_map(|(row, archived)| (!archived).then_some(row))
+        .collect::<Vec<_>>();
     rows.sort_by(|a, b| {
         b.started_at_ms
             .cmp(&a.started_at_ms)
@@ -646,7 +655,6 @@ pub fn build_usage_page(
         })
         .collect();
 
-    let totals = TokenCounts::sum_rows(rows.iter().map(|row| row.tokens));
     let mut projects: Vec<UsageOption> = runs
         .iter()
         .map(|run| UsageOption {

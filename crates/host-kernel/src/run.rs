@@ -70,6 +70,10 @@ pub struct RunSummary {
     #[serde(default)]
     pub waiting_for_user: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_action: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
@@ -112,6 +116,10 @@ pub struct RunSummary {
 impl RunSummary {
     pub fn is_active(&self) -> bool {
         matches!(self.status, RunStatus::Starting | RunStatus::Running)
+    }
+
+    pub fn is_archived(&self) -> bool {
+        self.archived_at_ms.is_some()
     }
 }
 
@@ -157,6 +165,8 @@ pub fn start_unbound(
         unbound: issue_id.map(|id| id.is_empty()).unwrap_or(true),
         status: RunStatus::Starting,
         waiting_for_user: false,
+        pinned_at_ms: None,
+        archived_at_ms: None,
         recent_action: agent.recent_action().filter(|text| !text.is_empty()),
         failure: None,
         previous_run_id: previous_run_id

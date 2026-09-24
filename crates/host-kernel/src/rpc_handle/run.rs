@@ -136,6 +136,46 @@ impl HostKernel {
                     run_id: required_string(&request, "runId")?,
                 })
             }
+            "setRunPinned" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::SetRunPinned {
+                    run_id: required_string(&request, "runId")?,
+                    pinned: request
+                        .get("pinned")
+                        .and_then(|value| value.as_bool())
+                        .ok_or_else(|| KernelError::Protocol("missing pinned".into()))?,
+                })
+            }
+            "archiveRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::ArchiveRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "restoreRun" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RestoreRun {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
+            "listArchivedRuns" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                let project_id = request
+                    .get("projectId")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty());
+                let mut outcome = self.outcome();
+                outcome.archived_runs = Some(self.list_archived_runs(project_id));
+                Ok(outcome)
+            }
             "openHostOverview" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);

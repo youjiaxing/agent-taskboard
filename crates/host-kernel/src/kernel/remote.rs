@@ -156,11 +156,12 @@ impl HostKernel {
                 state.graph_center_issue_id = None;
                 state.complete_dependency_graph = false;
             }
-            if state
-                .focused_run_id
-                .as_ref()
-                .is_some_and(|run_id| !self.runs.iter().any(|run| run.id == *run_id))
-            {
+            if state.focused_run_id.as_ref().is_some_and(|run_id| {
+                !self
+                    .runs
+                    .iter()
+                    .any(|run| run.id == *run_id && !run.is_archived())
+            }) {
                 state.focused_run_id = None;
                 if state.workspace_view == WorkspaceView::Run {
                     state.workspace_view = WorkspaceView::Project;
@@ -295,6 +296,12 @@ impl HostKernel {
             .and_then(|value| value.as_str())
             .unwrap_or("")
             .to_string();
+        let capabilities = snapshot
+            .get("capabilities")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
         let board = match snapshot.get("board") {
             Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
             _ => None,
@@ -324,6 +331,7 @@ impl HostKernel {
             host_id: host_id.to_string(),
             projects,
             focused_project_id,
+            capabilities,
             empty_actions,
             board,
             runs,
@@ -479,5 +487,62 @@ impl HostKernel {
             auto_advance: self.host_auto_advance,
         };
         write_json(&self.data.host_settings_path, &file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_remote_capability_is_cached_without_local_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut host = HostKernel::boot_with(
+            BootRequest {
+                app_local_data_dir: tmp.path().to_path_buf(),
+                app_log_dir: tmp.path().join("logs"),
+                system_locale: "en".into(),
+                system_appearance: SystemAppearance::Light,
+                host_display_name: "Client".into(),
+            },
+            Arc::new(MemoryTracker::new()),
+        )
+        .unwrap();
+        host.focused_host_id = "remote".into();
+        host.remote_hosts.push(pairing::RemoteHost {
+            id: "remote".into(),
+            display_name: "Old Host".into(),
+            address: "http://127.0.0.1:9".into(),
+            token: "token".into(),
+        });
+
+        host.apply_remote_view(
+            "remote",
+            &serde_json::json!({
+                "snapshot": {
+                    "focusedProjectId": "",
+                    "projects": [],
+                    "runs": [],
+                    "focusedRunId": ""
+                }
+            }),
+        )
+        .unwrap();
+        assert!(!host.snapshot().capabilities.run_organization);
+
+        host.apply_remote_view(
+            "remote",
+            &serde_json::json!({
+                "snapshot": {
+                    "focusedProjectId": "",
+                    "projects": [],
+                    "runs": [],
+                    "focusedRunId": "",
+                    "capabilities": { "runOrganization": true }
+                }
+            }),
+        )
+        .unwrap();
+        assert!(host.snapshot().capabilities.run_organization);
     }
 }

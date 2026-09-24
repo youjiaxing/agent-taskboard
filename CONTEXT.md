@@ -80,6 +80,14 @@ _Avoid_: 继承终端, Host 环境（那是图标进程自己的）, login env�
 一次在某个 Project 中启动 Agent CLI 的可观察执行会话。Run 通常绑定一个 Issue，也允许不绑定 Issue；一个 Issue 可按时间关联多次 Run，但同一时刻最多有一个活跃 Run。Run 的生命周期与 Issue 状态彼此独立：Issue 关闭不会终止活跃 Run，Run 结束也不会表示或触发 Issue 完成。默认在 Project 主目录执行；可选使用隔离执行目录。
 _Avoid_: Job（偏 CI）, Session（易与编辑器/聊天会话混淆）
 
+**置顶**:
+某台 Host 对未归档 Run 保存的整理标记，可用于活跃或已结束 Run；在该 Host 的 Client 之间一致，不跨 Host 聚合。产品文案统一使用“置顶 / 取消置顶”，不显示 `pin`。置顶不改变 Run 的执行状态、等待操作、Issue 认领或 PTY。
+_Avoid_: Pin（仅可用于代码字段或协议名）, 收藏（弱化了固定展示语义）, 把置顶当成 Run 状态
+
+**归档 Run**:
+某台 Host 从普通 Run 导航与历史投影中收起的已结束 Run。归档是整理维度，不是第四种 `RunStatus`；只有 `ended` Run 可归档，归档会清除置顶，但不会停止进程、改变认领、执行已停、Continue、自动推进、用量汇总、telemetry、隔离目录或历史关联。恢复只取消归档，不启动进程、不恢复 PTY、不重新置顶。
+_Avoid_: 已删除 Run, Done Run, 把 archived 加进 `RunStatus`, 用归档隐式停止活跃 Run
+
 **隔离执行目录**:
 某次 Run 可选的第二份工作目录：由该 Agent 的官方 CLI 用 git worktree 从 Project 主目录建出，共享同一仓库历史，文件改动互不覆盖。默认不用；只有 Adapter 声明能原生建树时，用户才能在这次 Run 上打开。看板不替 CLI 建树。
 _Avoid_: Worktree（实现机制，说明里要写明，不当领域词）, Workspace（那是别的产品更重的对象）, 沙箱（那是写盘/网络权限，不是第二份目录）

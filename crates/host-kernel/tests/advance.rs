@@ -294,6 +294,56 @@ fn pending_confirmation_veto_does_not_claim_next() {
 }
 
 #[test]
+fn archived_source_run_keeps_pending_confirmation_and_veto() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), vec![ready(1, "first"), ready(2, "second")]);
+    let project_id = register(&mut h.host, &dir);
+    enable_both(&mut h.host, &project_id);
+    let run_id = start_bound(&mut h.host, &project_id, "you/garden#1");
+    finish_normal(&mut h, 1);
+    let before = h
+        .host
+        .snapshot()
+        .pending_confirmation
+        .expect("pending confirmation");
+    assert_eq!(before.run_id, run_id);
+
+    let archived = h
+        .host
+        .handle(serde_json::json!({ "op": "archiveRun", "runId": run_id }))
+        .unwrap();
+    assert!(archived.snapshot.runs.is_empty());
+    let pending = archived
+        .snapshot
+        .pending_confirmation
+        .expect("pending remains after archive");
+    assert_eq!(pending.run_id, run_id);
+    let err = h
+        .host
+        .handle(serde_json::json!({ "op": "focusRun", "runId": run_id }))
+        .unwrap_err();
+    assert!(err.to_string().contains("archived"));
+
+    let vetoed = h
+        .host
+        .handle(serde_json::json!({
+            "op": "vetoPendingConfirmation",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    assert!(vetoed.snapshot.pending_confirmation.is_none());
+    h.host
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": T0 + PENDING_CONFIRM_MS,
+        }))
+        .unwrap();
+    assert_eq!(h.sessions.spawn_count(), 1);
+    assert!(claimed(&h.host, "you/garden#2").is_empty());
+}
+
+#[test]
 fn auto_pool_skips_grilling_prototype_and_triage_roles() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
