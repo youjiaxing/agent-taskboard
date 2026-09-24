@@ -111,6 +111,7 @@ impl HostKernel {
             | "focusRun"
             | "setRunPinned"
             | "archiveRun"
+            | "prepareRestoreRun"
             | "restoreRun"
             | "listArchivedRuns"
             | "injectRunInput"

@@ -25,4 +25,4 @@ Host 内部保留完整 Run 集合，默认快照只投影未归档 Run。归档
 - [完成信号与可选自动推进](./0005-completion-signal-and-auto-advance.md) 的 pending confirmation 不因来源 Run 归档而改变。
 - [主壳使用固定区域、内部页面状态和当前 Host 侧栏](./0015-codex-shell-ia.md) 的普通 Run 导航只消费未归档投影；置顶与归档页面仍服从当前 Host 作用域。
 - [Host 用量页同时看 token 账和通路快慢](./0016-host-usage-page.md) 的 totals 包含归档样本，默认流水排除归档 Run。
-- Project 墓碑重建、`runs.json` 基础数据恢复模式以及桌面/手机页面由后续票实现，不属于本决策的 Host 核心合同。
+- Project 墓碑重建由 [0021](./0021-project-tombstone-run-restore.md) 补充；`runs.json` 基础数据恢复模式以及桌面/手机页面仍由后续票实现，不属于本决策的 Host 核心合同。

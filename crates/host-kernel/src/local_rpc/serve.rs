@@ -228,15 +228,7 @@ pub(super) fn serve_connection(
                     events.append(&mut outcome.events);
                     outcome.events = events;
                     if applied {
-                        if let Some(inference) = response.get("inference").cloned() {
-                            outcome.inference = serde_json::from_value(inference).ok();
-                        }
-                        if let Some(view) = response.get("viewChanges").cloned() {
-                            outcome.view_changes = serde_json::from_value(view).ok();
-                        }
-                        if let Some(runs) = response.get("archivedRuns").cloned() {
-                            outcome.archived_runs = serde_json::from_value(runs).ok();
-                        }
+                        HostKernel::apply_forwarded_outcome_fields(&mut outcome, &response);
                     }
                 }
                 if background_refreshes && !refreshes.is_empty() {

@@ -387,6 +387,53 @@ fn project_registration_changes_roll_back_when_settings_cannot_be_persisted() {
 }
 
 #[test]
+fn removing_project_atomically_swaps_active_registration_for_tombstone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "garden", &dir, "you/garden");
+    let settings_path = host.snapshot().data.host_settings_path;
+    let settings_before = std::fs::read(&settings_path).unwrap();
+    let settings_tmp = settings_path.with_extension("json.tmp");
+    std::fs::create_dir(&settings_tmp).unwrap();
+
+    let error = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": id,
+        }))
+        .unwrap_err();
+    assert!(matches!(error, KernelError::Io(_)));
+    assert_eq!(host.snapshot().projects.len(), 1);
+    assert_eq!(std::fs::read(&settings_path).unwrap(), settings_before);
+
+    std::fs::remove_dir(settings_tmp).unwrap();
+    host.handle(serde_json::json!({
+        "op": "removeProject",
+        "projectId": id,
+    }))
+    .unwrap();
+
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(settings_path).unwrap()).unwrap();
+    assert!(settings.get("projects").is_none());
+    let tombstones = settings["projectTombstones"].as_array().unwrap();
+    assert_eq!(tombstones.len(), 1);
+    assert_eq!(tombstones[0]["id"], id);
+    assert_eq!(tombstones[0]["name"], "garden");
+    assert_eq!(
+        tombstones[0]["localPath"].as_str(),
+        Some(dir.to_str().unwrap())
+    );
+    assert_eq!(tombstones[0]["tracker"], "github");
+    assert_eq!(tombstones[0]["githubHost"], "github.com");
+    assert_eq!(tombstones[0]["repository"], "you/garden");
+    assert!(!tombstones[0]["revision"].as_str().unwrap().is_empty());
+    assert!(tombstones[0].get("token").is_none());
+    assert!(tombstones[0].get("pat").is_none());
+}
+
+#[test]
 fn active_run_allows_changing_only_the_project_name() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/first");

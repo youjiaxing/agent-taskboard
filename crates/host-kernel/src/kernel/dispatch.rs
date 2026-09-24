@@ -315,8 +315,24 @@ impl HostKernel {
             Command::ArchiveRun { run_id } => {
                 self.archive_run(&run_id)?;
             }
-            Command::RestoreRun { run_id } => {
-                self.restore_run(&run_id)?;
+            Command::PrepareRestoreRun { run_id } => {
+                let mut outcome = self.outcome();
+                outcome.run_restore = Some(self.prepare_restore_run(&run_id)?);
+                return Ok(outcome);
+            }
+            Command::RestoreRun {
+                run_id,
+                confirm_project_recreate,
+                expected_tombstone_revision,
+            } => {
+                let result = self.restore_run(
+                    &run_id,
+                    confirm_project_recreate,
+                    expected_tombstone_revision.as_deref(),
+                )?;
+                let mut outcome = self.outcome();
+                outcome.run_restore = Some(result);
+                return Ok(outcome);
             }
             Command::OpenHostOverview => {
                 self.usage_open = false;

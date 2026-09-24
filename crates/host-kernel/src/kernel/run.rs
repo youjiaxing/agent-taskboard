@@ -388,25 +388,152 @@ impl HostKernel {
         Ok(())
     }
 
-    pub(crate) fn restore_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+    pub(crate) fn prepare_restore_run(
+        &self,
+        run_id: &str,
+    ) -> Result<RunRestoreResult, KernelError> {
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if !run.is_archived() {
+            return Ok(RunRestoreResult::Restored {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                project_recreated: false,
+            });
+        }
+        Ok(self.restore_run_preflight(run))
+    }
+
+    pub(crate) fn restore_run(
+        &mut self,
+        run_id: &str,
+        confirm_project_recreate: bool,
+        expected_tombstone_revision: Option<&str>,
+    ) -> Result<RunRestoreResult, KernelError> {
         let position = self
             .runs
             .iter()
             .position(|run| run.id == run_id)
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
-        let run = &self.runs[position];
+        let run = self.runs[position].clone();
         if !run.is_archived() {
-            return Ok(());
+            return Ok(RunRestoreResult::Restored {
+                run_id: run.id,
+                project_id: run.project_id,
+                project_recreated: false,
+            });
         }
-        if !self
+
+        let preflight = self.restore_run_preflight(&run);
+        match preflight {
+            RunRestoreResult::Ready { .. } => {
+                self.unarchive_run(position)?;
+                Ok(RunRestoreResult::Restored {
+                    run_id: run.id,
+                    project_id: run.project_id,
+                    project_recreated: false,
+                })
+            }
+            RunRestoreResult::ProjectRecreateRequired { tombstone, .. } => {
+                if !confirm_project_recreate {
+                    return Ok(RunRestoreResult::ProjectRecreateRequired {
+                        run_id: run.id,
+                        project_id: run.project_id,
+                        tombstone,
+                    });
+                }
+                if expected_tombstone_revision != Some(tombstone.revision.as_str()) {
+                    return Ok(RunRestoreResult::Conflict {
+                        run_id: run.id,
+                        project_id: run.project_id,
+                        reason: RunRestoreConflictReason::TombstoneRevisionChanged,
+                        tombstone: Some(tombstone),
+                        conflicting_project_id: None,
+                    });
+                }
+
+                self.recreate_project_from_tombstone(
+                    &run.project_id,
+                    expected_tombstone_revision.expect("matched revision"),
+                )?;
+
+                self.unarchive_run(position)?;
+                Ok(RunRestoreResult::Restored {
+                    run_id: run.id,
+                    project_id: run.project_id,
+                    project_recreated: true,
+                })
+            }
+            conflict @ RunRestoreResult::Conflict { .. } => Ok(conflict),
+            RunRestoreResult::Restored { .. } => unreachable!("archived run preflight"),
+        }
+    }
+
+    fn restore_run_preflight(&self, run: &RunSummary) -> RunRestoreResult {
+        let project = self
             .projects
             .iter()
-            .any(|project| project.id == run.project_id)
-        {
-            return Err(KernelError::Denied(
-                "run Project is no longer registered".into(),
-            ));
+            .find(|project| project.id == run.project_id);
+        let tombstone = self
+            .project_tombstones
+            .iter()
+            .find(|tombstone| tombstone.id == run.project_id);
+        if project.is_some() && tombstone.is_some() {
+            return RunRestoreResult::Conflict {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                reason: RunRestoreConflictReason::ActiveProjectTombstoneConflict,
+                tombstone: tombstone.map(project_tombstone_summary),
+                conflicting_project_id: Some(run.project_id.clone()),
+            };
         }
+        if project.is_some() {
+            return RunRestoreResult::Ready {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+            };
+        }
+        let Some(tombstone) = tombstone else {
+            return RunRestoreResult::Conflict {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                reason: RunRestoreConflictReason::TombstoneMissing,
+                tombstone: None,
+                conflicting_project_id: None,
+            };
+        };
+        let summary = project_tombstone_summary(tombstone);
+        if !tombstone.local_path.is_dir() {
+            return RunRestoreResult::Conflict {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                reason: RunRestoreConflictReason::DirectoryMissing,
+                tombstone: Some(summary),
+                conflicting_project_id: None,
+            };
+        }
+        if let Some(conflicting) = self.projects.iter().find(|project_record| {
+            project::same_local_directory(&project_record.local_path, &tombstone.local_path)
+        }) {
+            return RunRestoreResult::Conflict {
+                run_id: run.id.clone(),
+                project_id: run.project_id.clone(),
+                reason: RunRestoreConflictReason::DirectoryInUse,
+                tombstone: Some(summary),
+                conflicting_project_id: Some(conflicting.id.clone()),
+            };
+        }
+        RunRestoreResult::ProjectRecreateRequired {
+            run_id: run.id.clone(),
+            project_id: run.project_id.clone(),
+            tombstone: summary,
+        }
+    }
+
+    fn unarchive_run(&mut self, position: usize) -> Result<(), KernelError> {
         let mut runs = self.runs.clone();
         runs[position].archived_at_ms = None;
         self.persist_run_records(&runs)?;
@@ -1063,6 +1190,18 @@ impl HostKernel {
         for run_id in crashed_ids {
             self.push_notification(NotificationKind::CrashRecovered, &run_id);
         }
+    }
+}
+
+fn project_tombstone_summary(tombstone: &StoredProjectTombstone) -> ProjectTombstoneSummary {
+    ProjectTombstoneSummary {
+        project_id: tombstone.id.clone(),
+        name: tombstone.name.clone(),
+        local_path: tombstone.local_path.clone(),
+        tracker: tombstone.tracker,
+        github_host: tombstone.github_host.clone(),
+        repository: tombstone.repository.clone(),
+        revision: tombstone.revision.clone(),
     }
 }
 

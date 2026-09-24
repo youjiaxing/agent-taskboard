@@ -232,8 +232,13 @@ pub enum Command {
     ArchiveRun {
         run_id: String,
     },
+    PrepareRestoreRun {
+        run_id: String,
+    },
     RestoreRun {
         run_id: String,
+        confirm_project_recreate: bool,
+        expected_tombstone_revision: Option<String>,
     },
     OpenHostOverview,
     ReturnToBoard,
@@ -447,6 +452,12 @@ pub struct CommandOutcome {
         skip_serializing_if = "Option::is_none"
     )]
     pub archived_runs: Option<Vec<RunSummary>>,
+    #[serde(
+        rename = "runRestore",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub run_restore: Option<RunRestoreResult>,
 }
 
 impl CommandOutcome {
@@ -477,8 +488,74 @@ impl CommandOutcome {
         if let Some(runs) = &self.archived_runs {
             value["archivedRuns"] = serde_json::to_value(runs).expect("archived runs json");
         }
+        if let Some(run_restore) = &self.run_restore {
+            value["runRestore"] =
+                serde_json::to_value(run_restore).expect("run restore result json");
+        }
         value
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTombstoneSummary {
+    pub project_id: String,
+    pub name: String,
+    pub local_path: PathBuf,
+    pub tracker: TrackerKind,
+    pub github_host: String,
+    pub repository: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunRestoreConflictReason {
+    TombstoneMissing,
+    DirectoryMissing,
+    DirectoryInUse,
+    TombstoneRevisionChanged,
+    ActiveProjectTombstoneConflict,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum RunRestoreResult {
+    Ready {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
+    ProjectRecreateRequired {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+        tombstone: ProjectTombstoneSummary,
+    },
+    Restored {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+        #[serde(rename = "projectRecreated")]
+        project_recreated: bool,
+    },
+    Conflict {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+        reason: RunRestoreConflictReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tombstone: Option<ProjectTombstoneSummary>,
+        #[serde(
+            rename = "conflictingProjectId",
+            skip_serializing_if = "Option::is_none"
+        )]
+        conflicting_project_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -486,6 +563,17 @@ impl CommandOutcome {
 pub struct HostCapabilities {
     #[serde(default)]
     pub run_organization: bool,
+    #[serde(default)]
+    pub project_restore: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum HostDataConflict {
+    ProjectIdTombstone {
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -635,6 +723,8 @@ pub struct HostSnapshot {
     pub focused_host_id: String,
     pub focused_project_id: String,
     pub capabilities: HostCapabilities,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_conflicts: Vec<HostDataConflict>,
     pub hosts: Vec<HostSummary>,
     pub projects: Vec<ProjectSummary>,
     pub appearance: AppearanceState,
@@ -736,6 +826,7 @@ pub(crate) struct RemoteView {
     pub(crate) projects: Vec<ProjectSummary>,
     pub(crate) focused_project_id: String,
     pub(crate) capabilities: HostCapabilities,
+    pub(crate) data_conflicts: Vec<HostDataConflict>,
     pub(crate) empty_actions: Vec<EmptyAction>,
     pub(crate) board: Option<BoardSnapshot>,
     pub(crate) runs: Vec<RunSummary>,

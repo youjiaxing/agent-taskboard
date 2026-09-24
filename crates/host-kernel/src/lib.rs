@@ -87,7 +87,7 @@ pub(crate) use persist::{
     host_not_running_reason, load_client_tokens, load_or_init_appearance,
     load_or_init_host_settings, load_paired_clients, occupied_reason, read_github_pat,
     read_github_pats, write_json, write_json_inner, ClientSecretsFile, ClientSettingsFile,
-    HostSecretsFile, HostSettingsFile, StoredProject,
+    HostSecretsFile, HostSettingsFile, StoredProject, StoredProjectTombstone,
 };
 pub(crate) use protocol::{
     write_tracker_error, AppearanceSelection, ClientNavigationState, ClientView, LoopbackKind,
@@ -104,6 +104,7 @@ pub struct HostKernel {
     data: DataLayout,
     appearance: AppearanceSelection,
     projects: Vec<ProjectRecord>,
+    project_tombstones: Vec<StoredProjectTombstone>,
     focused_project_id: Option<String>,
     tracker: Arc<dyn TrackerSeam>,
     agents: Vec<Arc<dyn AgentPort>>,
@@ -243,6 +244,11 @@ impl HostKernel {
 
         let language = appearance.language;
         let secrets_path = data.host_secrets_path.clone();
+        let project_tombstones = if host_mode == HostMode::HostAndClient {
+            settings.project_tombstones.clone()
+        } else {
+            Vec::new()
+        };
         let projects = if host_mode == HostMode::HostAndClient {
             settings
                 .projects
@@ -292,6 +298,7 @@ impl HostKernel {
             data,
             appearance,
             projects,
+            project_tombstones,
             focused_project_id,
             tracker,
             agents,

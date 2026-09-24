@@ -1,10 +1,11 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier, Mutex};
 
 use host_kernel::{
-    BootRequest, HostKernel, IssueRecord, KernelPorts, MemoryAgent, MemoryLaunchEnv,
-    MemorySessionFactory, MemoryTracker, RunStatus, SystemAppearance, TelemetryLane,
-    TelemetrySample, TokenCounts, WorkspaceView,
+    BootRequest, GitHubTracker, HostKernel, IssueRecord, KernelPorts, MemoryAgent, MemoryLaunchEnv,
+    MemorySessionFactory, MemoryTracker, ProjectConnection, RunRestoreConflictReason,
+    RunRestoreResult, RunStatus, ScriptedGitHub, SystemAppearance, TelemetryLane, TelemetrySample,
+    TokenCounts, WorkspaceView,
 };
 
 const T0: u64 = 1_000_000;
@@ -116,6 +117,25 @@ fn block_runs_file(path: &Path) -> Vec<u8> {
 fn restore_runs_file(path: &Path, previous: &[u8]) {
     std::fs::remove_dir(path).unwrap();
     std::fs::write(path, previous).unwrap();
+}
+
+fn archive_and_remove(host: &mut HostKernel, dir: &Path) -> (String, String, String) {
+    let project_id = register(host, dir);
+    let run_id = start_run(host, &project_id, None);
+    stop_run(host, &run_id);
+    host.handle(serde_json::json!({ "op": "archiveRun", "runId": run_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "removeProject", "projectId": project_id }))
+        .unwrap();
+    let prepared = host
+        .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    let RunRestoreResult::ProjectRecreateRequired { tombstone, .. } = prepared else {
+        panic!("expected project recreation preflight");
+    };
+    (project_id, run_id, tombstone.revision)
 }
 
 #[test]
@@ -348,6 +368,412 @@ fn organization_write_failure_keeps_memory_unchanged_and_retryable() {
         .handle(serde_json::json!({ "op": "restoreRun", "runId": run_id }))
         .unwrap();
     assert_eq!(restored.snapshot.runs.len(), 1);
+}
+
+#[test]
+fn restore_preflight_and_confirmation_recreate_the_original_project_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_run(&mut h.host, &project_id, None);
+    stop_run(&mut h.host, &run_id);
+    h.host
+        .handle(serde_json::json!({ "op": "archiveRun", "runId": run_id }))
+        .unwrap();
+    assert!(matches!(
+        h.host
+            .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }))
+            .unwrap()
+            .run_restore,
+        Some(RunRestoreResult::Ready { .. })
+    ));
+
+    h.host
+        .handle(serde_json::json!({ "op": "removeProject", "projectId": project_id }))
+        .unwrap();
+    let prepared = h
+        .host
+        .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    let RunRestoreResult::ProjectRecreateRequired { tombstone, .. } = prepared else {
+        panic!("expected project recreation preflight");
+    };
+    assert_eq!(tombstone.project_id, project_id);
+    assert_eq!(tombstone.name, "garden");
+    assert_eq!(tombstone.local_path, dir);
+    assert_eq!(tombstone.repository, "you/garden");
+    let revision = tombstone.revision.clone();
+
+    let confirmation_required = h
+        .host
+        .handle(serde_json::json!({ "op": "restoreRun", "runId": run_id }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    assert!(matches!(
+        confirmation_required,
+        RunRestoreResult::ProjectRecreateRequired { .. }
+    ));
+    let stale = h
+        .host
+        .handle(serde_json::json!({
+            "op": "restoreRun",
+            "runId": run_id,
+            "confirmProjectRecreate": true,
+            "expectedTombstoneRevision": "stale",
+        }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    assert!(matches!(
+        stale,
+        RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::TombstoneRevisionChanged,
+            ..
+        }
+    ));
+
+    let restored = h
+        .host
+        .handle(serde_json::json!({
+            "op": "restoreRun",
+            "runId": run_id,
+            "confirmProjectRecreate": true,
+            "expectedTombstoneRevision": revision.clone(),
+        }))
+        .unwrap();
+    assert!(matches!(
+        restored.run_restore,
+        Some(RunRestoreResult::Restored {
+            project_recreated: true,
+            ..
+        })
+    ));
+    assert_eq!(restored.snapshot.projects.len(), 1);
+    assert_eq!(restored.snapshot.projects[0].id, project_id);
+    assert_eq!(restored.snapshot.runs.len(), 1);
+    assert_eq!(restored.snapshot.runs[0].id, run_id);
+    assert_eq!(restored.snapshot.runs[0].project_id, project_id);
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&restored.snapshot.data.host_settings_path).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["projects"][0]["id"], project_id);
+    assert!(settings.get("projectTombstones").is_none());
+
+    h.host
+        .handle(serde_json::json!({ "op": "archiveRun", "runId": run_id }))
+        .unwrap();
+    h.host
+        .handle(serde_json::json!({ "op": "removeProject", "projectId": project_id }))
+        .unwrap();
+    let next = h
+        .host
+        .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    let RunRestoreResult::ProjectRecreateRequired {
+        tombstone: next_tombstone,
+        ..
+    } = next
+    else {
+        panic!("expected second project recreation preflight");
+    };
+    assert_ne!(next_tombstone.revision, revision);
+    assert!(matches!(
+        h.host
+            .handle(serde_json::json!({
+                "op": "restoreRun",
+                "runId": run_id,
+                "confirmProjectRecreate": true,
+                "expectedTombstoneRevision": revision,
+            }))
+            .unwrap()
+            .run_restore,
+        Some(RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::TombstoneRevisionChanged,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn restore_retries_after_project_commit_when_runs_write_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let (project_id, run_id, revision) = archive_and_remove(&mut h.host, &dir);
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    let previous = block_runs_file(&runs_path);
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "restoreRun",
+            "runId": run_id,
+            "confirmProjectRecreate": true,
+            "expectedTombstoneRevision": revision,
+        }))
+        .unwrap_err();
+    assert_eq!(h.host.snapshot().projects[0].id, project_id);
+    assert!(h.host.snapshot().runs.is_empty());
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(h.host.snapshot().data.host_settings_path).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["projects"][0]["id"], project_id);
+    assert!(settings.get("projectTombstones").is_none());
+
+    restore_runs_file(&runs_path, &previous);
+    let retried = h
+        .host
+        .handle(serde_json::json!({ "op": "restoreRun", "runId": run_id }))
+        .unwrap();
+    assert_eq!(retried.snapshot.projects.len(), 1);
+    assert_eq!(retried.snapshot.projects[0].id, project_id);
+    assert_eq!(retried.snapshot.runs[0].id, run_id);
+}
+
+#[test]
+fn simultaneous_client_confirmations_converge_idempotently() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let (project_id, run_id, revision) = archive_and_remove(&mut h.host, &dir);
+    let host = Arc::new(Mutex::new(h.host));
+    let barrier = Arc::new(Barrier::new(3));
+
+    let results = std::thread::scope(|scope| {
+        let handles = ["desktop", "browser"].map(|client_id| {
+            let host = Arc::clone(&host);
+            let barrier = Arc::clone(&barrier);
+            let run_id = run_id.clone();
+            let revision = revision.clone();
+            scope.spawn(move || {
+                barrier.wait();
+                host.lock()
+                    .unwrap()
+                    .handle(serde_json::json!({
+                        "op": "restoreRun",
+                        "clientInstanceId": client_id,
+                        "runId": run_id,
+                        "confirmProjectRecreate": true,
+                        "expectedTombstoneRevision": revision,
+                    }))
+                    .unwrap()
+                    .run_restore
+                    .unwrap()
+            })
+        });
+        barrier.wait();
+        handles.map(|handle| handle.join().unwrap())
+    });
+
+    assert!(results
+        .iter()
+        .all(|result| matches!(result, RunRestoreResult::Restored { .. })));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(
+                result,
+                RunRestoreResult::Restored {
+                    project_recreated: true,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+    let snapshot = host.lock().unwrap().snapshot();
+    assert_eq!(snapshot.projects.len(), 1);
+    assert_eq!(snapshot.projects[0].id, project_id);
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.runs[0].project_id, project_id);
+}
+
+#[test]
+fn restore_preflight_reports_missing_directory_conflict_and_legacy_gap() {
+    let missing_dir_tmp = tempfile::tempdir().unwrap();
+    let missing_dir = make_dir(missing_dir_tmp.path(), "work/garden");
+    let mut missing_dir_host = harness(missing_dir_tmp.path());
+    let (_, missing_dir_run, _) = archive_and_remove(&mut missing_dir_host.host, &missing_dir);
+    std::fs::remove_dir_all(&missing_dir).unwrap();
+    assert!(matches!(
+        missing_dir_host
+            .host
+            .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": missing_dir_run }))
+            .unwrap()
+            .run_restore,
+        Some(RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::DirectoryMissing,
+            ..
+        })
+    ));
+
+    let conflict_tmp = tempfile::tempdir().unwrap();
+    let conflict_dir = make_dir(conflict_tmp.path(), "work/garden");
+    let mut conflict_host = harness(conflict_tmp.path());
+    let (old_project_id, conflict_run, _) =
+        archive_and_remove(&mut conflict_host.host, &conflict_dir);
+    let conflicting_project_id = register(&mut conflict_host.host, &conflict_dir);
+    let conflict = conflict_host
+        .host
+        .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": conflict_run }))
+        .unwrap()
+        .run_restore
+        .unwrap();
+    assert!(matches!(
+        conflict,
+        RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::DirectoryInUse,
+            conflicting_project_id: Some(ref id),
+            ..
+        } if id == &conflicting_project_id
+    ));
+    assert_ne!(old_project_id, conflicting_project_id);
+
+    let legacy_tmp = tempfile::tempdir().unwrap();
+    let legacy_dir = make_dir(legacy_tmp.path(), "work/garden");
+    let mut legacy = harness(legacy_tmp.path());
+    let (_, legacy_run, _) = archive_and_remove(&mut legacy.host, &legacy_dir);
+    let settings_path = legacy.host.snapshot().data.host_settings_path.clone();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    settings["projectTombstones"] = serde_json::json!([]);
+    std::fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+    let agent = Arc::clone(&legacy.agent);
+    let sessions = Arc::clone(&legacy.sessions);
+    drop(legacy.host);
+    let mut rebooted = HostKernel::boot_with_ports(
+        boot_req(legacy_tmp.path()),
+        KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()),
+            agents: vec![agent],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        rebooted
+            .handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": legacy_run }))
+            .unwrap()
+            .run_restore,
+        Some(RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::TombstoneMissing,
+            ..
+        })
+    ));
+    assert!(rebooted.snapshot().projects.is_empty());
+}
+
+#[test]
+fn active_project_tombstone_conflict_is_visible_and_blocks_restore() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let (project_id, run_id, revision) = archive_and_remove(&mut h.host, &dir);
+    let settings_path = h.host.snapshot().data.host_settings_path.clone();
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    let mut active = settings["projectTombstones"][0].clone();
+    active.as_object_mut().unwrap().remove("revision");
+    settings["projects"] = serde_json::json!([active]);
+    settings["focusedProjectId"] = serde_json::json!(project_id);
+    std::fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+    let bytes_before = std::fs::read(&settings_path).unwrap();
+    let agent = Arc::clone(&h.agent);
+    let sessions = Arc::clone(&h.sessions);
+    drop(h.host);
+
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()),
+            agents: vec![agent],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions,
+        },
+    )
+    .unwrap();
+    assert_eq!(host.snapshot().data_conflicts.len(), 1);
+    assert!(matches!(
+        host.handle(serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }))
+            .unwrap()
+            .run_restore,
+        Some(RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::ActiveProjectTombstoneConflict,
+            ..
+        })
+    ));
+    assert!(matches!(
+        host.handle(serde_json::json!({
+            "op": "restoreRun",
+            "runId": run_id,
+            "confirmProjectRecreate": true,
+            "expectedTombstoneRevision": revision,
+        }))
+        .unwrap()
+        .run_restore,
+        Some(RunRestoreResult::Conflict {
+            reason: RunRestoreConflictReason::ActiveProjectTombstoneConflict,
+            ..
+        })
+    ));
+    assert_eq!(std::fs::read(settings_path).unwrap(), bytes_before);
+    assert!(host.snapshot().runs.is_empty());
+}
+
+#[test]
+fn tracker_unreachable_does_not_block_project_recreation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let agent = Arc::new(MemoryAgent::installed_grok());
+    let sessions = MemorySessionFactory::new();
+    let tracker = Arc::new(GitHubTracker::scripted(ScriptedGitHub {
+        env: [("GH_TOKEN".into(), "token".into())].into(),
+        accept_tokens: ["token".into()].into(),
+        unreachable: true,
+        ..Default::default()
+    }));
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker,
+            agents: vec![agent],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions,
+        },
+    )
+    .unwrap();
+    let (project_id, run_id, revision) = archive_and_remove(&mut host, &dir);
+    let restored = host
+        .handle(serde_json::json!({
+            "op": "restoreRun",
+            "runId": run_id,
+            "confirmProjectRecreate": true,
+            "expectedTombstoneRevision": revision,
+        }))
+        .unwrap();
+    assert_eq!(restored.snapshot.projects[0].id, project_id);
+    assert!(matches!(
+        restored.snapshot.projects[0].connection,
+        ProjectConnection::Unreachable { .. }
+    ));
+    assert_eq!(restored.snapshot.runs[0].id, run_id);
 }
 
 #[test]
