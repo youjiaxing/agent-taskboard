@@ -936,6 +936,7 @@ export type PrimaryPage =
 export type RightSideMode = "hidden" | "rail" | "changes";
 /** Mobile renders the focus workspace as one panel at a time; the section is a mobile density choice, not a second page. */
 export type MobileWorkspaceSection = "terminal" | "issue" | "runs";
+export type MobileRunHistoryScope = "issue" | "project";
 export type ScrollPosition = { scrollTop: number; scrollLeft: number };
 export type BoardViewMemory = {
   projectId: string;

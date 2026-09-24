@@ -176,6 +176,122 @@ if (issueEntryDisabled === selectedCardBefore) {
   throw new Error(`the drawer's Issue entry follows whether an Issue is selected: selected=${selectedCardBefore} disabled=${issueEntryDisabled}`);
 }
 
+await session.page.click("[data-dialog-id='mobile-drawer'] .mobile-project-row:has-text('tools') button[data-act='focus-project']");
+await session.page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "tools");
+await session.page.click("button[data-act='mobile-drawer']");
+await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
+await session.page.click("[data-dialog-id='mobile-drawer'] .mobile-project-row:has-text('garden') button[data-act='focus-project']");
+await session.page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "garden");
+const projectHistoryStart = await snapshot();
+if (projectHistoryStart.board.selected !== null) {
+  throw new Error(`switching back to garden should establish the no-Issue Project history case, got ${projectHistoryStart.board.selected?.id}`);
+}
+const gardenProject = projectHistoryStart.projects.find((project) => project.name === "garden");
+const toolsProject = projectHistoryStart.projects.find((project) => project.name === "tools");
+if (!gardenProject || !toolsProject) throw new Error("mobile Project history fixture needs garden and tools");
+const gardenRuns = projectHistoryStart.runs.filter((run) => run.projectId === gardenProject.id);
+const toolsRunIds = projectHistoryStart.runs.filter((run) => run.projectId === toolsProject.id).map((run) => run.id);
+const gardenUnboundEnded = gardenRuns.find((run) => run.unbound && run.status === "ended");
+const gardenBoundEnded = gardenRuns.find((run) => !run.unbound && run.status === "ended");
+if (!gardenUnboundEnded || !gardenBoundEnded || gardenRuns.every((run) => run.unbound)) {
+  throw new Error(`mobile Project history fixture needs bound and unbound garden Runs: ${JSON.stringify(gardenRuns)}`);
+}
+
+await session.page.click("button[data-act='mobile-drawer']");
+await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
+const noIssueDrawerState = await session.page.evaluate(() => ({
+  issueDisabled: document.querySelector("[data-dialog-id='mobile-drawer'] [data-act='mobile-issue-entry']")?.disabled,
+  historyDisabled: document.querySelector("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']")?.disabled,
+}));
+if (!noIssueDrawerState.issueDisabled || noIssueDrawerState.historyDisabled) {
+  throw new Error(`Project history must stay available without an Issue: ${JSON.stringify(noIssueDrawerState)}`);
+}
+await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+await session.page.waitForSelector(".mobile-project-history [data-run-history-scope='project']");
+await session.page.waitForTimeout(1100);
+await session.page.click("button[data-act='mobile-drawer']");
+await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
+if (!(await session.page.$(".mobile-project-history"))) {
+  throw new Error("the Host tick must not pull Project history back to the board");
+}
+await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+await session.page.waitForSelector(".mobile-project-history [data-run-history-scope='project']");
+const projectHistoryShape = await session.page.evaluate(() => ({
+  heading: document.querySelector(".mobile-project-history-head")?.textContent?.replace(/\s+/g, " ").trim(),
+  runIds: [...document.querySelectorAll(".mobile-project-history .workspace-run-history-item")].map((node) => node.dataset.id),
+  text: document.querySelector(".mobile-project-history")?.textContent?.replace(/\s+/g, " ").trim(),
+  pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+}));
+const expectedGardenRunIds = gardenRuns.map((run) => run.id).sort();
+if (projectHistoryShape.runIds.slice().sort().join("|") !== expectedGardenRunIds.join("|")) {
+  throw new Error(`Project history should contain only the current Project Runs: ${JSON.stringify(projectHistoryShape)}`);
+}
+if (projectHistoryShape.runIds.some((runId) => toolsRunIds.includes(runId))) {
+  throw new Error(`Project history leaked a tools Run: ${JSON.stringify(projectHistoryShape.runIds)}`);
+}
+if (!projectHistoryShape.heading?.includes("garden") || !projectHistoryShape.heading.includes("历史") || !projectHistoryShape.text?.includes("未绑定 Issue")) {
+  throw new Error(`Project history should identify its Project and unbound Runs: ${JSON.stringify(projectHistoryShape)}`);
+}
+if (projectHistoryShape.pageOverflow > 0) throw new Error(`Project history must not create horizontal overflow: ${projectHistoryShape.pageOverflow}`);
+await assertTouchTargets("mobile Project history");
+
+await session.page.click(`.mobile-project-history .workspace-run-history-item[data-id='${gardenUnboundEnded.id}']`);
+await session.page.waitForSelector(`[data-terminal-surface='readonly'][data-run='${gardenUnboundEnded.id}']`);
+const unboundHistoryOutput = await session.page.$eval(".readonly-terminal-output", (node) => node.textContent ?? "");
+if (!unboundHistoryOutput.includes("garden unbound history output") || await session.page.$("[data-mobile-run-input]")) {
+  throw new Error(`ended unbound history must use recentOutput without PTY input, got ${unboundHistoryOutput}`);
+}
+let historyRunContext = await snapshot();
+if (historyRunContext.focusedProjectId !== gardenProject.id || historyRunContext.board.selected !== null) {
+  throw new Error(`opening an unbound history Run must not fabricate an Issue: ${JSON.stringify({ projectId: historyRunContext.focusedProjectId, issueId: historyRunContext.board.selected?.id })}`);
+}
+await session.page.click("button[data-act='mobile-project-history-return']");
+await session.page.waitForSelector(".mobile-project-history");
+const unboundReturnContext = await session.page.$eval(".mobile-project-history", (node) => ({
+  project: document.querySelector("[data-current-identity]")?.textContent?.trim(),
+  runId: node.dataset.focusedRun,
+}));
+if (unboundReturnContext.project !== "garden" || unboundReturnContext.runId !== gardenUnboundEnded.id) {
+  throw new Error(`returning to Project history should preserve the focused Run: ${JSON.stringify(unboundReturnContext)}`);
+}
+
+await session.page.click(`.mobile-project-history .workspace-run-history-item[data-id='${gardenBoundEnded.id}']`);
+await session.page.waitForSelector(`[data-terminal-surface='readonly'][data-run='${gardenBoundEnded.id}']`);
+await session.page.click("button[data-act='mobile-project-history-return']");
+await session.page.waitForSelector(".mobile-project-history");
+historyRunContext = await snapshot();
+const boundReturnRunId = await session.page.getAttribute(".mobile-project-history", "data-focused-run");
+if (historyRunContext.focusedProjectId !== gardenProject.id || boundReturnRunId !== gardenBoundEnded.id) {
+  throw new Error(`bound history should preserve its Project and Run without turning the history page into an Issue view: ${JSON.stringify({ projectId: historyRunContext.focusedProjectId, runId: boundReturnRunId })}`);
+}
+
+await session.page.click(`.mobile-project-history .workspace-run-history-item[data-id='${gardenUnboundEnded.id}']`);
+await session.page.waitForSelector(`[data-terminal-surface='readonly'][data-run='${gardenUnboundEnded.id}']`);
+const issueDocumentRequests = [];
+const observeIssueDocumentRequest = (request) => {
+  if (!request.url().endsWith("/rpc") || request.method() !== "POST") return;
+  try {
+    const body = request.postDataJSON();
+    if (body.op === "loadIssueDocument") issueDocumentRequests.push(body.issueId);
+  } catch {
+    // Ignore non-JSON requests; this observer is scoped to the RPC assertion below.
+  }
+};
+session.page.on("request", observeIssueDocumentRequest);
+await session.page.click(".mobile-section-switch button[data-id='issue']");
+await session.page.waitForSelector(".mobile-workspace-panel > p.board-empty");
+await session.page.waitForTimeout(120);
+session.page.off("request", observeIssueDocumentRequest);
+if (issueDocumentRequests.length || await session.page.$(".mobile-issue-panel")) {
+  throw new Error(`an unbound history Run must not load or display a residual Issue: ${JSON.stringify(issueDocumentRequests)}`);
+}
+await session.page.click("button[data-act='mobile-project-history-return']");
+await session.page.waitForSelector(".mobile-project-history");
+await session.page.click(".mobile-nav button[data-id='board']");
+await session.page.waitForSelector(".mobile-board-view");
+await session.page.click("button[data-act='mobile-drawer']");
+await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
+
 await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-appearance-entry']");
 const appearanceChoices = await session.page.$$eval("[data-dialog-id='mobile-drawer'] [data-act='appearance']", (nodes) => nodes.map((node) => node.dataset.id));
 if (appearanceChoices.join("|") !== "warm|light|dark|system") {
@@ -394,6 +510,14 @@ const endedRun = await session.page.$eval(".mobile-workspace-panel .workspace-ru
 if (!endedRun?.includes("已结束")) {
   throw new Error(`the mobile Run history should read the ended Run state, got ${endedRun}`);
 }
+const issueHistoryRunIds = await session.page.$$eval(".mobile-workspace-panel .workspace-run-history-item", (nodes) => nodes.map((node) => node.dataset.id).sort());
+const issueHistoryExpected = (await snapshot()).runs
+  .filter((run) => run.issueId === mobileFrontierIssueId)
+  .map((run) => run.id)
+  .sort();
+if (issueHistoryRunIds.join("|") !== issueHistoryExpected.join("|")) {
+  throw new Error(`Issue Run history must exclude unbound and other-Issue Runs: ${JSON.stringify({ issueHistoryRunIds, issueHistoryExpected })}`);
+}
 await assertShellRegionsDoNotOverlap(session.page);
 await assertTouchTargets("mobile workspace");
 
@@ -436,10 +560,7 @@ for (const act of ["mobile-issue-entry", "mobile-history-entry"]) {
 }
 await assertTouchTargets("mobile drawer");
 await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
-await session.page.waitForSelector(".mobile-workspace-view");
-if (!(await session.page.$(".mobile-section-switch button[data-id='runs'][aria-pressed='true']"))) {
-  throw new Error("the drawer's history entry should open the Run history section");
-}
+await session.page.waitForSelector(".mobile-project-history [data-run-history-scope='project']");
 await session.page.click(".mobile-nav button[data-id='board']");
 await session.page.waitForSelector(".mobile-board-view");
 await assertTouchTargets("mobile board");

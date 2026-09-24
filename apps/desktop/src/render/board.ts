@@ -508,13 +508,19 @@ export function workspaceRailLabels(): { actions: string; issue: string; runs: s
     : { actions: "Claim and actions", issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
 }
 
-export function workspaceRunHistory(copy: ShellCopy, runs: RunSummary[]): string {
+export function workspaceRunHistory(
+  copy: ShellCopy,
+  runs: RunSummary[],
+  options: { showIdentity?: boolean } = {},
+): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
+    const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
     return `<button type="button" class="workspace-run-history-item" data-act="focus-run" data-id="${escapeHtml(run.id)}">
       <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
+      ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
       ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
     </button>`;
   }).join("")}</div>`;

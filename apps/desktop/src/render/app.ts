@@ -88,6 +88,12 @@ export function render(): void {
   const focusRun = workspaceRun(snap);
   const showSidebar = !isMobile && !runWindow && ui.clientView.panels.sidebarVisible;
   const selectedIssue = snap.board?.selected;
+  const workspaceIdentityIssue = isMobile && ui.mobileProjectHistoryRunOpen && focusRun?.unbound
+    ? undefined
+    : selectedIssue;
+  const mobileProjectHistoryOpen = isMobile
+    && ui.mobileRunHistoryScope === "project"
+    && ui.mobileWorkspaceSection === "runs";
   const primaryIdentity = ui.clientView.page === "settings"
     ? copy.settings
     : ui.clientView.page === "host-overview"
@@ -95,7 +101,9 @@ export function render(): void {
       : ui.clientView.page === "usage"
         ? copy.usage
         : ui.clientView.page === "focus-workspace"
-          ? selectedIssue?.title ?? focusedRun(snap)?.agentName ?? copy.appName
+          ? mobileProjectHistoryOpen
+            ? currentProject(snap)?.name ?? copy.appName
+            : workspaceIdentityIssue?.title ?? focusedRun(snap)?.agentName ?? copy.appName
           : isMobile
             ? currentProject(snap)?.name ?? host?.displayName ?? copy.appName
             : host?.displayName ?? copy.appName;

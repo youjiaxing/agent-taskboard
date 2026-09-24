@@ -307,6 +307,7 @@
 }
 
 .workspace-run-history-item small,
+.workspace-run-history-identity,
 .workspace-run-history-item > span:last-child {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);

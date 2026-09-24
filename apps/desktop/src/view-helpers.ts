@@ -110,7 +110,10 @@ export function syncClientPrimaryPage(snap: Snapshot): void {
     return;
   }
   if (ui.clientView.page !== "settings") {
-    if (ui.clientView.page === "focus-workspace" && snap.board?.selected) return;
+    const mobileProjectHistoryOpen = mobileClient()
+      && ui.mobileRunHistoryScope === "project"
+      && ui.mobileWorkspaceSection === "runs";
+    if (ui.clientView.page === "focus-workspace" && (snap.board?.selected || mobileProjectHistoryOpen)) return;
     ui.clientView.page = primaryPageFromSnapshot(snap);
   }
 }
