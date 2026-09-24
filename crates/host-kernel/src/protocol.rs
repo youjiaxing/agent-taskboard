@@ -225,6 +225,16 @@ pub enum Command {
     FocusRun {
         run_id: String,
     },
+    SetRunPinned {
+        run_id: String,
+        pinned: bool,
+    },
+    ArchiveRun {
+        run_id: String,
+    },
+    RestoreRun {
+        run_id: String,
+    },
     OpenHostOverview,
     ReturnToBoard,
     InjectRunInput {
@@ -431,6 +441,12 @@ pub struct CommandOutcome {
         skip_serializing_if = "Option::is_none"
     )]
     pub launch_environment: Option<LaunchEnvironmentStatus>,
+    #[serde(
+        rename = "archivedRuns",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub archived_runs: Option<Vec<RunSummary>>,
 }
 
 impl CommandOutcome {
@@ -458,8 +474,18 @@ impl CommandOutcome {
             value["launchEnvironment"] =
                 serde_json::to_value(status).expect("launch environment json");
         }
+        if let Some(runs) = &self.archived_runs {
+            value["archivedRuns"] = serde_json::to_value(runs).expect("archived runs json");
+        }
         value
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HostCapabilities {
+    #[serde(default)]
+    pub run_organization: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -608,6 +634,7 @@ pub struct HostSnapshot {
     pub host_mode: HostMode,
     pub focused_host_id: String,
     pub focused_project_id: String,
+    pub capabilities: HostCapabilities,
     pub hosts: Vec<HostSummary>,
     pub projects: Vec<ProjectSummary>,
     pub appearance: AppearanceState,
@@ -708,6 +735,7 @@ pub(crate) struct RemoteView {
     pub(crate) host_id: String,
     pub(crate) projects: Vec<ProjectSummary>,
     pub(crate) focused_project_id: String,
+    pub(crate) capabilities: HostCapabilities,
     pub(crate) empty_actions: Vec<EmptyAction>,
     pub(crate) board: Option<BoardSnapshot>,
     pub(crate) runs: Vec<RunSummary>,

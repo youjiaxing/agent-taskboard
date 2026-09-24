@@ -234,6 +234,9 @@ pub(super) fn serve_connection(
                         if let Some(view) = response.get("viewChanges").cloned() {
                             outcome.view_changes = serde_json::from_value(view).ok();
                         }
+                        if let Some(runs) = response.get("archivedRuns").cloned() {
+                            outcome.archived_runs = serde_json::from_value(runs).ok();
+                        }
                     }
                 }
                 if background_refreshes && !refreshes.is_empty() {

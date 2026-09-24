@@ -34,11 +34,15 @@ impl HostKernel {
         issue_id: Option<&str>,
     ) -> Result<&RunSummary, KernelError> {
         if let Some(run_id) = run_id.filter(|id| !id.is_empty()) {
-            return self
+            let run = self
                 .runs
                 .iter()
                 .find(|run| run.id == run_id)
-                .ok_or_else(|| KernelError::Protocol("unknown run".into()));
+                .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+            if run.is_archived() {
+                return Err(KernelError::Denied("run is archived".into()));
+            }
+            return Ok(run);
         }
         let issue_id = issue_id
             .filter(|id| !id.is_empty())
@@ -46,12 +50,14 @@ impl HostKernel {
         self.runs
             .iter()
             .rev()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .find(|run| {
+                run.issue_id.as_deref() == Some(issue_id) && run.is_active() && !run.is_archived()
+            })
             .or_else(|| {
                 self.runs
                     .iter()
                     .rev()
-                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
+                    .find(|run| run.issue_id.as_deref() == Some(issue_id) && !run.is_archived())
             })
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))
     }
@@ -104,6 +110,9 @@ impl HostKernel {
             .find(|run| run.id == run_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if run.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
         self.change_notes.push(changes::new_note(
             &run,
             if repo.trim().is_empty() {

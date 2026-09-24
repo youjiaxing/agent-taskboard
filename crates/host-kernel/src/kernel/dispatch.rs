@@ -304,10 +304,19 @@ impl HostKernel {
                 self.stop_run(&run_id)?;
             }
             Command::FocusRun { run_id } => {
+                self.focus_run(&run_id)?;
                 self.usage_open = false;
                 self.usage_query.highlighted_run_id = None;
-                self.focus_run(&run_id)?;
                 self.workspace_view = WorkspaceView::Run;
+            }
+            Command::SetRunPinned { run_id, pinned } => {
+                self.set_run_pinned(&run_id, pinned)?;
+            }
+            Command::ArchiveRun { run_id } => {
+                self.archive_run(&run_id)?;
+            }
+            Command::RestoreRun { run_id } => {
+                self.restore_run(&run_id)?;
             }
             Command::OpenHostOverview => {
                 self.usage_open = false;

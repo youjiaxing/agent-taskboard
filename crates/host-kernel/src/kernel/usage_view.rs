@@ -2,7 +2,11 @@ use super::super::*;
 
 impl HostKernel {
     pub(crate) fn persist_runs(&self) -> Result<(), KernelError> {
-        write_json(&self.data.host_dir.join("runs.json"), &self.runs)
+        self.persist_run_records(&self.runs)
+    }
+
+    pub(crate) fn persist_run_records(&self, runs: &Vec<RunSummary>) -> Result<(), KernelError> {
+        write_json(&self.data.host_dir.join("runs.json"), runs)
     }
 
     pub(crate) fn usage_samples_path(&self) -> PathBuf {
@@ -72,6 +76,7 @@ impl HostKernel {
                 agent_name: run.agent_name.clone(),
                 issue_id: run.issue_id.clone(),
                 started_at_ms: run.started_at_ms,
+                archived: run.is_archived(),
             })
             .collect::<Vec<_>>();
         usage::build_usage_page(
@@ -117,8 +122,13 @@ impl HostKernel {
     }
 
     pub(crate) fn open_usage_for_run(&mut self, run_id: &str) -> Result<(), KernelError> {
-        if !self.runs.iter().any(|run| run.id == run_id) {
-            return Err(KernelError::Protocol("unknown run".into()));
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if run.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
         }
         self.usage_open = true;
         self.usage_query.highlighted_run_id = Some(run_id.to_string());
@@ -132,6 +142,9 @@ impl HostKernel {
             .find(|run| run.id == run_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if run.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
         self.usage_open = false;
         self.usage_query.highlighted_run_id = None;
         self.focused_run_id = Some(run.id.clone());

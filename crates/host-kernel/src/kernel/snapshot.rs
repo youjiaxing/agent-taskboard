@@ -11,6 +11,7 @@ impl HostKernel {
             host_mode: self.host_mode,
             focused_host_id: self.focused_host_id.clone(),
             focused_project_id: focused_project_id.clone(),
+            capabilities: self.capabilities_for_focus(),
             hosts: self.connected_hosts(),
             projects,
             appearance: AppearanceState::from_selection(self.appearance),
@@ -79,6 +80,7 @@ impl HostKernel {
             events: std::mem::take(&mut self.pending_events),
             view_changes,
             launch_environment: None,
+            archived_runs: None,
         }
     }
 
@@ -117,6 +119,19 @@ impl HostKernel {
             local: false,
         }));
         hosts
+    }
+
+    pub(crate) fn capabilities_for_focus(&self) -> HostCapabilities {
+        if self.focused_host_id == LOCAL_HOST_ID {
+            return HostCapabilities {
+                run_organization: true,
+            };
+        }
+        self.remote_view
+            .as_ref()
+            .filter(|view| view.host_id == self.focused_host_id)
+            .map(|view| view.capabilities)
+            .unwrap_or_default()
     }
 
     pub(crate) fn board_for_focus(&self) -> (Vec<ProjectSummary>, String, Vec<EmptyAction>) {

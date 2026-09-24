@@ -11,6 +11,13 @@ pub(crate) struct PreviousRun {
 
 impl HostKernel {
     pub fn pty_session(&self, run_id: &str) -> Result<Arc<dyn AgentSession>, KernelError> {
+        if self
+            .runs
+            .iter()
+            .any(|run| run.id == run_id && run.is_archived())
+        {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
         self.live
             .get(run_id)
             .cloned()
@@ -52,20 +59,12 @@ impl HostKernel {
     }
 
     pub fn write_pty(&self, run_id: &str, data: &[u8]) -> Result<(), KernelError> {
-        let session = self
-            .live
-            .get(run_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let session = self.pty_session(run_id)?;
         session.write(data).map_err(KernelError::Io)
     }
 
     pub fn resize_pty(&self, run_id: &str, cols: u16, rows: u16) -> Result<(), KernelError> {
-        let session = self
-            .live
-            .get(run_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let session = self.pty_session(run_id)?;
         session.resize(cols, rows);
         Ok(())
     }
@@ -86,7 +85,14 @@ impl HostKernel {
             }
         }
         (
-            self.decorate_runs(&self.runs),
+            self.decorate_runs(
+                &self
+                    .runs
+                    .iter()
+                    .filter(|run| !run.is_archived())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ),
             self.focused_run_id.clone().unwrap_or_default(),
             self.workspace_view,
             self.quit_offer.clone(),
@@ -299,12 +305,18 @@ impl HostKernel {
     }
 
     pub(crate) fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        let run = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if run.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
         if let Some(session) = self.live.get(run_id).cloned() {
             session.stop();
         }
-        if self.runs.iter().any(|run| run.id == run_id) {
-            self.mark_run_ended(run_id, RunEndedReason::Stopped);
-        }
+        self.mark_run_ended(run_id, RunEndedReason::Stopped);
         Ok(())
     }
 
@@ -315,6 +327,9 @@ impl HostKernel {
             .find(|run| run.id == run_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if run.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
         self.focused_run_id = Some(run.id);
         if self
             .projects
@@ -327,6 +342,115 @@ impl HostKernel {
             self.selected_issue_id = Some(issue_id);
         }
         Ok(())
+    }
+
+    pub(crate) fn set_run_pinned(&mut self, run_id: &str, pinned: bool) -> Result<(), KernelError> {
+        let position = self
+            .runs
+            .iter()
+            .position(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let run = &self.runs[position];
+        if pinned && run.is_archived() {
+            return Err(KernelError::Denied("archived run cannot be pinned".into()));
+        }
+        if (pinned && run.pinned_at_ms.is_some()) || (!pinned && run.pinned_at_ms.is_none()) {
+            return Ok(());
+        }
+        let mut runs = self.runs.clone();
+        runs[position].pinned_at_ms = pinned.then_some(self.now_ms);
+        self.persist_run_records(&runs)?;
+        self.runs = runs;
+        Ok(())
+    }
+
+    pub(crate) fn archive_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        let position = self
+            .runs
+            .iter()
+            .position(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let run = &self.runs[position];
+        if run.is_archived() {
+            return Ok(());
+        }
+        if run.status != RunStatus::Ended {
+            return Err(KernelError::Denied(
+                "only ended runs can be archived".into(),
+            ));
+        }
+        let mut runs = self.runs.clone();
+        runs[position].pinned_at_ms = None;
+        runs[position].archived_at_ms = Some(self.now_ms);
+        self.persist_run_records(&runs)?;
+        self.runs = runs;
+        self.clear_run_navigation(run_id);
+        Ok(())
+    }
+
+    pub(crate) fn restore_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        let position = self
+            .runs
+            .iter()
+            .position(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        let run = &self.runs[position];
+        if !run.is_archived() {
+            return Ok(());
+        }
+        if !self
+            .projects
+            .iter()
+            .any(|project| project.id == run.project_id)
+        {
+            return Err(KernelError::Denied(
+                "run Project is no longer registered".into(),
+            ));
+        }
+        let mut runs = self.runs.clone();
+        runs[position].archived_at_ms = None;
+        self.persist_run_records(&runs)?;
+        self.runs = runs;
+        Ok(())
+    }
+
+    pub(crate) fn list_archived_runs(&self, project_id: Option<&str>) -> Vec<RunSummary> {
+        let mut runs = self
+            .runs
+            .iter()
+            .filter(|run| {
+                run.is_archived()
+                    && project_id.is_none_or(|project_id| run.project_id == project_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.sort_by(|left, right| {
+            right
+                .archived_at_ms
+                .cmp(&left.archived_at_ms)
+                .then(right.started_at_ms.cmp(&left.started_at_ms))
+                .then(right.id.cmp(&left.id))
+        });
+        self.decorate_runs(&runs)
+    }
+
+    fn clear_run_navigation(&mut self, run_id: &str) {
+        clear_local_run_navigation(
+            &mut self.focused_run_id,
+            &mut self.workspace_view,
+            &mut self.usage_query,
+            run_id,
+        );
+        clear_local_client_navigation(&mut self.client_navigation_seed, run_id);
+        for state in self.client_navigation.values_mut() {
+            clear_local_client_navigation(state, run_id);
+        }
+        if self.open_view_changes_run_id.as_deref() == Some(run_id) {
+            self.open_view_changes_run_id = None;
+        }
+        self.pending_events.retain(|event| {
+            !matches!(event, HostEvent::Notification { run_id: event_run_id, .. } if event_run_id == run_id)
+        });
     }
 
     pub(crate) fn stop_all_runs(&mut self) {
@@ -399,7 +523,11 @@ impl HostKernel {
     }
 
     pub(crate) fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
-        let Some(run) = self.runs.iter().find(|run| run.id == run_id) else {
+        let Some(run) = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id && !run.is_archived())
+        else {
             return;
         };
         self.pending_events.push(HostEvent::Notification {
@@ -420,12 +548,14 @@ impl HostKernel {
         self.runs
             .iter()
             .rev()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id) && run.is_active())
+            .find(|run| {
+                run.issue_id.as_deref() == Some(issue_id) && run.is_active() && !run.is_archived()
+            })
             .or_else(|| {
                 self.runs
                     .iter()
                     .rev()
-                    .find(|run| run.issue_id.as_deref() == Some(issue_id))
+                    .find(|run| run.issue_id.as_deref() == Some(issue_id) && !run.is_archived())
             })
     }
 
@@ -933,5 +1063,34 @@ impl HostKernel {
         for run_id in crashed_ids {
             self.push_notification(NotificationKind::CrashRecovered, &run_id);
         }
+    }
+}
+
+fn clear_local_client_navigation(state: &mut ClientNavigationState, run_id: &str) {
+    if state.focused_host_id != LOCAL_HOST_ID {
+        return;
+    }
+    clear_local_run_navigation(
+        &mut state.focused_run_id,
+        &mut state.workspace_view,
+        &mut state.usage_query,
+        run_id,
+    );
+}
+
+fn clear_local_run_navigation(
+    focused_run_id: &mut Option<String>,
+    workspace_view: &mut WorkspaceView,
+    usage_query: &mut usage::UsageQuery,
+    run_id: &str,
+) {
+    if focused_run_id.as_deref() == Some(run_id) {
+        *focused_run_id = None;
+        if *workspace_view == WorkspaceView::Run {
+            *workspace_view = WorkspaceView::Project;
+        }
+    }
+    if usage_query.highlighted_run_id.as_deref() == Some(run_id) {
+        usage_query.highlighted_run_id = None;
     }
 }
