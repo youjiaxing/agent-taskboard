@@ -28,11 +28,52 @@ let issueDocumentRequestSequence = 0;
 export function commitRpcResult(result: RpcResult): void {
   syncLaunchDraft(result.snapshot);
   deliverHostEvents(result.events ?? [], result.snapshot);
+  if (ui.snapshot?.focusedHostId && ui.snapshot.focusedHostId !== result.snapshot.focusedHostId) {
+    ui.archivedRuns = [];
+    ui.archivedRunsHostId = "";
+    ui.archivedRunsError = "";
+    ui.archiveProjectFilter = "";
+    ui.archiveSelectedRunId = "";
+    ui.recentlyRestoredRunId = "";
+    ui.runOrganizationRetry = null;
+  }
   ui.snapshot = result.snapshot;
   syncClientPrimaryPage(result.snapshot);
   if (result.viewChanges) {
     ui.changesView = result.viewChanges;
     ui.clientView.panels.rightSide = "changes";
+  }
+}
+
+let archivedRunsRequestSequence = 0;
+
+export async function loadArchivedRuns(): Promise<void> {
+  const hostId = ui.snapshot?.focusedHostId;
+  if (!hostId || !ui.snapshot?.capabilities.runOrganization) return;
+  const sequence = ++archivedRunsRequestSequence;
+  ui.archivedRunsLoading = true;
+  ui.archivedRunsError = "";
+  ui.archivedRunsHostId = hostId;
+  render();
+  try {
+    const result = await executeRpc("listArchivedRuns", {}, false);
+    if (sequence !== archivedRunsRequestSequence || ui.snapshot?.focusedHostId !== hostId) return;
+    commitRpcResult(result);
+    ui.archivedRuns = result.archivedRuns ?? [];
+    if (ui.archiveProjectFilter && !ui.archivedRuns.some((run) => run.projectId === ui.archiveProjectFilter)) {
+      ui.archiveProjectFilter = "";
+    }
+    if (ui.archiveSelectedRunId && !ui.archivedRuns.some((run) => run.id === ui.archiveSelectedRunId)) {
+      ui.archiveSelectedRunId = "";
+    }
+  } catch (error) {
+    if (sequence !== archivedRunsRequestSequence || ui.snapshot?.focusedHostId !== hostId) return;
+    ui.archivedRunsError = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (sequence === archivedRunsRequestSequence && ui.snapshot?.focusedHostId === hostId) {
+      ui.archivedRunsLoading = false;
+      render();
+    }
   }
 }
 

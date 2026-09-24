@@ -787,6 +787,8 @@ export type RunSummary = {
   unbound: boolean;
   status: RunStatus;
   waitingForUser?: boolean;
+  pinnedAtMs?: number;
+  archivedAtMs?: number;
   recentAction?: string | null;
   failure?: string | null;
   previousRunId?: string | null;
@@ -990,6 +992,7 @@ export type RpcResult = {
   updateInstallGate?: UpdateInstallGate;
   events?: HostEvent[];
   viewChanges?: ViewChanges;
+  archivedRuns?: RunSummary[];
   runRestore?: RunRestoreResult;
 };
 
@@ -999,6 +1002,7 @@ export type PrimaryPage =
   | "focus-workspace"
   | "settings"
   | "host-overview"
+  | "run-archive"
   | "usage";
 
 export type RightSideMode = "hidden" | "rail" | "changes";

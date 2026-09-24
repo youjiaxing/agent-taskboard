@@ -22,7 +22,8 @@ fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
             .blocking("you/garden", 5, "waiting on history")
             .blocking("you/garden", 10, "active work"),
     );
-    tracker.add_issue(IssueRecord::open("you/garden", 4, "unparented ready").label("ready-for-agent"));
+    tracker
+        .add_issue(IssueRecord::open("you/garden", 4, "unparented ready").label("ready-for-agent"));
     tracker.add_issue(IssueRecord::open("you/garden", 10, "active work"));
     tracker.add_issue(IssueRecord::open("you/garden", 9, "blocker").blocked_by(
         "you/garden",
@@ -247,7 +248,8 @@ Paragraph six confirms that entering a Run must retain this same complete Issue 
     remote_req.host_display_name = "Mini".into();
     let remote_tracker = Arc::new(MemoryTracker::new());
     remote_tracker.add_issue(IssueRecord::open("you/ledger", 1, "ledger ready"));
-    let mut remote_host = HostKernel::boot_with(remote_req, Arc::clone(&remote_tracker) as _).unwrap();
+    let mut remote_host =
+        HostKernel::boot_with(remote_req, Arc::clone(&remote_tracker) as _).unwrap();
     pin_board_test_time(&mut remote_host);
     let ledger_dir = make_dir(remote_tmp.path(), "work/ledger");
     register(&mut remote_host, "ledger", &ledger_dir, "you/ledger");
@@ -282,6 +284,242 @@ Paragraph six confirms that entering a Run must retain this same complete Issue 
     }))
     .unwrap();
     run_browser_e2e(host, "board.mjs", &[]);
+}
+
+#[test]
+fn browser_delivers_desktop_run_organization_workflows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(MemoryTracker::new());
+    tracker.add_issue(
+        IssueRecord::open("you/garden", 1, "finish and confirm").label("ready-for-agent"),
+    );
+    tracker.add_issue(IssueRecord::open("you/garden", 2, "next ready").label("ready-for-agent"));
+    tracker.add_issue(IssueRecord::open("you/tools", 1, "tools ready"));
+    tracker.add_issue(IssueRecord::open("you/legacy", 1, "legacy history"));
+    let agent = Arc::new(MemoryAgent::installed_grok());
+    let sessions = MemorySessionFactory::new();
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::clone(&tracker) as _,
+            agents: vec![Arc::clone(&agent) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&sessions) as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut host);
+    let garden_dir = make_dir(tmp.path(), "work/garden");
+    let garden_project_id = register(&mut host, "garden", &garden_dir, "you/garden");
+    host.handle(serde_json::json!({ "op": "setHostAutoAdvance", "enabled": true }))
+        .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setProjectAutoAdvance",
+        "projectId": garden_project_id,
+        "enabled": true,
+    }))
+    .unwrap();
+    let pending_run_id = start_bound_grok(&mut host, &garden_project_id, "you/garden#1")
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"pending confirmation output\n");
+    sessions.last_session().unwrap().set_session_end(true);
+    tracker.close_issue("you/garden", 1);
+    sessions.last_session().unwrap().finish(0);
+    host.handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    assert!(host.snapshot().pending_confirmation.is_some());
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": BOARD_TEST_NOW_MS + 10 }))
+        .unwrap();
+    host.handle(
+        serde_json::json!({ "op": "setRunPinned", "runId": pending_run_id, "pinned": true }),
+    )
+    .unwrap();
+
+    let archived_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": garden_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "archived garden Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"garden archived recent output\n");
+    host.handle(serde_json::json!({ "op": "stopRun", "runId": archived_run_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": BOARD_TEST_NOW_MS + 20 }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "archiveRun", "runId": archived_run_id }))
+        .unwrap();
+
+    let tools_dir = make_dir(tmp.path(), "work/tools");
+    let tools_project_id = register(&mut host, "tools", &tools_dir, "you/tools");
+    let active_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": tools_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "active pinned tools Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"active tools output\n");
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": BOARD_TEST_NOW_MS + 30 }))
+        .unwrap();
+    host.handle(
+        serde_json::json!({ "op": "setRunPinned", "runId": active_run_id, "pinned": true }),
+    )
+    .unwrap();
+
+    let legacy_dir = make_dir(tmp.path(), "work/legacy");
+    let legacy_project_id = register(&mut host, "legacy", &legacy_dir, "you/legacy");
+    let removed_run_id = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": legacy_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "removed Project archived Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    sessions
+        .last_session()
+        .unwrap()
+        .push_output(b"legacy archived output\n");
+    host.handle(serde_json::json!({ "op": "stopRun", "runId": removed_run_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "tick", "nowMs": BOARD_TEST_NOW_MS + 40 }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "archiveRun", "runId": removed_run_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "removeProject", "projectId": legacy_project_id }))
+        .unwrap();
+
+    let remote_tmp = tempfile::tempdir().unwrap();
+    let remote_tracker = Arc::new(MemoryTracker::new());
+    remote_tracker.add_issue(IssueRecord::open("you/remote", 1, "remote ready"));
+    let remote_agent = Arc::new(MemoryAgent::installed_grok());
+    let remote_sessions = MemorySessionFactory::new();
+    let mut remote_req = boot_req(remote_tmp.path());
+    remote_req.host_display_name = "Remote Studio".into();
+    let mut remote_host = HostKernel::boot_with_ports(
+        remote_req,
+        host_kernel::KernelPorts {
+            tracker: Arc::clone(&remote_tracker) as _,
+            agents: vec![Arc::clone(&remote_agent) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&remote_sessions) as _,
+        },
+    )
+    .unwrap();
+    pin_board_test_time(&mut remote_host);
+    let remote_dir = make_dir(remote_tmp.path(), "work/remote");
+    let remote_project_id = register(&mut remote_host, "remote", &remote_dir, "you/remote");
+    let remote_run_id = remote_host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": remote_project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "remote pinned Run",
+        }))
+        .unwrap()
+        .snapshot
+        .focused_run_id;
+    remote_host
+        .handle(serde_json::json!({ "op": "setRunPinned", "runId": remote_run_id, "pinned": true }))
+        .unwrap();
+    let remote = Arc::new(Mutex::new(remote_host));
+    let remote_server = LoopbackServer::attach(Arc::clone(&remote), 0, |_| {}).unwrap();
+    let remote_address = remote_server
+        .protocol_url()
+        .trim_end_matches('/')
+        .to_string();
+    let remote_code = remote
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({ "op": "beginPairingOffer", "address": remote_address }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+    host.handle(serde_json::json!({ "op": "pairRemoteHost", "address": remote_address, "code": remote_code }))
+        .unwrap();
+    let remote_host_id = host
+        .snapshot()
+        .hosts
+        .iter()
+        .find(|candidate| !candidate.local)
+        .unwrap()
+        .id
+        .clone();
+    host.handle(serde_json::json!({ "op": "focusProject", "projectId": garden_project_id }))
+        .unwrap();
+    host.handle(serde_json::json!({ "op": "returnToBoard" }))
+        .unwrap();
+
+    run_browser_e2e(
+        host,
+        "run-organization.mjs",
+        &[
+            ("PENDING_RUN_ID", Path::new(&pending_run_id)),
+            ("ACTIVE_RUN_ID", Path::new(&active_run_id)),
+            ("ARCHIVED_RUN_ID", Path::new(&archived_run_id)),
+            ("REMOVED_RUN_ID", Path::new(&removed_run_id)),
+            ("REMOVED_PROJECT_ID", Path::new(&legacy_project_id)),
+            ("REMOTE_HOST_ID", Path::new(&remote_host_id)),
+            ("REMOTE_RUN_ID", Path::new(&remote_run_id)),
+        ],
+    );
 }
 
 #[test]
@@ -593,11 +831,7 @@ fn browser_registers_local_markdown_and_self_hosted_github_projects_through_the_
     .unwrap();
 
     let tracker = Arc::new(MemoryTracker::new());
-    tracker.add_issue(IssueRecord::open(
-        "acme/garden",
-        3,
-        "self-hosted issue",
-    ));
+    tracker.add_issue(IssueRecord::open("acme/garden", 3, "self-hosted issue"));
     let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         host_kernel::KernelPorts {

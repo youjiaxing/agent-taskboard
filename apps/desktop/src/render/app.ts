@@ -1,5 +1,5 @@
 import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, syncGraphSelection } from "../main";
-import { clientCopy, restoreGraphAnchor } from "../view-helpers";
+import { clientCopy, primaryPageFromSnapshot, restoreGraphAnchor } from "../view-helpers";
 import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
 import type { ScrollPosition } from "../protocol";
 import {
@@ -15,7 +15,8 @@ import {
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage } from "./shell";
+import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, runRow, settingsPage, updateDialog, usagePage } from "./shell";
+import { restoreRunDialog, runArchivePage, runOrganizationLabels, runPersistenceBanner } from "./run-organization";
 import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileSearchDialog } from "./mobile";
 import { issuePanelIcon, projectMain } from "./board";
 import { launchForm, loopbackNotice, projectForm, removeDialog } from "./run";
@@ -63,6 +64,11 @@ export function render(): void {
   const snap = ui.snapshot;
   const runWindow = Boolean(ui.nativeRunWindowRunId);
   const isMobile = mobileClient() && !runWindow;
+  if (isMobile && ui.clientView.page === "run-archive") {
+    ui.clientView.page = primaryPageFromSnapshot(snap);
+    ui.clientView.returnPoint = null;
+    ui.returnPointHistory.length = 0;
+  }
   const activeField = captureActiveField();
   const browserAppearance = browserClient() ? ensureBrowserAppearance() : null;
   const appearance = {
@@ -98,6 +104,8 @@ export function render(): void {
     ? copy.settings
     : ui.clientView.page === "host-overview"
       ? copy.hostOverview
+      : ui.clientView.page === "run-archive"
+        ? runOrganizationLabels().archive
       : ui.clientView.page === "usage"
         ? copy.usage
         : ui.clientView.page === "focus-workspace"
@@ -173,6 +181,10 @@ export function render(): void {
   if (!ui.pairingAddress) {
     ui.pairingAddress = (ui.snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
+  const organizationLabels = runOrganizationLabels();
+  const pinnedRuns = snap.capabilities.runOrganization
+    ? (snap.runs ?? []).filter((run) => run.pinnedAtMs).sort((left, right) => (right.pinnedAtMs ?? 0) - (left.pinnedAtMs ?? 0))
+    : [];
 
   ui.app.innerHTML = `
     <div class="frame page-${ui.clientView.page}">
@@ -234,7 +246,8 @@ export function render(): void {
                     <button type="button" class="title-icon" data-act="pair" aria-label="${escapeHtml(copy.pairAnotherHost)}">⊕</button>
                   </div>
                   <button type="button" class="item ${ui.clientView.page === "host-overview" ? "active" : ""}" data-act="open-overview">${escapeHtml(copy.hostOverview)}</button>
-                  <button type="button" class="item ${ui.clientView.page === "usage" ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>`
+                  <button type="button" class="item ${ui.clientView.page === "usage" ? "active" : ""}" data-act="open-usage">${escapeHtml(copy.usage)}</button>
+                  ${snap.capabilities.runOrganization ? `<button type="button" class="item ${ui.clientView.page === "run-archive" ? "active" : ""}" data-act="open-run-archive">${escapeHtml(organizationLabels.archive)}</button>` : ""}`
                 : ""
             }
             ${
@@ -248,6 +261,10 @@ export function render(): void {
                 : ""
             }
           </div>
+          ${snap.capabilities.runOrganization ? `<section class="pinned-run-section" data-pinned-runs>
+            <div class="group-head"><div class="group-name">${escapeHtml(organizationLabels.pinnedRuns)}</div><span>${pinnedRuns.length}</span></div>
+            ${pinnedRuns.map((run) => `<div class="pinned-run-entry"><span class="pinned-run-project">${escapeHtml(projects.find((project) => project.id === run.projectId)?.name ?? run.projectId)}</span>${runRow(copy, run, snap.focusedRunId)}</div>`).join("")}
+          </section>` : ""}
           <div>
             <div class="group-head">
               <div class="group-name">${escapeHtml(copy.projects)}</div>
@@ -263,9 +280,12 @@ export function render(): void {
           </div>
         </aside>` : ""}
         <main class="workspace ${empty ? "" : "board-open"}${ui.clientView.page === "focus-workspace" ? " focus-workspace-open" : ""}${!snap.usageOpen && snap.workspaceView === "project" && focusedRun(snap) ? " has-run" : ""}">
+          ${!isMobile ? runPersistenceBanner(copy, snap) : ""}
           ${
             ui.clientView.page === "settings"
               ? settingsPage(copy, localCopy, snap, appearance, isMobile)
+              : ui.clientView.page === "run-archive"
+                ? runArchivePage(copy, snap)
               : empty
                 ? `${loopbackNotice(snap.loopbackPage)}${emptyState({
                     title: copy.noProjectTitle,
@@ -278,7 +298,7 @@ export function render(): void {
                 : ui.clientView.page === "usage"
                   ? usagePage(copy, snap)
                   : ui.clientView.page === "host-overview"
-                    ? hostOverviewPage(copy, snap)
+                    ? hostOverviewPage(copy, snap, !isMobile)
                     : isMobile
                       ? mobilePage(copy, localCopy, snap)
                       : ui.clientView.page === "focus-workspace"
@@ -311,6 +331,7 @@ export function render(): void {
     ${ui.removeProject ? removeDialog(copy, ui.removeProject) : ""}
     ${snap.quitOffer ? quitOfferDialog(copy) : ""}
     ${dangerConfirmationDialog(copy)}
+    ${restoreRunDialog(copy)}
     ${updateDialog(copy)}
     ${ui.keyboardHelpOpen ? keyboardHelpDialog(copy) : ""}
   `;
