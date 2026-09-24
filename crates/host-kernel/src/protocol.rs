@@ -240,6 +240,7 @@ pub enum Command {
         confirm_project_recreate: bool,
         expected_tombstone_revision: Option<String>,
     },
+    RetryRunPersistenceLoad,
     OpenHostOverview,
     ReturnToBoard,
     InjectRunInput {
@@ -565,6 +566,35 @@ pub struct HostCapabilities {
     pub run_organization: bool,
     #[serde(default)]
     pub project_restore: bool,
+    #[serde(default = "crate::persist::default_true")]
+    pub run_persistence_writes: bool,
+    #[serde(default)]
+    pub run_persistence_recovery: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunPersistenceFailureKind {
+    Unreadable,
+    InvalidJson,
+    InvalidRunRecord,
+    WriteFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPersistenceRecovery {
+    pub kind: RunPersistenceFailureKind,
+    pub detail: String,
+    pub retry_operation: String,
+    pub writes_blocked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPersistenceWriteError {
+    pub detail: String,
+    pub retryable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,6 +753,10 @@ pub struct HostSnapshot {
     pub focused_host_id: String,
     pub focused_project_id: String,
     pub capabilities: HostCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_persistence_recovery: Option<RunPersistenceRecovery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_persistence_write_error: Option<RunPersistenceWriteError>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_conflicts: Vec<HostDataConflict>,
     pub hosts: Vec<HostSummary>,
@@ -826,6 +860,8 @@ pub(crate) struct RemoteView {
     pub(crate) projects: Vec<ProjectSummary>,
     pub(crate) focused_project_id: String,
     pub(crate) capabilities: HostCapabilities,
+    pub(crate) run_persistence_recovery: Option<RunPersistenceRecovery>,
+    pub(crate) run_persistence_write_error: Option<RunPersistenceWriteError>,
     pub(crate) data_conflicts: Vec<HostDataConflict>,
     pub(crate) empty_actions: Vec<EmptyAction>,
     pub(crate) board: Option<BoardSnapshot>,

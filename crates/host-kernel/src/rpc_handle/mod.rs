@@ -113,6 +113,7 @@ impl HostKernel {
             | "archiveRun"
             | "prepareRestoreRun"
             | "restoreRun"
+            | "retryRunPersistenceLoad"
             | "listArchivedRuns"
             | "injectRunInput"
             | "noteRunEnded"

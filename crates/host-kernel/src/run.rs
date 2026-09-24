@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::agent::{
     format_not_found, prepare_launch_env, AgentPort, CompletionHookPlan, ProbeResult,
@@ -69,9 +69,17 @@ pub struct RunSummary {
     pub status: RunStatus,
     #[serde(default)]
     pub waiting_for_user: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_organization_timestamp",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub pinned_at_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_organization_timestamp",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub archived_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recent_action: Option<String>,
@@ -111,6 +119,14 @@ pub struct RunSummary {
     pub telemetry: Vec<crate::usage::RunTelemetryLane>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub recent_output: String,
+}
+
+fn deserialize_organization_timestamp<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| value.as_u64()))
 }
 
 impl RunSummary {

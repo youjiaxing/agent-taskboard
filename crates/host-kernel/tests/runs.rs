@@ -94,6 +94,18 @@ fn start_unbound(
     }))
 }
 
+fn block_runs_file(path: &Path) -> Vec<u8> {
+    let previous = std::fs::read(path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    std::fs::create_dir(path).unwrap();
+    previous
+}
+
+fn restore_runs_file(path: &Path, previous: &[u8]) {
+    std::fs::remove_dir(path).unwrap();
+    std::fs::write(path, previous).unwrap();
+}
+
 #[test]
 fn missing_grok_lists_command_path_and_known_locations() {
     let tmp = tempfile::tempdir().unwrap();
@@ -203,6 +215,97 @@ fn client_only_switch_reserves_the_process_against_new_runs() {
     let err = start_unbound(&mut h.host, &project_id).unwrap_err();
     assert!(err.to_string().contains("update install is starting"));
     assert_eq!(h.sessions.spawn_count(), 0);
+}
+
+#[test]
+fn run_start_write_failure_keeps_the_previous_collection_and_stops_the_new_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+    let first = start_unbound(&mut h.host, &project_id).unwrap();
+    let first_run_id = first.snapshot.runs[0].id.clone();
+    h.host
+        .handle(serde_json::json!({ "op": "stopRun", "runId": first_run_id }))
+        .unwrap();
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    let previous = block_runs_file(&runs_path);
+
+    let err = start_unbound(&mut h.host, &project_id).unwrap_err();
+
+    assert!(!err.to_string().is_empty());
+    assert_eq!(h.host.snapshot().runs.len(), 1);
+    assert!(h.sessions.last_session().unwrap().stopped());
+    restore_runs_file(&runs_path, &previous);
+    let stored: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(&runs_path).unwrap()).unwrap();
+    assert_eq!(stored.len(), 1);
+}
+
+#[test]
+fn run_end_write_failure_keeps_memory_and_disk_at_the_running_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_unbound(&mut h.host, &project_id)
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .id
+        .clone();
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    let previous = block_runs_file(&runs_path);
+
+    let err = h
+        .host
+        .handle(serde_json::json!({ "op": "stopRun", "runId": run_id }))
+        .unwrap_err();
+
+    assert!(!err.to_string().is_empty());
+    let snapshot = h.host.snapshot();
+    assert_eq!(snapshot.runs[0].status, RunStatus::Running);
+    assert!(snapshot.run_persistence_write_error.is_some());
+    assert!(h.sessions.last_session().unwrap().stopped());
+    restore_runs_file(&runs_path, &previous);
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&runs_path).unwrap()).unwrap();
+    assert_eq!(stored[0]["status"], "running");
+
+    let stopped = h
+        .host
+        .handle(serde_json::json!({ "op": "stopRun", "runId": run_id }))
+        .unwrap();
+    assert_eq!(stopped.snapshot.runs[0].status, RunStatus::Ended);
+    assert!(stopped.snapshot.run_persistence_write_error.is_none());
+}
+
+#[test]
+fn natural_exit_write_failure_is_projected_until_the_retry_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+    start_unbound(&mut h.host, &project_id).unwrap();
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    let previous = block_runs_file(&runs_path);
+    h.sessions.last_session().unwrap().finish(0);
+
+    let failed = h
+        .host
+        .handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+
+    assert_eq!(failed.snapshot.runs[0].status, RunStatus::Running);
+    assert!(failed.snapshot.run_persistence_write_error.is_some());
+    restore_runs_file(&runs_path, &previous);
+
+    let recovered = h
+        .host
+        .handle(serde_json::json!({ "op": "snapshot" }))
+        .unwrap();
+    assert_eq!(recovered.snapshot.runs[0].status, RunStatus::Ended);
+    assert!(recovered.snapshot.run_persistence_write_error.is_none());
 }
 
 #[test]

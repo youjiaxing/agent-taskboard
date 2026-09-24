@@ -12,6 +12,8 @@ impl HostKernel {
             focused_host_id: self.focused_host_id.clone(),
             focused_project_id: focused_project_id.clone(),
             capabilities: self.capabilities_for_focus(),
+            run_persistence_recovery: self.run_persistence_recovery_for_focus(),
+            run_persistence_write_error: self.run_persistence_write_error_for_focus(),
             data_conflicts: self.data_conflicts_for_focus(),
             hosts: self.connected_hosts(),
             projects,
@@ -128,6 +130,8 @@ impl HostKernel {
             return HostCapabilities {
                 run_organization: true,
                 project_restore: true,
+                run_persistence_writes: self.run_persistence_recovery.is_none(),
+                run_persistence_recovery: true,
             };
         }
         self.remote_view
@@ -135,6 +139,26 @@ impl HostKernel {
             .filter(|view| view.host_id == self.focused_host_id)
             .map(|view| view.capabilities)
             .unwrap_or_default()
+    }
+
+    pub(crate) fn run_persistence_recovery_for_focus(&self) -> Option<RunPersistenceRecovery> {
+        if self.focused_host_id == LOCAL_HOST_ID {
+            return self.run_persistence_recovery.clone();
+        }
+        self.remote_view
+            .as_ref()
+            .filter(|view| view.host_id == self.focused_host_id)
+            .and_then(|view| view.run_persistence_recovery.clone())
+    }
+
+    pub(crate) fn run_persistence_write_error_for_focus(&self) -> Option<RunPersistenceWriteError> {
+        if self.focused_host_id == LOCAL_HOST_ID {
+            return self.run_persistence_write_error.clone();
+        }
+        self.remote_view
+            .as_ref()
+            .filter(|view| view.host_id == self.focused_host_id)
+            .and_then(|view| view.run_persistence_write_error.clone())
     }
 
     pub(crate) fn data_conflicts_for_focus(&self) -> Vec<HostDataConflict> {

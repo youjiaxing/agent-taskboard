@@ -185,11 +185,11 @@ impl HostKernel {
     pub(crate) fn harvest_live_signals(&mut self) {
         let ids: Vec<String> = self.live.keys().cloned().collect();
         for id in ids {
-            self.harvest_run_signals(&id);
+            let _ = self.harvest_run_signals(&id);
         }
     }
 
-    pub(crate) fn harvest_run_signals(&mut self, run_id: &str) {
+    pub(crate) fn harvest_run_signals(&mut self, run_id: &str) -> Result<(), KernelError> {
         let session_signals = self
             .live
             .get(run_id)
@@ -210,10 +210,20 @@ impl HostKernel {
                     .map(|agent| agent.read_completion_signals(dir))
             })
             .unwrap_or_default();
-        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
-            run.session_end |= session_signals.session_end || file_signals.session_end;
-            run.stop_failure |= session_signals.stop_failure || file_signals.stop_failure;
+        let mut runs = self.runs.clone();
+        let Some(run) = runs.iter_mut().find(|run| run.id == run_id) else {
+            return Ok(());
+        };
+        let session_end =
+            run.session_end || session_signals.session_end || file_signals.session_end;
+        let stop_failure =
+            run.stop_failure || session_signals.stop_failure || file_signals.stop_failure;
+        if run.session_end == session_end && run.stop_failure == stop_failure {
+            return Ok(());
         }
+        run.session_end = session_end;
+        run.stop_failure = stop_failure;
+        self.commit_run_records(runs)
     }
 
     pub(crate) fn consider_auto_advance(&mut self, run_id: &str) {
@@ -262,9 +272,6 @@ impl HostKernel {
         if previous.self_check {
             return;
         }
-        if let Some(run) = self.runs.iter_mut().find(|run| run.id == previous.id) {
-            run.self_check_attempted = true;
-        }
         let agent = match self
             .agents
             .iter()
@@ -296,20 +303,12 @@ impl HostKernel {
                     native_session_id: previous.native_session_id.clone(),
                     working_directory: previous.working_directory.clone(),
                     isolated: previous.isolated,
+                    self_check: true,
                 }),
             )
             .is_err()
         {
             return;
-        }
-        if let Some(run) = self
-            .runs
-            .iter_mut()
-            .rev()
-            .find(|run| run.issue_id.as_deref() == Some(issue_id))
-        {
-            run.self_check = true;
-            run.self_check_attempted = true;
         }
     }
 
@@ -334,9 +333,13 @@ impl HostKernel {
         {
             return;
         }
-        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+        let mut runs = self.runs.clone();
+        if let Some(run) = runs.iter_mut().find(|run| run.id == run_id) {
             run.self_check = true;
             run.self_check_attempted = true;
+        }
+        if self.commit_run_records(runs).is_err() {
+            return;
         }
         let text = run::submitted_input(&advance::self_check_text(self.appearance.language));
         if self.write_pty(run_id, &text).is_ok() {
@@ -348,7 +351,7 @@ impl HostKernel {
             .find(|run| run.id == run_id)
             .cloned()
             .unwrap_or(run);
-        self.mark_run_ended(run_id, RunEndedReason::Abnormal);
+        let _ = self.mark_run_ended(run_id, RunEndedReason::Abnormal);
         if let Some(issue_id) = previous.issue_id.clone() {
             self.launch_self_check_run(&previous, &issue_id);
         }

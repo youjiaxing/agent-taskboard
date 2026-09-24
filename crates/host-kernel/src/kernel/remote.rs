@@ -320,6 +320,14 @@ impl HostKernel {
             .map(serde_json::from_value)
             .transpose()?
             .unwrap_or_default();
+        let run_persistence_recovery = match snapshot.get("runPersistenceRecovery") {
+            Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+            _ => None,
+        };
+        let run_persistence_write_error = match snapshot.get("runPersistenceWriteError") {
+            Some(value) if !value.is_null() => serde_json::from_value(value.clone())?,
+            _ => None,
+        };
         let data_conflicts = snapshot
             .get("dataConflicts")
             .cloned()
@@ -356,6 +364,8 @@ impl HostKernel {
             projects,
             focused_project_id,
             capabilities,
+            run_persistence_recovery,
+            run_persistence_write_error,
             data_conflicts,
             empty_actions,
             board,
@@ -561,6 +571,8 @@ mod tests {
         .unwrap();
         assert!(!host.snapshot().capabilities.run_organization);
         assert!(!host.snapshot().capabilities.project_restore);
+        assert!(!host.snapshot().capabilities.run_persistence_writes);
+        assert!(!host.snapshot().capabilities.run_persistence_recovery);
 
         host.apply_remote_view(
             "remote",
@@ -577,6 +589,48 @@ mod tests {
         .unwrap();
         assert!(host.snapshot().capabilities.run_organization);
         assert!(!host.snapshot().capabilities.project_restore);
+        assert!(host.snapshot().capabilities.run_persistence_writes);
+        assert!(!host.snapshot().capabilities.run_persistence_recovery);
+
+        host.apply_remote_view(
+            "remote",
+            &serde_json::json!({
+                "snapshot": {
+                    "focusedProjectId": "",
+                    "projects": [],
+                    "runs": [],
+                    "focusedRunId": "",
+                    "capabilities": {
+                        "runOrganization": true,
+                        "projectRestore": true,
+                        "runPersistenceWrites": false,
+                        "runPersistenceRecovery": true
+                    },
+                    "runPersistenceRecovery": {
+                        "kind": "invalid-json",
+                        "detail": "unexpected EOF",
+                        "retryOperation": "retryRunPersistenceLoad",
+                        "writesBlocked": true
+                    },
+                    "runPersistenceWriteError": {
+                        "detail": "permission denied",
+                        "retryable": true
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        let snapshot = host.snapshot();
+        assert!(!snapshot.capabilities.run_persistence_writes);
+        assert!(snapshot.capabilities.run_persistence_recovery);
+        assert_eq!(
+            snapshot.run_persistence_recovery.unwrap().kind,
+            RunPersistenceFailureKind::InvalidJson
+        );
+        assert_eq!(
+            snapshot.run_persistence_write_error.unwrap().detail,
+            "permission denied"
+        );
     }
 
     #[test]

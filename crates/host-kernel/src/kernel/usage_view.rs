@@ -1,12 +1,39 @@
 use super::super::*;
 
 impl HostKernel {
-    pub(crate) fn persist_runs(&self) -> Result<(), KernelError> {
-        self.persist_run_records(&self.runs)
+    pub(crate) fn runs_path(&self) -> PathBuf {
+        self.data.host_dir.join("runs.json")
+    }
+
+    pub(crate) fn ensure_run_persistence_writable(&self) -> Result<(), KernelError> {
+        if self.run_persistence_recovery.is_none() {
+            return Ok(());
+        }
+        Err(KernelError::Denied(
+            ShellCopy::for_language(self.appearance.language).run_persistence_write_blocked,
+        ))
     }
 
     pub(crate) fn persist_run_records(&self, runs: &Vec<RunSummary>) -> Result<(), KernelError> {
-        write_json(&self.data.host_dir.join("runs.json"), runs)
+        write_json(&self.runs_path(), runs)
+    }
+
+    pub(crate) fn commit_run_records(&mut self, runs: Vec<RunSummary>) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
+        if let Err(err) = self.persist_run_records(&runs) {
+            self.note_run_persistence_write_error(&err);
+            return Err(err);
+        }
+        self.runs = runs;
+        self.run_persistence_write_error = None;
+        Ok(())
+    }
+
+    pub(crate) fn note_run_persistence_write_error(&mut self, err: &KernelError) {
+        self.run_persistence_write_error = Some(RunPersistenceWriteError {
+            detail: err.to_string(),
+            retryable: true,
+        });
     }
 
     pub(crate) fn usage_samples_path(&self) -> PathBuf {
