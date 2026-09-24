@@ -7,6 +7,7 @@ pub(crate) struct PreviousRun {
     pub(crate) native_session_id: Option<String>,
     pub(crate) working_directory: String,
     pub(crate) isolated: bool,
+    pub(crate) self_check: bool,
 }
 
 impl HostKernel {
@@ -38,7 +39,7 @@ impl HostKernel {
             .live
             .get(run_id)
             .is_some_and(|session| session.was_stopped());
-        self.mark_run_ended(run_id, RunEndedReason::from_exit(code, stopped));
+        let _ = self.mark_run_ended(run_id, RunEndedReason::from_exit(code, stopped));
     }
 
     pub fn update_install_gate(&mut self) -> UpdateInstallGate {
@@ -305,6 +306,7 @@ impl HostKernel {
     }
 
     pub(crate) fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         let run = self
             .runs
             .iter()
@@ -316,8 +318,7 @@ impl HostKernel {
         if let Some(session) = self.live.get(run_id).cloned() {
             session.stop();
         }
-        self.mark_run_ended(run_id, RunEndedReason::Stopped);
-        Ok(())
+        self.mark_run_ended(run_id, RunEndedReason::Stopped)
     }
 
     pub(crate) fn focus_run(&mut self, run_id: &str) -> Result<(), KernelError> {
@@ -345,6 +346,7 @@ impl HostKernel {
     }
 
     pub(crate) fn set_run_pinned(&mut self, run_id: &str, pinned: bool) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         let position = self
             .runs
             .iter()
@@ -359,12 +361,11 @@ impl HostKernel {
         }
         let mut runs = self.runs.clone();
         runs[position].pinned_at_ms = pinned.then_some(self.now_ms);
-        self.persist_run_records(&runs)?;
-        self.runs = runs;
-        Ok(())
+        self.commit_run_records(runs)
     }
 
     pub(crate) fn archive_run(&mut self, run_id: &str) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         let position = self
             .runs
             .iter()
@@ -382,8 +383,7 @@ impl HostKernel {
         let mut runs = self.runs.clone();
         runs[position].pinned_at_ms = None;
         runs[position].archived_at_ms = Some(self.now_ms);
-        self.persist_run_records(&runs)?;
-        self.runs = runs;
+        self.commit_run_records(runs)?;
         self.clear_run_navigation(run_id);
         Ok(())
     }
@@ -392,6 +392,7 @@ impl HostKernel {
         &self,
         run_id: &str,
     ) -> Result<RunRestoreResult, KernelError> {
+        self.ensure_run_persistence_writable()?;
         let run = self
             .runs
             .iter()
@@ -413,6 +414,7 @@ impl HostKernel {
         confirm_project_recreate: bool,
         expected_tombstone_revision: Option<&str>,
     ) -> Result<RunRestoreResult, KernelError> {
+        self.ensure_run_persistence_writable()?;
         let position = self
             .runs
             .iter()
@@ -536,9 +538,7 @@ impl HostKernel {
     fn unarchive_run(&mut self, position: usize) -> Result<(), KernelError> {
         let mut runs = self.runs.clone();
         runs[position].archived_at_ms = None;
-        self.persist_run_records(&runs)?;
-        self.runs = runs;
-        Ok(())
+        self.commit_run_records(runs)
     }
 
     pub(crate) fn list_archived_runs(&self, project_id: Option<&str>) -> Vec<RunSummary> {
@@ -606,7 +606,7 @@ impl HostKernel {
             })
             .collect::<Vec<_>>();
         for (id, reason) in ended {
-            self.mark_run_ended(&id, reason);
+            let _ = self.mark_run_ended(&id, reason);
         }
     }
 
@@ -629,17 +629,25 @@ impl HostKernel {
             .iter()
             .map(|(id, session)| (id.clone(), session.waiting_for_user()))
             .collect::<Vec<_>>();
+        let mut runs = self.runs.clone();
         let mut became_waiting = Vec::new();
+        let mut changed = false;
         for (id, is_waiting) in waiting {
-            let Some(run) = self.runs.iter_mut().find(|run| run.id == id) else {
+            let Some(run) = runs.iter_mut().find(|run| run.id == id) else {
                 continue;
             };
             if !run.is_active() || run.waiting_for_user == is_waiting {
                 continue;
             }
             run.waiting_for_user = is_waiting;
+            changed = true;
             if is_waiting {
                 became_waiting.push(id);
+            }
+        }
+        if changed {
+            if self.commit_run_records(runs).is_err() {
+                return;
             }
         }
         for id in became_waiting {
@@ -698,13 +706,19 @@ impl HostKernel {
         }
     }
 
-    pub(crate) fn mark_run_ended(&mut self, run_id: &str, reason: RunEndedReason) {
-        self.harvest_run_signals(run_id);
+    pub(crate) fn mark_run_ended(
+        &mut self,
+        run_id: &str,
+        reason: RunEndedReason,
+    ) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
+        self.harvest_run_signals(run_id)?;
         let recent_output = self.live.get(run_id).map(|session| session.recent_output());
         let mut issue_id = None;
         let mut project_id = None;
         let mut newly_ended = false;
-        if let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) {
+        let mut runs = self.runs.clone();
+        if let Some(run) = runs.iter_mut().find(|run| run.id == run_id) {
             if run.status != RunStatus::Ended {
                 run.status = RunStatus::Ended;
                 run.waiting_for_user = false;
@@ -716,6 +730,9 @@ impl HostKernel {
                 project_id = Some(run.project_id.clone());
                 newly_ended = true;
             }
+        }
+        if newly_ended {
+            self.commit_run_records(runs)?;
         }
         if newly_ended {
             self.pending_events.push(HostEvent::RunStatusChanged {
@@ -732,6 +749,9 @@ impl HostKernel {
                 RunEndedReason::Stopped | RunEndedReason::Crash => {}
             }
         }
+        if !newly_ended && !self.runs.iter().any(|run| run.id == run_id) {
+            return Err(KernelError::Protocol("unknown run".into()));
+        }
         self.live.remove(run_id);
         if let Some(issue_id) = issue_id {
             if self.execution_stopped(&issue_id) {
@@ -747,7 +767,6 @@ impl HostKernel {
         } else if let Some(offer) = &mut self.quit_offer {
             offer.active_run_count = active;
         }
-        let _ = self.persist_runs();
         if newly_ended {
             if let Some(project_id) = project_id {
                 let live = self.refresh_project(&project_id, RefreshTrigger::RunEnded);
@@ -756,6 +775,7 @@ impl HostKernel {
                 }
             }
         }
+        Ok(())
     }
 
     pub(crate) fn project_has_active_run(&self, project_id: &str) -> bool {
@@ -859,6 +879,7 @@ impl HostKernel {
         from_form: bool,
         previous: Option<PreviousRun>,
     ) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         if self.update_installing {
             return Err(KernelError::Denied("update install is starting".into()));
         }
@@ -1065,6 +1086,36 @@ impl HostKernel {
                 baseline.display_path = result.record.working_directory.clone();
             }
         }
+        let mut runs = self.runs.clone();
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous.self_check)
+        {
+            if let Some(previous) = runs
+                .iter_mut()
+                .find(|run| Some(run.id.as_str()) == previous_run_id.as_deref())
+            {
+                previous.self_check_attempted = true;
+            }
+            result.record.self_check = true;
+            result.record.self_check_attempted = true;
+        }
+        runs.push(result.record.clone());
+        if let Err(err) = self.persist_run_records(&runs) {
+            self.note_run_persistence_write_error(&err);
+            if let Some(session) = result.session.as_ref() {
+                session.stop();
+            }
+            if let Some(issue_id) = provisional_claim.as_deref() {
+                let _ = self.release_issue(issue_id);
+            }
+            if let Some(form) = &mut self.launch_form {
+                form.error = Some(err.to_string());
+            }
+            return Err(err);
+        }
+        self.runs = runs;
+        self.run_persistence_write_error = None;
         self.focused_run_id = Some(result.record.id.clone());
         self.pending_events.push(HostEvent::RunStatusChanged {
             run_id: result.record.id.clone(),
@@ -1083,12 +1134,11 @@ impl HostKernel {
                 form.error = result.record.failure.clone();
             }
         }
-        self.runs.push(result.record);
-        self.persist_runs()?;
         Ok(())
     }
 
     pub(crate) fn start_bound_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         let project_id = self.project_id_for_issue(issue_id)?;
         let issue = self
             .issue_by_id(issue_id)
@@ -1116,6 +1166,7 @@ impl HostKernel {
     }
 
     pub(crate) fn continue_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+        self.ensure_run_persistence_writable()?;
         if !self.execution_stopped(issue_id) {
             return Err(KernelError::Denied("issue is not execution-stopped".into()));
         }
@@ -1149,17 +1200,30 @@ impl HostKernel {
                 native_session_id: last.native_session_id.clone(),
                 working_directory: last.working_directory.clone(),
                 isolated: last.isolated,
+                self_check: false,
             }),
         )
     }
 
     pub(crate) fn load_persisted_runs(&mut self) -> Vec<String> {
-        let path = self.data.host_dir.join("runs.json");
-        let Ok(raw) = fs::read_to_string(&path) else {
-            return Vec::new();
-        };
-        let Ok(mut runs) = serde_json::from_str::<Vec<RunSummary>>(&raw) else {
-            return Vec::new();
+        let was_recovering = self.run_persistence_recovery.is_some();
+        let mut runs = match self.read_persisted_runs() {
+            Ok(Some(runs)) => runs,
+            Ok(None) if !was_recovering => {
+                self.run_persistence_recovery = None;
+                return Vec::new();
+            }
+            Ok(None) => {
+                self.set_run_persistence_recovery(
+                    RunPersistenceFailureKind::Unreadable,
+                    "runs.json is missing".into(),
+                );
+                return Vec::new();
+            }
+            Err(recovery) => {
+                self.run_persistence_recovery = Some(recovery);
+                return Vec::new();
+            }
         };
         let mut crashed_ids = Vec::new();
         for run in &mut runs {
@@ -1173,11 +1237,51 @@ impl HostKernel {
                 crashed_ids.push(run.id.clone());
             }
         }
-        self.runs = runs;
         if !crashed_ids.is_empty() {
-            let _ = self.persist_runs();
+            if let Err(err) = self.persist_run_records(&runs) {
+                self.set_run_persistence_recovery(
+                    RunPersistenceFailureKind::WriteFailed,
+                    err.to_string(),
+                );
+                return Vec::new();
+            }
         }
+        self.runs = runs;
+        self.run_persistence_recovery = None;
+        self.run_persistence_write_error = None;
         crashed_ids
+    }
+
+    pub(crate) fn retry_run_persistence_load(&mut self) -> Vec<String> {
+        if self.run_persistence_recovery.is_none() {
+            return Vec::new();
+        }
+        self.load_persisted_runs()
+    }
+
+    fn read_persisted_runs(&self) -> Result<Option<Vec<RunSummary>>, RunPersistenceRecovery> {
+        let path = self.runs_path();
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(run_persistence_recovery(
+                    RunPersistenceFailureKind::Unreadable,
+                    err.to_string(),
+                ))
+            }
+        };
+        let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|err| {
+            run_persistence_recovery(RunPersistenceFailureKind::InvalidJson, err.to_string())
+        })?;
+        let runs = serde_json::from_value::<Vec<RunSummary>>(value).map_err(|err| {
+            run_persistence_recovery(RunPersistenceFailureKind::InvalidRunRecord, err.to_string())
+        })?;
+        Ok(Some(runs))
+    }
+
+    fn set_run_persistence_recovery(&mut self, kind: RunPersistenceFailureKind, detail: String) {
+        self.run_persistence_recovery = Some(run_persistence_recovery(kind, detail));
     }
 
     pub(crate) fn note_crash_recovery(&mut self, crashed_ids: Vec<String>) {
@@ -1190,6 +1294,18 @@ impl HostKernel {
         for run_id in crashed_ids {
             self.push_notification(NotificationKind::CrashRecovered, &run_id);
         }
+    }
+}
+
+fn run_persistence_recovery(
+    kind: RunPersistenceFailureKind,
+    detail: String,
+) -> RunPersistenceRecovery {
+    RunPersistenceRecovery {
+        kind,
+        detail,
+        retry_operation: "retryRunPersistenceLoad".into(),
+        writes_blocked: true,
     }
 }
 

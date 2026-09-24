@@ -56,6 +56,82 @@ fn host_data_and_desktop_client_settings_are_two_trees() {
 }
 
 #[test]
+fn invalid_run_organization_metadata_falls_back_without_losing_the_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let runs_path = host.snapshot().data.host_dir.join("runs.json");
+    drop(host);
+    std::fs::write(
+        &runs_path,
+        br#"[{"id":"run-1","projectId":"project-1","agentId":"codex","agentName":"Codex","unbound":true,"status":"ended","pinnedAtMs":"bad","archivedAtMs":-1}]"#,
+    )
+    .unwrap();
+
+    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let snapshot = host.snapshot();
+
+    assert!(snapshot.run_persistence_recovery.is_none());
+    assert!(snapshot.capabilities.run_persistence_writes);
+    assert_eq!(snapshot.runs.len(), 1);
+    assert_eq!(snapshot.runs[0].id, "run-1");
+    assert!(snapshot.runs[0].pinned_at_ms.is_none());
+    assert!(snapshot.runs[0].archived_at_ms.is_none());
+}
+
+#[test]
+fn unreliable_runs_files_are_preserved_and_exposed_as_recovery() {
+    let cases: Vec<(&str, Vec<u8>, RunPersistenceFailureKind)> = vec![
+        (
+            "truncated-json",
+            br#"[{"id":"run-1""#.to_vec(),
+            RunPersistenceFailureKind::InvalidJson,
+        ),
+        (
+            "invalid-base-field",
+            br#"[{"id":7,"projectId":"project-1","agentId":"codex","agentName":"Codex","unbound":true,"status":"ended"}]"#.to_vec(),
+            RunPersistenceFailureKind::InvalidRunRecord,
+        ),
+        (
+            "unreadable-utf8",
+            vec![0xff, 0xfe, 0xfd],
+            RunPersistenceFailureKind::Unreadable,
+        ),
+    ];
+
+    for (name, original, expected_kind) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+        let runs_path = host.snapshot().data.host_dir.join("runs.json");
+        drop(host);
+        std::fs::write(&runs_path, &original).unwrap();
+
+        let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+        let snapshot = host.snapshot();
+        let recovery = snapshot
+            .run_persistence_recovery
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name}: recovery state missing"));
+
+        assert_eq!(recovery.kind, expected_kind, "{name}");
+        assert_eq!(
+            recovery.retry_operation, "retryRunPersistenceLoad",
+            "{name}"
+        );
+        assert!(recovery.writes_blocked, "{name}");
+        assert!(!snapshot.capabilities.run_persistence_writes, "{name}");
+        assert!(snapshot.capabilities.run_persistence_recovery, "{name}");
+        assert!(snapshot.runs.is_empty(), "{name}");
+        assert_eq!(std::fs::read(&runs_path).unwrap(), original, "{name}");
+        assert!(!snapshot.copy.run_persistence_recovery_body.is_empty());
+        assert!(!snapshot.copy.run_persistence_recovery_retry.is_empty());
+        assert!(!snapshot.copy.run_persistence_write_failed.is_empty());
+        assert!(!snapshot.copy_catalog[&Language::En]
+            .run_persistence_recovery_body
+            .is_empty());
+    }
+}
+
+#[test]
 fn secrets_are_user_readable_json_not_keychain() {
     let tmp = tempfile::tempdir().unwrap();
     let host = HostKernel::boot(boot_req(tmp.path())).unwrap();

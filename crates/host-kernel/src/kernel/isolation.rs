@@ -73,15 +73,19 @@ impl HostKernel {
                 continue;
             };
             let project_dir = project.local_path.clone();
-            if let Some(probe) = self.isolation_probes.get(&run.id) {
-                match probe.receiver.try_recv() {
+            let probe = self
+                .isolation_probes
+                .get(&run.id)
+                .map(|probe| (probe.receiver.try_recv(), probe.started.elapsed()));
+            if let Some((result, elapsed)) = probe {
+                match result {
                     Ok(Some(tree)) => {
                         // A new tree cannot safely identify either of two concurrent
                         // launches that both observed the same pre-launch tree list.
                         let ambiguous = self.isolation_tree_conflicts(&run, &tree);
                         if tree.exists() && !ambiguous {
-                            let current = self
-                                .runs
+                            let mut runs = self.runs.clone();
+                            let current = runs
                                 .iter_mut()
                                 .find(|current| current.id == run.id)
                                 .expect("pending Run");
@@ -94,15 +98,19 @@ impl HostKernel {
                                 baseline.path = tree.display().to_string();
                                 baseline.display_path = tree.display().to_string();
                             }
-                            self.isolation_probes.remove(&run.id);
-                            let _ = self.persist_runs();
-                            continue;
+                            match self.commit_run_records(runs) {
+                                Ok(()) => {
+                                    self.isolation_probes.remove(&run.id);
+                                    continue;
+                                }
+                                Err(_) => return,
+                            }
                         }
                     }
                     Err(TryRecvError::Empty) => continue,
                     Ok(None) | Err(TryRecvError::Disconnected) => {}
                 }
-                if probe.started.elapsed() < Duration::from_secs(1) {
+                if elapsed < Duration::from_secs(1) {
                     continue;
                 }
             }

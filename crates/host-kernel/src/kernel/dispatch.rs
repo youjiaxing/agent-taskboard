@@ -334,6 +334,10 @@ impl HostKernel {
                 outcome.run_restore = Some(result);
                 return Ok(outcome);
             }
+            Command::RetryRunPersistenceLoad => {
+                let crashed_ids = self.retry_run_persistence_load();
+                self.note_crash_recovery(crashed_ids);
+            }
             Command::OpenHostOverview => {
                 self.usage_open = false;
                 self.usage_query.highlighted_run_id = None;

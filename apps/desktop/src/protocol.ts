@@ -189,6 +189,11 @@ export type ShellCopy = {
   refreshAuthRecovery: string;
   refreshIncomplete: string;
   refreshTrackerError: string;
+  runPersistenceRecoveryTitle: string;
+  runPersistenceRecoveryBody: string;
+  runPersistenceRecoveryRetry: string;
+  runPersistenceWriteFailed: string;
+  runPersistenceWriteBlocked: string;
   newRun: string;
   executeRun: string;
   startRun: string;
@@ -613,7 +618,14 @@ export type Snapshot = {
   hostMode: "host-and-client" | "client-only";
   focusedHostId: string;
   focusedProjectId: string;
-  capabilities: { runOrganization?: boolean; projectRestore?: boolean };
+  capabilities: {
+    runOrganization?: boolean;
+    projectRestore?: boolean;
+    runPersistenceWrites?: boolean;
+    runPersistenceRecovery?: boolean;
+  };
+  runPersistenceRecovery?: RunPersistenceRecovery | null;
+  runPersistenceWriteError?: RunPersistenceWriteError | null;
   dataConflicts?: { kind: "project-id-tombstone"; projectId: string }[];
   hosts: { id: string; displayName: string; local: boolean }[];
   projects: Project[];
@@ -825,6 +837,18 @@ export type RunRestoreResult =
       tombstone?: ProjectTombstone;
       conflictingProjectId?: string;
     };
+
+export type RunPersistenceRecovery = {
+  kind: "unreadable" | "invalid-json" | "invalid-run-record" | "write-failed";
+  detail: string;
+  retryOperation: "retryRunPersistenceLoad";
+  writesBlocked: true;
+};
+
+export type RunPersistenceWriteError = {
+  detail: string;
+  retryable: true;
+};
 
 export type TokenCounts = {
   input?: number | null;

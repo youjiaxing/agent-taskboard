@@ -359,6 +359,77 @@ fn a_client_window_can_switch_among_local_and_paired_hosts() {
 }
 
 #[test]
+fn remote_client_projects_run_recovery_and_can_forward_the_retry() {
+    let host_dir = tempfile::tempdir().unwrap();
+    let client_dir = tempfile::tempdir().unwrap();
+    let mut host_req = boot_req(host_dir.path());
+    host_req.host_display_name = "Mini".into();
+    let initial = HostKernel::boot(host_req.clone()).unwrap();
+    let runs_path = initial.snapshot().data.host_dir.join("runs.json");
+    drop(initial);
+    std::fs::write(&runs_path, br#"[{"id":"truncated""#).unwrap();
+
+    let host = Arc::new(Mutex::new(HostKernel::boot(host_req).unwrap()));
+    let server = LoopbackServer::attach(Arc::clone(&host), 0, |_| {}).unwrap();
+    let address = server.protocol_url().trim_end_matches('/').to_string();
+    let code = host
+        .lock()
+        .unwrap()
+        .handle(serde_json::json!({
+            "op": "beginPairingOffer",
+            "address": address,
+        }))
+        .unwrap()
+        .snapshot
+        .pairing_offer
+        .unwrap()
+        .code;
+
+    let mut client = HostKernel::boot(boot_req(client_dir.path())).unwrap();
+    let paired = client
+        .handle(serde_json::json!({
+            "op": "pairRemoteHost",
+            "address": address,
+            "code": code,
+        }))
+        .unwrap();
+    let remote_id = paired
+        .snapshot
+        .hosts
+        .iter()
+        .find(|item| !item.local)
+        .unwrap()
+        .id
+        .clone();
+    let focused = client
+        .handle(serde_json::json!({ "op": "focusHost", "hostId": remote_id }))
+        .unwrap();
+    let recovery = focused.snapshot.run_persistence_recovery.unwrap();
+    assert_eq!(recovery.kind, RunPersistenceFailureKind::InvalidJson);
+    assert!(!focused.snapshot.capabilities.run_persistence_writes);
+    assert!(focused.snapshot.capabilities.run_persistence_recovery);
+
+    let still_broken = client
+        .handle(serde_json::json!({ "op": "retryRunPersistenceLoad" }))
+        .unwrap();
+    assert!(still_broken.snapshot.run_persistence_recovery.is_some());
+    assert!(!still_broken.snapshot.capabilities.run_persistence_writes);
+
+    std::fs::write(
+        &runs_path,
+        br#"[{"id":"run-remote","projectId":"project-remote","agentId":"codex","agentName":"Codex","unbound":true,"status":"ended"}]"#,
+    )
+    .unwrap();
+    let recovered = client
+        .handle(serde_json::json!({ "op": "retryRunPersistenceLoad" }))
+        .unwrap();
+    assert!(recovered.snapshot.run_persistence_recovery.is_none());
+    assert!(recovered.snapshot.capabilities.run_persistence_writes);
+    assert_eq!(recovered.snapshot.runs.len(), 1);
+    assert_eq!(recovered.snapshot.runs[0].id, "run-remote");
+}
+
+#[test]
 fn dependency_graph_centering_and_expansion_are_forwarded_to_a_remote_host() {
     let host_dir = tempfile::tempdir().unwrap();
     let client_dir = tempfile::tempdir().unwrap();

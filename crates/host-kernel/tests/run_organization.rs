@@ -191,6 +191,74 @@ fn legacy_runs_default_to_unpinned_and_unarchived() {
 }
 
 #[test]
+fn recovery_blocks_run_writes_preserves_evidence_and_retry_restores_the_full_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_run(&mut h.host, &project_id, None);
+    stop_run(&mut h.host, &run_id);
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    let original = std::fs::read(&runs_path).unwrap();
+    let spawn_count = h.sessions.spawn_count();
+    drop(h.host);
+    let corrupt = br#"[{"id":"truncated""#.to_vec();
+    std::fs::write(&runs_path, &corrupt).unwrap();
+
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()),
+            agents: vec![Arc::clone(&h.agent) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: Arc::clone(&h.sessions) as _,
+        },
+    )
+    .unwrap();
+    let snapshot = host.snapshot();
+    assert!(snapshot.run_persistence_recovery.is_some());
+    assert!(!snapshot.capabilities.run_persistence_writes);
+
+    let requests = [
+        serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": values(),
+            "openingText": "must stay blocked"
+        }),
+        serde_json::json!({ "op": "setRunPinned", "runId": run_id, "pinned": true }),
+        serde_json::json!({ "op": "archiveRun", "runId": run_id }),
+        serde_json::json!({ "op": "prepareRestoreRun", "runId": run_id }),
+        serde_json::json!({ "op": "restoreRun", "runId": run_id }),
+        serde_json::json!({ "op": "stopRun", "runId": run_id }),
+    ];
+    for request in requests {
+        let err = host.handle(request).unwrap_err();
+        assert!(err.to_string().contains("恢复状态"), "{err}");
+        assert_eq!(std::fs::read(&runs_path).unwrap(), corrupt);
+    }
+    assert_eq!(h.sessions.spawn_count(), spawn_count);
+
+    let still_broken = host
+        .handle(serde_json::json!({ "op": "retryRunPersistenceLoad" }))
+        .unwrap();
+    assert!(still_broken.snapshot.run_persistence_recovery.is_some());
+    assert!(!still_broken.snapshot.capabilities.run_persistence_writes);
+    assert_eq!(std::fs::read(&runs_path).unwrap(), corrupt);
+
+    std::fs::write(&runs_path, &original).unwrap();
+    let recovered = host
+        .handle(serde_json::json!({ "op": "retryRunPersistenceLoad" }))
+        .unwrap();
+    assert!(recovered.snapshot.run_persistence_recovery.is_none());
+    assert!(recovered.snapshot.capabilities.run_persistence_writes);
+    assert_eq!(recovered.snapshot.runs.len(), 1);
+    assert_eq!(recovered.snapshot.runs[0].id, run_id);
+    assert_eq!(recovered.snapshot.runs[0].status, RunStatus::Ended);
+}
+
+#[test]
 fn active_and_waiting_runs_reject_archive_without_stopping() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

@@ -181,6 +181,12 @@ impl HostKernel {
                         .map(ToOwned::to_owned),
                 })
             }
+            "retryRunPersistenceLoad" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RetryRunPersistenceLoad)
+            }
             "listArchivedRuns" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
