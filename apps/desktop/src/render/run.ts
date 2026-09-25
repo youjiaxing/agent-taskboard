@@ -5,7 +5,7 @@ import { focusedHostIsLocal, prefillHint } from "../launch-session";
 import { launchFormKey } from "../form-keys";
 import { startupCopy } from "../startup-copy";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, checkbox, formField, notice, optionGroup, textArea, textInput } from "../components/primitives";
+import { button, checkbox, formField, notice, textArea, textInput } from "../components/primitives";
 import { ui } from "../ui";
 import { runPersistenceWritesBlocked } from "./run-organization";
 
@@ -73,36 +73,15 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const draft = ui.launchDraft;
   const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
   const folded = form.fields.filter((field) => field.folded);
-  const intentActive = draft.custom ? "" : draft.intentId;
   const key = launchFormKey(form.projectId);
   const pending = ui.formOperations.pending.has(key);
   const error = ui.formOperations.errors.get(key) || form.error || "";
-  const intents = [
-    { id: "", label: copy.intentNone },
-    ...form.intents.map((intent) => ({ id: intent.id, label: intent.label })),
-  ];
   const body = `<fieldset class="launch-fields" ${pending ? "disabled" : ""}>
     <div class="launch-agent">
       <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
       ${button({ id: "switch-agent", label: copy.switchAgent })}
     </div>
     <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
-    ${formField({
-      label: copy.runIntent,
-      control: `${optionGroup({
-        label: copy.runIntent,
-        actions: intents.map((intent) => ({
-          id: "intent",
-          label: intent.label,
-          pressed: intentActive === intent.id && !draft.custom,
-          data: { id: intent.id },
-        })),
-      })}${button({ id: "intent-custom", label: copy.intentCustom, pressed: draft.custom }, {
-        variant: draft.custom ? "primary" : "secondary",
-        className: draft.custom ? "active" : "",
-        attributes: { hidden: !draft.custom },
-      })}`,
-    })}
     ${formField({
       id: "opening-text",
       label: copy.openingPlaceholder,

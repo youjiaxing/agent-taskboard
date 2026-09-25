@@ -1,7 +1,7 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
@@ -847,18 +847,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     });
     render();
     void completeDeferredLaunchDiscovery(form.projectId, issueId, agentId);
-    return;
-  }
-  if (act === "intent") {
-    if (!ui.launchDraft || !ui.snapshot.launchForm) return;
-    const intentId = target.dataset.id ?? "";
-    ui.launchDraft.intentId = intentId;
-    ui.launchDraft.custom = false;
-    ui.launchDraft.openingText = expectedOpening(ui.snapshot.launchForm, ui.launchDraft);
-    render();
-    return;
-  }
-  if (act === "intent-custom") {
     return;
   }
   if (act === "toggle-folded") {

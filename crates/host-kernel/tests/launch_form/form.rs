@@ -73,7 +73,9 @@ fn prepare_form_uses_cli_seed_concrete_values() {
         form.values.get("initial-instruction").map(String::as_str),
         Some("")
     );
+    assert!(form.intents.is_empty());
     let dump = serde_json::to_string(&form).unwrap();
+    assert!(dump.contains("\"intents\":[]"));
     assert!(!dump.contains("使用默认"));
     assert!(!dump.to_ascii_lowercase().contains("use default"));
     assert!(form.fields.iter().any(|field| field.id == "model"));
@@ -97,7 +99,7 @@ fn prepare_form_uses_cli_seed_concrete_values() {
         }))
         .unwrap();
     assert!(!h.host.snapshot().show_command_preview);
-    assert_eq!(out.snapshot.copy.opening_placeholder, "要 Agent 做什么");
+    assert_eq!(out.snapshot.copy.opening_placeholder, "任务说明");
 }
 
 #[test]
@@ -234,7 +236,7 @@ fn memory_prefers_current_project_then_other_project() {
 }
 
 #[test]
-fn isolation_intent_and_instruction_are_not_remembered() {
+fn isolation_and_instruction_are_not_remembered() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path());
@@ -254,7 +256,7 @@ fn isolation_intent_and_instruction_are_not_remembered() {
             "projectId": project_id,
             "agentId": "grok-build",
             "values": values,
-            "openingText": "根据下面的说明修改实现。\n不要记住这句话",
+            "openingText": "不要记住这句话",
         }))
         .unwrap();
 
@@ -282,15 +284,12 @@ fn isolation_intent_and_instruction_are_not_remembered() {
 }
 
 #[test]
-fn intent_only_changes_opening_text() {
+fn opening_text_is_sent_without_generated_prefix() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path());
     let project_id = register(&mut h.host, &dir, "garden", "you/garden");
-    let opening = format!(
-        "{}\n修一下测试",
-        intent_prefix(Some(RunIntent::Modify), Language::ZhCn)
-    );
+    let opening = "修一下测试";
     h.host
         .handle(serde_json::json!({
             "op": "prepareRunLaunch",
@@ -315,7 +314,7 @@ fn intent_only_changes_opening_text() {
         .read_after(0, Duration::from_millis(10));
     assert_eq!(
         String::from_utf8_lossy(&chunk.data),
-        "\x1b[200~根据下面的说明修改实现。\n修一下测试\x1b[201~\r"
+        "\x1b[200~修一下测试\x1b[201~\r"
     );
     assert!(h.host.snapshot().launch_form.is_none());
 }
@@ -343,7 +342,7 @@ fn required_instruction_keeps_form_and_creates_no_run() {
         }))
         .unwrap();
     let form = out.snapshot.launch_form.as_ref().unwrap();
-    assert_eq!(form.error.as_deref(), Some("请填写要 Agent 做什么。"));
+    assert_eq!(form.error.as_deref(), Some("请填写任务说明。"));
     assert!(out.snapshot.runs.is_empty());
     assert_eq!(h.sessions.spawn_count(), 0);
 }
@@ -827,13 +826,4 @@ fn missing_last_successful_agent_returns_to_an_unselected_picker() {
         .agents
         .iter()
         .any(|agent| agent.id == "codex" && !agent.installed));
-}
-
-#[test]
-fn english_intent_prefix_uses_client_language() {
-    assert_eq!(
-        intent_prefix(Some(RunIntent::Answer), Language::En),
-        "Only answer the questions below. Do not modify any files."
-    );
-    assert_eq!(intent_prefix(None, Language::ZhCn), "");
 }

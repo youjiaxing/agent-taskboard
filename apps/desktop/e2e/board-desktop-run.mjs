@@ -298,21 +298,8 @@ if (await pick.count()) {
   await session.page.click("button[data-act='next-agent']");
   await session.page.waitForSelector("textarea[data-field='openingText']");
 }
-await session.page.click(".launch-sheet button[data-act='intent'][data-id='modify']");
 const openingText = session.page.locator("textarea[data-field='openingText']");
-await openingText.fill("");
-await openingText.pressSequentially("e2e unbound run");
-const customIntent = await session.page.$eval(".launch-sheet button[data-act='intent-custom']", (node) => ({
-  text: node.textContent?.trim(),
-  active: node.classList.contains("active"),
-  hidden: node.hidden,
-}));
-if (customIntent.hidden || !customIntent.active || (customIntent.text !== "自定义" && customIntent.text !== "Custom")) {
-  throw new Error(`editing an intent prefix should show Custom, got ${JSON.stringify(customIntent)}`);
-}
-if ((await openingText.inputValue()) !== "e2e unbound run" || !(await openingText.evaluate((node) => node === document.activeElement))) {
-  throw new Error("editing an intent prefix should preserve the textarea and its focus");
-}
+await openingText.fill("e2e unbound run");
 await session.page.click(".launch-sheet button[type='submit']");
 await session.page.waitForSelector(".run-dock");
 await session.page.waitForFunction(() => !document.querySelector(".launch-sheet"));

@@ -4,8 +4,8 @@ use std::process::Command;
 
 use crate::agent::prepare_launch_env;
 use crate::agent::{
-    intent_prefix, AgentField, AgentFieldKind, AgentPort, AgentSummary, IntentOption,
-    PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
+    AgentField, AgentFieldKind, AgentPort, AgentSummary, PrefillSource, ProbeResult,
+    RunLaunchConfig, RunLaunchForm,
 };
 use crate::{IssueRecord, Language, LaunchEnvPort};
 
@@ -135,44 +135,6 @@ pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
         issue.url,
         issue.title
     )
-}
-
-pub fn intent_options(language: Language) -> Vec<IntentOption> {
-    [
-        RunIntent::Modify,
-        RunIntent::Continue,
-        RunIntent::Answer,
-        RunIntent::Review,
-    ]
-    .into_iter()
-    .map(|intent| IntentOption {
-        id: intent_id(intent).into(),
-        label: intent_label(intent, language).into(),
-        prefix: intent_prefix(Some(intent), language),
-    })
-    .collect()
-}
-
-pub fn intent_id(intent: RunIntent) -> &'static str {
-    match intent {
-        RunIntent::Modify => "modify",
-        RunIntent::Continue => "continue",
-        RunIntent::Answer => "answer",
-        RunIntent::Review => "review",
-    }
-}
-
-fn intent_label(intent: RunIntent, language: Language) -> &'static str {
-    match (language, intent) {
-        (Language::ZhCn, RunIntent::Modify) => "修改",
-        (Language::ZhCn, RunIntent::Continue) => "继续",
-        (Language::ZhCn, RunIntent::Answer) => "只回答",
-        (Language::ZhCn, RunIntent::Review) => "复查",
-        (Language::En, RunIntent::Modify) => "Modify",
-        (Language::En, RunIntent::Continue) => "Continue",
-        (Language::En, RunIntent::Answer) => "Answer only",
-        (Language::En, RunIntent::Review) => "Review",
-    }
 }
 
 pub fn localize_fields(
@@ -344,8 +306,8 @@ pub fn missing_required(
 pub fn opening_required(opening: &str, language: Language) -> Option<String> {
     if opening.trim().is_empty() {
         Some(match language {
-            Language::ZhCn => "请填写要 Agent 做什么。".into(),
-            Language::En => "Tell the Agent what to do.".into(),
+            Language::ZhCn => "请填写任务说明。".into(),
+            Language::En => "Enter a task description.".into(),
         })
     } else {
         None
