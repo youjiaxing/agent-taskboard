@@ -196,6 +196,8 @@ pub struct ShellCopy {
     pub start_run_pending: String,
     pub switch_agent: String,
     pub pick_agent: String,
+    pub available_agents: String,
+    pub unavailable_agents: String,
     pub no_agent_selected: String,
     pub next_step: String,
     pub launch_title: String,

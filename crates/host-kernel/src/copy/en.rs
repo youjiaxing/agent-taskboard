@@ -188,6 +188,8 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 start_run_pending: "Starting…".into(),
                 switch_agent: "Switch Agent".into(),
                 pick_agent: "Choose Agent".into(),
+                available_agents: "Available Agents".into(),
+                unavailable_agents: "Unavailable Agents".into(),
                 no_agent_selected: "No Agent selected".into(),
                 next_step: "Next".into(),
                 launch_title: "Launch".into(),

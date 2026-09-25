@@ -188,6 +188,8 @@ pub(super) fn shell_copy() -> super::ShellCopy {
                 start_run_pending: "启动中…".into(),
                 switch_agent: "换一家".into(),
                 pick_agent: "选择 Agent".into(),
+                available_agents: "可用 Agent".into(),
+                unavailable_agents: "不可用 Agent".into(),
                 no_agent_selected: "尚未选择 Agent".into(),
                 next_step: "下一步".into(),
                 launch_title: "启动配置".into(),

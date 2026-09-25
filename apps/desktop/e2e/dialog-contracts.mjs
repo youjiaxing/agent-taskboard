@@ -43,7 +43,16 @@ try {
   await dialogRoot("project-form").waitFor({ state: "detached" });
 
   await page.click(".side button[data-act='new-run']");
-  const launch = await assertDialogSemantics("launch");
+  let launch = await assertDialogSemantics("launch");
+  const picker = launch.panel.locator("button[data-act='select-agent']");
+  if (await picker.count()) {
+    const pickerWidth = await width(launch.panel);
+    assert.ok(pickerWidth <= 640 && pickerWidth >= 540, `Agent picker should use the form-sized dialog, got ${pickerWidth}`);
+    await launch.panel.locator("button[data-act='select-agent']:not([disabled])").first().click();
+    await launch.panel.locator("button[data-act='next-agent']").click();
+    await page.waitForSelector("textarea[data-field='openingText']");
+    launch = await assertDialogSemantics("launch");
+  }
   const wideWidth = await width(launch.panel);
   assert.ok(wideWidth <= 880 && wideWidth >= 840, `Run launch should respect the 880px maximum, got ${wideWidth}`);
   await page.keyboard.press("Escape");
