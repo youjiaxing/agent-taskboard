@@ -200,6 +200,8 @@ export type ShellCopy = {
   startRunPending: string;
   switchAgent: string;
   pickAgent: string;
+  availableAgents: string;
+  unavailableAgents: string;
   noAgentSelected: string;
   nextStep: string;
   launchTitle: string;

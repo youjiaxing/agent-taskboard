@@ -17,34 +17,56 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   if (!form.skipAgentPicker) {
     const selected = form.agents.find((agent) => agent.id === ui.launchPickerAgentId);
     const selection = selected ? `${copy.pickAgent}：${selected.name}` : copy.noAgentSelected;
-    const body = `<div class="agent-picks">
-      ${form.agents.map((agent) => `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
+    const availableAgents = form.agents.filter((agent) => agent.installed);
+    const unavailableAgents = form.agents.filter((agent) => !agent.installed);
+    const renderAgent = (agent: typeof form.agents[number]) => {
+      const reasonId = `agent-reason-${agent.id}`;
+      return `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
         ${button({
           id: "select-agent",
           label: agent.name,
           disabled: !agent.installed,
           pressed: agent.id === ui.launchPickerAgentId,
           data: { id: agent.id },
-        }, { variant: agent.id === ui.launchPickerAgentId ? "primary" : "secondary" })}
-        ${agent.installed || !agent.unavailableReason ? "" : notice({ status: "danger", message: agent.unavailableReason })}
-      </div>`).join("")}
-    </div>
-    <p class="hint agent-selection" aria-live="polite">${escapeHtml(selection)}</p>`;
-    const actions = `${dialogDismissButton(copy.cancel)}${dialogActionButton({
+        }, {
+          variant: "secondary",
+          className: "agent-choice-button",
+          attributes: {
+            "data-agent-mark": agent.name.slice(0, 1).toUpperCase(),
+            "aria-describedby": !agent.installed && agent.unavailableReason ? reasonId : undefined,
+          },
+        })}
+        ${agent.installed || !agent.unavailableReason
+          ? ""
+          : `<p id="${escapeHtml(reasonId)}" class="agent-choice-reason">${escapeHtml(agent.unavailableReason)}</p>`}
+      </div>`;
+    };
+    const body = `<div class="agent-picker">
+      ${availableAgents.length > 0 ? `<section class="agent-picker-group" aria-labelledby="available-agents-title">
+        <h3 id="available-agents-title">${escapeHtml(copy.availableAgents)}</h3>
+        <div class="agent-picks">${availableAgents.map(renderAgent).join("")}</div>
+      </section>` : ""}
+      ${unavailableAgents.length > 0 ? `<section class="agent-picker-group agent-picker-unavailable" aria-labelledby="unavailable-agents-title">
+        <h3 id="unavailable-agents-title">${escapeHtml(copy.unavailableAgents)}</h3>
+        <div class="agent-picks">${unavailableAgents.map(renderAgent).join("")}</div>
+      </section>` : ""}
+    </div>`;
+    const actions = `<div class="agent-selection" aria-live="polite">${escapeHtml(selection)}</div>
+      ${dialogDismissButton(copy.cancel)}${dialogActionButton({
       id: "next-agent",
       label: copy.nextStep,
       disabled: !selected?.installed,
     }, { primary: true })}`;
     return dialog({
       id: "launch",
-      tier: "wide",
+      tier: "form",
       title: copy.pickAgent,
       body,
       actions,
       closeLabel: localCopy.close,
       dismissible: true,
       initialFocus: "first-field",
-      className: "launch-sheet",
+      className: "launch-sheet launch-agent-picker",
     });
   }
   if (!ui.launchDraft) return "";

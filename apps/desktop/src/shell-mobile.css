@@ -284,6 +284,18 @@
   .dialog-content .issue-search input,
   .dialog-content .issue-search select { width: 100%; }
 
+  .agent-picks { grid-template-columns: 1fr; }
+  .launch-agent-picker .dialog-content { padding: var(--space-16); }
+  .launch-agent-picker .dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .launch-agent-picker .agent-selection {
+    width: 100%;
+    margin-right: 0;
+  }
+  .launch-agent-picker .dialog-actions .ui-button { width: 100%; }
+
   /* usage and telemetry keep their existing compact mobile density */
   .usage-ranges, .usage-custom, .usage-full, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
   .usage-compact { display: grid; gap: var(--space-8); }
