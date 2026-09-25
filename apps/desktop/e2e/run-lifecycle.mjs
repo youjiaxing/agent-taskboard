@@ -63,7 +63,7 @@ let activeSidebarRun = page.locator(".side .run-row.waiting").first();
 const activeSidebarActions = await activeSidebarRun.locator(".run-row-actions button").evaluateAll((nodes) =>
   nodes.map((node) => node.dataset.act),
 );
-if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
+if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|set-run-pinned") {
   throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
 }
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
@@ -71,7 +71,7 @@ for (const runId of endedRunIds) {
   const endedActions = await page.locator(`.side .run-row[data-run="${runId}"] .run-row-actions button`).evaluateAll((nodes) =>
     nodes.map((node) => node.dataset.act),
   );
-  if (endedActions.join("|") !== "open-usage-run") {
+  if (endedActions.join("|") !== "open-usage-run|set-run-pinned|archive-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
   }
 }
@@ -304,6 +304,11 @@ const countEndedOutput = (request) => {
 };
 page.on("request", countEndedOutput);
 await card("continue lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+if (await page.$(".lifted-run") || await page.$(".run-dock")) {
+  throw new Error("an Issue without an active Run should remain on the Board until a history item is selected");
+}
+await page.click('.board-run-history button[data-act="view-issue-run"]');
 await page.waitForSelector('[data-terminal-surface="readonly"]');
 await new Promise((resolve) => setTimeout(resolve, 200));
 page.off("request", countEndedOutput);
@@ -313,8 +318,8 @@ if (endedOutputRequests !== 0 || await page.$('[data-terminal-surface="readonly"
 const endedDefaults = await page.$$eval(".workspace-rail-section", (sections) =>
   Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
 );
-if (!endedDefaults.issue || endedDefaults.runs || endedDefaults.actions) {
-  throw new Error(`an Issue without an active Run should default to its body: ${JSON.stringify(endedDefaults)}`);
+if (!endedDefaults.issue || !endedDefaults.runs || endedDefaults.actions) {
+  throw new Error(`an explicitly selected ended Run should keep Issue and Run history visible: ${JSON.stringify(endedDefaults)}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector(".changes-sheet .notice.bad");
@@ -342,6 +347,11 @@ await page.waitForSelector(".lanes");
 
 await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+if (await page.$(".lifted-run") || await page.$(".run-dock")) {
+  throw new Error("an ended Run should remain on the Board until its history entry is selected");
+}
+await page.click('.board-run-history button[data-act="view-issue-run"]');
 await page.waitForSelector('[data-terminal-surface="readonly"]');
 await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='release-claim']");
@@ -354,9 +364,9 @@ if (!(await page.locator('[data-lane="inProgress"] .issue-card:has-text("continu
   throw new Error("stopping a Run must leave the still-claimed open Issue in progress");
 }
 await card("never run lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector('[data-terminal-surface="empty"] button[data-act="execute-run"]');
-if (await page.$(".pty-slot") || await page.$('[data-global-action="changes"]')) {
-  throw new Error("an Issue that never ran must show only the Terminal empty state and its launch entry");
+await page.waitForSelector(".board-shell > .issue-detail");
+if (await page.$(".lifted-run") || await page.$(".pty-slot") || await page.$('[data-global-action="changes"]')) {
+  throw new Error("an Issue that never ran must stay on the Board with its launch entry");
 }
 await capture("issue-100-run-ended-issue-open-1280x840.png");
 

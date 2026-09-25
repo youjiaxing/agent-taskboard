@@ -1,6 +1,6 @@
 import { connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, effectiveClientLanguage, mobileClient } from "../view-helpers";
+import { currentProject, effectiveClientLanguage, issueRuns, mobileClient, workspaceRun } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
@@ -399,6 +399,9 @@ function laneCard(
   selectedId: string | undefined,
   lane: IssueLaneState,
 ): string {
+  const run = issue.runId && !mobileClient()
+    ? ui.snapshot?.runs.find((candidate) => candidate.id === issue.runId && candidate.status !== "ended")
+    : undefined;
   return issueCard({
     id: issue.id,
     identity: { number: issue.number, title: issue.title },
@@ -406,6 +409,8 @@ function laneCard(
     activity: issue.activity,
     selected: issue.id === selectedId,
     tags: laneTags(copy, issue),
+    recentAction: run?.recentAction ?? undefined,
+    recentOutput: run?.recentOutput?.trim().slice(-240) ?? undefined,
     entry: { id: "focus-issue", label: issue.title, data: { id: issue.id } },
     actions: laneActions(copy, issue, lane),
   });
@@ -493,6 +498,7 @@ function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, sh
 /** The page decides whether this Issue surface includes dependency controls. */
 export type IssueDetailOptions = {
   dependencyGraph?: boolean;
+  runHistory?: string;
 };
 
 export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: IssueDetailOptions = {}): string {
@@ -504,7 +510,7 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: Issu
       </div>
       ${issueActions(copy, board, issue)}
     </header>
-    <div class="detail-scroll">${issueBody(copy, board, issue, options.dependencyGraph ?? true)}</div>`;
+    <div class="detail-scroll">${options.runHistory ?? ""}${issueBody(copy, board, issue, options.dependencyGraph ?? true)}</div>`;
 }
 
 export function workspaceRailLabels(): { actions: string; issue: string; runs: string; emptyRuns: string } {
@@ -516,16 +522,18 @@ export function workspaceRailLabels(): { actions: string; issue: string; runs: s
 export function workspaceRunHistory(
   copy: ShellCopy,
   runs: RunSummary[],
-  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot; organizationMode?: "text" | "menu" } = {},
+  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot; organizationMode?: "text" | "menu"; currentRunId?: string; action?: string } = {},
 ): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
     const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
-    return `<article class="workspace-run-history-item" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-      <button type="button" class="workspace-run-history-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-        <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}</small></span>
+    const action = options.action ?? "focus-run";
+    const current = run.id === options.currentRunId;
+    return `<article class="workspace-run-history-item ${current ? "current" : ""}" data-act="${action}" data-id="${escapeHtml(run.id)}">
+      <button type="button" class="workspace-run-history-main" data-act="${action}" data-id="${escapeHtml(run.id)}" ${current ? 'aria-current="true"' : ""}>
+        <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}${run.startedAtMs ? ` · ${new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage())}` : ""}</small></span>
         ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
         ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
       </button>
@@ -538,11 +546,11 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
   const board = snap.board;
   const issue = board?.selected;
   if (!board || !issue || ui.clientView.panels.rightSide !== "rail") return "";
-  const runs = (snap.runs ?? []).filter((run) => run.issueId === issue.id);
+  const runs = issueRuns(snap, issue.id);
   const hasActive = runs.some((run) => run.status !== "ended");
   let open = ui.workspaceRailOpenSections.get(issue.id);
   if (!open) {
-    open = new Set<"actions" | "issue" | "runs">(hasActive ? ["runs"] : ["issue"]);
+    open = new Set<"actions" | "issue" | "runs">(hasActive ? ["runs"] : ["issue", "runs"]);
     ui.workspaceRailOpenSections.set(issue.id, open);
   }
   const labels = workspaceRailLabels();
@@ -555,7 +563,7 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
     ${fixedPanelResizeHandle("right-rail")}
     ${section("actions", labels.actions, `<div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>${issueActions(copy, board, issue)}`)}
     ${section("issue", labels.issue, issueBody(copy, board, issue, true), "detail-scroll")}
-    ${section("runs", labels.runs, workspaceRunHistory(copy, runs, { organizationSnapshot: snap }))}
+    ${section("runs", labels.runs, workspaceRunHistory(copy, runs, { organizationSnapshot: snap, currentRunId: workspaceRun(snap)?.id, action: "view-issue-run" }))}
   </aside>`;
 }
 

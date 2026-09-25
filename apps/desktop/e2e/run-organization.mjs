@@ -136,7 +136,7 @@ try {
   assert.equal(await page.locator("[data-terminal-panel]").count(), 0, "restore must not open a terminal");
   await page.click(".archive-restored button[data-act='open-restored-run']");
   await page.waitForSelector(`[data-terminal-surface='readonly'][data-run='${removedRunId}']`);
-  await page.waitForSelector(`.project-run-rail .workspace-run-history-item[data-id='${removedRunId}'] [data-act='archive-run']`);
+  await page.waitForSelector(`.focus-workspace-layout [data-act='archive-run'][data-id='${removedRunId}']`);
   await page.click("button[data-act='return-page']");
   await page.waitForSelector(".run-archive-page");
 

@@ -32,10 +32,9 @@ if (await pick.count()) {
 }
 await page.locator("form[data-form='launch'] button[type='submit']").click();
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-const started = await hostSnapshot(page, url);
-const startedRun = started.runs.find((run) => run.issueId === "you/disconnect#1");
-const firstRunId = startedRun?.id;
-if (!firstRunId) throw new Error(`the UI-created Run must be observable after launch: ${JSON.stringify(started.runs)}`);
+await page.waitForSelector(".side .run-row[data-run]");
+const firstRunId = await page.locator(".side .run-row[data-run]").last().getAttribute("data-run");
+if (!firstRunId) throw new Error("the UI-created Run must be observable in the sidebar");
 releasePtyRead();
 
 // CI runners can briefly starve the Host tick loop while Chromium is painting
@@ -48,7 +47,7 @@ for (let attempt = 0; attempt < 60; attempt += 1) {
   await page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
   await tickResponse;
   // The HTTP response can arrive before the Client applies and paints it.
-  // Wait for the visible result instead of exhausting every tick in that gap.
+  // Wait for the visible result instead of issuing a raw snapshot that can consume Host events.
   const stopped = await page.locator('[data-lane="inProgress"] .issue-card.execution-stopped', {
     hasText: "PTY disconnect issue",
   }).waitFor({ state: "visible", timeout: 500 }).then(() => true, () => false);
@@ -83,13 +82,15 @@ if (!detailText.includes("执行已停")) {
   throw new Error(`the Issue inspector must explain the recoverable stopped state: ${detailText}`);
 }
 
-await page.locator('.issue-detail button[data-act="continue-run"]').dispatchEvent("click");
-await page.waitForFunction((previousRunId) => {
-  const currentRunId = document.querySelector(".pty-slot")?.dataset.run;
-  return Boolean(currentRunId && currentRunId !== previousRunId);
-}, firstRunId);
-const resumedRunId = await page.$eval(".pty-slot", (node) => node.dataset.run);
+await page.locator('.issue-detail button[data-act="continue-run"]').click();
+await page.waitForFunction(() => document.querySelectorAll(".side .run-row[data-run]").length >= 2);
 const resumed = await hostSnapshot(page, url);
+const resumedRunId = resumed.runs.find(
+  (run) => run.issueId === "you/disconnect#1" && run.status === "running",
+)?.id;
+if (!resumedRunId) throw new Error(`Continue should create a new active Run: ${JSON.stringify(resumed.runs)}`);
+await page.click(`.side .run-row[data-run="${resumedRunId}"] .run-main`);
+await page.waitForSelector(`.lifted-terminal[data-terminal-surface="live"][data-run="${resumedRunId}"]`);
 const resumedRuns = resumed.runs.filter(
   (run) => run.issueId === "you/disconnect#1" && run.status === "running",
 );
@@ -109,7 +110,7 @@ if (
   throw new Error(`Continue must replace the disconnected PTY with one linked active Run: ${JSON.stringify({ resumedRun, originalRun, resumedIssue, runs: resumed.runs })}`);
 }
 
-await page.click('.run-dock button[data-act="stop-run"]');
+await page.click('.lifted-terminal button[data-act="stop-run"]');
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
 
 await browser.close();

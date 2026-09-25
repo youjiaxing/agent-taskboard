@@ -48,7 +48,7 @@ const waitForIssueTextWithout = async (needle) => {
   throw new Error(`Local Markdown files still contain ${needle}`);
 };
 
-const issueSection = '.workspace-rail-section[data-workspace-section="issue"]';
+const issueSection = ".issue-detail";
 const openRailSection = async (name) => {
   const section = page.locator('.workspace-rail-section[data-workspace-section="' + name + '"]');
   if (await section.count() === 0) return;
@@ -79,15 +79,8 @@ await page.waitForSelector(".issue-card:has-text('Created from desktop UI')");
 await waitForIssueText("created body from desktop UI");
 
 await page.locator(".issue-card-main", { hasText: "Child" }).click();
-await page.waitForSelector(".focus-workspace-layout");
-await page.waitForSelector("[data-terminal-surface]");
-await page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "Child");
-const railSections = await page.$$eval(".workspace-rail-section", (sections) =>
-  sections.map((section) => section.dataset.workspaceSection),
-);
-if (railSections.join(",") !== "actions,issue,runs") {
-  throw new Error(`desktop Issue focus must use the three-section right rail: ${JSON.stringify(railSections)}`);
-}
+await page.waitForSelector(".board-shell > .issue-detail");
+await page.waitForFunction(() => document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes("Child"));
 await page.waitForSelector(`${issueSection} section.issue-document[data-document-state='ready']`);
 
 let failNextUpdate = true;
@@ -134,7 +127,7 @@ await page.fill("#issue-edit-title", "Child edited from desktop UI");
 await page.fill("#issue-edit-body", "edited body from desktop UI");
 await page.click("form[data-act='issue-edit'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector("form[data-act='issue-edit']"));
-await page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "Child edited from desktop UI");
+await page.waitForFunction(() => document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes("Child edited from desktop UI"));
 await waitForIssueText("edited body from desktop UI");
 
 await openIssueMaintenance();

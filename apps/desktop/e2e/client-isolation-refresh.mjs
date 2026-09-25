@@ -68,24 +68,19 @@ const focusProject = async (page, projectId, expectedName) => {
 };
 
 const enterIssueFocusWorkspace = async (page, expectedTitle) => {
-  await page.waitForSelector(".focus-workspace-layout");
-  await page.waitForSelector("[data-terminal-surface]");
+  await page.waitForSelector(".board-shell > .issue-detail");
   await page.waitForFunction(
-    (title) => document.querySelector("[data-current-identity]")?.textContent?.trim() === title,
+    (title) => document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes(title),
     expectedTitle,
   );
-  const sections = await page.$$eval(".workspace-rail-section", (nodes) =>
-    nodes.map((node) => node.dataset.workspaceSection),
-  );
-  if (sections.join(",") !== "actions,issue,runs") {
-    throw new Error(`clicking an Issue must show the fixed focus workspace rail: ${JSON.stringify(sections)}`);
-  }
-  await page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"] section.issue-document[data-document-state="ready"]');
+  await page.waitForSelector(".board-shell > .issue-detail section.issue-document[data-document-state='ready']");
 };
 
 const leaveFocusWorkspace = async (page) => {
-  await page.click("button[data-act='return-page']");
-  await page.waitForSelector(".lanes");
+  if (await page.$(".focus-workspace-layout")) {
+    await page.click("button[data-act='return-page']");
+    await page.waitForSelector(".lanes");
+  }
 };
 
 await focusProject(desktop, gardenProjectId, "garden");

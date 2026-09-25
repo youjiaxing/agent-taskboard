@@ -221,6 +221,7 @@ await browserPage.waitForFunction(() => document.documentElement.dataset.viewpor
 const fullDesktopBoundary = await workspaceGeometry(browserPage, '[data-fixed-panel="changes-panel"]', "__PANEL_TERMINAL_HOST__");
 assertMinimumWorkspace(fullDesktopBoundary, "900x640 desktop boundary", activeWorkspaceRunId);
 await browserPage.setViewportSize({ width: 1280, height: 840 });
+await browserPage.waitForSelector('[data-panel-resize="changes-panel"]');
 await dragBy(browserPage, '[data-panel-resize="changes-panel"]', -80);
 assertNear(await widthOf(browserPage, '[data-fixed-panel="changes-panel"]'), 600, "resized changes panel width");
 if (await browserPage.$("[data-panel-drag], [data-panel-mode], [data-floating], [data-workbench-panel]")) {

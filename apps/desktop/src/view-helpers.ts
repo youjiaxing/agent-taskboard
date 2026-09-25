@@ -249,7 +249,7 @@ export function captureReturnPoint(snap: Snapshot): ReturnPoint {
     hostId: snap.focusedHostId,
     projectId,
     issueId: snap.board?.selected?.id ?? null,
-    runId: ui.clientView.page === "run-archive" ? null : snap.focusedRunId || null,
+    runId: ui.clientView.page === "run-archive" ? null : ui.viewingRunId || snap.focusedRunId || null,
     board: cloneBoardMemory(
       projectId && boardScroll
         ? {
@@ -270,6 +270,7 @@ export function enterPrimaryPage(page: PrimaryPage, snap: Snapshot): void {
     if (ui.clientView.returnPoint) ui.returnPointHistory.push(ui.clientView.returnPoint);
     ui.clientView.returnPoint = captureReturnPoint(snap);
   }
+  if (page !== "focus-workspace") ui.viewingRunId = "";
   ui.clientView.page = page;
 }
 
@@ -298,6 +299,7 @@ export function restoreReturnPointMemory(returnPoint: ReturnPoint): void {
     ui.pendingGraphAnchor = { ...returnPoint.graph.viewportAnchor };
   }
   ui.clientView.page = returnPoint.page;
+  ui.viewingRunId = returnPoint.page === "focus-workspace" ? returnPoint.runId ?? "" : "";
   ui.clientView.returnPoint = ui.returnPointHistory.pop() ?? null;
 }
 
@@ -321,13 +323,39 @@ export function focusedRun(snap: Snapshot): RunSummary | undefined {
   return (snap.runs ?? []).find((run) => run.id === snap.focusedRunId);
 }
 
+export function activeRunForIssue(snap: Snapshot, issueId = snap.board?.selected?.id): RunSummary | undefined {
+  if (!issueId) return undefined;
+  return (snap.runs ?? []).find(
+    (run) => run.issueId === issueId && run.status !== "ended" && !run.archivedAtMs,
+  );
+}
+
+export function issueRuns(snap: Snapshot, issueId = snap.board?.selected?.id): RunSummary[] {
+  if (!issueId) return [];
+  return (snap.runs ?? []).filter((run) => run.issueId === issueId && !run.archivedAtMs);
+}
+
 export function workspaceRun(snap: Snapshot): RunSummary | undefined {
-  const focused = focusedRun(snap);
+  if (mobileClient()) {
+    const focused = focusedRun(snap);
+    const issueId = snap.board?.selected?.id;
+    if (focused && (!issueId || focused.unbound || focused.issueId === issueId)) return focused;
+    if (!issueId) return focused;
+    const runs = issueRuns(snap, issueId);
+    return runs.find((run) => run.status !== "ended") ?? runs[runs.length - 1];
+  }
   const issueId = snap.board?.selected?.id;
-  if (focused && (!issueId || focused.unbound || focused.issueId === issueId)) return focused;
-  if (!issueId) return focused;
-  const issueRuns = (snap.runs ?? []).filter((run) => run.issueId === issueId);
-  return issueRuns.find((run) => run.status !== "ended") ?? issueRuns[issueRuns.length - 1];
+  const viewing = ui.viewingRunId
+    ? (snap.runs ?? []).find((run) => run.id === ui.viewingRunId && !run.archivedAtMs)
+    : undefined;
+  if (viewing && (!issueId || viewing.unbound || viewing.issueId === issueId)) return viewing;
+  if (ui.viewingRunId) return undefined;
+  const focused = focusedRun(snap);
+  if (focused && focused.status !== "ended" && (!issueId || focused.unbound || focused.issueId === issueId)) {
+    return focused;
+  }
+  if (!issueId) return focused?.status === "ended" ? undefined : focused;
+  return activeRunForIssue(snap, issueId);
 }
 
 export function resetGraphUiState(): void {
