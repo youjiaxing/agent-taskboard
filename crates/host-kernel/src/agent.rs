@@ -52,6 +52,10 @@ pub struct AgentField {
     pub options: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub option_filter: Option<AgentFieldOptionFilter>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub option_labels: BTreeMap<String, String>,
     pub required: bool,
     pub folded: bool,
 }
@@ -198,6 +202,7 @@ pub trait AgentPort: Send + Sync {
     fn config_fields(&self) -> Vec<AgentField> {
         Vec::new()
     }
+    fn localize_field(&self, _field: &mut AgentField, _language: Language) {}
     fn seed_config(&self) -> BTreeMap<String, String> {
         BTreeMap::new()
     }
@@ -572,6 +577,8 @@ fn text_field(id: &str, label: &str, required: bool, folded: bool) -> AgentField
         kind: AgentFieldKind::Text,
         options: Vec::new(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required,
         folded,
     }
@@ -590,6 +597,8 @@ fn select_field(
         kind: AgentFieldKind::Select,
         options: options.iter().map(|option| (*option).to_string()).collect(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required,
         folded,
     }
@@ -602,6 +611,8 @@ fn boolean_field(id: &str, label: &str, folded: bool) -> AgentField {
         kind: AgentFieldKind::Boolean,
         options: Vec::new(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required: false,
         folded,
     }
@@ -614,6 +625,8 @@ fn multiline_field(id: &str, label: &str) -> AgentField {
         kind: AgentFieldKind::Multiline,
         options: Vec::new(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required: false,
         folded: false,
     }
