@@ -125,7 +125,7 @@ pub struct RunLaunchForm {
     pub change_notes_text: String,
     #[serde(default)]
     pub command_preview: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub intents: Vec<IntentOption>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -137,47 +137,12 @@ pub struct RunLaunchForm {
     pub option_discovery_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RunIntent {
-    Modify,
-    Continue,
-    Answer,
-    Review,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntentOption {
     pub id: String,
     pub label: String,
     pub prefix: String,
-}
-
-pub fn intent_prefix(intent: Option<RunIntent>, language: Language) -> String {
-    let Some(intent) = intent else {
-        return String::new();
-    };
-    match (language, intent) {
-        (Language::ZhCn, RunIntent::Modify) => "根据下面的说明修改实现。".into(),
-        (Language::ZhCn, RunIntent::Continue) => "继续当前工作。下面的说明是补充要求。".into(),
-        (Language::ZhCn, RunIntent::Answer) => "只回答下面的问题，不要修改文件。".into(),
-        (Language::ZhCn, RunIntent::Review) => "复查当前实现并报告你的发现，不要修改文件。".into(),
-        (Language::En, RunIntent::Modify) => {
-            "Modify the implementation according to the instructions below.".into()
-        }
-        (Language::En, RunIntent::Continue) => {
-            "Continue the current work. Treat the instructions below as additional requirements."
-                .into()
-        }
-        (Language::En, RunIntent::Answer) => {
-            "Only answer the questions below. Do not modify any files.".into()
-        }
-        (Language::En, RunIntent::Review) => {
-            "Review the current implementation and report your findings. Do not modify any files."
-                .into()
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

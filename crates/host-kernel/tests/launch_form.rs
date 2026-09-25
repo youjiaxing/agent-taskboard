@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use host_kernel::{
-    intent_prefix, AgentConfigDiscovery, AgentField, AgentFieldKind, AgentFieldOptionFilter,
-    AgentPort, AgentSession, BootRequest, HostKernel, KernelPorts, Language, LaunchEnvironment,
-    MemoryAgent, MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource, ProbeResult,
-    RunIntent, RunStatus, SystemAppearance, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME,
-    CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME,
+    AgentConfigDiscovery, AgentField, AgentFieldKind, AgentFieldOptionFilter, AgentPort,
+    AgentSession, BootRequest, HostKernel, KernelPorts, LaunchEnvironment, MemoryAgent,
+    MemoryLaunchEnv, MemorySessionFactory, MemoryTracker, PrefillSource, ProbeResult, RunStatus,
+    SystemAppearance, ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN,
+    CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
 
 fn boot_req(root: &Path) -> BootRequest {

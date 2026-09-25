@@ -48,8 +48,6 @@ export function syncLaunchDraft(snap: Snapshot): void {
       agentId: form.selectedAgentId,
       values: { ...form.values },
       openingText: form.openingText,
-      intentId: "",
-      custom: false,
     };
     coerceLaunchFieldValues();
   }
@@ -148,30 +146,6 @@ export function refreshLaunchWarnings(): void {
   const warnings = ui.snapshot.launchForm.warnings ?? [];
   node.textContent = warnings.join(" ");
   node.hidden = warnings.length === 0;
-}
-
-export function refreshIntentChoices(): void {
-  if (!ui.app || !ui.launchDraft) return;
-  for (const button of ui.app.querySelectorAll<HTMLButtonElement>(".launch-sheet button[data-act='intent']")) {
-    button.classList.toggle(
-      "active",
-      !ui.launchDraft.custom && (button.dataset.id ?? "") === ui.launchDraft.intentId,
-    );
-  }
-  const custom = ui.app.querySelector<HTMLButtonElement>(".launch-sheet button[data-act='intent-custom']");
-  if (custom) {
-    custom.hidden = !ui.launchDraft.custom;
-    custom.classList.toggle("active", ui.launchDraft.custom);
-  }
-}
-
-export function expectedOpening(form: RunLaunchForm, draft: LaunchDraft): string {
-  const prefix = form.intents.find((intent) => intent.id === draft.intentId)?.prefix ?? "";
-  const body = (draft.values["initial-instruction"] ?? "").trim();
-  const notes = (form.changeNotesText ?? "").trim();
-  const core = prefix && body ? `${prefix}\n${body}` : prefix || body;
-  if (core && notes) return `${core}\n\n${notes}`;
-  return core || notes;
 }
 
 export async function openExternalUrl(url: string): Promise<void> {

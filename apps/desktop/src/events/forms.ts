@@ -1,4 +1,4 @@
-import { applyLaunchDependentDefaults, applyLocalPath, expectedOpening, launchValuesForHost, refreshIntentChoices, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
+import { applyLaunchDependentDefaults, applyLocalPath, launchValuesForHost, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
 import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { CUSTOM_VALUE, launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
@@ -446,14 +446,7 @@ ui.app.addEventListener("input", (event) => {
   }
   if (field === "openingText" && ui.launchDraft && "value" in target) {
     ui.launchDraft.openingText = (target as HTMLTextAreaElement).value;
-    if (!ui.launchDraft.intentId) {
-      ui.launchDraft.values["initial-instruction"] = ui.launchDraft.openingText;
-      ui.launchDraft.custom = false;
-    } else if (ui.snapshot?.launchForm) {
-      ui.launchDraft.custom =
-        ui.launchDraft.openingText.trim() !== expectedOpening(ui.snapshot.launchForm, ui.launchDraft).trim();
-      refreshIntentChoices();
-    }
+    ui.launchDraft.values["initial-instruction"] = ui.launchDraft.openingText;
   }
   const customLaunchId = target.getAttribute("data-launch-custom");
   if (customLaunchId && ui.launchDraft && "value" in target) {

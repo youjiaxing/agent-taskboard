@@ -776,8 +776,6 @@ export type LaunchDraft = {
   agentId: string;
   values: Record<string, string>;
   openingText: string;
-  intentId: string;
-  custom: boolean;
 };
 
 export type RunStatus = "starting" | "running" | "ended";
