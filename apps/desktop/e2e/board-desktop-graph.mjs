@@ -234,6 +234,42 @@ const graphScrollLeft = await session.page.$eval(".graph-canvas", (node) => {
 if (!graphCanvas || graphScrollLeft <= 0) {
   throw new Error(`graph scroll regression needs horizontal overflow, got ${graphScrollLeft}`);
 }
+
+// 紧凑桌面上的高内容依赖图必须留在工作区内，由 graph-canvas 自身响应真实滚轮。
+const compactGraphToggle = session.page.locator("button[data-act='toggle-issue']");
+if (await compactGraphToggle.count()) await compactGraphToggle.click();
+await session.page.setViewportSize({ width: 800, height: 600 });
+await session.page.waitForSelector(".graph-canvas");
+const compactGraphStyle = await session.page.addStyleTag({
+  content: ".graph-flow { min-height: 1200px; }",
+});
+const compactGraphBefore = await session.page.$eval(".graph-canvas", (node) => {
+  const rect = node.getBoundingClientRect();
+  return {
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+    rectBottom: rect.bottom,
+    viewportHeight: window.innerHeight,
+  };
+});
+if (compactGraphBefore.scrollHeight <= compactGraphBefore.clientHeight) {
+  throw new Error(`compact graph scroll fixture needs vertical overflow: ${JSON.stringify(compactGraphBefore)}`);
+}
+if (compactGraphBefore.rectBottom > compactGraphBefore.viewportHeight + 1) {
+  throw new Error(`compact graph must stay inside the viewport: ${JSON.stringify(compactGraphBefore)}`);
+}
+const compactGraphBox = await session.page.locator(".graph-canvas").boundingBox();
+if (!compactGraphBox) throw new Error("compact graph scroll fixture has no geometry");
+await session.page.mouse.move(compactGraphBox.x + compactGraphBox.width / 2, compactGraphBox.y + compactGraphBox.height / 2);
+await session.page.mouse.wheel(0, 420);
+const compactGraphAfter = await session.page.$eval(".graph-canvas", (node) => node.scrollTop);
+if (compactGraphAfter <= 0) {
+  throw new Error(`compact graph canvas should respond to a real mouse wheel: ${compactGraphBefore.clientHeight}/${compactGraphBefore.scrollHeight} -> ${compactGraphAfter}`);
+}
+await compactGraphStyle.evaluate((node) => node.remove());
+await session.page.setViewportSize({ width: 1280, height: 840 });
+await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
+
 const tickResponse = session.page.waitForResponse((response) =>
   response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
 );

@@ -735,6 +735,45 @@ for (const [width, expectedViewport, expectedMobile] of [
 }
 await session.page.setViewportSize({ width: 1440, height: 900 });
 await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
+
+// 紧凑桌面上的高内容车道必须留在工作区内，由车道自身滚动，而不是把 board-main 撑出视口。
+await session.page.setViewportSize({ width: 800, height: 600 });
+await session.page.waitForSelector(".lanes");
+const compactIssueToggle = session.page.locator("button[data-act='toggle-issue']");
+if (await compactIssueToggle.count()) await compactIssueToggle.click();
+await session.page.waitForFunction(() => document.querySelector(".board-main") && getComputedStyle(document.querySelector(".board-main")).display !== "none");
+const compactBoardStyle = await session.page.addStyleTag({
+  content: '[data-lane="frontier"] { height: 180px; min-height: 0; }',
+});
+const compactBoardBefore = await session.page.$eval('[data-lane="frontier"]', (node) => {
+  const rect = node.getBoundingClientRect();
+  const board = node.closest(".board-shell").getBoundingClientRect();
+  return {
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+    boardBottom: board.bottom,
+    viewportHeight: window.innerHeight,
+    rectBottom: rect.bottom,
+  };
+});
+if (compactBoardBefore.scrollHeight <= compactBoardBefore.clientHeight) {
+  throw new Error(`compact board scroll fixture needs vertical overflow: ${JSON.stringify(compactBoardBefore)}`);
+}
+if (compactBoardBefore.boardBottom > compactBoardBefore.viewportHeight + 1 || compactBoardBefore.rectBottom > compactBoardBefore.viewportHeight + 1) {
+  throw new Error(`compact board must stay inside the viewport: ${JSON.stringify(compactBoardBefore)}`);
+}
+const compactBoardBox = await session.page.locator('[data-lane="frontier"]').boundingBox();
+if (!compactBoardBox) throw new Error("compact board scroll fixture has no geometry");
+await session.page.mouse.move(compactBoardBox.x + compactBoardBox.width / 2, compactBoardBox.y + compactBoardBox.height / 2);
+await session.page.mouse.wheel(0, 420);
+const compactBoardAfter = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (compactBoardAfter <= 0) {
+  throw new Error(`compact board lane should respond to a real mouse wheel: ${compactBoardBefore.clientHeight}/${compactBoardBefore.scrollHeight} -> ${compactBoardAfter}`);
+}
+await compactBoardStyle.evaluate((node) => node.remove());
+await session.page.setViewportSize({ width: 1440, height: 900 });
+await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
+
 let releaseDocumentRefresh;
 const documentRefreshGate = new Promise((resolve) => {
   releaseDocumentRefresh = resolve;
