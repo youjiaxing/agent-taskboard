@@ -120,10 +120,12 @@ if (afterWait < beforeWait - 2) {
 
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-await page.waitForSelector(".run-dock");
-await page.click(".run-dock button[data-act='stop-run']");
+await page.waitForSelector(".side .run-row");
+await page.locator(".side .run-row").last().locator(".run-main").click();
+await page.waitForSelector(".lifted-terminal");
+await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
-await page.waitForFunction(() => !document.querySelector(".run-dock"));
+await page.waitForFunction(() => !document.querySelector(".lifted-terminal"));
 
 await page.click("button[data-act='new-run']");
 await page.waitForSelector("textarea[data-field='openingText']");

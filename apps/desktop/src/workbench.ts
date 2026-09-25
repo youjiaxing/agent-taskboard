@@ -6,8 +6,8 @@ import type {
 } from "./protocol";
 import { desktopShellAvailable } from "./launch-session";
 import { escapeHtml } from "./client-utils";
-import { issueDetail } from "./render/board";
-import { effectiveClientLanguage, mobileClient } from "./view-helpers";
+import { issueDetail, workspaceRailLabels, workspaceRunHistory } from "./render/board";
+import { effectiveClientLanguage, issueRuns, mobileClient } from "./view-helpers";
 import { ui } from "./ui";
 
 export const CLIENT_PANEL_STATE_STORAGE_PREFIX = "agent-taskboard-client-panels:v1:";
@@ -162,9 +162,13 @@ export function fixedPanelResizeHandle(region: FixedPanelRegion): string {
 }
 
 export function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
+  const runs = issueRuns(ui.snapshot!, board.selected?.id);
+  const history = runs.length
+    ? `<section class="detail-block board-run-history"><h4>${escapeHtml(workspaceRailLabels().runs)}</h4>${workspaceRunHistory(copy, runs, { action: "view-issue-run" })}</section>`
+    : "";
   return `<aside class="issue-detail fixed-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
-    ${issueDetail(copy, board)}
+    ${issueDetail(copy, board, { runHistory: history })}
   </aside>`;
 }
 

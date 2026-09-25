@@ -63,6 +63,8 @@ export type IssueCardView = {
   activity?: IssueActivityState | null;
   selected?: boolean;
   tags: IssueDisplayTag[];
+  recentAction?: string;
+  recentOutput?: string;
   /** Workspace entry owned by the calling page. */
   entry: ActionDescriptor;
   actions: IssueCardAction[];
@@ -90,7 +92,9 @@ export function issueCard(card: IssueCardView): string {
     })}>
       ${issueIdentity(card.identity)}
       ${tags ? `<div class="issue-tags">${tags}</div>` : ""}
+      ${card.recentAction ? `<span class="issue-run-action">${escapeHtml(card.recentAction)}</span>` : ""}
     </button>
+    ${card.recentOutput ? `<pre class="issue-run-preview" aria-readonly="true">${escapeHtml(card.recentOutput)}</pre>` : ""}
     ${actions ? `<div class="issue-card-actions">${actions}</div>` : ""}
   </article>`;
 }

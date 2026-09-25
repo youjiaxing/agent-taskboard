@@ -24,7 +24,7 @@ page.on("console", (message) => {
 await page.goto(url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector(".project-board");
 
-const issueSection = '.workspace-rail-section[data-workspace-section="issue"]';
+const issueSection = ".issue-detail";
 const waitForRpcResponse = (op, timeout) => page.waitForResponse((response) => {
   try {
     const request = response.request();
@@ -41,6 +41,7 @@ const clickCard = async (locator) => {
 };
 const openRailSection = async (name) => {
   const section = page.locator(`.workspace-rail-section[data-workspace-section="${name}"]`);
+  if (await section.count() === 0) return;
   await section.waitFor({ state: "attached" });
   if (!(await section.evaluate((node) => node.open))) await section.locator("summary").click();
 };
@@ -65,10 +66,9 @@ const clickIssue = async (issueId, timeout) => {
 const focusIssue = async (issueId, expectedTitle, timeout) => {
   const started = Date.now();
   await clickIssue(issueId, timeout);
-  await page.waitForSelector(".focus-workspace-layout", { timeout });
-  await page.waitForSelector("[data-terminal-surface]", { timeout });
+  await page.waitForSelector(".board-shell > .issue-detail", { timeout });
   await page.waitForFunction(
-    (title) => document.querySelector("[data-current-identity]")?.textContent?.trim() === title,
+    (title) => document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes(title),
     expectedTitle,
     { timeout },
   );
@@ -77,12 +77,6 @@ const focusIssue = async (issueId, expectedTitle, timeout) => {
 
 await focusProject(gardenProjectId, "garden");
 await focusIssue("you/garden#1", "garden issue", 30_000);
-const gardenSections = await page.$$eval(".workspace-rail-section", (sections) =>
-  sections.map((section) => section.dataset.workspaceSection),
-);
-if (gardenSections.join(",") !== "actions,issue,runs") {
-  throw new Error(`desktop Issue focus must use the three-section right rail: ${JSON.stringify(gardenSections)}`);
-}
 await page.waitForSelector(`${issueSection} section.issue-document[data-document-state="ready"]`);
 await openRailSection("actions");
 await page.click('button[data-act="edit-issue"]');
@@ -116,12 +110,12 @@ if (
 await page.waitForTimeout(100);
 const identityAfterWrite = await page.evaluate(() => ({
   project: document.querySelector(".project-row.active b")?.textContent?.trim(),
-  selected: document.querySelector("[data-current-identity]")?.textContent?.trim(),
+  selected: document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.replace(/\s+/g, " ").trim(),
   editForm: Boolean(document.querySelector('form[data-act="issue-edit"]')),
 }));
 if (
   identityAfterWrite.project !== "notes"
-  || identityAfterWrite.selected !== "notes issue"
+  || !identityAfterWrite.selected?.includes("notes issue")
   || identityAfterWrite.editForm
 ) {
   throw new Error(`slow write completion rolled back navigation: ${JSON.stringify(identityAfterWrite)}`);

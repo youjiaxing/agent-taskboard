@@ -166,7 +166,7 @@ if (!searchAfterCardFocus.searchFocused) {
 }
 await session.page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
 const scrollRegressionStyle = await session.page.addStyleTag({
-  content: '[data-lane="frontier"] { max-height: 120px; } .workspace-rail-section .detail-scroll { max-height: 180px; }',
+  content: '[data-lane="frontier"] { max-height: 120px; } .board-shell > .issue-detail .detail-scroll { max-height: 180px; }',
 });
 const frontierScrollBeforeFocus = await session.page.$eval('[data-lane="frontier"]', (node) => {
   node.scrollTop = node.scrollHeight;
@@ -177,33 +177,31 @@ await session.page.evaluate(() => {
   document.querySelectorAll(".issue-card-main")[0]?.focus();
   document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 });
-await session.page.waitForSelector(".focus-workspace-layout");
-await session.page.waitForSelector('[data-terminal-surface]');
-await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] .issue-document[data-document-state="ready"]');
-if (await session.page.$(".lanes")) throw new Error("selecting an Issue should enter the focus workspace instead of overlaying the board");
-const initialWorkspaceSections = await session.page.$$eval(".workspace-rail-section", (sections) =>
-  Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
-);
-if (!initialWorkspaceSections.issue || initialWorkspaceSections.actions || initialWorkspaceSections.runs) {
-  throw new Error(`an Issue without an active Run should default to its body section: ${JSON.stringify(initialWorkspaceSections)}`);
-}
-const detailScrollBeforeCollapse = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"] .detail-scroll', (node) => {
-  node.scrollTop = node.scrollHeight;
-  return node.scrollTop;
-});
-if (detailScrollBeforeCollapse <= 0) throw new Error("focus workspace regression needs a scrollable Issue document");
-await session.page.click("button[data-act='toggle-issue']");
-await session.page.waitForFunction(() => !document.querySelector('[data-fixed-panel="right-rail"]'));
-if (!(await session.page.$('[data-terminal-surface]')) || !(await session.page.$("button[data-act='toggle-issue']"))) {
-  throw new Error("hiding the right rail must keep the fixed Terminal and its restore control");
-}
-await session.page.click("button[data-act='toggle-issue']");
-await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open]');
-const detailScrollAfterRestore = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"] .detail-scroll', (node) => node.scrollTop);
-if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
-  throw new Error(`restoring the right rail must preserve Issue scroll: ${detailScrollBeforeCollapse} -> ${detailScrollAfterRestore}`);
-}
-const inspectorHierarchy = await session.page.$eval('.workspace-rail-section[data-workspace-section="issue"]', (node) => ({
+	await session.page.waitForSelector(".project-board");
+	await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+	if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+	  throw new Error("selecting an Issue without an active Run should stay on the Board");
+	}
+	if (await session.page.$(".board-run-history")) {
+	  throw new Error("an Issue without a Run should not render a non-empty Run history section");
+	}
+	const detailScrollBeforeCollapse = await session.page.$eval(".board-shell > .issue-detail .detail-scroll", (node) => {
+	  node.scrollTop = node.scrollHeight;
+	  return node.scrollTop;
+	});
+	if (detailScrollBeforeCollapse <= 0) throw new Error("Board inspector regression needs a scrollable Issue document");
+	await session.page.click("button[data-act='toggle-issue']");
+	await session.page.waitForFunction(() => !document.querySelector('[data-fixed-panel="right-rail"]'));
+	if (await session.page.$("[data-terminal-surface]") || !(await session.page.$("button[data-act='toggle-issue']"))) {
+	  throw new Error("hiding the right rail must keep the Board and its restore control");
+	}
+	await session.page.click("button[data-act='toggle-issue']");
+	await session.page.waitForSelector(".board-shell > .issue-detail");
+	const detailScrollAfterRestore = await session.page.$eval(".board-shell > .issue-detail .detail-scroll", (node) => node.scrollTop);
+	if (Math.abs(detailScrollAfterRestore - detailScrollBeforeCollapse) > 1) {
+	  throw new Error(`restoring the right rail must preserve Issue scroll: ${detailScrollBeforeCollapse} -> ${detailScrollAfterRestore}`);
+	}
+	const inspectorHierarchy = await session.page.$eval(".board-shell > .issue-detail", (node) => ({
   text: node.textContent?.replace(/\s+/g, " ").trim() ?? "",
   commentVisible: Boolean(node.querySelector('form[data-act="issue-comment"]')?.getClientRects().length),
 }));
@@ -214,20 +212,18 @@ for (const internalPhrase of ["属于 / 子票", "挡住它的 / 它挡住的", 
   if (inspectorHierarchy.text.includes(internalPhrase)) throw new Error(`Issue body should remove internal copy: ${internalPhrase}`);
 }
 if (inspectorHierarchy.commentVisible) throw new Error("secondary Issue update forms should stay collapsed until requested");
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
 const frontierScrollAfterReturn = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (Math.abs(frontierScrollAfterReturn - frontierScrollBeforeFocus) > 1) {
-  throw new Error(`returning from focus must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterReturn}`);
+  throw new Error(`opening an Issue inspector must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterReturn}`);
 }
 await session.page.$eval('.issue-card:has(.issue-title:text-is("unparented ready")) .issue-card-main', (node) => node.click());
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
-await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] .issue-document[data-document-state="ready"]');
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+  throw new Error("switching to another Issue without an active Run should stay on the Board");
+}
 const frontierScrollAfterSwitch = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (Math.abs(frontierScrollAfterSwitch - frontierScrollBeforeFocus) > 1) {
-  throw new Error(`switching Issues through focus must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterSwitch}`);
+  throw new Error(`switching Issues through the Board inspector must preserve board scroll: ${frontierScrollBeforeFocus} -> ${frontierScrollAfterSwitch}`);
 }
 await scrollRegressionStyle.evaluate((node) => node.remove());
 
@@ -271,7 +267,7 @@ await session.page.selectOption(".issue-search select[name='state']", "all");
 await submitIssueSearch();
 await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length > 1);
 
-// 标题 / 角色 / 开关筛选 + 列滚动 + 已选 Issue：进入专注工作区再返回必须完全一致
+// 标题 / 角色 / 开关筛选 + 列滚动 + 已选 Issue：打开 Board inspector 后必须完全一致
 const boardRoundTripStyle = await session.page.addStyleTag({ content: '[data-lane="frontier"] { max-height: 90px; }' });
 await session.page.fill("#issue-title-search", "ready");
 await session.page.selectOption(".issue-search select[name='triageRole']", "ready-for-agent");
@@ -294,10 +290,11 @@ const boardRoundTripBefore = await session.page.evaluate(() => {
 });
 if (boardRoundTripBefore.scrollTop <= 0) throw new Error("board round trip fixture needs a scrollable filtered lane");
 await session.clickCard(session.page.locator('[data-lane="frontier"] .issue-card .issue-card-main').first());
-await session.page.waitForSelector(".focus-workspace-layout");
-const roundTripIssue = await session.page.$eval("[data-current-identity]", (node) => node.textContent?.trim());
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+  throw new Error("a filtered Issue without an active Run should stay on the Board");
+}
+const roundTripIssue = await session.page.$eval(".issue-card.sel .issue-title", (node) => node.textContent?.trim());
 const boardRoundTripAfter = await session.page.evaluate(() => ({
   title: document.querySelector("#issue-title-search")?.value ?? "",
   triageRole: document.querySelector(".issue-search select[name='triageRole']")?.value ?? "",
@@ -314,10 +311,10 @@ if (
   || Math.abs(boardRoundTripAfter.scrollTop - boardRoundTripBefore.scrollTop) > 1
   || boardRoundTripAfter.cards.join("|") !== boardRoundTripBefore.cards.join("|")
 ) {
-  throw new Error(`returning from the focus workspace must restore filters, lane scroll and the Issue set: ${JSON.stringify({ boardRoundTripBefore, boardRoundTripAfter })}`);
+  throw new Error(`opening the Board inspector must preserve filters, lane scroll and the Issue set: ${JSON.stringify({ boardRoundTripBefore, boardRoundTripAfter })}`);
 }
 if (!roundTripIssue || boardRoundTripAfter.selected !== roundTripIssue || !boardRoundTripAfter.inspector.includes(roundTripIssue)) {
-  throw new Error(`returning from the focus workspace must keep the selected Issue: ${JSON.stringify({ roundTripIssue, boardRoundTripAfter })}`);
+  throw new Error(`the Board inspector must keep the selected Issue: ${JSON.stringify({ roundTripIssue, boardRoundTripAfter })}`);
 }
 await boardRoundTripStyle.evaluate((node) => node.remove());
 await session.page.fill("#issue-title-search", "");
@@ -666,27 +663,27 @@ const boardStateBeforeSettings = await session.page.evaluate(() => {
 });
 if (boardStateBeforeSettings.scrollTop <= 0) throw new Error("settings return fixture needs non-zero board scroll");
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
-await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] [data-document-state="ready"]');
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+  throw new Error("the settings return fixture Issue should stay on the Board");
+}
 await session.page.click("button[data-act='settings']");
 await session.page.waitForSelector(".settings-page");
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.locator("button[data-act='return-page']").evaluate((node) => node.click());
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
 const focusStateAfterSettings = await session.page.evaluate(() => ({
-  title: document.querySelector("[data-current-identity]")?.textContent?.trim(),
-  issueOpen: document.querySelector('.workspace-rail-section[data-workspace-section="issue"]')?.open,
+  title: document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.replace(/\s+/g, " ").trim(),
+  inspectorOpen: Boolean(document.querySelector(".board-shell > .issue-detail")),
 }));
-if (focusStateAfterSettings.title !== "child ready" || !focusStateAfterSettings.issueOpen) {
-  throw new Error(`settings return must restore the focused Issue workspace: ${JSON.stringify(focusStateAfterSettings)}`);
+if (!focusStateAfterSettings.title?.includes("child ready") || !focusStateAfterSettings.inspectorOpen) {
+  throw new Error(`settings return must restore the Board Issue inspector: ${JSON.stringify(focusStateAfterSettings)}`);
 }
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
 const boardStateAfterSettings = await session.page.evaluate(() => ({
   title: document.querySelector("#issue-title-search")?.value,
   scrollTop: document.querySelector('[data-lane="frontier"]')?.scrollTop ?? 0,
 }));
 if (JSON.stringify(boardStateAfterSettings) !== JSON.stringify(boardStateBeforeSettings)) {
-  throw new Error(`returning from settings through focus must restore filter and scroll: ${JSON.stringify({ boardStateBeforeSettings, boardStateAfterSettings })}`);
+  throw new Error(`returning from settings must restore filter and scroll: ${JSON.stringify({ boardStateBeforeSettings, boardStateAfterSettings })}`);
 }
 await settingsReturnStyle.evaluate((node) => node.remove());
 await session.page.fill("#issue-title-search", "");
@@ -809,9 +806,11 @@ const preserveCachedDocumentDuringRefresh = async (route) => {
 };
 await session.page.route("**/*", preserveCachedDocumentDuringRefresh);
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.waitForSelector(".board-shell > .issue-detail");
+if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+  throw new Error("stale-document Issue should stay on the Board");
+}
 await session.page.waitForSelector('[data-document-state="stale"] .issue-markdown:has-text("Cached issue body")');
-await session.page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 if (await session.page.$('button[data-act="edit-issue"]')) {
   throw new Error("Issue editing must stay unavailable for a stale read-only document");
 }
@@ -871,7 +870,7 @@ if (imageLabel !== "the Tracker image label" || await session.page.$(".issue-mar
   throw new Error(`Markdown images must stay inert with readable labels, got ${JSON.stringify(imageLabel)}`);
 }
 const sectionOrder = await session.page.evaluate(() => {
-  const body = document.querySelector('.workspace-rail-section[data-workspace-section="issue"]');
+  const body = document.querySelector(".board-shell > .issue-detail");
   const documentTop = body?.querySelector(".issue-document")?.getBoundingClientRect().top ?? 0;
   const family = body?.querySelector(".detail-block")?.getBoundingClientRect().top ?? 0;
   return { document: documentTop, family };
@@ -893,28 +892,27 @@ if ((await detailHide.count()) !== 1 || (await detailHide.getAttribute("aria-lab
 }
 await detailHide.click();
 await session.page.waitForFunction(() => !document.querySelector('[data-fixed-panel="right-rail"]'));
-if (!(await session.page.$('[data-terminal-surface="empty"]'))) throw new Error("hiding Issue details must keep the fixed Terminal empty state");
+if (await session.page.$('[data-terminal-surface]') || !(await session.page.$(".lanes"))) throw new Error("hiding Issue details must keep the Board visible");
 const restoreDetail = session.page.locator('button[data-act="toggle-issue"][aria-label="显示详情"]');
 if ((await restoreDetail.count()) !== 1 || (await restoreDetail.locator("svg").count()) !== 1) {
   throw new Error("collapsed Issue details should keep an icon-only restore control in chrome");
 }
 await restoreDetail.click();
 await session.page.waitForSelector('[data-fixed-panel="right-rail"]');
-await session.page.click('.workspace-rail-section[data-workspace-section="actions"] button[data-act="open-issue"]');
+await session.page.click('.board-shell > .issue-detail button[data-act="open-issue"]');
 const openedDetailUrl = await session.page.evaluate(() => window.__OPENED_URLS__.at(-1));
 if (openedDetailUrl !== "https://github.com/you/garden/issues/2") {
   throw new Error(`details should open the GitHub Issue, got ${openedDetailUrl}`);
 }
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
 const beforeFrontier = await session.page.$$eval('[data-lane="frontier"] .issue-card', (nodes) => nodes.length);
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
 await session.page.click(".name-btn:has-text('#1 parent')");
-await session.page.waitForFunction(() => document.querySelector("[data-current-identity]")?.textContent?.trim() === "parent");
-if (await session.page.$(".lanes")) throw new Error("clicking a parent link should stay in the focus workspace without filtering the board");
+await session.page.waitForSelector(".board-shell > .issue-detail .detail-hd:has-text('parent')");
+if (await session.page.$(".focus-workspace-layout") || !(await session.page.$(".lanes"))) {
+  throw new Error("clicking a parent link should stay in the Board without filtering the board");
+}
 await session.page.click("button:has-text('只看这些子票')");
-await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector("button:has-text('清除过滤')");
 const filtered = await session.page.$$eval('[data-lane="frontier"] .issue-card .issue-title', (nodes) => nodes.map((node) => node.textContent));
 if (filtered.join(",") !== "child ready") {

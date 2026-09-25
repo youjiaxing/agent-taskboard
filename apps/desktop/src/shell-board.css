@@ -140,6 +140,28 @@
 
 .issue-card-actions button { padding: var(--space-2) var(--space-6); font-size: var(--font-size-xs); }
 
+.issue-run-action {
+  display: block;
+  margin: 0 var(--space-8) var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-run-preview {
+  max-height: 72px;
+  margin: 0 var(--space-8) var(--space-8);
+  padding: var(--space-6);
+  overflow: hidden;
+  color: var(--terminal-text-muted);
+  background: var(--terminal-canvas);
+  border-radius: var(--radius-sm);
+  font: var(--font-size-xs)/1.35 var(--font-family-mono);
+  white-space: pre-wrap;
+}
+
 .issue-card:hover { border-color: var(--color-border); }
 
 .issue-card.sel { border-color: var(--color-border-strong); background: var(--color-surface); box-shadow: 0 0 0 1px var(--color-border-strong); }
@@ -154,6 +176,8 @@
 
 .issue-card.recently-completed.subdued:hover,
 .issue-card.recently-completed.subdued:focus-within { border-color: var(--color-border-strong); }
+
+.board-run-history { margin-top: var(--space-12); }
 
 @media (max-width: 899.98px) {
   .board-shell { display: flex; flex-direction: column; }

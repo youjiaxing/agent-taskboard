@@ -58,6 +58,13 @@ impl HostKernel {
             .map(|run| {
                 let mut run = run.clone();
                 run.telemetry = usage::run_telemetry(&self.usage_samples, &run.id);
+                if run.is_active() {
+                    if let Some(session) = self.live.get(&run.id) {
+                        let output = session.recent_output();
+                        let tail = output.chars().count().saturating_sub(1200);
+                        run.recent_output = output.chars().skip(tail).collect();
+                    }
+                }
                 run
             })
             .collect()
