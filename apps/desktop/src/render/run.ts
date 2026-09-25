@@ -160,11 +160,12 @@ export function launchField(
   const awaiting = fieldAwaitsDiscovery(field, values, discoveryPending);
   const pendingHint = awaiting && field.id === "model" && discoveryPending ? discoveryPending : undefined;
   if (field.kind === "boolean") {
-    return checkbox({
+    const control = checkbox({
       label: field.label,
       checked: value === "true",
       attributes: { "data-launch": field.id },
     });
+    return `${control}${field.description ? `<p class="hint">${escapeHtml(field.description)}</p>` : ""}`;
   }
   const busy = awaiting ? ` data-launch-discovery="pending" aria-busy="true"` : "";
   const options = field.kind === "select" ? launchFieldOptions(field, values) : [];
@@ -174,7 +175,7 @@ export function launchField(
     return `<div class="ui-form-field field"${busy}>
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
       <select id="${id}" class="ui-select" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
-        ${launchSelectOptions(options, value)}
+        ${launchSelectOptions(options, value, field.optionLabels)}
       </select>
       ${textInput({
         value: customValue,
@@ -183,13 +184,15 @@ export function launchField(
         className: "launch-custom-value",
         attributes: { "data-launch-custom": field.id, hidden: customHidden },
       })}
+      ${field.description ? `<p class="hint">${escapeHtml(field.description)}</p>` : ""}
       ${pendingHint ? `<p class="hint" data-launch-discovery="pending">${escapeHtml(pendingHint)}</p>` : ""}
     </div>`;
   }
+  const hint = [field.description, pendingHint].filter(Boolean).join(" ");
   const control = field.kind === "multiline"
     ? textArea({ id, value, rows: 3, attributes: { "data-launch": field.id } })
     : textInput({ id, value, required: field.required, attributes: { "data-launch": field.id } });
-  return `<div${busy}>${formField({ id, label: field.label, required: field.required, hint: pendingHint, control })}</div>`;
+  return `<div${busy}>${formField({ id, label: field.label, required: field.required, hint, control })}</div>`;
 }
 
 export const CUSTOM_VALUE = "__custom__";
@@ -208,14 +211,21 @@ export function launchSelectState(options: string[], value: string): { customVal
   return { customValue: known || customEntry ? "" : value, customEntry };
 }
 
-export function launchSelectOptions(options: string[], value: string): string {
+export function launchSelectOptions(
+  options: string[],
+  value: string,
+  labels: Record<string, string> = {},
+): string {
   const customEntry = value === CUSTOM_VALUE;
   const known = options.includes(value);
   const placeholder = value ? "" : `<option value="" disabled selected>${escapeHtml(selectPlaceholderLabel())}</option>`;
   const current = value && !customEntry && !known
     ? `<option value="${escapeHtml(value)}" selected>${escapeHtml(value)} · ${escapeHtml(currentValueLabel())}</option>`
     : "";
-  return `${placeholder}${current}${options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}<option value="${CUSTOM_VALUE}" ${customEntry ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
+  return `${placeholder}${current}${options.map((option) => {
+    const label = labels[option] ? `${option} · ${labels[option]}` : option;
+    return `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("")}<option value="${CUSTOM_VALUE}" ${customEntry ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
 }
 
 export function selectPlaceholderLabel(): string {

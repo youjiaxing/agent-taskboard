@@ -74,6 +74,65 @@ impl AgentPort for CodexAdapter {
         ]
     }
 
+    fn localize_field(&self, field: &mut AgentField, language: Language) {
+        match (language, field.id.as_str()) {
+            (Language::ZhCn, "approval") => {
+                field.label = "approval（确认策略）".into();
+                field.description =
+                    "决定越过沙箱边界时是否暂停询问；sandbox 决定技术边界，approval 决定是否先问。"
+                        .into();
+                field.option_labels = BTreeMap::from([
+                    ("untrusted".into(), "不受信任".into()),
+                    ("on-request".into(), "需要时询问".into()),
+                    ("never".into(), "不询问".into()),
+                ]);
+            }
+            (Language::En, "approval") => {
+                field.label = "approval (confirmation policy)".into();
+                field.description = "Controls whether Codex pauses to ask before crossing a sandbox boundary; sandbox sets the boundary, approval controls whether to ask first.".into();
+                field.option_labels = BTreeMap::from([
+                    ("untrusted".into(), "untrusted".into()),
+                    ("on-request".into(), "ask when needed".into()),
+                    ("never".into(), "never ask".into()),
+                ]);
+            }
+            (Language::ZhCn, "profile") => {
+                field.label = "profile（配置档）".into();
+                field.description =
+                    "填写本机 Codex CLI 能识别的 profile 名称。Taskboard 只会将它作为 --profile 原样传递，不读取或校验 profile；留空则不传。"
+                        .into();
+            }
+            (Language::En, "profile") => {
+                field.label = "profile (configuration profile)".into();
+                field.description = "Enter a profile name recognized by the local Codex CLI. Taskboard only passes it as --profile and does not read or validate the profile; leave it blank to omit it.".into();
+            }
+            (Language::ZhCn, "sandbox") => {
+                field.label = "sandbox（命令沙箱）".into();
+                field.description =
+                    "控制 Codex 执行命令时的文件系统和网络边界。它不是 git worktree，也不隔离多个 Run。"
+                        .into();
+                field.option_labels = BTreeMap::from([
+                    ("read-only".into(), "只读".into()),
+                    ("workspace-write".into(), "可写工作区".into()),
+                    ("danger-full-access".into(), "完全访问，风险最高".into()),
+                ]);
+            }
+            (Language::En, "sandbox") => {
+                field.label = "sandbox (command sandbox)".into();
+                field.description = "Controls the file-system and network boundary for commands run by Codex. It is not a git worktree and does not isolate multiple Runs.".into();
+                field.option_labels = BTreeMap::from([
+                    ("read-only".into(), "read-only".into()),
+                    ("workspace-write".into(), "workspace writable".into()),
+                    (
+                        "danger-full-access".into(),
+                        "full access, highest risk".into(),
+                    ),
+                ]);
+            }
+            _ => {}
+        }
+    }
+
     fn seed_config(&self) -> BTreeMap<String, String> {
         BTreeMap::from([
             ("model".into(), "gpt-5.1".into()),

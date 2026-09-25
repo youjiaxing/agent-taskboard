@@ -145,6 +145,8 @@ fn field(id: &str, folded: bool) -> AgentField {
         kind: AgentFieldKind::Text,
         options: Vec::new(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required: false,
         folded,
     }

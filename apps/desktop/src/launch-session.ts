@@ -101,7 +101,7 @@ export function refreshLaunchFieldOptions(): void {
     const options = launchFieldOptions(field, ui.launchDraft.values);
     const current = ui.launchDraft.values[field.id] ?? "";
     const { customValue, customEntry } = launchSelectState(options, current);
-    select.innerHTML = launchSelectOptions(options, current);
+    select.innerHTML = launchSelectOptions(options, current, field.optionLabels);
     select.value = customEntry ? CUSTOM_VALUE : current;
     const custom = ui.app?.querySelector<HTMLInputElement>(
       `[data-launch-custom="${CSS.escape(field.id)}"]`,
