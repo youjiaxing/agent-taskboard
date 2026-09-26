@@ -163,7 +163,9 @@ jobs:
     if: needs.prepare.outputs.publish == 'true'
     name: 测试
     needs: prepare
-    runs-on: macos-latest
+    # Keep the browser release gate on a known image; macos-latest currently
+    # follows the rolling macOS 26 arm64 image.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
