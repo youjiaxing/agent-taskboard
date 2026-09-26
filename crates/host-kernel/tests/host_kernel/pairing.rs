@@ -364,7 +364,15 @@ fn remote_client_projects_run_recovery_and_can_forward_the_retry() {
     let client_dir = tempfile::tempdir().unwrap();
     let mut host_req = boot_req(host_dir.path());
     host_req.host_display_name = "Mini".into();
-    let initial = HostKernel::boot(host_req.clone()).unwrap();
+    let mut initial = HostKernel::boot(host_req.clone()).unwrap();
+    let project_dir = host_dir.path().join("work/remote-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let project_id = crate::common::register_project(
+        &mut initial,
+        "remote-project",
+        &project_dir,
+        "acme/remote",
+    );
     let runs_path = initial.snapshot().data.host_dir.join("runs.json");
     drop(initial);
     std::fs::write(&runs_path, br#"[{"id":"truncated""#).unwrap();
@@ -417,7 +425,15 @@ fn remote_client_projects_run_recovery_and_can_forward_the_retry() {
 
     std::fs::write(
         &runs_path,
-        br#"[{"id":"run-remote","projectId":"project-remote","agentId":"codex","agentName":"Codex","unbound":true,"status":"ended"}]"#,
+        serde_json::to_vec(&serde_json::json!([{
+            "id": "run-remote",
+            "projectId": project_id,
+            "agentId": "codex",
+            "agentName": "Codex",
+            "unbound": true,
+            "status": "ended"
+        }]))
+        .unwrap(),
     )
     .unwrap();
     let recovered = client
