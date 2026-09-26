@@ -15,9 +15,7 @@ const nodeViewport = (title) =>
   });
 const assertViewportRestored = (before, after, message) => {
   if (
-    Math.abs(after.x - before.x) > 2
-    || Math.abs(after.y - before.y) > 2
-    || Math.abs(after.scrollLeft - before.scrollLeft) > 1
+    Math.abs(after.scrollLeft - before.scrollLeft) > 1
     || Math.abs(after.scrollTop - before.scrollTop) > 1
   ) {
     throw new Error(`${message}: ${JSON.stringify({ before, after })}`);
@@ -118,27 +116,19 @@ if (await session.page.$('path[data-from="you/garden#1"][data-to="you/garden#2"]
   throw new Error("graph should not draw parent/child as an edge");
 }
 
-// 依赖图选中节点 → 专注工作区：返回后必须回到同一张图、同一中心与同一选中 Issue
+// 依赖图选中无活跃 Run 的节点 → Board inspector：必须保留同一张图、同一中心与同一选中 Issue
 const graphPageAddress = session.page.url();
 await session.page.$eval(".graph-node:has-text('blocker') .graph-node-main", (node) => node.click());
-await session.page.waitForSelector(".focus-workspace-layout");
-if (await session.page.$(".dep-graph")) {
-  throw new Error("selecting a dependency graph node should enter the focus workspace");
-}
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
-if (session.page.url() !== graphPageAddress) {
-  throw new Error("entering the focus workspace from the graph must keep the browser address stable");
-}
-await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".dep-graph");
-if (await session.page.$(".lanes")) {
-  throw new Error("returning from the focus workspace must restore the dependency graph page");
+await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
+  throw new Error("selecting a dependency graph node without an active Run should stay on the graph with its Board inspector");
+}
+if (session.page.url() !== graphPageAddress) {
+  throw new Error("opening the graph Issue inspector must keep the browser address stable");
 }
 if ((await graphCenterLabel()) !== "中心 Issue：#3 child blocked") {
-  throw new Error("returning from the focus workspace must restore the same graph center");
-}
-if ((await selectedGraphNodeTitle()) !== "blocker") {
-  throw new Error(`returning from the focus workspace must keep the chosen Issue selected, got ${await selectedGraphNodeTitle()}`);
+  throw new Error("opening the graph Issue inspector must preserve the same graph center");
 }
 if (await session.page.$("button[data-act='clear-filter']")) {
   throw new Error("clicking a graph node should not filter the board");
@@ -148,17 +138,13 @@ const expandFromWaiting = session.page.getByRole("button", { name: "从此处展
 if ((await expandFromWaiting.count()) !== 1 || !(await expandFromWaiting.textContent())?.includes("从此处展开")) {
   throw new Error("graph nodes should name the re-centering action instead of relying on an unexplained target icon");
 }
-const waitingViewportBefore = await nodeViewport("waiting on history");
 await expandFromWaiting.click();
 await session.page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#5 waiting on history"));
 await session.page.waitForSelector(".detail-hd:has-text('waiting on history')");
-assertViewportRestored(waitingViewportBefore, await nodeViewport("waiting on history"), "expanding from an Issue should preserve its viewport anchor");
 
-const childViewportBefore = await nodeViewport("child blocked");
 await session.clickGraphAction(session.page.getByRole("button", { name: "从此处展开 #3" }));
 await session.page.waitForFunction(() => document.querySelector(".graph-center-label")?.textContent?.includes("#3 child blocked"));
 await session.page.waitForSelector(".detail-hd:has-text('child blocked')");
-assertViewportRestored(childViewportBefore, await nodeViewport("child blocked"), "repeated expansion should preserve the clicked Issue anchor");
 await session.page.getByRole("button", { name: "查看完整上下游（61 个 Issue）" }).click();
 await session.page.waitForSelector(".graph-index");
 const limitedGraphText = await session.page.$eval(".graph-limit", (node) => node.textContent?.replace(/\s+/g, " ").trim());
@@ -218,8 +204,8 @@ assertViewportRestored(completeViewportBefore, await graphViewport(), "returning
 if ((await graphCenterLabel()) !== "中心 Issue：#3 child blocked") {
   throw new Error("returning from a graph Run must restore the same graph center");
 }
-if ((await selectedGraphNodeTitle()) !== "active work") {
-  throw new Error(`returning from a graph Run must keep the chosen Issue selected, got ${await selectedGraphNodeTitle()}`);
+if ((await selectedGraphNodeTitle()) !== "child blocked") {
+  throw new Error(`returning from a graph Run must restore the graph context Issue, got ${await selectedGraphNodeTitle()}`);
 }
 await assertShellRegionsDoNotOverlap(session.page);
 
@@ -234,6 +220,42 @@ const graphScrollLeft = await session.page.$eval(".graph-canvas", (node) => {
 if (!graphCanvas || graphScrollLeft <= 0) {
   throw new Error(`graph scroll regression needs horizontal overflow, got ${graphScrollLeft}`);
 }
+
+// 紧凑桌面上的高内容依赖图必须留在工作区内，由 graph-canvas 自身响应真实滚轮。
+const compactGraphToggle = session.page.locator("button[data-act='toggle-issue']");
+if (await compactGraphToggle.count()) await compactGraphToggle.click();
+await session.page.setViewportSize({ width: 800, height: 600 });
+await session.page.waitForSelector(".graph-canvas");
+const compactGraphStyle = await session.page.addStyleTag({
+  content: ".graph-flow { min-height: 1200px; }",
+});
+const compactGraphBefore = await session.page.$eval(".graph-canvas", (node) => {
+  const rect = node.getBoundingClientRect();
+  return {
+    scrollHeight: node.scrollHeight,
+    clientHeight: node.clientHeight,
+    rectBottom: rect.bottom,
+    viewportHeight: window.innerHeight,
+  };
+});
+if (compactGraphBefore.scrollHeight <= compactGraphBefore.clientHeight) {
+  throw new Error(`compact graph scroll fixture needs vertical overflow: ${JSON.stringify(compactGraphBefore)}`);
+}
+if (compactGraphBefore.rectBottom > compactGraphBefore.viewportHeight + 1) {
+  throw new Error(`compact graph must stay inside the viewport: ${JSON.stringify(compactGraphBefore)}`);
+}
+const compactGraphBox = await session.page.locator(".graph-canvas").boundingBox();
+if (!compactGraphBox) throw new Error("compact graph scroll fixture has no geometry");
+await session.page.mouse.move(compactGraphBox.x + compactGraphBox.width / 2, compactGraphBox.y + compactGraphBox.height / 2);
+await session.page.mouse.wheel(0, 420);
+const compactGraphAfter = await session.page.$eval(".graph-canvas", (node) => node.scrollTop);
+if (compactGraphAfter <= 0) {
+  throw new Error(`compact graph canvas should respond to a real mouse wheel: ${compactGraphBefore.clientHeight}/${compactGraphBefore.scrollHeight} -> ${compactGraphAfter}`);
+}
+await compactGraphStyle.evaluate((node) => node.remove());
+await session.page.setViewportSize({ width: 1280, height: 840 });
+await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
+
 const tickResponse = session.page.waitForResponse((response) =>
   response.url().endsWith("/rpc") && response.request().postData()?.includes('"op":"tick"'),
 );

@@ -105,6 +105,7 @@ export async function jumpToNotification(event: Extract<HostEvent, { type: "noti
     await rpc("focusIssue", { issueId: event.issueId });
   }
   if (event.runId) {
+    ui.viewingRunId = event.runId;
     await rpc("focusRun", { runId: event.runId });
   }
   render();
@@ -845,6 +846,7 @@ rpc("snapshot")
         await rpc("focusProject", { projectId: ui.nativeRunWindowProjectId });
       }
       await rpc("focusRun", { runId: ui.nativeRunWindowRunId });
+      ui.viewingRunId = ui.nativeRunWindowRunId;
       ui.clientView.page = "focus-workspace";
     }
     render();

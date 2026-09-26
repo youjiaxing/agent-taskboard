@@ -29,7 +29,7 @@ await page.waitForSelector("textarea[data-field='openingText']");
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForSelector(".launch-sheet [role='alert']");
 const emptyOpeningError = (await page.locator(".launch-sheet [role='alert']").textContent())?.trim() ?? "";
-if (!emptyOpeningError.includes("请填写要 Agent 做什么。")) {
+if (!emptyOpeningError.includes("请填写任务说明。")) {
   throw new Error(`empty opening text should show the Host validation error, got ${JSON.stringify(emptyOpeningError)}`);
 }
 await page.fill("textarea[data-field='openingText']", "Issue 115 browser supplement");
@@ -120,10 +120,12 @@ if (afterWait < beforeWait - 2) {
 
 await page.click(".launch-sheet button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-await page.waitForSelector(".run-dock");
-await page.click(".run-dock button[data-act='stop-run']");
+await page.waitForSelector(".side .run-row");
+await page.locator(".side .run-row").last().locator(".run-main").click();
+await page.waitForSelector(".lifted-terminal");
+await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
-await page.waitForFunction(() => !document.querySelector(".run-dock"));
+await page.waitForFunction(() => !document.querySelector(".lifted-terminal"));
 
 await page.click("button[data-act='new-run']");
 await page.waitForSelector("textarea[data-field='openingText']");

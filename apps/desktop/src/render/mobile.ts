@@ -4,7 +4,7 @@ import type { MobileWorkspaceSection, RunSummary, ShellCopy, Snapshot } from "..
 import type { StartupCopy } from "../startup-copy";
 import { appearancePreferenceLabel } from "../startup-copy";
 import { ui } from "../ui";
-import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, mobileOutputKey, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, issueRuns, mobileOutputKey, workspaceRun } from "../view-helpers";
 import { boardLanes, boardUnavailable, issueDetail, issueSearch, refreshBar, workspaceRailLabels, workspaceRunHistory } from "./board";
 import { loopbackNotice } from "./run";
 import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
@@ -161,13 +161,13 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
     ["runs", labels.runs],
   ];
   const section = ui.mobileWorkspaceSection;
-  const issueRuns = issue ? (snap.runs ?? []).filter((candidate) => candidate.issueId === issue.id) : [];
+  const runs = issue ? issueRuns(snap, issue.id) : [];
   const panel = section === "issue"
     ? issue
       ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { dependencyGraph: false })}</aside>`
       : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`
     : section === "runs"
-      ? (issue ? workspaceRunHistory(copy, issueRuns, { organizationSnapshot: snap, organizationMode: "menu" }) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
+      ? (issue ? workspaceRunHistory(copy, runs, { organizationSnapshot: snap, organizationMode: "menu", currentRunId: workspaceRun(snap)?.id, action: "view-issue-run" }) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
       : mobileTerminalPanel(copy, snap, run);
   return `<section class="mobile-workspace-view">
     ${ui.mobileProjectHistoryRunOpen

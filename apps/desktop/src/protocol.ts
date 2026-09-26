@@ -200,6 +200,8 @@ export type ShellCopy = {
   startRunPending: string;
   switchAgent: string;
   pickAgent: string;
+  availableAgents: string;
+  unavailableAgents: string;
   noAgentSelected: string;
   nextStep: string;
   launchTitle: string;
@@ -675,6 +677,8 @@ export type AgentField = {
     optionsByValue: Record<string, string[]>;
     defaultsByValue?: Record<string, string>;
   } | null;
+  description?: string;
+  optionLabels?: Record<string, string>;
   required: boolean;
   folded: boolean;
 };
@@ -772,8 +776,6 @@ export type LaunchDraft = {
   agentId: string;
   values: Record<string, string>;
   openingText: string;
-  intentId: string;
-  custom: boolean;
 };
 
 export type RunStatus = "starting" | "running" | "ended";

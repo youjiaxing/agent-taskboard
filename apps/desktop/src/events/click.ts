@@ -1,7 +1,7 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
-import { captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory, syncReturnPointNavigation } from "../view-helpers";
+import { activeRunForIssue, captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, expectedOpening, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
@@ -137,6 +137,7 @@ export async function returnToPreviousPage(): Promise<void> {
   } else if (returnPoint.page === "usage") {
     await rpc("openUsage");
   } else if (returnPoint.page === "focus-workspace" && returnPoint.runId) {
+    ui.viewingRunId = returnPoint.runId;
     await rpc("focusRun", { runId: returnPoint.runId });
   } else {
     if (ui.snapshot.usageOpen) await rpc("closeUsage");
@@ -787,6 +788,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "continue-run" && target.dataset.id) {
     if (desktopRunWritesBlocked()) return;
     await rpc("continueRun", { issueId: target.dataset.id });
+    ui.viewingRunId = activeRunForIssue(ui.snapshot, target.dataset.id)?.id ?? "";
     render();
     return;
   }
@@ -830,18 +832,6 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     void completeDeferredLaunchDiscovery(form.projectId, issueId, agentId);
     return;
   }
-  if (act === "intent") {
-    if (!ui.launchDraft || !ui.snapshot.launchForm) return;
-    const intentId = target.dataset.id ?? "";
-    ui.launchDraft.intentId = intentId;
-    ui.launchDraft.custom = false;
-    ui.launchDraft.openingText = expectedOpening(ui.snapshot.launchForm, ui.launchDraft);
-    render();
-    return;
-  }
-  if (act === "intent-custom") {
-    return;
-  }
   if (act === "toggle-folded") {
     ui.launchFolded = !ui.launchFolded;
     return;
@@ -851,8 +841,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     const fromProjectHistory = mobileClient() && Boolean(target.closest("[data-run-history-scope='project']"));
     enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
+    ui.viewingRunId = target.dataset.id;
     await rpc("focusRun", { runId: target.dataset.id });
-    if (ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     if (!fromProjectHistory && run?.issueId && ui.snapshot.board?.selected?.id === run.issueId) {
       await loadSelectedIssueDocument();
     }
@@ -865,13 +855,31 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
+  if (act === "view-issue-run" && target.dataset.id) {
+    const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
+    const issueId = ui.snapshot.board?.selected?.id;
+    if (!run || !issueId || run.issueId !== issueId) return;
+    enterPrimaryPage("focus-workspace", ui.snapshot);
+    ui.clientView.panels.rightSide = "rail";
+    ui.viewingRunId = run.id;
+    await rpc("focusRun", { runId: run.id });
+    await loadSelectedIssueDocument();
+    if (mobileClient()) {
+      ui.mobileWorkspaceSection = "terminal";
+      ui.mobileRunHistoryScope = "issue";
+      ui.mobileProjectHistoryRunOpen = false;
+      ui.mobileLiveTerminal = false;
+    }
+    render();
+    return;
+  }
   if (act === "open-restored-run" && target.dataset.id) {
     const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
     if (!run) return;
     enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
+    ui.viewingRunId = run.id;
     await rpc("focusRun", { runId: run.id });
-    syncReturnPointNavigation();
     render();
     return;
   }
@@ -928,6 +936,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "open-run-usage" && target.dataset.id) {
     enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
+    ui.viewingRunId = target.dataset.id;
     await rpc("openRunFromUsage", { runId: target.dataset.id });
     render();
     return;
@@ -1371,16 +1380,29 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-issue" && target.dataset.id) {
-    const enterWorkspace = ui.clientView.page === "focus-workspace"
-      || Boolean(target.closest(".issue-card-main, .graph-node-main, .graph-index-main"));
-    if (enterWorkspace) enterPrimaryPage("focus-workspace", ui.snapshot);
+    const wasFocusWorkspace = ui.clientView.page === "focus-workspace";
+    const enterFromBoard = !wasFocusWorkspace
+      && Boolean(target.closest(".issue-card-main, .graph-node-main, .graph-index-main"));
+    const previousPage = ui.clientView.page;
+    const previousReturnPoint = ui.clientView.returnPoint;
+    const previousReturnHistory = [...ui.returnPointHistory];
+    if (enterFromBoard) enterPrimaryPage("focus-workspace", ui.snapshot);
     ui.clientView.panels.rightSide = "rail";
     await rpc("focusIssue", { issueId: target.dataset.id });
-    const run = workspaceRun(ui.snapshot);
-    if (enterWorkspace && run && (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run")) {
-      await rpc("focusRun", { runId: run.id });
+    const run = activeRunForIssue(ui.snapshot, target.dataset.id);
+    if (enterFromBoard && !run && !mobileClient()) {
+      ui.clientView.page = previousPage;
+      ui.clientView.returnPoint = previousReturnPoint;
+      ui.returnPointHistory = previousReturnHistory;
+      ui.viewingRunId = "";
+    } else if (run) {
+      ui.viewingRunId = run.id;
+      if (ui.snapshot.focusedRunId !== run.id || ui.snapshot.workspaceView !== "run") {
+        await rpc("focusRun", { runId: run.id });
+      }
+    } else if (wasFocusWorkspace) {
+      ui.viewingRunId = "";
     }
-    if (enterWorkspace && ui.clientView.page === "focus-workspace") syncReturnPointNavigation();
     await loadSelectedIssueDocument();
     if (mobileClient()) {
       ui.mobileWorkspaceSection = "issue";

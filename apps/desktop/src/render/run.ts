@@ -5,7 +5,7 @@ import { focusedHostIsLocal, prefillHint } from "../launch-session";
 import { launchFormKey } from "../form-keys";
 import { startupCopy } from "../startup-copy";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, checkbox, formField, notice, optionGroup, textArea, textInput } from "../components/primitives";
+import { button, checkbox, formField, notice, textArea, textInput } from "../components/primitives";
 import { ui } from "../ui";
 import { runPersistenceWritesBlocked } from "./run-organization";
 
@@ -17,70 +17,71 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   if (!form.skipAgentPicker) {
     const selected = form.agents.find((agent) => agent.id === ui.launchPickerAgentId);
     const selection = selected ? `${copy.pickAgent}：${selected.name}` : copy.noAgentSelected;
-    const body = `<div class="agent-picks">
-      ${form.agents.map((agent) => `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
+    const availableAgents = form.agents.filter((agent) => agent.installed);
+    const unavailableAgents = form.agents.filter((agent) => !agent.installed);
+    const renderAgent = (agent: typeof form.agents[number]) => {
+      const reasonId = `agent-reason-${agent.id}`;
+      return `<div class="agent-choice ${agent.installed ? "" : "agent-choice-unavailable"}">
         ${button({
           id: "select-agent",
           label: agent.name,
           disabled: !agent.installed,
           pressed: agent.id === ui.launchPickerAgentId,
           data: { id: agent.id },
-        }, { variant: agent.id === ui.launchPickerAgentId ? "primary" : "secondary" })}
-        ${agent.installed || !agent.unavailableReason ? "" : notice({ status: "danger", message: agent.unavailableReason })}
-      </div>`).join("")}
-    </div>
-    <p class="hint agent-selection" aria-live="polite">${escapeHtml(selection)}</p>`;
-    const actions = `${dialogDismissButton(copy.cancel)}${dialogActionButton({
+        }, {
+          variant: "secondary",
+          className: "agent-choice-button",
+          attributes: {
+            "data-agent-mark": agent.name.slice(0, 1).toUpperCase(),
+            "aria-describedby": !agent.installed && agent.unavailableReason ? reasonId : undefined,
+          },
+        })}
+        ${agent.installed || !agent.unavailableReason
+          ? ""
+          : `<p id="${escapeHtml(reasonId)}" class="agent-choice-reason">${escapeHtml(agent.unavailableReason)}</p>`}
+      </div>`;
+    };
+    const body = `<div class="agent-picker">
+      ${availableAgents.length > 0 ? `<section class="agent-picker-group" aria-labelledby="available-agents-title">
+        <h3 id="available-agents-title">${escapeHtml(copy.availableAgents)}</h3>
+        <div class="agent-picks">${availableAgents.map(renderAgent).join("")}</div>
+      </section>` : ""}
+      ${unavailableAgents.length > 0 ? `<section class="agent-picker-group agent-picker-unavailable" aria-labelledby="unavailable-agents-title">
+        <h3 id="unavailable-agents-title">${escapeHtml(copy.unavailableAgents)}</h3>
+        <div class="agent-picks">${unavailableAgents.map(renderAgent).join("")}</div>
+      </section>` : ""}
+    </div>`;
+    const actions = `<div class="agent-selection" aria-live="polite">${escapeHtml(selection)}</div>
+      ${dialogDismissButton(copy.cancel)}${dialogActionButton({
       id: "next-agent",
       label: copy.nextStep,
       disabled: !selected?.installed,
     }, { primary: true })}`;
     return dialog({
       id: "launch",
-      tier: "wide",
+      tier: "form",
       title: copy.pickAgent,
       body,
       actions,
       closeLabel: localCopy.close,
       dismissible: true,
       initialFocus: "first-field",
-      className: "launch-sheet",
+      className: "launch-sheet launch-agent-picker",
     });
   }
   if (!ui.launchDraft) return "";
   const draft = ui.launchDraft;
   const first = form.fields.filter((field) => !field.folded && field.id !== "initial-instruction");
   const folded = form.fields.filter((field) => field.folded);
-  const intentActive = draft.custom ? "" : draft.intentId;
   const key = launchFormKey(form.projectId);
   const pending = ui.formOperations.pending.has(key);
   const error = ui.formOperations.errors.get(key) || form.error || "";
-  const intents = [
-    { id: "", label: copy.intentNone },
-    ...form.intents.map((intent) => ({ id: intent.id, label: intent.label })),
-  ];
   const body = `<fieldset class="launch-fields" ${pending ? "disabled" : ""}>
     <div class="launch-agent">
       <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
       ${button({ id: "switch-agent", label: copy.switchAgent })}
     </div>
     <p class="hint">${escapeHtml(prefillHint(copy, form.prefillSource))}</p>
-    ${formField({
-      label: copy.runIntent,
-      control: `${optionGroup({
-        label: copy.runIntent,
-        actions: intents.map((intent) => ({
-          id: "intent",
-          label: intent.label,
-          pressed: intentActive === intent.id && !draft.custom,
-          data: { id: intent.id },
-        })),
-      })}${button({ id: "intent-custom", label: copy.intentCustom, pressed: draft.custom }, {
-        variant: draft.custom ? "primary" : "secondary",
-        className: draft.custom ? "active" : "",
-        attributes: { hidden: !draft.custom },
-      })}`,
-    })}
     ${formField({
       id: "opening-text",
       label: copy.openingPlaceholder,
@@ -160,11 +161,12 @@ export function launchField(
   const awaiting = fieldAwaitsDiscovery(field, values, discoveryPending);
   const pendingHint = awaiting && field.id === "model" && discoveryPending ? discoveryPending : undefined;
   if (field.kind === "boolean") {
-    return checkbox({
+    const control = checkbox({
       label: field.label,
       checked: value === "true",
       attributes: { "data-launch": field.id },
     });
+    return `${control}${field.description ? `<p class="hint">${escapeHtml(field.description)}</p>` : ""}`;
   }
   const busy = awaiting ? ` data-launch-discovery="pending" aria-busy="true"` : "";
   const options = field.kind === "select" ? launchFieldOptions(field, values) : [];
@@ -174,7 +176,7 @@ export function launchField(
     return `<div class="ui-form-field field"${busy}>
       <label class="label" for="${id}">${escapeHtml(field.label)}</label>
       <select id="${id}" class="ui-select" data-launch-select="${escapeHtml(field.id)}" data-launch="${escapeHtml(field.id)}" ${field.required ? "required" : ""}>
-        ${launchSelectOptions(options, value)}
+        ${launchSelectOptions(options, value, field.optionLabels)}
       </select>
       ${textInput({
         value: customValue,
@@ -183,13 +185,15 @@ export function launchField(
         className: "launch-custom-value",
         attributes: { "data-launch-custom": field.id, hidden: customHidden },
       })}
+      ${field.description ? `<p class="hint">${escapeHtml(field.description)}</p>` : ""}
       ${pendingHint ? `<p class="hint" data-launch-discovery="pending">${escapeHtml(pendingHint)}</p>` : ""}
     </div>`;
   }
+  const hint = [field.description, pendingHint].filter(Boolean).join(" ");
   const control = field.kind === "multiline"
     ? textArea({ id, value, rows: 3, attributes: { "data-launch": field.id } })
     : textInput({ id, value, required: field.required, attributes: { "data-launch": field.id } });
-  return `<div${busy}>${formField({ id, label: field.label, required: field.required, hint: pendingHint, control })}</div>`;
+  return `<div${busy}>${formField({ id, label: field.label, required: field.required, hint, control })}</div>`;
 }
 
 export const CUSTOM_VALUE = "__custom__";
@@ -208,14 +212,21 @@ export function launchSelectState(options: string[], value: string): { customVal
   return { customValue: known || customEntry ? "" : value, customEntry };
 }
 
-export function launchSelectOptions(options: string[], value: string): string {
+export function launchSelectOptions(
+  options: string[],
+  value: string,
+  labels: Record<string, string> = {},
+): string {
   const customEntry = value === CUSTOM_VALUE;
   const known = options.includes(value);
   const placeholder = value ? "" : `<option value="" disabled selected>${escapeHtml(selectPlaceholderLabel())}</option>`;
   const current = value && !customEntry && !known
     ? `<option value="${escapeHtml(value)}" selected>${escapeHtml(value)} · ${escapeHtml(currentValueLabel())}</option>`
     : "";
-  return `${placeholder}${current}${options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}<option value="${CUSTOM_VALUE}" ${customEntry ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
+  return `${placeholder}${current}${options.map((option) => {
+    const label = labels[option] ? `${option} · ${labels[option]}` : option;
+    return `<option value="${escapeHtml(option)}" ${option === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("")}<option value="${CUSTOM_VALUE}" ${customEntry ? "selected" : ""}>${escapeHtml(customOptionLabel())}</option>`;
 }
 
 export function selectPlaceholderLabel(): string {

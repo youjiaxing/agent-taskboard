@@ -2,7 +2,7 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, focusedRun, mobileClient, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
 import { ui } from "../ui";
@@ -500,14 +500,6 @@ export function terminalPanel(copy: ShellCopy, run: RunSummary, className: strin
     ${runNotices(copy, run)}
     <div class="pty-slot" data-run="${escapeHtml(run.id)}"></div>
   </div>`;
-}
-
-export function runDock(copy: ShellCopy, snap: Snapshot): string {
-  const run = focusedRun(snap);
-  if (!run || run.status === "ended") return "";
-  const selectedIssueId = snap.board?.selected?.id;
-  if (!run.unbound && run.issueId !== selectedIssueId) return "";
-  return terminalPanel(copy, run, "run-dock", true);
 }
 
 export function readOnlyTerminal(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {

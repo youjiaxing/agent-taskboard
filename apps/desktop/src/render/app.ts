@@ -15,7 +15,7 @@ import {
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runDock, settingsPage, updateDialog, usagePage } from "./shell";
+import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, settingsPage, updateDialog, usagePage } from "./shell";
 import { restoreRunDialog, runArchivePage, runOrganizationLabels, runPersistenceBanner } from "./run-organization";
 import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileRunOrganizationPage, mobileSearchDialog } from "./mobile";
 import { issuePanelIcon, projectMain } from "./board";
@@ -290,7 +290,7 @@ export function render(): void {
                       ? mobilePage(copy, localCopy, snap)
                       : ui.clientView.page === "focus-workspace"
                         ? focusWorkspaceView(copy, snap)
-                        : `${projectMain(copy, snap, reuseGraphCanvas)}${runDock(copy, snap)}`
+                        : projectMain(copy, snap, reuseGraphCanvas)
           }
         </main>
       </div>

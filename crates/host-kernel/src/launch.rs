@@ -4,8 +4,8 @@ use std::process::Command;
 
 use crate::agent::prepare_launch_env;
 use crate::agent::{
-    intent_prefix, AgentField, AgentFieldKind, AgentPort, AgentSummary, IntentOption,
-    PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm,
+    AgentField, AgentFieldKind, AgentPort, AgentSummary, PrefillSource, ProbeResult,
+    RunLaunchConfig, RunLaunchForm,
 };
 use crate::{IssueRecord, Language, LaunchEnvPort};
 
@@ -137,49 +137,16 @@ pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
     )
 }
 
-pub fn intent_options(language: Language) -> Vec<IntentOption> {
-    [
-        RunIntent::Modify,
-        RunIntent::Continue,
-        RunIntent::Answer,
-        RunIntent::Review,
-    ]
-    .into_iter()
-    .map(|intent| IntentOption {
-        id: intent_id(intent).into(),
-        label: intent_label(intent, language).into(),
-        prefix: intent_prefix(Some(intent), language),
-    })
-    .collect()
-}
-
-pub fn intent_id(intent: RunIntent) -> &'static str {
-    match intent {
-        RunIntent::Modify => "modify",
-        RunIntent::Continue => "continue",
-        RunIntent::Answer => "answer",
-        RunIntent::Review => "review",
-    }
-}
-
-fn intent_label(intent: RunIntent, language: Language) -> &'static str {
-    match (language, intent) {
-        (Language::ZhCn, RunIntent::Modify) => "修改",
-        (Language::ZhCn, RunIntent::Continue) => "继续",
-        (Language::ZhCn, RunIntent::Answer) => "只回答",
-        (Language::ZhCn, RunIntent::Review) => "复查",
-        (Language::En, RunIntent::Modify) => "Modify",
-        (Language::En, RunIntent::Continue) => "Continue",
-        (Language::En, RunIntent::Answer) => "Answer only",
-        (Language::En, RunIntent::Review) => "Review",
-    }
-}
-
-pub fn localize_fields(fields: Vec<AgentField>, language: Language) -> Vec<AgentField> {
+pub fn localize_fields(
+    fields: Vec<AgentField>,
+    language: Language,
+    agent: &dyn AgentPort,
+) -> Vec<AgentField> {
     fields
         .into_iter()
         .map(|mut field| {
             field.label = field_label(&field.id, language).unwrap_or(field.label);
+            agent.localize_field(&mut field, language);
             field
         })
         .collect()
@@ -195,10 +162,6 @@ fn field_label(id: &str, language: Language) -> Option<String> {
         (Language::En, INITIAL_INSTRUCTION) => "Initial instruction",
         (Language::ZhCn, "additional-args") => "附加参数",
         (Language::En, "additional-args") => "Extra arguments",
-        (Language::ZhCn, "approval") => "approval",
-        (Language::En, "approval") => "approval",
-        (Language::ZhCn, "profile") => "profile",
-        (Language::En, "profile") => "profile",
         (Language::ZhCn, "execution-mode") => "执行模式",
         (Language::En, "execution-mode") => "Execution mode",
         (Language::ZhCn, "skip-permissions") => "跳过权限确认",
@@ -209,7 +172,6 @@ fn field_label(id: &str, language: Language) -> Option<String> {
         (Language::En, "add-dir") => "Additional directories",
         (_, "model") => "model",
         (_, "effort") => "effort",
-        (_, "sandbox") => "sandbox",
         _ => return None,
     };
     Some(label.into())
@@ -344,8 +306,8 @@ pub fn missing_required(
 pub fn opening_required(opening: &str, language: Language) -> Option<String> {
     if opening.trim().is_empty() {
         Some(match language {
-            Language::ZhCn => "请填写要 Agent 做什么。".into(),
-            Language::En => "Tell the Agent what to do.".into(),
+            Language::ZhCn => "请填写任务说明。".into(),
+            Language::En => "Enter a task description.".into(),
         })
     } else {
         None
@@ -499,7 +461,7 @@ pub fn summarize_agents(
                 name: agent.name().to_string(),
                 installed,
                 unavailable_reason,
-                fields: localize_fields(agent.config_fields(), language),
+                fields: localize_fields(agent.config_fields(), language, agent.as_ref()),
             }
         })
         .collect()
@@ -536,4 +498,62 @@ pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) 
     form.values = config.values.clone();
     form.opening_text = config.opening_text.clone();
     form.error = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::localize_fields;
+    use crate::{AgentPort, AntigravityAdapter, CodexAdapter, GrokAdapter, Language};
+
+    #[test]
+    fn localized_codex_fields_explain_sandbox_approval_and_profile() {
+        let fields = localize_fields(CodexAdapter.config_fields(), Language::ZhCn, &CodexAdapter);
+        let field = |id: &str| fields.iter().find(|field| field.id == id).unwrap();
+
+        let sandbox = field("sandbox");
+        assert_eq!(sandbox.label, "sandbox（命令沙箱）");
+        assert!(sandbox.description.contains("不是 git worktree"));
+        assert_eq!(sandbox.option_labels["read-only"], "只读");
+        assert_eq!(sandbox.option_labels["workspace-write"], "可写工作区");
+        assert_eq!(
+            sandbox.option_labels["danger-full-access"],
+            "完全访问，风险最高"
+        );
+
+        let approval = field("approval");
+        assert_eq!(approval.label, "approval（确认策略）");
+        assert!(approval.description.contains("approval 决定是否先问"));
+        assert_eq!(approval.option_labels["on-request"], "需要时询问");
+        assert_eq!(approval.option_labels["never"], "不询问");
+
+        let profile = field("profile");
+        assert_eq!(profile.label, "profile（配置档）");
+        assert!(profile.description.contains("不读取或校验 profile"));
+
+        let fields = localize_fields(CodexAdapter.config_fields(), Language::En, &CodexAdapter);
+        let field = |id: &str| fields.iter().find(|field| field.id == id).unwrap();
+        assert_eq!(field("sandbox").label, "sandbox (command sandbox)");
+        assert_eq!(
+            field("sandbox").option_labels["workspace-write"],
+            "workspace writable"
+        );
+        assert!(field("profile")
+            .description
+            .contains("does not read or validate"));
+    }
+
+    #[test]
+    fn codex_field_explanations_do_not_leak_to_other_agents() {
+        for (agent, adapter) in [
+            (GrokAdapter.config_fields(), &GrokAdapter as &dyn AgentPort),
+            (
+                AntigravityAdapter.config_fields(),
+                &AntigravityAdapter as &dyn AgentPort,
+            ),
+        ] {
+            let fields = localize_fields(agent, Language::ZhCn, adapter);
+            assert!(fields.iter().all(|field| field.description.is_empty()));
+            assert!(fields.iter().all(|field| field.option_labels.is_empty()));
+        }
+    }
 }

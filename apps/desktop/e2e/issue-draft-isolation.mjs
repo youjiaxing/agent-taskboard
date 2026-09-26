@@ -4,9 +4,10 @@ import { openIssue100Browser } from "./issue-100-harness.mjs";
 const { browser, page, capture } = await openIssue100Browser();
 try {
   const issueTitle = "shared issue";
-  const issueSection = '.workspace-rail-section[data-workspace-section="issue"]';
+  const issueSection = ".issue-detail";
   const openRailSection = async (name) => {
     const section = page.locator(`.workspace-rail-section[data-workspace-section="${name}"]`);
+    if (await section.count() === 0) return;
     await section.waitFor({ state: "attached" });
     if (!(await section.evaluate((node) => node.open))) await section.locator("summary").click();
   };
@@ -28,15 +29,8 @@ try {
   const focus = async (projectId) => {
     await focusProject(projectId);
     await page.click('[data-act="focus-issue"][data-id="you/shared#1"]');
-    await page.waitForSelector(".focus-workspace-layout");
-    await page.waitForSelector("[data-terminal-surface]");
-    await page.waitForFunction((expected) => document.querySelector("[data-current-identity]")?.textContent?.trim() === expected, issueTitle);
-    assert.deepEqual(
-      await page.$$eval(".workspace-rail-section", (sections) => sections.map((section) => section.dataset.workspaceSection)),
-      ["actions", "issue", "runs"],
-      "focusing an Issue must render the fixed three-section right rail",
-    );
-    await openRailSection("issue");
+    await page.waitForSelector(".board-shell > .issue-detail");
+    await page.waitForFunction((expected) => document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes(expected), issueTitle);
     await page.waitForSelector(`${issueSection} section.issue-document[data-document-state="ready"]`);
     const maintenance = page.locator(`${issueSection} details.detail-maintenance`);
     if (!(await maintenance.evaluate((element) => element.open))) await maintenance.locator("summary").click();

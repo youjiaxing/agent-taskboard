@@ -21,7 +21,7 @@ Issues track work this repo has already chosen to track. A request the user make
 
 After a successful `/implement` of an implementation ticket, run these steps in the same turn. Successful means tests are green and `HEAD` is the implementation commit. Also run them when the user says 收尾 / 关票, and for a direct user request unless they asked for something else. The issue closes because GitHub processes `Closes #<n>` on merge — not because the agent ran `gh issue close`.
 
-1. Commit the task changes on a feature branch with a Conventional Commit message (`fix(launch): …`), naming the ticket in the subject when one exists (`… (#126)`). Done when `git status` is clean and `HEAD` is the implementation commit.
+1. Before editing, establish the feature branch from the starting commit. Follow `AGENTS.md` for the branch prefix; in this repository use `agent/<agent-id>/<task-slug>`. If the checkout is detached, create that branch immediately and preserve the recorded starting state. Then commit the task changes with a Conventional Commit message (`fix(launch): …`), naming the ticket in the subject when one exists (`… (#126)`). Done when `git status` is clean and `HEAD` is the implementation commit.
 2. `git push -u origin HEAD`. Done when the branch tracks `origin`.
 3. `gh pr create` with title equal to the commit title and a body that has `## 摘要`, a `Closes #<n>` line when a ticket exists, `## 范围` (Host kernel / Client), and `明确不做` for deferred tickets. Done when `gh pr view` shows that URL.
 4. `gh pr merge <pr> --merge --delete-branch`. Done when the PR is `MERGED`, the ticket is `CLOSED` if there was one, the feature branch is gone on the remote, and local `main` is at the merge commit.

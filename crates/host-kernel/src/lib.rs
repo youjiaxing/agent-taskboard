@@ -32,12 +32,12 @@ use std::time::Duration;
 
 pub use advance::{PendingConfirmation, DEFAULT_RESTORE_DELAY_MS, PENDING_CONFIRM_MS};
 pub use agent::{
-    builtin_agents, intent_prefix, probe_binary, AgentConfigDiscovery, AgentField, AgentFieldKind,
+    builtin_agents, probe_binary, AgentConfigDiscovery, AgentField, AgentFieldKind,
     AgentFieldOptionFilter, AgentPort, AgentSummary, AntigravityAdapter, ClaudeAdapter,
     CodexAdapter, CompletionHookPlan, CompletionSignals, GrokAdapter, IntentOption, MemoryAgent,
-    PrefillSource, ProbeResult, RunIntent, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN,
-    ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN,
-    CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
+    PrefillSource, ProbeResult, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN, ANTIGRAVITY_ID,
+    ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID,
+    CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,

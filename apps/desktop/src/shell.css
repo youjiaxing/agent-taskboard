@@ -645,8 +645,6 @@ button.danger.primary {
   margin: var(--space-4) 0 var(--space-8);
 }
 
-.agent-picks { margin-bottom: var(--space-12); }
-
 .folded { margin: var(--space-8) 0 var(--space-12); }
 
 .folded summary { cursor: pointer; color: var(--color-text-secondary); font-size: var(--font-size-md); }

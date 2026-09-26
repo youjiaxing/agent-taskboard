@@ -100,6 +100,8 @@ fn browser_supplements_issue_115_launch_form_behavior() {
         kind,
         options: options.iter().map(|value| (*value).to_string()).collect(),
         option_filter: None,
+        description: String::new(),
+        option_labels: BTreeMap::new(),
         required: id == "model" || id == "effort",
         folded,
     };

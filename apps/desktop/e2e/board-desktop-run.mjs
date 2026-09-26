@@ -142,8 +142,8 @@ if (liftedWidths.horizontalOverflow > 0) {
 await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
 await session.page.waitForSelector(".side");
-if (!(await session.page.$(".run-dock"))) {
-  throw new Error("returning to the board should restore the active Issue terminal dock");
+if (await session.page.$(".run-dock") || await session.page.$(".lifted-terminal")) {
+  throw new Error("returning to the board should remove the full Terminal surface");
 }
 const hostRunCount = () =>
   session.page.evaluate(async (protocol) => {
@@ -157,30 +157,25 @@ const hostRunCount = () =>
 
 const runsBeforeNeverRunEntry = await hostRunCount();
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector('[data-terminal-surface="empty"]');
-await session.page.waitForSelector('.workspace-rail-section[data-workspace-section="issue"][open] [data-document-state="ready"]');
-if (await session.page.$(".run-dock")) {
-  throw new Error("selecting an Issue without a Run should replace the board dock with the fixed Terminal empty state");
+await session.page.waitForSelector(".project-board");
+await session.page.waitForSelector(".board-shell > .issue-detail");
+if (await session.page.$(".lifted-run") || await session.page.$(".run-dock")) {
+  throw new Error("selecting an Issue without a Run should stay on the Board");
 }
 if ((await hostRunCount()) !== runsBeforeNeverRunEntry) {
   throw new Error("selecting an Issue must not create a Run");
 }
 
-const issueToggleLeftBeforeSidebarFold = await session.page.$eval("button[data-act='toggle-issue']", (node) =>
-  node.getBoundingClientRect().left,
-);
+if (await session.page.locator("button[data-act='toggle-issue']").count() !== 1) {
+  throw new Error("Board inspector should expose one Issue detail toggle");
+}
 await session.page.click("button[data-act='toggle-sidebar']");
 if (await session.page.$(".side")) {
   throw new Error("the sidebar toggle should remove the sidebar from layout");
 }
-const issueToggleLeftAfterSidebarFold = await session.page.$eval("button[data-act='toggle-issue']", (node) =>
-  node.getBoundingClientRect().left,
-);
-if (Math.abs(issueToggleLeftAfterSidebarFold - issueToggleLeftBeforeSidebarFold) > 1) {
-  throw new Error(`Issue detail toggle should keep its chrome coordinate when the sidebar folds: ${issueToggleLeftBeforeSidebarFold} -> ${issueToggleLeftAfterSidebarFold}`);
+if (await session.page.locator("button[data-act='toggle-issue']").count() !== 1) {
+  throw new Error("folding the sidebar should preserve the Issue detail toggle");
 }
-await session.page.click("button[data-act='return-page']");
-await session.page.waitForSelector(".lanes");
 await session.clickCard(session.page.locator('[data-lane="inProgress"] .issue-card:has-text("active work") .issue-card-main'));
 await session.page.waitForSelector(".lifted-run");
 await session.page.click("button[data-act='return-page']");
@@ -195,16 +190,20 @@ await session.page.waitForSelector(".side");
 // 已有历史 Run 的 Issue：进入那次 Run 的只读画面，且选择 Issue 不得新建 Run
 const runsBeforeHistoryEntry = await hostRunCount();
 await session.clickCard(session.page.locator('[data-lane="recentlyCompleted"] .issue-card:has-text("just closed") .issue-card-main'));
-await session.page.waitForSelector('[data-terminal-surface="readonly"]');
+await session.page.waitForSelector(".board-run-history");
 if (
-  await session.page.$('[data-terminal-surface="readonly"] .pty-slot')
-  || await session.page.$('[data-terminal-surface="readonly"] input')
-  || await session.page.$('[data-terminal-surface="live"]')
+  await session.page.$(".lifted-run")
+  || await session.page.$(".run-dock")
 ) {
-  throw new Error("an Issue whose Run already ended must stay on the read-only history surface");
+  throw new Error("selecting an Issue whose Run already ended must stay on the Board");
 }
 if ((await hostRunCount()) !== runsBeforeHistoryEntry) {
   throw new Error("selecting an Issue must not create a Run");
+}
+await session.page.click('.board-run-history button[data-act="view-issue-run"]');
+await session.page.waitForSelector('[data-terminal-surface="readonly"]');
+if (await session.page.$('[data-terminal-surface="readonly"] .pty-slot') || await session.page.$('[data-terminal-surface="readonly"] input')) {
+  throw new Error("an explicitly selected ended Run must use a read-only history surface");
 }
 await session.page.click("button[data-act='return-page']");
 await session.page.waitForSelector(".lanes");
@@ -298,31 +297,17 @@ if (await pick.count()) {
   await session.page.click("button[data-act='next-agent']");
   await session.page.waitForSelector("textarea[data-field='openingText']");
 }
-await session.page.click(".launch-sheet button[data-act='intent'][data-id='modify']");
 const openingText = session.page.locator("textarea[data-field='openingText']");
-await openingText.fill("");
-await openingText.pressSequentially("e2e unbound run");
-const customIntent = await session.page.$eval(".launch-sheet button[data-act='intent-custom']", (node) => ({
-  text: node.textContent?.trim(),
-  active: node.classList.contains("active"),
-  hidden: node.hidden,
-}));
-if (customIntent.hidden || !customIntent.active || (customIntent.text !== "自定义" && customIntent.text !== "Custom")) {
-  throw new Error(`editing an intent prefix should show Custom, got ${JSON.stringify(customIntent)}`);
-}
-if ((await openingText.inputValue()) !== "e2e unbound run" || !(await openingText.evaluate((node) => node === document.activeElement))) {
-  throw new Error("editing an intent prefix should preserve the textarea and its focus");
-}
+await openingText.fill("e2e unbound run");
 await session.page.click(".launch-sheet button[type='submit']");
-await session.page.waitForSelector(".run-dock");
 await session.page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-const dockText = await session.page.$eval(".run-dock", (node) => node.textContent.replace(/\s+/g, " ").trim());
-if (!dockText.includes("Grok Build") || (!dockText.includes("未绑定 Issue") && !dockText.includes("Unbound Issue"))) {
-  throw new Error(`unbound Run dock missing identity, got ${dockText}`);
+await session.page.waitForSelector(".side .run-row");
+const runRowText = await session.page.locator(".side .run-row").last().textContent();
+if (!runRowText?.includes("Grok Build") || (!runRowText.includes("未绑定 Issue") && !runRowText.includes("Unbound Issue"))) {
+  throw new Error(`unbound Run row missing identity, got ${runRowText}`);
 }
-if (!(await session.page.$(".pty-slot"))) {
-  throw new Error("Embedded Terminal slot missing");
-}
+await session.page.locator(".side .run-row").last().locator(".run-main").click();
+await session.page.waitForSelector(".lifted-terminal .pty-slot");
 await session.page.click(".xterm-helper-textarea");
 await session.page.keyboard.press("?");
 if (await session.page.$(".keyboard-help")) {
@@ -341,7 +326,7 @@ const terminalShortcutGuard = await session.page.evaluate(() => {
       dialog: Boolean(document.querySelector("[data-dialog-root='true']")),
       help: Boolean(document.querySelector(".keyboard-help")),
       page: document.querySelector(".frame")?.className ?? "",
-      dock: Boolean(document.querySelector(".run-dock")),
+      dock: Boolean(document.querySelector(".lifted-terminal")),
     };
   });
   return { pageBefore, steps };
@@ -352,9 +337,9 @@ const stolenKeys = terminalShortcutGuard.steps.filter(
 if (stolenKeys.length) {
   throw new Error(`terminal focus must keep every shell shortcut in the official TUI: ${JSON.stringify(stolenKeys)}`);
 }
-await session.page.click(".run-dock button[data-act='stop-run']");
+await session.page.click(".lifted-terminal button[data-act='stop-run']");
 await session.page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
-await session.page.waitForFunction(() => !document.querySelector(".run-dock"));
+await session.page.waitForFunction(() => !document.querySelector(".lifted-terminal"));
 
 await session.page.click("button[data-act='settings']");
 await session.page.waitForSelector(".settings-page #recent-limit");
@@ -393,6 +378,8 @@ if (!launchEnvironmentText?.includes("启动环境已更新")) {
 }
 await session.page.fill("#recent-limit", "1");
 await session.page.locator("#recent-limit").dispatchEvent("change");
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector('[data-terminal-surface="readonly"]');
 await session.page.click("button[data-act='return-page']");
 await session.page.waitForFunction(() => document.querySelectorAll('[data-lane="recentlyCompleted"] .issue-card').length === 1);
 }

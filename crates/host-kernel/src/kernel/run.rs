@@ -206,7 +206,7 @@ impl HostKernel {
                 opening_text: String::new(),
                 change_notes_text: String::new(),
                 command_preview: String::new(),
-                intents: launch::intent_options(language),
+                intents: Vec::new(),
                 warnings: Vec::new(),
                 error: None,
                 option_discovery_pending: None,
@@ -251,7 +251,7 @@ impl HostKernel {
         let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
         let change_notes_text = changes::format_notes(&pending);
         opening_text = changes::append_notes(&opening_text, &pending);
-        let fields = launch::localize_fields(discovery.fields, language);
+        let fields = launch::localize_fields(discovery.fields, language, agent.as_ref());
         values.insert(launch::ISOLATION_FIELD.into(), "false".into());
         launch::apply_option_defaults(&fields, &mut values);
         let (isolation_supported, isolation_reason) =
@@ -281,7 +281,7 @@ impl HostKernel {
             opening_text,
             change_notes_text,
             command_preview: preview,
-            intents: launch::intent_options(language),
+            intents: Vec::new(),
             warnings,
             error: None,
             option_discovery_pending,
@@ -946,7 +946,9 @@ impl HostKernel {
             .as_ref()
             .filter(|form| form.selected_agent_id == config.agent_id)
             .map(|form| form.fields.clone())
-            .unwrap_or_else(|| launch::localize_fields(agent.config_fields(), language));
+            .unwrap_or_else(|| {
+                launch::localize_fields(agent.config_fields(), language, agent.as_ref())
+            });
         if let Some(form) = &mut self.launch_form {
             launch::apply_submitted_form(form, &config);
             let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
