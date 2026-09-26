@@ -163,9 +163,9 @@ jobs:
     if: needs.prepare.outputs.publish == 'true'
     name: 测试
     needs: prepare
-    # Keep the browser release gate on a known image; macos-latest currently
-    # follows the rolling macOS 26 arm64 image.
-    runs-on: macos-15
+    # Keep the browser release gate on a known image with enough resources for
+    # the concurrent Chromium contexts used by the recovery journeys.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
         with:
