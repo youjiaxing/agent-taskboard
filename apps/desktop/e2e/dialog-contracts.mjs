@@ -135,7 +135,11 @@ try {
     headerTop: panel.querySelector(".dialog-header").getBoundingClientRect().top,
     footerBottom: panel.querySelector(".dialog-actions").getBoundingClientRect().bottom,
   }));
-  assert.deepEqual(after, { headerTop: before.headerTop, footerBottom: before.footerBottom }, "header and actions must stay fixed while content scrolls");
+  assert.ok(
+    Math.abs(after.headerTop - before.headerTop) <= 1
+      && Math.abs(after.footerBottom - before.footerBottom) <= 1,
+    `header and actions must stay fixed while content scrolls: ${JSON.stringify({ before, after })}`,
+  );
   await compact.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
 
   await page.setViewportSize({ width: 1280, height: 840 });

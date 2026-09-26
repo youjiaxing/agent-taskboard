@@ -67,6 +67,7 @@ try {
 
   await page.click("button[data-act='open-run-archive']");
   await page.waitForSelector(".run-archive-page");
+  await page.waitForSelector(".archive-run-row");
   const hostArchived = await page.evaluate(async (protocol) => {
     const response = await fetch(`${protocol.replace(/\/$/, "")}/rpc`, {
       method: "POST",

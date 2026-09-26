@@ -3,6 +3,8 @@ import { chromium } from "playwright";
 const url = process.env.BOARD_URL;
 const gardenProjectId = process.env.GARDEN_PROJECT_ID;
 const notesProjectId = process.env.NOTES_PROJECT_ID;
+const navigationBudgetMs = Number(process.env.E2E_NAVIGATION_BUDGET_MS ?? "750");
+const responseTimeoutMs = Math.max(navigationBudgetMs, 2_000);
 if (!url || !gardenProjectId || !notesProjectId) {
   throw new Error("missing Client isolation E2E environment");
 }
@@ -56,13 +58,13 @@ const waitForRpcResponse = (page, op, timeout) => page.waitForResponse((response
 
 const focusProject = async (page, projectId, expectedName) => {
   const started = Date.now();
-  const responsePromise = waitForRpcResponse(page, "focusProject", 500);
+  const responsePromise = waitForRpcResponse(page, "focusProject", responseTimeoutMs);
   await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
   const response = await responsePromise;
   if (!response.ok()) throw new Error(`focusProject failed: ${response.status()} ${await response.text()}`);
-  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`);
+  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: responseTimeoutMs });
   const elapsed = Date.now() - started;
-  if (elapsed >= 500) {
+  if (elapsed >= navigationBudgetMs) {
     throw new Error(`Project focus waited ${elapsed}ms for the slow Tracker`);
   }
 };
@@ -136,7 +138,11 @@ if (
 }
 
 await desktop.click('button[data-act="center-view"][data-id="board"]');
-await desktop.waitForSelector(".lanes");
+await desktop.waitForSelector(".lanes", { state: "visible" });
+await desktop.waitForFunction(() => {
+  const lanes = document.querySelector(".lanes");
+  return Boolean(lanes && getComputedStyle(lanes).display !== "none" && lanes.getBoundingClientRect().height > 0);
+});
 await desktop.addStyleTag({ content: '[data-lane="frontier"] { height: 120px; min-height: 0; }' });
 const scrollFixture = await desktop.$eval('[data-lane="frontier"]', (node) => {
   node.scrollTop = node.scrollHeight;

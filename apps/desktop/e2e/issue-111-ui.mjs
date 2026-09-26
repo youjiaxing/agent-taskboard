@@ -47,6 +47,14 @@ const waitForIssueTextWithout = async (needle) => {
   }
   throw new Error(`Local Markdown files still contain ${needle}`);
 };
+const waitForRpc = (op) => page.waitForResponse((response) => {
+  try {
+    return response.request().method() === "POST"
+      && response.request().postDataJSON()?.op === op;
+  } catch {
+    return false;
+  }
+});
 
 const issueSection = ".issue-detail";
 const openRailSection = async (name) => {
@@ -137,19 +145,27 @@ await page.waitForFunction(() => document.querySelector("form[data-act='issue-co
 await waitForIssueText("comment from desktop UI");
 
 await page.selectOption("#issue-parent", issueId(1));
+const parentResponse = waitForRpc("setIssueParent");
 await page.click("form[data-act='issue-parent'] button[type='submit']");
+await parentResponse;
 await page.waitForFunction((expected) => document.querySelector("#issue-parent")?.value === expected, issueId(1));
 await waitForIssueText("Part of: 1");
 
 await page.selectOption("#issue-blocked-by", [issueId(1)]);
+const blockersResponse = waitForRpc("setIssueBlockedBy");
 await page.click("form[data-act='issue-blockers'] button[type='submit']");
+await blockersResponse;
 await waitForIssueText("Blocked by: 1");
 
 await page.selectOption("#issue-parent", "");
+const clearParentResponse = waitForRpc("setIssueParent");
 await page.click("form[data-act='issue-parent'] button[type='submit']");
+await clearParentResponse;
 await waitForIssueTextWithout("Part of: 1");
 await page.click("button[data-act='clear-issue-blockers']");
+const clearBlockersResponse = waitForRpc("setIssueBlockedBy");
 await page.click("form[data-act='issue-blockers'] button[type='submit']");
+await clearBlockersResponse;
 await waitForIssueTextWithout("Blocked by: 1");
 
 await openRailSection("actions");

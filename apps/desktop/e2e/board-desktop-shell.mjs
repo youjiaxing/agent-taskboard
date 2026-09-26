@@ -735,10 +735,19 @@ await session.page.waitForFunction(() => document.documentElement.dataset.viewpo
 
 // 紧凑桌面上的高内容车道必须留在工作区内，由车道自身滚动，而不是把 board-main 撑出视口。
 await session.page.setViewportSize({ width: 800, height: 600 });
-await session.page.waitForSelector(".lanes");
 const compactIssueToggle = session.page.locator("button[data-act='toggle-issue']");
 if (await compactIssueToggle.count()) await compactIssueToggle.click();
-await session.page.waitForFunction(() => document.querySelector(".board-main") && getComputedStyle(document.querySelector(".board-main")).display !== "none");
+await session.page.waitForSelector(".lanes", { state: "visible" });
+await session.page.waitForFunction(() => {
+  const board = document.querySelector(".board-main");
+  const lanes = document.querySelector(".lanes");
+  return Boolean(
+    board
+      && lanes
+      && getComputedStyle(board).display !== "none"
+      && lanes.getBoundingClientRect().height > 0,
+  );
+});
 const compactBoardStyle = await session.page.addStyleTag({
   content: '[data-lane="frontier"] { height: 180px; min-height: 0; }',
 });
@@ -763,6 +772,7 @@ const compactBoardBox = await session.page.locator('[data-lane="frontier"]').bou
 if (!compactBoardBox) throw new Error("compact board scroll fixture has no geometry");
 await session.page.mouse.move(compactBoardBox.x + compactBoardBox.width / 2, compactBoardBox.y + compactBoardBox.height / 2);
 await session.page.mouse.wheel(0, 420);
+await session.page.waitForFunction(() => document.querySelector('[data-lane="frontier"]')?.scrollTop > 0);
 const compactBoardAfter = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (compactBoardAfter <= 0) {
   throw new Error(`compact board lane should respond to a real mouse wheel: ${compactBoardBefore.clientHeight}/${compactBoardBefore.scrollHeight} -> ${compactBoardAfter}`);

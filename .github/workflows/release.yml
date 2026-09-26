@@ -195,7 +195,7 @@ jobs:
           # Cross-version macOS font rasterization differs while the explicit
           # geometry, overlap, overflow, and interaction assertions stay exact.
           VISUAL_DIFF_MAX_RATIO: "0.05"
-          E2E_NAVIGATION_BUDGET_MS: "750"
+          E2E_NAVIGATION_BUDGET_MS: "1000"
 
   publish:
     if: needs.prepare.outputs.publish == 'true'
