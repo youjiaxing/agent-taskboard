@@ -19,6 +19,13 @@ async function openDrawer(page) {
   await page.waitForSelector("[data-dialog-id='mobile-drawer']");
 }
 
+async function clickRefreshingDrawerAction(page, action) {
+  const selector = `[data-dialog-id='mobile-drawer'] [data-act='${action}']`;
+  const trigger = page.locator(selector);
+  await trigger.waitFor({ state: "visible" });
+  await trigger.evaluate((node) => node.click());
+}
+
 async function openRunMenu(page, runId, scope = "") {
   const prefix = scope ? `${scope} ` : "";
   const trigger = page.locator(`${prefix}[data-act='mobile-run-menu'][data-id='${runId}']`);
@@ -76,7 +83,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
   await page.waitForSelector(".mobile-board-view");
   await openDrawer(page);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+  await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");
   const mobileHistoryIds = await page.$$eval(".mobile-project-history .workspace-run-history-item", (nodes) => nodes.map((node) => ({
     id: node.dataset.id,
@@ -118,7 +125,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
   await page.waitForSelector(".mobile-board-view");
   await openDrawer(page);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+  await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");
   assert.equal(await page.locator(`.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}']`).count(), 1);
   assert.equal(await page.locator(`.mobile-project-history .workspace-run-history-item[data-id='${mobileEndedRunId}']`).count(), 1);
@@ -225,7 +232,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
   await page.waitForSelector(".mobile-board-view");
   await openDrawer(page);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+  await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");
   await page.waitForSelector("[data-run-persistence='recovery'] [data-act='retry-run-persistence']");
   menu = await openRunMenu(page, mobileActiveRunId, `.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}']`);
