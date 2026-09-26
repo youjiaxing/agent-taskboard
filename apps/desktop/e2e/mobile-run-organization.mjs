@@ -23,7 +23,37 @@ async function clickRefreshingDrawerAction(page, action) {
   const selector = `[data-dialog-id='mobile-drawer'] [data-act='${action}']`;
   const trigger = page.locator(selector);
   await trigger.waitFor({ state: "visible" });
+  await page.waitForFunction((target) => {
+    const node = document.querySelector(target);
+    return node instanceof HTMLButtonElement && !node.disabled;
+  }, selector);
+  const clicked = await trigger.evaluate((node) => {
+    if (!(node instanceof HTMLButtonElement) || node.disabled) return false;
+    node.click();
+    return true;
+  });
+  assert.equal(clicked, true, `${action} should stay actionable while the drawer refreshes`);
+}
+
+async function focusProject(page, projectId) {
+  const selector = `[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${projectId}']`;
+  const trigger = page.locator(selector);
+  await trigger.waitFor({ state: "visible" });
+  const responsePromise = page.waitForResponse((response) => {
+    try {
+      const request = response.request();
+      return request.method() === "POST" && request.postDataJSON()?.op === "focusProject";
+    } catch {
+      return false;
+    }
+  });
   await trigger.evaluate((node) => node.click());
+  const response = await responsePromise;
+  assert.equal(response.ok(), true, `focusProject failed with ${response.status()}`);
+  await page.waitForFunction(() => Boolean(
+    document.querySelector(".mobile-board-view")
+      && !document.querySelector("[data-dialog-id='mobile-drawer']")
+  ));
 }
 
 async function openRunMenu(page, runId, scope = "") {
@@ -80,8 +110,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   const drawerActions = await page.$$eval("[data-dialog-id='mobile-drawer'] [data-act]", (nodes) => nodes.map((node) => node.dataset.act));
   assert.equal(drawerActions.includes("open-run-pinned"), false);
   assert.equal(drawerActions.includes("open-run-archive"), true);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
-  await page.waitForSelector(".mobile-board-view");
+  await focusProject(page, mobileProjectId);
   await openDrawer(page);
   await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");
@@ -122,8 +151,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.waitForSelector(".mobile-project-history");
 
   await openDrawer(page);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
-  await page.waitForSelector(".mobile-board-view");
+  await focusProject(page, mobileProjectId);
   await openDrawer(page);
   await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");
@@ -196,8 +224,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   assert.equal(await page.locator("[data-terminal-panel]").count(), 0);
 
   await openDrawer(page);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
-  await page.waitForSelector(".mobile-board-view");
+  await focusProject(page, mobileProjectId);
   await page.click(`[data-act='focus-issue'][data-id='you/mobile#1']`);
   await page.waitForSelector(".mobile-workspace-view");
   await page.click(".mobile-section-switch [data-act='mobile-workspace-section'][data-id='runs']");
@@ -229,8 +256,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await openDrawer(page);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
-  await page.waitForSelector(".mobile-board-view");
+  await focusProject(page, mobileProjectId);
   await openDrawer(page);
   await clickRefreshingDrawerAction(page, "mobile-history-entry");
   await page.waitForSelector(".mobile-project-history");

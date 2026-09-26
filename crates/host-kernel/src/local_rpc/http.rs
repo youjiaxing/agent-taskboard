@@ -194,9 +194,11 @@ pub(super) fn write_empty(
 }
 
 pub(super) fn request_backgrounds_refreshes(request: &serde_json::Value) -> bool {
+    // Client ticks share the frontend request queue. A slow Tracker read must
+    // not hold later navigation or form actions behind the background refresh.
     matches!(
         request.get("op").and_then(|value| value.as_str()),
-        Some("focusProject" | "setClientView")
+        Some("focusProject" | "setClientView" | "tick")
     )
 }
 

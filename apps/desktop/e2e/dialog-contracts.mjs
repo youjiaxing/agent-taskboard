@@ -3,12 +3,27 @@ import { openIssue100Browser } from "./issue-100-harness.mjs";
 
 const { browser, page } = await openIssue100Browser();
 try {
+  // Geometry assertions should observe the settled panel, not the entry animation.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   const dialogRoot = (id) => page.locator(`[data-dialog-root='true'][data-dialog-id='${id}']`);
+  const waitForFiniteAnimations = async (scope) => {
+    await scope.evaluate(async (node) => {
+      const animations = node.getAnimations({ subtree: true }).filter((animation) => {
+        const iterations = animation.effect?.getComputedTiming().iterations;
+        return iterations !== Infinity;
+      });
+      await Promise.race([
+        Promise.all(animations.map((animation) => animation.finished.catch(() => undefined))),
+        new Promise((resolve) => setTimeout(resolve, 500)),
+      ]);
+    });
+  };
   const assertDialogSemantics = async (id) => {
     const root = dialogRoot(id);
     await root.waitFor();
     const panel = root.getByRole("dialog");
-    await page.waitForTimeout(180);
+    await panel.waitFor({ state: "visible" });
+    await waitForFiniteAnimations(root);
     assert.equal(await panel.getAttribute("aria-modal"), "true");
     assert.ok(await panel.getAttribute("aria-labelledby"));
     return { root, panel };
@@ -50,9 +65,10 @@ try {
     assert.ok(pickerWidth <= 640 && pickerWidth >= 540, `Agent picker should use the form-sized dialog, got ${pickerWidth}`);
     await launch.panel.locator("button[data-act='select-agent']:not([disabled])").first().click();
     await launch.panel.locator("button[data-act='next-agent']").click();
-    await page.waitForSelector("textarea[data-field='openingText']");
-    launch = await assertDialogSemantics("launch");
+    await page.waitForSelector(".dialog-tier-wide .launch-fields");
+    await page.waitForSelector(".dialog-tier-wide[data-form='launch'] textarea[data-field='openingText']");
   }
+  launch = await assertDialogSemantics("launch");
   const wideWidth = await width(launch.panel);
   assert.ok(wideWidth <= 880 && wideWidth >= 840, `Run launch should respect the 880px maximum, got ${wideWidth}`);
   await page.keyboard.press("Escape");
