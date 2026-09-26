@@ -566,6 +566,46 @@ fn project_focus_returns_cached_board_before_one_background_refresh_finishes() {
 }
 
 #[test]
+fn client_tick_returns_before_background_refresh_finishes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let garden = make_dir(tmp.path(), "work/garden");
+    let tracker = Arc::new(SeamTracker::new());
+    tracker.add_issue(IssueRecord::open("you/garden", 1, "garden issue"));
+    let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
+    register(&mut kernel, "garden", &garden, "you/garden");
+    let garden_fetched_at = match refresh_status(&kernel) {
+        RefreshStatus::Ready { fetched_at_ms, .. } => fetched_at_ms,
+        other => panic!("expected ready garden cache, got {other:?}"),
+    };
+
+    let baseline = tracker.read_count("you/garden");
+    tracker.set_read_delay_ms(750);
+    let host = Arc::new(Mutex::new(kernel));
+    let server = LoopbackServer::attach_client_transport(Arc::clone(&host), |_| {}).unwrap();
+
+    let ticked_at = Instant::now();
+    post_rpc(
+        server.protocol_url(),
+        serde_json::json!({
+            "op": "tick",
+            "clientInstanceId": "desktop",
+            "nowMs": garden_fetched_at + DEFAULT_REFRESH_INTERVAL_MS,
+        }),
+    );
+    assert!(
+        ticked_at.elapsed() < Duration::from_millis(250),
+        "Client tick waited for the Tracker: {:?}",
+        ticked_at.elapsed()
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while tracker.read_count("you/garden") == baseline && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(tracker.read_count("you/garden"), baseline + 1);
+}
+
+#[test]
 fn rapid_project_focus_keeps_the_last_client_focus_after_older_refreshes_finish() {
     let tmp = tempfile::tempdir().unwrap();
     let tracker = Arc::new(SeamTracker::new());

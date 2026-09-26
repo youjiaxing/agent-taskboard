@@ -679,9 +679,16 @@ await session.page.click("button[data-act='settings']");
 await session.page.waitForSelector(".settings-page");
 await session.page.waitForFunction(() => {
   const button = document.querySelector("button[data-act='return-page']");
-  if (!(button instanceof HTMLElement)) return false;
-  button.click();
-  return true;
+  if (button instanceof HTMLElement) {
+    button.click();
+    return true;
+  }
+  const detail = document.querySelector(".board-shell > .issue-detail");
+  return Boolean(
+    detail
+      && detail.querySelector(".detail-hd")?.textContent?.includes("child ready")
+      && detail.querySelector(".issue-document")?.getAttribute("data-document-state") === "ready",
+  );
 });
 await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
 const focusStateAfterSettings = await session.page.evaluate(() => ({
