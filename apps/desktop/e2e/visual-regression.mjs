@@ -85,6 +85,13 @@ export function createVisualAssert(page) {
 
 export async function assertNecessaryTextContrast(page, label) {
   await page.waitForTimeout(260);
+  await page.evaluate(async () => {
+    const animations = document.getAnimations({ subtree: true }).filter((animation) => {
+      const iterations = animation.effect?.getComputedTiming().iterations;
+      return iterations !== Infinity;
+    });
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+  });
   const failures = await page.evaluate(() => {
     const parseColor = (value) => {
       const match = value.match(/^rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i);
