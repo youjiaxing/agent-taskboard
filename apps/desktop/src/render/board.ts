@@ -10,7 +10,7 @@ import { GRAPH_RELATION_META } from "../graph-meta";
 import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
 import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
 import { refreshStatus } from "../components/refresh-status";
-import { runOrganizationActions } from "./run-organization";
+import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels } from "./run-organization";
 import { runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectMain(copy: ShellCopy, snap: Snapshot, reuseGraphCanvas = false): string {
@@ -526,14 +526,19 @@ export function workspaceRunHistory(
 ): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
-  return `<div class="workspace-run-history">${[...runs].reverse().map((run) => {
+  const organizationLabels = runOrganizationLabels();
+  const displayRuns = orderRunsForDisplay([...runs].reverse());
+  return `<div class="workspace-run-history">${displayRuns.map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
     const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
     const action = options.action ?? "focus-run";
     const current = run.id === options.currentRunId;
-    return `<article class="workspace-run-history-item ${current ? "current" : ""}" data-act="${action}" data-id="${escapeHtml(run.id)}">
+    const pinMarker = run.pinnedAtMs != null
+      ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
+      : "";
+    return `<article class="workspace-run-history-item ${run.pinnedAtMs != null ? "pinned" : ""} ${current ? "current" : ""}" data-act="${action}" data-id="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
       <button type="button" class="workspace-run-history-main" data-act="${action}" data-id="${escapeHtml(run.id)}" ${current ? 'aria-current="true"' : ""}>
-        <span><b>${escapeHtml(run.agentName)}</b><small>${escapeHtml(status)}${run.startedAtMs ? ` · ${new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage())}` : ""}</small></span>
+        <span><b>${escapeHtml(run.agentName)}${pinMarker}</b><small>${escapeHtml(status)}${run.startedAtMs ? ` · ${new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage())}` : ""}</small></span>
         ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
         ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
       </button>

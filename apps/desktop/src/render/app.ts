@@ -15,7 +15,7 @@ import {
   viewportClass,
 } from "../view-helpers";
 import { escapeHtml } from "../client-utils";
-import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, runRow, settingsPage, updateDialog, usagePage } from "./shell";
+import { dangerConfirmationDialog, focusWorkspaceView, hostOverviewPage, keyboardHelpDialog, projectBlock, quitOfferDialog, settingsPage, updateDialog, usagePage } from "./shell";
 import { restoreRunDialog, runArchivePage, runOrganizationLabels, runPersistenceBanner } from "./run-organization";
 import { mobileDrawer, mobileNav, mobilePage, mobileRunInput, mobileRunOrganizationPage, mobileSearchDialog } from "./mobile";
 import { issuePanelIcon, projectMain } from "./board";
@@ -97,12 +97,10 @@ export function render(): void {
     && ui.mobileWorkspaceSection === "runs";
   const primaryIdentity = ui.clientView.page === "settings"
     ? copy.settings
-    : ui.clientView.page === "host-overview"
+      : ui.clientView.page === "host-overview"
       ? copy.hostOverview
       : ui.clientView.page === "run-archive"
-        ? isMobile && ui.mobileRunOrganizationSection === "pinned"
-          ? runOrganizationLabels().pinnedRuns
-          : runOrganizationLabels().archive
+        ? runOrganizationLabels().archive
       : ui.clientView.page === "usage"
         ? copy.usage
         : ui.clientView.page === "focus-workspace"
@@ -179,10 +177,6 @@ export function render(): void {
     ui.pairingAddress = (ui.snapshot.loopbackPage.url || "http://127.0.0.1:10529/").replace(/\/$/, "");
   }
   const organizationLabels = runOrganizationLabels();
-  const pinnedRuns = snap.capabilities.runOrganization
-    ? (snap.runs ?? []).filter((run) => run.pinnedAtMs).sort((left, right) => (right.pinnedAtMs ?? 0) - (left.pinnedAtMs ?? 0))
-    : [];
-
   ui.app.innerHTML = `
     <div class="frame page-${ui.clientView.page}">
       <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
@@ -258,10 +252,6 @@ export function render(): void {
                 : ""
             }
           </div>
-          ${snap.capabilities.runOrganization ? `<section class="pinned-run-section" data-pinned-runs>
-            <div class="group-head"><div class="group-name">${escapeHtml(organizationLabels.pinnedRuns)}</div><span>${pinnedRuns.length}</span></div>
-            ${pinnedRuns.map((run) => `<div class="pinned-run-entry"><span class="pinned-run-project">${escapeHtml(projects.find((project) => project.id === run.projectId)?.name ?? run.projectId)}</span>${runRow(copy, run, snap.focusedRunId)}</div>`).join("")}
-          </section>` : ""}
           <div>
             <div class="group-head">
               <div class="group-name">${escapeHtml(copy.projects)}</div>

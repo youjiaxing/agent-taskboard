@@ -507,31 +507,12 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     render();
     return;
   }
-  if (act === "open-run-pinned") {
-    if (!ui.snapshot.capabilities.runOrganization) return;
-    closeMobileDrawer();
-    clearRunOrganizationContext();
-    ui.mobileRunOrganizationSection = "pinned";
-    enterPrimaryPage("run-archive", ui.snapshot);
-    render();
-    return;
-  }
   if (act === "open-run-archive") {
     if (!ui.snapshot.capabilities.runOrganization) return;
     closeMobileDrawer();
     clearRunOrganizationContext();
-    if (mobileClient()) ui.mobileRunOrganizationSection = "archive";
     enterPrimaryPage("run-archive", ui.snapshot);
     await loadArchivedRuns();
-    render();
-    return;
-  }
-  if (act === "mobile-run-organization-section" && target.dataset.id) {
-    ui.mobileRunOrganizationSection = target.dataset.id === "archive" ? "archive" : "pinned";
-    ui.mobileRunMenuId = "";
-    ui.archiveSelectedRunId = "";
-    ui.restoreRunDialog = null;
-    if (ui.mobileRunOrganizationSection === "archive") await loadArchivedRuns();
     render();
     return;
   }

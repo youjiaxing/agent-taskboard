@@ -191,6 +191,50 @@ fn legacy_runs_default_to_unpinned_and_unarchived() {
 }
 
 #[test]
+fn loading_runs_archives_runs_for_removed_projects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/removed");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let run_id = start_run(&mut h.host, &project_id, None);
+    stop_run(&mut h.host, &run_id);
+    h.host
+        .handle(serde_json::json!({
+            "op": "setRunPinned",
+            "runId": run_id,
+            "pinned": true,
+        }))
+        .unwrap();
+    let settings_path = h.host.snapshot().data.host_settings_path.clone();
+    drop(h.host);
+
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    settings["projects"] = serde_json::json!([]);
+    std::fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let mut h = harness(tmp.path());
+    assert!(h.host.snapshot().projects.is_empty());
+    assert!(h.host.snapshot().runs.is_empty());
+    let archived = h
+        .host
+        .handle(serde_json::json!({
+            "op": "listArchivedRuns",
+            "projectId": project_id,
+        }))
+        .unwrap()
+        .archived_runs
+        .unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].id, run_id);
+    assert!(archived[0].pinned_at_ms.is_none());
+}
+
+#[test]
 fn recovery_blocks_run_writes_preserves_evidence_and_retry_restores_the_full_set() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

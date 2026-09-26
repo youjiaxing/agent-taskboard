@@ -135,14 +135,6 @@
     min-height: 0;
     overflow: hidden;
   }
-  .mobile-run-organization-switch {
-    flex: 0 0 auto;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-6);
-    padding: var(--space-12) var(--density-gutter-inline) 0;
-  }
-  .mobile-run-organization-switch .ui-button { min-width: 0; }
   .mobile-run-organization-head {
     flex: 0 0 auto;
     padding: var(--space-16) var(--density-gutter-inline) var(--space-10);
@@ -150,38 +142,6 @@
   }
   .mobile-run-organization-head h1 { margin: 0 0 var(--space-4); font-size: var(--font-size-xl); }
   .mobile-run-organization-head p { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
-  .mobile-run-library-list {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    align-content: start;
-    gap: var(--space-6);
-    padding: var(--space-12) var(--density-gutter-inline) calc(var(--space-16) + var(--density-bottom-gap));
-    overflow: auto;
-  }
-  .mobile-run-library-item {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--touch-target-min);
-    align-items: start;
-    gap: var(--space-6);
-    padding: var(--space-8);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-  }
-  .mobile-run-library-main {
-    min-width: 0;
-    display: grid;
-    gap: var(--space-2);
-    padding: 0;
-    border: 0;
-    background: transparent;
-    text-align: left;
-  }
-  .mobile-run-library-main > * { min-width: 0; overflow-wrap: anywhere; }
-  .mobile-run-library-main span,
-  .mobile-run-library-main small { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
   .run-organization-menu-wrap { position: relative; justify-self: end; }
   .run-organization-menu-wrap .run-row-action { width: var(--touch-target-min); min-width: var(--touch-target-min); height: var(--touch-target-min); }
   .run-organization-menu {

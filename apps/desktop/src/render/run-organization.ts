@@ -10,9 +10,7 @@ type OrganizationActionMode = "icons" | "text" | "menu";
 export function runOrganizationLabels() {
   return effectiveClientLanguage() === "zh-CN"
     ? {
-        pinnedRuns: "置顶 Run",
-        pinnedHint: "当前 Host 上置顶的未归档 Run，跨 Project 展示。",
-        pinnedEmpty: "还没有置顶 Run",
+        pinnedMarker: "置顶",
         archive: "Run 归档",
         archiveHint: "当前 Host 上已归档的 Run。恢复不会启动进程，也不会自动打开 Run。",
         archiveEmpty: "还没有归档 Run",
@@ -53,9 +51,7 @@ export function runOrganizationLabels() {
         cancel: "取消",
       }
     : {
-        pinnedRuns: "Runs kept on top",
-        pinnedHint: "Unarchived Runs kept on top across Projects on the current Host.",
-        pinnedEmpty: "No Runs kept on top yet",
+        pinnedMarker: "Kept on top",
         archive: "Run archive",
         archiveHint: "Archived Runs on the current Host. Restoring does not start a process or open the Run.",
         archiveEmpty: "No archived Runs yet",
@@ -97,6 +93,22 @@ export function runOrganizationLabels() {
       };
 }
 
+export function orderRunsForDisplay(runs: RunSummary[]): RunSummary[] {
+  return runs
+    .map((run, index) => ({ run, index }))
+    .sort((left, right) => {
+      const leftPinned = left.run.pinnedAtMs != null;
+      const rightPinned = right.run.pinnedAtMs != null;
+      if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+      if (!leftPinned) return left.index - right.index;
+      if (leftPinned && rightPinned && left.run.pinnedAtMs !== right.run.pinnedAtMs) {
+        return (right.run.pinnedAtMs ?? 0) - (left.run.pinnedAtMs ?? 0);
+      }
+      return left.index - right.index;
+    })
+    .map(({ run }) => run);
+}
+
 export function runOrganizationWritable(snap: Snapshot): boolean {
   return Boolean(snap.capabilities.runOrganization)
     && !runPersistenceWritesBlocked(snap);
@@ -122,17 +134,18 @@ export function runOrganizationActionDescriptors(
   if (!snap.capabilities.runOrganization || run.archivedAtMs) return [];
   const labels = runOrganizationLabels();
   const writable = runOrganizationWritable(snap);
-  const pinLabel = run.pinnedAtMs ? labels.unpin : labels.pin;
+  const pinned = run.pinnedAtMs != null;
+  const pinLabel = pinned ? labels.unpin : labels.pin;
   const pinPending = ui.runOrganizationPending.has(actionKey("pin", run.id));
   const archivePending = ui.runOrganizationPending.has(actionKey("archive", run.id));
   const pin: ActionDescriptor = {
     id: "set-run-pinned",
     label: pinLabel,
-    icon: run.pinnedAtMs ? "↓" : "↑",
+    icon: pinned ? "↓" : "↑",
     disabled: !writable,
     busy: pinPending,
-    pressed: Boolean(run.pinnedAtMs),
-    data: { id: run.id, pinned: run.pinnedAtMs ? "false" : "true" },
+    pressed: pinned,
+    data: { id: run.id, pinned: pinned ? "false" : "true" },
   };
   const archive: ActionDescriptor | null = run.status === "ended"
     ? {

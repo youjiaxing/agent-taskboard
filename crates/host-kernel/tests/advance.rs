@@ -344,6 +344,35 @@ fn archived_source_run_keeps_pending_confirmation_and_veto() {
 }
 
 #[test]
+fn removing_project_cancels_pending_confirmation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), vec![ready(1, "first"), ready(2, "second")]);
+    let project_id = register(&mut h.host, &dir);
+    enable_both(&mut h.host, &project_id);
+    start_bound(&mut h.host, &project_id, "you/garden#1");
+    finish_normal(&mut h, 1);
+    assert!(h.host.snapshot().pending_confirmation.is_some());
+
+    let removed = h
+        .host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": project_id,
+        }))
+        .unwrap();
+    assert!(removed.snapshot.pending_confirmation.is_none());
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "tick",
+            "nowMs": T0 + PENDING_CONFIRM_MS,
+        }))
+        .unwrap();
+    assert_eq!(h.sessions.spawn_count(), 1);
+}
+
+#[test]
 fn auto_pool_skips_grilling_prototype_and_triage_roles() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
