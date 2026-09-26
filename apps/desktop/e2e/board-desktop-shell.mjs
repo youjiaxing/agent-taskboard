@@ -487,6 +487,14 @@ const shellStructure = async () => session.page.evaluate(() => ({
     width: Math.round(node.getBoundingClientRect().width),
   })),
 }));
+const waitForBoardIssueInspector = async (title) => session.page.waitForFunction((expectedTitle) => {
+  const detail = document.querySelector(".board-shell > .issue-detail");
+  return Boolean(
+    detail
+      && detail.querySelector(".detail-hd")?.textContent?.includes(expectedTitle)
+      && detail.querySelector(".issue-document")?.getAttribute("data-document-state") === "ready",
+  );
+}, title);
 const readCssTokens = async (names) => session.page.evaluate((tokenNames) => {
   const style = getComputedStyle(document.documentElement);
   return Object.fromEntries(tokenNames.map((name) => [name, style.getPropertyValue(name).trim()]));
@@ -663,13 +671,18 @@ const boardStateBeforeSettings = await session.page.evaluate(() => {
 });
 if (boardStateBeforeSettings.scrollTop <= 0) throw new Error("settings return fixture needs non-zero board scroll");
 await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+await waitForBoardIssueInspector("child ready");
 if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
   throw new Error("the settings return fixture Issue should stay on the Board");
 }
 await session.page.click("button[data-act='settings']");
 await session.page.waitForSelector(".settings-page");
-await session.page.locator("button[data-act='return-page']").evaluate((node) => node.click());
+await session.page.waitForFunction(() => {
+  const button = document.querySelector("button[data-act='return-page']");
+  if (!(button instanceof HTMLElement)) return false;
+  button.click();
+  return true;
+});
 await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
 const focusStateAfterSettings = await session.page.evaluate(() => ({
   title: document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.replace(/\s+/g, " ").trim(),
