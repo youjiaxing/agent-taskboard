@@ -90,7 +90,10 @@ export async function assertNecessaryTextContrast(page, label) {
       const iterations = animation.effect?.getComputedTiming().iterations;
       return iterations !== Infinity;
     });
-    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
+    await Promise.race([
+      Promise.all(animations.map((animation) => animation.finished.catch(() => undefined))),
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
   });
   const failures = await page.evaluate(() => {
     const parseColor = (value) => {
