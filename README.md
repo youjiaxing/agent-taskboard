@@ -5,7 +5,7 @@
 
 Agent Taskboard 是一个**本地优先的桌面效率工具**：它把多个工作项目中的 GitHub Issue、依赖关系和执行状态集中起来，并把 Issue 交给本机安装的编码 Agent 命令行工具执行。
 
-项目名称是 **Agent Taskboard**，桌面应用名称为 **Agent Taskboard**。当前版本为 `v0.1.1`，可从 [GitHub Releases](https://github.com/youjiaxing/agent-taskboard/releases) 下载。
+项目名称是 **Agent Taskboard**，桌面应用名称为 **Agent Taskboard**。桌面安装包可从 [GitHub Releases](https://github.com/youjiaxing/agent-taskboard/releases) 下载。
 
 > 项目仍处于早期阶段。数据保存在本机，项目路径和 Agent CLI 登录状态也依赖当前电脑的环境。使用前请先阅读下方的限制和安全提示。
 
@@ -192,7 +192,7 @@ Agent CLI 的账号、API key 和登录状态由各 Agent 自己管理，Agent T
 - 更新失败或跨大版本更新不会替换 Host 数据和 Client 设置。
 - 浏览器 Client 不提供替另一台 Host 更换安装包的操作。
 
-发布约束和平台资产说明见 [`docs/adr/0013-packaging-and-auto-update.md`](./docs/adr/0013-packaging-and-auto-update.md)。维护者发布新版本时，向 `v*` 标签推送即可触发 GitHub Actions 发布工作流；更新私钥只应保存在 CI secret 中。
+发布约束和平台资产说明见 [`docs/adr/0013-packaging-and-auto-update.md`](./docs/adr/0013-packaging-and-auto-update.md)。合并影响桌面应用的改动到 `main` 后，GitHub Actions 会自动递增补丁版本、运行发布门禁并创建安装包；手动向 `v*` 标签推送仍可触发发布工作流。更新私钥只应保存在 CI secret 中。
 
 ## 当前范围与限制
 

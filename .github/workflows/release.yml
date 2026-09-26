@@ -8,18 +8,158 @@ on:
         required: true
         type: string
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths:
+      - "apps/desktop/**"
+      - "crates/**"
+      - "Cargo.lock"
 
 permissions:
   contents: write
 
+concurrency:
+  group: agent-taskboard-release-${{ github.event_name == 'push' && github.ref_type == 'branch' && 'main' || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: 准备版本
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.prepare.outputs.publish }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      ref: ${{ steps.prepare.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: prepare
+        name: 生成版本提交或读取发布标签
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            test -n "$INPUT_TAG"
+            git fetch --tags --force
+            if git show-ref --tags --verify --quiet "refs/tags/$INPUT_TAG"; then
+              git checkout --detach "$INPUT_TAG"
+            fi
+            {
+              echo "publish=true"
+              echo "tag=$INPUT_TAG"
+              echo "ref=$(git rev-parse HEAD)"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            {
+              echo "publish=true"
+              echo "tag=$GITHUB_REF_NAME"
+              echo "ref=$(git rev-parse HEAD)"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin main --tags --force
+          git checkout -B main origin/main
+
+          # A manually-created release PR already has its own tag flow. Do not
+          # create another patch release for that merge.
+          if git log -1 --pretty=%B | grep -Eq 'chore\(release\):'; then
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current=$(node -p 'require("./apps/desktop/package.json").version')
+          latest_tag=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              latest_tag="$candidate"
+              break
+            fi
+          done < <(git tag --list 'v*' --sort=-v:refname)
+
+          latest_release_complete=true
+          if [[ -n "$latest_tag" ]]; then
+            latest_version="${latest_tag#v}"
+            assets_json=$(gh release view "$latest_tag" --json isDraft,assets --jq '{draft:.isDraft,names:[.assets[].name]}' 2>/dev/null || echo '{"draft":true,"names":[]}')
+            if [[ "$(jq -r '.draft' <<<"$assets_json")" == "false" ]] &&
+              jq -e --arg version "$latest_version" '
+                .names as $names |
+                [
+                  "latest.json",
+                  "Agent.Taskboard_\($version)_darwin_aarch64.dmg",
+                  "Agent.Taskboard_\($version)_darwin_aarch64.app.tar.gz",
+                  "Agent.Taskboard_\($version)_darwin_aarch64.app.tar.gz.sig",
+                  "Agent.Taskboard_\($version)_darwin_x64.dmg",
+                  "Agent.Taskboard_\($version)_darwin_x64.app.tar.gz",
+                  "Agent.Taskboard_\($version)_darwin_x64.app.tar.gz.sig",
+                  "Agent.Taskboard_\($version)_windows_x64-setup.exe",
+                  "Agent.Taskboard_\($version)_windows_x64-setup.exe.sig"
+                ] | all(. as $asset | $names | index($asset) != null)
+              ' <<<"$assets_json" >/dev/null; then
+              latest_json="$RUNNER_TEMP/latest-$latest_version.json"
+              if gh release download "$latest_tag" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output "$latest_json" --clobber >/dev/null 2>&1 &&
+                jq -e --arg prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$latest_tag/" '
+                  .platforms | to_entries | all(.value.url | startswith($prefix))
+                ' "$latest_json" >/dev/null; then
+                latest_release_complete=true
+              else
+                latest_release_complete=false
+              fi
+            else
+              latest_release_complete=false
+            fi
+          fi
+
+          version=$(node apps/desktop/scripts/auto-release-version.mjs --next "$current" "$latest_tag" "$latest_release_complete")
+          tag="v$version"
+
+          if [[ "$version" != "$current" ]]; then
+            node apps/desktop/scripts/auto-release-version.mjs "$version"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/desktop/src-tauri/tauri.conf.json \
+            apps/desktop/package.json \
+            apps/desktop/src-tauri/Cargo.toml \
+            crates/host-kernel/Cargo.toml \
+            apps/desktop/package-lock.json \
+            Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): $version"
+            git push origin HEAD:main
+          fi
+
+          {
+            echo "publish=true"
+            echo "tag=$tag"
+            if git show-ref --tags --verify --quiet "refs/tags/$tag"; then
+              echo "ref=$(git rev-list -n 1 "$tag")"
+            else
+              echo "ref=$(git rev-parse HEAD)"
+            fi
+          } >>"$GITHUB_OUTPUT"
+
   test:
+    if: needs.prepare.outputs.publish == 'true'
     name: 测试
+    needs: prepare
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -41,8 +181,12 @@ jobs:
           E2E_NAVIGATION_BUDGET_MS: "750"
 
   publish:
+    if: needs.prepare.outputs.publish == 'true'
     name: ${{ matrix.name }}
-    needs: test
+    needs:
+      - prepare
+      - test
+      - tag
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +206,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -74,7 +221,7 @@ jobs:
       - run: npm ci --prefix apps/desktop
       - run: npm --prefix apps/desktop run verify:release
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,7 +229,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ inputs.tag || github.ref_name }}
+          tagName: ${{ needs.prepare.outputs.tag }}
           releaseName: Agent Taskboard __VERSION__
           releaseBody: |
             从本页下载适合当前电脑的安装包：
@@ -164,15 +311,49 @@ jobs:
           name: Windows-native-desktop-evidence
           path: ${{ runner.temp }}/windows-desktop-evidence/*.png
 
+  tag:
+    if: needs.prepare.outputs.publish == 'true'
+    name: 创建发布标签
+    needs:
+      - prepare
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - name: 自动版本创建标签
+        env:
+          EXPECTED_REF: ${{ needs.prepare.outputs.ref }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          expected=$(git rev-parse "$EXPECTED_REF")
+          if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
+            actual=$(git rev-list -n 1 "$TAG")
+            test "$actual" = "$expected" || {
+              echo "tag $TAG points to $actual, expected $expected"
+              exit 1
+            }
+            exit 0
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+
   finalize-updater:
+    if: needs.prepare.outputs.publish == 'true'
     name: 固定 updater 下载地址
-    needs: publish
+    needs:
+      - prepare
+      - publish
     runs-on: ubuntu-latest
     steps:
       - name: 将 latest.json 指向公开 Release 下载地址
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.prepare.outputs.tag }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
