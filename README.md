@@ -134,7 +134,7 @@ cargo check --workspace --all-targets
 npm --prefix apps/desktop run verify:release
 ```
 
-发布工作流还会安装 Playwright Chromium、构建前端并运行 `cargo test`。Windows 安装包另有 [安装冒烟工作流](./.github/workflows/windows-package-smoke.yml)。
+发布工作流还会安装 Playwright Chromium、构建前端并运行 `cargo test`，并在正式发布时验证 Windows 安装包可以安装和启动。
 
 ## 项目结构
 
@@ -143,7 +143,7 @@ crates/host-kernel/       Host 核心：Issue、Project、Run、Agent 和 Tracke
 apps/desktop/src/         TypeScript/Vite Client 界面
 apps/desktop/src-tauri/   Tauri 2 桌面壳和跨平台打包配置
 apps/desktop/e2e/         浏览器端到端测试
-.github/workflows/        测试、发布和 Windows 安装验证
+.github/workflows/        测试与发布
 CONTEXT.md                领域词汇和产品边界
 docs/adr/                 架构决策记录
 ```
