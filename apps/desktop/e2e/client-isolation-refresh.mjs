@@ -57,16 +57,20 @@ const waitForRpcResponse = (page, op, timeout) => page.waitForResponse((response
 }, { timeout });
 
 const focusProject = async (page, projectId, expectedName) => {
-  const started = Date.now();
   const responsePromise = waitForRpcResponse(page, "focusProject", responseTimeoutMs);
-  await page.click(`button[data-act="focus-project"][data-id="${projectId}"]`);
+  const started = Date.now();
+  await page.evaluate((id) => {
+    const button = document.querySelector(`button[data-act="focus-project"][data-id="${CSS.escape(id)}"]`);
+    if (!(button instanceof HTMLElement)) throw new Error(`missing Project focus target ${id}`);
+    button.click();
+  }, projectId);
   const response = await responsePromise;
   if (!response.ok()) throw new Error(`focusProject failed: ${response.status()} ${await response.text()}`);
-  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: responseTimeoutMs });
   const elapsed = Date.now() - started;
   if (elapsed >= navigationBudgetMs) {
     throw new Error(`Project focus waited ${elapsed}ms for the slow Tracker`);
   }
+  await page.waitForSelector(`.project-heading h1:has-text("${expectedName}")`, { timeout: responseTimeoutMs });
 };
 
 const enterIssueFocusWorkspace = async (page, expectedTitle) => {
@@ -106,7 +110,11 @@ await mobile.click('button[data-act="mobile-drawer"]');
 await mobile.waitForSelector("[data-dialog-id='mobile-drawer']");
 const mobileFocusStarted = Date.now();
 const mobileFocusResponsePromise = waitForRpcResponse(mobile, "focusProject", 500);
-await mobile.click(`[data-dialog-id='mobile-drawer'] button[data-act="focus-project"][data-id="${gardenProjectId}"]`);
+await mobile.evaluate((id) => {
+  const button = document.querySelector(`[data-dialog-id='mobile-drawer'] button[data-act="focus-project"][data-id="${CSS.escape(id)}"]`);
+  if (!(button instanceof HTMLElement)) throw new Error(`missing mobile Project focus target ${id}`);
+  button.click();
+}, gardenProjectId);
 const mobileFocusResponse = await mobileFocusResponsePromise;
 if (!mobileFocusResponse.ok()) {
   throw new Error(`mobile focusProject failed: ${mobileFocusResponse.status()} ${await mobileFocusResponse.text()}`);

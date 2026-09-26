@@ -33,16 +33,22 @@ const openClient = async ({ clientId, panelState, tauriLabel = "", runId = "", h
 
 let pointerId = 100;
 const dragBy = async (page, selector, dx) => {
-  const target = page.locator(selector);
-  const box = await target.boundingBox();
-  if (!box) throw new Error(`missing resize target ${selector}`);
   pointerId += 1;
-  const start = { x: box.x + box.width / 2, y: box.y + Math.min(box.height / 2, 80) };
-  await target.dispatchEvent("pointerdown", { pointerId, clientX: start.x, clientY: start.y, bubbles: true });
-  await page.evaluate(({ id, x, y }) => {
-    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: id, clientX: x, clientY: y, bubbles: true }));
-    window.dispatchEvent(new PointerEvent("pointerup", { pointerId: id, clientX: x, clientY: y, bubbles: true }));
-  }, { id: pointerId, x: start.x + dx, y: start.y });
+  await page.evaluate(({ selector, id, dx }) => {
+    const target = document.querySelector(selector);
+    if (!(target instanceof HTMLElement)) throw new Error(`missing resize target ${selector}`);
+    const box = target.getBoundingClientRect();
+    const x = box.x + box.width / 2;
+    const y = box.y + Math.min(box.height / 2, 80);
+    target.dispatchEvent(new PointerEvent("pointerdown", {
+      pointerId: id,
+      clientX: x,
+      clientY: y,
+      bubbles: true,
+    }));
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: id, clientX: x + dx, clientY: y, bubbles: true }));
+    window.dispatchEvent(new PointerEvent("pointerup", { pointerId: id, clientX: x + dx, clientY: y, bubbles: true }));
+  }, { selector, id: pointerId, dx });
 };
 
 const widthOf = async (page, selector) => {
