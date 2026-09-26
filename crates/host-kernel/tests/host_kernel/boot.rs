@@ -58,12 +58,26 @@ fn host_data_and_desktop_client_settings_are_two_trees() {
 #[test]
 fn invalid_run_organization_metadata_falls_back_without_losing_the_run() {
     let tmp = tempfile::tempdir().unwrap();
-    let host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let project_dir = tmp.path().join("work/project-1");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let project_id =
+        crate::common::register_project(&mut host, "project-1", &project_dir, "you/project-1");
     let runs_path = host.snapshot().data.host_dir.join("runs.json");
     drop(host);
     std::fs::write(
         &runs_path,
-        br#"[{"id":"run-1","projectId":"project-1","agentId":"codex","agentName":"Codex","unbound":true,"status":"ended","pinnedAtMs":"bad","archivedAtMs":-1}]"#,
+        serde_json::to_vec(&serde_json::json!([{
+            "id": "run-1",
+            "projectId": project_id,
+            "agentId": "codex",
+            "agentName": "Codex",
+            "unbound": true,
+            "status": "ended",
+            "pinnedAtMs": "bad",
+            "archivedAtMs": -1
+        }]))
+        .unwrap(),
     )
     .unwrap();
 
