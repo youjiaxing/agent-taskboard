@@ -605,7 +605,12 @@ export async function renderAfterTick(fullRender: boolean): Promise<void> {
     && (ui.mobileProjectHistoryRunOpen
       || (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs"));
   if (!deferMobileHistoryIssue && ui.snapshot?.board?.selected?.document.kind === "unloaded") {
-    await loadSelectedIssueDocument();
+    try {
+      await loadSelectedIssueDocument();
+    } catch {
+      // A tick can start a document read just as the user changes Issue.
+      // The next render will retry for the newly selected Issue.
+    }
     fullRender = true;
   }
   if (fullRender) render();

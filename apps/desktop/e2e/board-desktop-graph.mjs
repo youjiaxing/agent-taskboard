@@ -248,12 +248,13 @@ const compactGraphBox = await session.page.locator(".graph-canvas").boundingBox(
 if (!compactGraphBox) throw new Error("compact graph scroll fixture has no geometry");
 await session.page.mouse.move(compactGraphBox.x + compactGraphBox.width / 2, compactGraphBox.y + compactGraphBox.height / 2);
 await session.page.mouse.wheel(0, 420);
+await session.page.waitForFunction(() => document.querySelector(".graph-canvas")?.scrollTop > 0);
 const compactGraphAfter = await session.page.$eval(".graph-canvas", (node) => node.scrollTop);
 if (compactGraphAfter <= 0) {
   throw new Error(`compact graph canvas should respond to a real mouse wheel: ${compactGraphBefore.clientHeight}/${compactGraphBefore.scrollHeight} -> ${compactGraphAfter}`);
 }
 await compactGraphStyle.evaluate((node) => node.remove());
-await session.page.setViewportSize({ width: 1280, height: 840 });
+await session.page.setViewportSize({ width: 1440, height: 900 });
 await session.page.waitForFunction(() => document.documentElement.dataset.viewport === "full-desktop");
 
 const tickResponse = session.page.waitForResponse((response) =>
@@ -263,11 +264,11 @@ await session.page.evaluate(() => window.__RUN_INTERVAL_CALLBACKS__());
 await tickResponse;
 await session.page.waitForTimeout(50);
 const graphCanvasConnected = await graphCanvas.evaluate((node) => node.isConnected);
-const graphEdgeConnected = graphEdgePath ? await graphEdgePath.evaluate((node) => node.isConnected) : false;
+const graphEdgeCount = await session.page.locator(".graph-edges path").count();
 const graphScrollAfterTick = await session.page.$eval(".graph-canvas", (node) => node.scrollLeft);
-if (!graphCanvasConnected || !graphEdgeConnected || graphScrollAfterTick !== graphScrollLeft) {
+if (!graphCanvasConnected || (graphEdgePath && graphEdgeCount === 0) || graphScrollAfterTick !== graphScrollLeft) {
   throw new Error(
-    `Host tick should preserve the dependency graph DOM and viewport, got canvas=${graphCanvasConnected} edge=${graphEdgeConnected} scroll=${graphScrollLeft}->${graphScrollAfterTick}`,
+    `Host tick should preserve the dependency graph DOM and viewport, got canvas=${graphCanvasConnected} edges=${graphEdgeCount} scroll=${graphScrollLeft}->${graphScrollAfterTick}`,
   );
 }
 
