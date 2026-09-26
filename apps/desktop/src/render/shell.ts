@@ -10,11 +10,11 @@ import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../sta
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, iconButton, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
-import { runOrganizationActions, runPersistenceWritesBlocked } from "./run-organization";
+import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
-  const runs = (snap.runs ?? []).filter((run) => run.projectId === project.id);
-  return `<div class="project-block">
+  const runs = orderRunsForDisplay((snap.runs ?? []).filter((run) => run.projectId === project.id));
+  return `<div class="project-block" data-project="${escapeHtml(project.id)}">
     ${projectRow(copy, project, focusedId)}
     ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
   </div>`;
@@ -60,6 +60,7 @@ export function runIdentity(copy: ShellCopy, run: RunSummary): string {
 export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
   const identity = runIdentity(copy, run);
   const localCopy = startupCopy(effectiveClientLanguage());
+  const organizationLabels = runOrganizationLabels();
   const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
   const runWritesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const stateClass =
@@ -77,7 +78,6 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
           ? copy.running
           : "";
   const actions = [
-    ui.snapshot ? runOrganizationActions(ui.snapshot, run, "icons") : "",
     desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
       ? iconButton(
           { id: "open-run-window", label: localCopy.openRunWindow, icon: "↗", data: { id: run.id } },
@@ -94,10 +94,14 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
           { className: "run-row-action danger", attributes: { title: runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.stopRun } },
         )
       : "",
+    ui.snapshot ? runOrganizationActions(ui.snapshot, run, "icons") : "",
   ].join("");
-  return `<div class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)}" data-run="${escapeHtml(run.id)}">
+  const pinMarker = run.pinnedAtMs != null
+    ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
+    : "";
+  return `<div class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
     <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-      <b>${escapeHtml(run.agentName)}</b>
+      <b>${escapeHtml(run.agentName)}${pinMarker}</b>
       <span>${escapeHtml(identity)}</span>
       ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
       ${action ? `<span class="run-action">${action}</span>` : ""}

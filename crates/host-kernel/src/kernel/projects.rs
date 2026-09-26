@@ -220,12 +220,48 @@ impl HostKernel {
         Ok(())
     }
 
+    fn archive_project_ended_runs(&mut self, project_id: &str) -> Result<(), KernelError> {
+        let mut runs = self.runs.clone();
+        let mut archived_ids = Vec::new();
+        for run in &mut runs {
+            if run.project_id != project_id || run.is_archived() {
+                continue;
+            }
+            if run.is_active() {
+                return Err(KernelError::Denied(
+                    "cannot remove a Project with an active Run".into(),
+                ));
+            }
+            run.pinned_at_ms = None;
+            run.archived_at_ms = Some(self.now_ms);
+            archived_ids.push(run.id.clone());
+        }
+        if archived_ids.is_empty() {
+            return Ok(());
+        }
+        self.commit_run_records(runs)?;
+        for run_id in archived_ids {
+            self.clear_run_navigation(&run_id);
+        }
+        Ok(())
+    }
+
     pub(crate) fn remove_project(&mut self, project_id: &str) -> Result<(), KernelError> {
-        let index = self
+        self.ensure_run_persistence_writable()?;
+        let Some(index) = self
             .projects
             .iter()
             .position(|project| project.id == project_id)
-            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        else {
+            if self
+                .project_tombstones
+                .iter()
+                .any(|tombstone| tombstone.id == project_id)
+            {
+                return Ok(());
+            }
+            return Err(KernelError::Protocol("unknown project".into()));
+        };
         if self.project_has_active_run(project_id) {
             return Err(KernelError::Denied(
                 "cannot remove a Project with an active Run".into(),
@@ -240,6 +276,7 @@ impl HostKernel {
                 "Project conflicts with an existing tombstone".into(),
             ));
         }
+        self.archive_project_ended_runs(project_id)?;
         let removed = self.projects[index].clone();
         let was_current = self.focused_project_id.as_deref() == Some(project_id);
         let mut projects = self.projects.clone();

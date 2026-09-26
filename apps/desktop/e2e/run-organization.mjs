@@ -46,12 +46,17 @@ try {
   await page.click("button[data-act='toggle-hosts']");
   void localHostId;
 
-  const initialPinned = await page.$$eval("[data-pinned-runs] .run-row", (nodes) => nodes.map((node) => node.dataset.run));
-  assert.deepEqual(initialPinned, [activeRunId, pendingRunId], "pinned Runs should be sorted by pinnedAtMs across Projects");
-  assert.equal(await page.locator(`[data-pinned-runs] .run-row[data-run='${activeRunId}'] [data-act='archive-run']`).count(), 0, "active Run must not offer archive");
-  assert.equal(await page.locator(`[data-pinned-runs] .run-row[data-run='${pendingRunId}'] [data-act='archive-run']`).count(), 1, "ended Run should offer archive");
+  const pinnedRows = await page.$$eval(".project-block .run-row[data-pinned='true']", (nodes) => nodes.map((node) => ({
+    run: node.dataset.run,
+    project: node.closest(".project-block")?.dataset.project,
+  })));
+  assert.deepEqual(pinnedRows.map((row) => row.run).sort(), [activeRunId, pendingRunId].sort(), "pinned Runs should remain visible in their owning Projects");
+  assert.equal(new Set(pinnedRows.map((row) => row.project)).size, 2, "pinned Runs from different Projects must not share a Host-level group");
+  assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] [data-act='archive-run']`).count(), 0, "active Run must not offer archive");
+  assert.equal(await page.locator(`.run-row[data-run='${pendingRunId}'] [data-act='archive-run']`).count(), 1, "ended Run should offer archive");
+  assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] .run-pin-marker`).count(), 1, "pinned Run should show a visible marker");
 
-  await page.click(`[data-pinned-runs] .run-row[data-run='${pendingRunId}'] .run-main`);
+  await page.click(`.run-row[data-run='${pendingRunId}'] .run-main`);
   await page.waitForSelector(`[data-terminal-surface='readonly'][data-run='${pendingRunId}']`);
   await page.click(`.run-dock-hd [data-act='archive-run'][data-id='${pendingRunId}']`);
   await page.waitForSelector(".project-board");
@@ -167,19 +172,19 @@ try {
   await page.click("button[data-act='toggle-hosts']");
   await page.click(`.host-picker button[data-id='${remoteHostId}']`);
   await page.waitForFunction(() => !document.querySelector("button[data-act='open-run-archive']"));
-  assert.equal(await page.locator("[data-pinned-runs]").count(), 0, "old Host capability must hide Run organization UI");
+  assert.equal(await page.locator("[data-pinned-runs]").count(), 0, "Run organization must not render a Host-level pinned group");
   await page.click("button[data-act='toggle-hosts']");
   await page.click(`.host-picker button[data-id='${focusedLocalHostId}']`);
-  await page.waitForSelector(`[data-pinned-runs] .run-row[data-run='${activeRunId}']`);
+  await page.waitForSelector(`.run-row[data-run='${activeRunId}']`);
   await page.click("button[data-act='toggle-hosts']");
   await page.click(`.host-picker button[data-id='${remoteHostId}']`);
-  await page.waitForSelector(`[data-pinned-runs] .run-row[data-run='${remoteRunId}']`);
-  assert.deepEqual(await page.$$eval("[data-pinned-runs] .run-row", (nodes) => nodes.map((node) => node.dataset.run)), [remoteRunId], "remote Host must not inherit local pinned Runs");
+  await page.waitForSelector(`.run-row[data-run='${remoteRunId}']`);
+  assert.equal(await page.locator(`.run-row[data-run='${remoteRunId}'][data-pinned='true']`).count(), 1, "remote Host keeps its own Project-local pin");
   await page.unroute("**/rpc");
   await page.click("button[data-act='toggle-hosts']");
   await page.click(`.host-picker button[data-id='${focusedLocalHostId}']`);
-  await page.waitForSelector(`[data-pinned-runs] .run-row[data-run='${activeRunId}']`);
-  await page.click(`[data-pinned-runs] .run-row[data-run='${activeRunId}'] .run-main`);
+  await page.waitForSelector(`.run-row[data-run='${activeRunId}']`);
+  await page.click(`.run-row[data-run='${activeRunId}'] .run-main`);
   await page.waitForSelector(`[data-terminal-surface='live'][data-run='${activeRunId}']`);
 
   let recovery = true;
@@ -202,7 +207,7 @@ try {
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-run-persistence='recovery'] button[data-act='retry-run-persistence']");
-  assert.equal(await page.locator("[data-pinned-runs] [data-run-organization]:not(:disabled)").count(), 0, "recovery mode must disable Run writes");
+  assert.equal(await page.locator(".project-block [data-run-organization]:not(:disabled)").count(), 0, "recovery mode must disable Run writes");
   assert.equal(await page.locator(".side button[data-act='new-run']:not(:disabled)").count(), 0, "recovery mode must disable new Run entry points");
   assert.equal(await page.locator("button[data-act='execute-run']:not(:disabled), button[data-act='continue-run']:not(:disabled), button[data-act='stop-run']:not(:disabled)").count(), 0, "recovery mode must disable desktop Run lifecycle writes");
 
@@ -248,7 +253,7 @@ try {
   });
   await page.locator(".side button[data-act='focus-project']").first().click();
   await page.waitForSelector(".project-board");
-  await page.$eval(`[data-pinned-runs] .run-row[data-run='${activeRunId}'] [data-act='set-run-pinned']`, (node) => node.click());
+  await page.$eval(`.run-row[data-run='${activeRunId}'] [data-act='set-run-pinned']`, (node) => node.click());
   await page.waitForSelector("[data-run-persistence='write-error'] button[data-act='retry-run-organization']");
   await page.click("[data-run-persistence='write-error'] button[data-act='retry-run-organization']");
   await page.waitForFunction(() => !document.querySelector("[data-run-persistence='write-error']"));

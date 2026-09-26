@@ -28,9 +28,27 @@ pub(crate) fn restrict_to_owner(path: &Path) -> Result<(), KernelError> {
 
 pub(crate) fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(windows)]
-    if to.exists() {
-        fs::remove_file(to)?;
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING};
+
+        let mut from_wide: Vec<u16> = from.as_os_str().encode_wide().collect();
+        from_wide.push(0);
+        let mut to_wide: Vec<u16> = to.as_os_str().encode_wide().collect();
+        to_wide.push(0);
+        let replaced = unsafe {
+            MoveFileExW(
+                from_wide.as_ptr(),
+                to_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING,
+            )
+        };
+        if replaced == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok(());
     }
+    #[cfg(not(windows))]
     fs::rename(from, to)
 }
 

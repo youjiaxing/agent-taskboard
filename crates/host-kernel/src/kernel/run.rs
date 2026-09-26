@@ -561,7 +561,7 @@ impl HostKernel {
         self.decorate_runs(&runs)
     }
 
-    fn clear_run_navigation(&mut self, run_id: &str) {
+    pub(crate) fn clear_run_navigation(&mut self, run_id: &str) {
         clear_local_run_navigation(
             &mut self.focused_run_id,
             &mut self.workspace_view,
@@ -1226,6 +1226,7 @@ impl HostKernel {
             }
         };
         let mut crashed_ids = Vec::new();
+        let mut persisted_changes = false;
         for run in &mut runs {
             if run.recent_output.contains('\x1b') {
                 run.recent_output = session::readable_pty_output(run.recent_output.as_bytes());
@@ -1235,9 +1236,20 @@ impl HostKernel {
                 run.waiting_for_user = false;
                 run.ended_reason = Some(RunEndedReason::Crash);
                 crashed_ids.push(run.id.clone());
+                persisted_changes = true;
+            }
+            if !run.is_archived()
+                && !self
+                    .projects
+                    .iter()
+                    .any(|project| project.id == run.project_id)
+            {
+                run.pinned_at_ms = None;
+                run.archived_at_ms = Some(self.now_ms);
+                persisted_changes = true;
             }
         }
-        if !crashed_ids.is_empty() {
+        if persisted_changes {
             if let Err(err) = self.persist_run_records(&runs) {
                 self.set_run_persistence_recovery(
                     RunPersistenceFailureKind::WriteFailed,

@@ -81,11 +81,11 @@ _Avoid_: 继承终端, Host 环境（那是图标进程自己的）, login env�
 _Avoid_: Job（偏 CI）, Session（易与编辑器/聊天会话混淆）
 
 **置顶**:
-某台 Host 对未归档 Run 保存的整理标记，可用于活跃或已结束 Run；在该 Host 的 Client 之间一致，不跨 Host 聚合。产品文案统一使用“置顶 / 取消置顶”，不显示 `pin`。置顶不改变 Run 的执行状态、等待操作、Issue 认领或 PTY。
+某个 Project 对其未归档 Run 保存的整理标记，可用于活跃或已结束 Run；在该 Host 的 Client 之间一致，但只在所属 Project 内生效。Project 和 Issue 的 Run 历史中，置顶 Run 排在未置顶 Run 前，且持续显示置顶标志；置顶 Run 按 `pinnedAtMs` 倒序，未置顶 Run 保持原页面顺序。产品文案统一使用“置顶 / 取消置顶”，不显示 `pin`。置顶不改变 Run 的执行状态、等待操作、Issue 认领或 PTY，也不产生 Host 级置顶页。
 _Avoid_: Pin（仅可用于代码字段或协议名）, 收藏（弱化了固定展示语义）, 把置顶当成 Run 状态
 
 **归档 Run**:
-某台 Host 从普通 Run 导航与历史投影中收起的已结束 Run。归档是整理维度，不是第四种 `RunStatus`；只有 `ended` Run 可归档，归档会清除置顶，但不会停止进程、改变认领、执行已停、Continue、自动推进、用量汇总、telemetry、隔离目录或历史关联。恢复只取消归档，不启动进程、不恢复 PTY、不重新置顶。
+某台 Host 从普通 Run 导航与历史投影中收起的已结束 Run。归档是整理维度，不是第四种 `RunStatus`；只有 `ended` Run 可归档，归档会清除置顶，但不会停止进程、改变认领、执行已停、Continue、自动推进、用量汇总、telemetry、隔离目录或历史关联。移除 Project 时，已结束的未归档 Run 自动归档并保留在历史中；含活跃 Run 的 Project 不能移除。恢复只取消归档，不启动进程、不恢复 PTY、不重新置顶。
 _Avoid_: 已删除 Run, Done Run, 把 archived 加进 `RunStatus`, 用归档隐式停止活跃 Run
 
 **Run 持久化恢复**:

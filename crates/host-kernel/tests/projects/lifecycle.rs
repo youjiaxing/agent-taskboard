@@ -301,7 +301,7 @@ fn a_project_that_never_synced_the_tracker_can_still_be_removed() {
 }
 
 #[test]
-fn removing_a_project_preserves_ended_run_history() {
+fn removing_a_project_archives_ended_run_history() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/history");
     let mut host = boot_memory(tmp.path());
@@ -310,6 +310,12 @@ fn removing_a_project_preserves_ended_run_history() {
     host.handle(serde_json::json!({
         "op": "stopRun",
         "runId": run_id,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setRunPinned",
+        "runId": run_id,
+        "pinned": true,
     }))
     .unwrap();
 
@@ -321,8 +327,19 @@ fn removing_a_project_preserves_ended_run_history() {
         .unwrap();
 
     assert!(out.snapshot.projects.is_empty());
-    assert_eq!(out.snapshot.runs.len(), 1);
-    assert_eq!(out.snapshot.runs[0].project_id, id);
+    assert!(out.snapshot.runs.is_empty());
+    let archived = host
+        .handle(serde_json::json!({
+            "op": "listArchivedRuns",
+            "projectId": id,
+        }))
+        .unwrap()
+        .archived_runs
+        .unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].project_id, id);
+    assert!(archived[0].pinned_at_ms.is_none());
+    assert!(archived[0].archived_at_ms.is_some());
     let tracker_snapshot = out
         .snapshot
         .data
@@ -332,7 +349,7 @@ fn removing_a_project_preserves_ended_run_history() {
         .join("tracker-snapshot");
     assert!(tracker_snapshot.is_file());
     drop(host);
-    assert_eq!(boot_memory(tmp.path()).snapshot().runs.len(), 1);
+    assert!(boot_memory(tmp.path()).snapshot().runs.is_empty());
 }
 
 #[test]
@@ -384,6 +401,61 @@ fn project_registration_changes_roll_back_when_settings_cannot_be_persisted() {
         .unwrap_err();
     assert!(matches!(remove_error, KernelError::Io(_)));
     assert_eq!(host.snapshot().projects.len(), 1);
+}
+
+#[test]
+fn removing_project_keeps_archived_runs_when_settings_commit_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/partial");
+    let mut host = boot_memory(tmp.path());
+    let id = register(&mut host, "partial", &dir, "you/partial");
+    let run_id = start_unbound_grok(&mut host, &id).snapshot.focused_run_id;
+    host.handle(serde_json::json!({
+        "op": "stopRun",
+        "runId": run_id,
+    }))
+    .unwrap();
+    host.handle(serde_json::json!({
+        "op": "setRunPinned",
+        "runId": run_id,
+        "pinned": true,
+    }))
+    .unwrap();
+
+    let settings_tmp = host
+        .snapshot()
+        .data
+        .host_settings_path
+        .with_extension("json.tmp");
+    std::fs::create_dir(&settings_tmp).unwrap();
+
+    let error = host
+        .handle(serde_json::json!({
+            "op": "removeProject",
+            "projectId": id,
+        }))
+        .unwrap_err();
+    assert!(matches!(error, KernelError::Io(_)));
+    assert_eq!(host.snapshot().projects.len(), 1);
+    assert!(host.snapshot().runs.is_empty());
+    let archived = host
+        .handle(serde_json::json!({
+            "op": "listArchivedRuns",
+            "projectId": id,
+        }))
+        .unwrap()
+        .archived_runs
+        .unwrap();
+    assert_eq!(archived.len(), 1);
+    assert!(archived[0].pinned_at_ms.is_none());
+
+    std::fs::remove_dir(settings_tmp).unwrap();
+    host.handle(serde_json::json!({
+        "op": "removeProject",
+        "projectId": id,
+    }))
+    .unwrap();
+    assert!(host.snapshot().projects.is_empty());
 }
 
 #[test]

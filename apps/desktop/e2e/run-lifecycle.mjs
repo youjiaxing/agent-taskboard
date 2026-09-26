@@ -63,7 +63,7 @@ let activeSidebarRun = page.locator(".side .run-row.waiting").first();
 const activeSidebarActions = await activeSidebarRun.locator(".run-row-actions button").evaluateAll((nodes) =>
   nodes.map((node) => node.dataset.act),
 );
-if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
+if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|set-run-pinned") {
   throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
 }
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
@@ -71,7 +71,7 @@ for (const runId of endedRunIds) {
   const endedActions = await page.locator(`.side .run-row[data-run="${runId}"] .run-row-actions button`).evaluateAll((nodes) =>
     nodes.map((node) => node.dataset.act),
   );
-  if (endedActions.join("|") !== "open-usage-run") {
+  if (endedActions.join("|") !== "open-usage-run|set-run-pinned|archive-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
   }
 }

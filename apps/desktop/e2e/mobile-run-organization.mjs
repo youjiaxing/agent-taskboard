@@ -55,9 +55,6 @@ async function assertMobileShell(page, label) {
 export async function runMobileRunOrganizationJourney(page, options) {
   const {
     url,
-    activeRunId,
-    remoteHostId,
-    remoteRunId,
     mobileProjectId,
     mobileBoundRunId,
     mobileActiveRunId,
@@ -67,7 +64,6 @@ export async function runMobileRunOrganizationJourney(page, options) {
   } = options;
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await rpc(page, url, { op: "setRunPinned", runId: activeRunId, pinned: true });
   await rpc(page, url, { op: "setRunPinned", runId: mobileActiveRunId, pinned: true });
   await rpc(page, url, { op: "setRunPinned", runId: mobileEndedRunId, pinned: true });
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -75,54 +71,48 @@ export async function runMobileRunOrganizationJourney(page, options) {
 
   await openDrawer(page);
   const drawerActions = await page.$$eval("[data-dialog-id='mobile-drawer'] [data-act]", (nodes) => nodes.map((node) => node.dataset.act));
-  assert.equal(drawerActions.includes("open-run-pinned"), true);
+  assert.equal(drawerActions.includes("open-run-pinned"), false);
   assert.equal(drawerActions.includes("open-run-archive"), true);
-  const hosts = await page.$$eval("[data-dialog-id='mobile-drawer'] [data-act='focus-host']", (nodes) => nodes.map((node) => ({ id: node.dataset.id, active: node.classList.contains("active") })));
-  const localHostId = hosts.find((host) => host.active)?.id;
-  assert.ok(localHostId);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='open-run-pinned']");
-  await page.waitForSelector("[data-primary-page='run-pinned']");
-  assert.equal(await page.locator(".mobile-nav").count(), 0, "Run organization must stay outside bottom navigation");
-  const pinnedIds = await page.$$eval("[data-pinned-run]", (nodes) => nodes.map((node) => node.dataset.pinnedRun));
-  assert.equal(pinnedIds.includes(activeRunId), true, "pinned page should span current Host Projects");
-  assert.equal(pinnedIds.includes(mobileActiveRunId), true);
-  assert.equal(pinnedIds.includes(mobileEndedRunId), true);
-  assert.match((await page.textContent(".mobile-run-library-list")) ?? "", /tools/);
-  assert.match((await page.textContent(".mobile-run-library-list")) ?? "", /mobile/);
+  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
+  await page.waitForSelector(".mobile-board-view");
+  await openDrawer(page);
+  await page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+  await page.waitForSelector(".mobile-project-history");
+  const mobileHistoryIds = await page.$$eval(".mobile-project-history .workspace-run-history-item", (nodes) => nodes.map((node) => ({
+    id: node.dataset.id,
+    pinned: node.dataset.pinned,
+  })));
+  assert.equal(mobileHistoryIds.find((run) => run.id === mobileActiveRunId)?.pinned, "true");
+  assert.equal(mobileHistoryIds.find((run) => run.id === mobileEndedRunId)?.pinned, "true");
+  assert.equal(mobileHistoryIds.find((run) => run.id === mobileBoundRunId)?.pinned, "false");
+  assert.ok(mobileHistoryIds.findIndex((run) => run.id === mobileEndedRunId) < mobileHistoryIds.findIndex((run) => run.id === mobileBoundRunId), "pinned history must precede unpinned history");
+  assert.equal(await page.locator(`.workspace-run-history-item[data-id='${mobileActiveRunId}'] .run-pin-marker`).count(), 1, "mobile Project history should show the pin marker");
 
-  let menu = await openRunMenu(page, mobileActiveRunId, `[data-pinned-run='${mobileActiveRunId}']`);
+  let menu = await openRunMenu(page, mobileActiveRunId, `.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}']`);
   assert.equal(await menu.locator("[data-act='archive-run']").count(), 0, "active waiting Run must not offer archive");
   assert.equal(await menu.locator("[data-act='set-run-pinned']").count(), 1);
-  const activeMenuTrigger = page.locator(`[data-pinned-run='${mobileActiveRunId}'] [data-act='mobile-run-menu']`);
+  const activeMenuTrigger = page.locator(`.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}'] [data-act='mobile-run-menu']`);
   assert.match((await activeMenuTrigger.getAttribute("aria-label")) ?? "", /Run/);
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => !document.querySelector(".run-organization-menu"));
   assert.equal(await activeMenuTrigger.evaluate((node) => node === document.activeElement), true, "Escape should close the Run menu and restore trigger focus");
-  menu = await openRunMenu(page, mobileEndedRunId, `[data-pinned-run='${mobileEndedRunId}']`);
+  menu = await openRunMenu(page, mobileEndedRunId, `.mobile-project-history .workspace-run-history-item[data-id='${mobileEndedRunId}']`);
   assert.equal(await menu.locator("[data-act='archive-run']").count(), 1, "ended Run should offer archive");
-  await page.click(`[data-pinned-run='${mobileEndedRunId}'] [data-act='mobile-run-menu']`);
+  await page.click(`.mobile-project-history .workspace-run-history-item[data-id='${mobileEndedRunId}'] [data-act='mobile-run-menu']`);
 
-  await page.click(`[data-pinned-run='${mobileActiveRunId}'] .mobile-run-library-main`);
+  await page.click(`.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}'] .workspace-run-history-main`);
   await page.waitForSelector(`[data-terminal-surface='readable'][data-run='${mobileActiveRunId}']`);
   await page.waitForFunction(() => document.querySelector(".mobile-run-output")?.textContent?.includes("mobile active output"));
   assert.match((await page.textContent(".mobile-run-output")) ?? "", /mobile active output/);
   assert.match((await page.textContent(".mobile-output-panel")) ?? "", /等待操作/);
   await page.fill("[data-mobile-run-input] input[name='text']", "mobile draft survives organization navigation");
-  await page.click("button[data-act='return-page']");
-  await page.waitForSelector("[data-primary-page='run-pinned']");
-  await page.click(`[data-pinned-run='${mobileActiveRunId}'] .mobile-run-library-main`);
+  await page.click("button[data-act='mobile-project-history-return']");
+  await page.waitForSelector(".mobile-project-history");
+  await page.click(`.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}'] .workspace-run-history-main`);
   await page.waitForSelector(`[data-terminal-surface='readable'][data-run='${mobileActiveRunId}']`);
   assert.equal(await page.inputValue("[data-mobile-run-input] input[name='text']"), "mobile draft survives organization navigation");
-  await page.click("button[data-act='return-page']");
-  await page.waitForSelector("[data-primary-page='run-pinned']");
-
-  await openDrawer(page);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-host'][data-id='${remoteHostId}']`);
-  await page.waitForSelector(`[data-pinned-run='${remoteRunId}']`);
-  assert.deepEqual(await page.$$eval("[data-pinned-run]", (nodes) => nodes.map((node) => node.dataset.pinnedRun)), [remoteRunId], "switching Host must replace the pinned projection");
-  await openDrawer(page);
-  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-host'][data-id='${localHostId}']`);
-  await page.waitForSelector(`[data-pinned-run='${mobileActiveRunId}']`);
+  await page.click("button[data-act='mobile-project-history-return']");
+  await page.waitForSelector(".mobile-project-history");
 
   await openDrawer(page);
   await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
@@ -211,8 +201,8 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.click(`.workspace-run-history-item[data-id='${mobileBoundRunId}'] [data-act='mobile-run-menu']`);
 
   await openDrawer(page);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='open-run-pinned']");
-  await page.waitForSelector("[data-primary-page='run-pinned']");
+  await page.click("[data-dialog-id='mobile-drawer'] [data-act='open-run-archive']");
+  await page.waitForSelector(".mobile-run-archive-page");
   let recovery = true;
   await page.route("**/rpc", async (route) => {
     const request = route.request().postDataJSON();
@@ -232,9 +222,13 @@ export async function runMobileRunOrganizationJourney(page, options) {
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await openDrawer(page);
-  await page.click("[data-dialog-id='mobile-drawer'] [data-act='open-run-pinned']");
+  await page.click(`[data-dialog-id='mobile-drawer'] [data-act='focus-project'][data-id='${mobileProjectId}']`);
+  await page.waitForSelector(".mobile-board-view");
+  await openDrawer(page);
+  await page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-history-entry']");
+  await page.waitForSelector(".mobile-project-history");
   await page.waitForSelector("[data-run-persistence='recovery'] [data-act='retry-run-persistence']");
-  menu = await openRunMenu(page, mobileActiveRunId, `[data-pinned-run='${mobileActiveRunId}']`);
+  menu = await openRunMenu(page, mobileActiveRunId, `.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}']`);
   assert.equal(await menu.locator("[data-act='set-run-pinned']:not(:disabled), [data-act='archive-run']:not(:disabled)").count(), 0, "recovery mode must disable mobile organization writes");
   await page.click("[data-run-persistence='recovery'] [data-act='retry-run-persistence']");
   await page.waitForFunction(() => !document.querySelector("[data-run-persistence='recovery']"));
@@ -250,10 +244,10 @@ export async function runMobileRunOrganizationJourney(page, options) {
     }
     await route.continue();
   });
-  menu = await openRunMenu(page, mobileActiveRunId, `[data-pinned-run='${mobileActiveRunId}']`);
+  menu = await openRunMenu(page, mobileActiveRunId, `.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}']`);
   await menu.locator("[data-act='set-run-pinned']").click();
   await page.waitForSelector("[data-run-persistence='write-error'] [data-act='retry-run-organization']");
-  assert.equal(await page.locator("[data-primary-page='run-pinned']").count(), 1, "write failure must stay on the current mobile page");
+  assert.equal(await page.locator(".mobile-project-history").count(), 1, "write failure must stay on the current mobile Project history");
   await page.click("[data-run-persistence='write-error'] [data-act='retry-run-organization']");
   await page.waitForFunction(() => !document.querySelector("[data-run-persistence='write-error']"));
   await page.unroute("**/rpc");
