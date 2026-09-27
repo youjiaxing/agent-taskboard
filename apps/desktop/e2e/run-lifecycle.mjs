@@ -70,7 +70,22 @@ await page.click("button[data-act='appearance-menu']");
 await page.click("button[data-act='appearance-menu']");
 
 let activeSidebarRun = page.locator(".side .run-row.waiting").first();
-const activeSidebarActions = await activeSidebarRun.locator(".run-row-actions button").evaluateAll((nodes) =>
+const runRowHeights = await page.$$eval(".side .run-row", (nodes) =>
+  nodes.map((node) => Math.round(node.getBoundingClientRect().height)),
+);
+if (runRowHeights.some((height) => height > 34)) {
+  throw new Error(`sidebar Run rows should stay single-line, got heights: ${JSON.stringify(runRowHeights)}`);
+}
+const openSidebarRunMenu = async (run) => {
+  const openMenu = page.locator(".side .run-row.menu-open button[data-act='run-menu']");
+  if (await openMenu.count()) await openMenu.click({ force: true });
+  await run.hover();
+  await run.locator("button[data-act='run-menu']").click();
+  await run.locator(".run-row-menu").waitFor();
+  return run.locator(".run-row-menu");
+};
+let activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
+const activeSidebarActions = await activeSidebarMenu.locator("button").evaluateAll((nodes) =>
   nodes.map((node) => node.dataset.act),
 );
 if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|set-run-pinned") {
@@ -78,13 +93,18 @@ if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|
 }
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
 for (const runId of endedRunIds) {
-  const endedActions = await page.locator(`.side .run-row[data-run="${runId}"] .run-row-actions button`).evaluateAll((nodes) =>
+  const endedRun = page.locator(`.side .run-row[data-run="${runId}"]`);
+  const endedMenu = await openSidebarRunMenu(endedRun);
+  const endedActions = await endedMenu.locator("button").evaluateAll((nodes) =>
     nodes.map((node) => node.dataset.act),
   );
   if (endedActions.join("|") !== "open-usage-run|set-run-pinned|archive-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
   }
 }
+
+await activeSidebarRun.click({ button: "right" });
+await activeSidebarRun.locator(".run-row-menu").waitFor();
 
 await activeSidebarRun.hover();
 const hoverVisibility = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
@@ -112,10 +132,13 @@ activeSidebarRun = page.locator(".side .run-row.waiting").first();
 await activeSidebarRun.locator(".run-main").focus();
 await page.keyboard.press("Tab");
 const keyboardAction = await page.evaluate(() => document.activeElement?.getAttribute("data-act"));
-if (keyboardAction !== "open-run-window") {
-  throw new Error(`first keyboard-reachable Run action should open the standalone window, got ${keyboardAction}`);
+if (keyboardAction !== "run-menu") {
+  throw new Error(`first keyboard-reachable Run action should open the Run menu, got ${keyboardAction}`);
 }
 const beforeWindowFailure = await hostSnapshot(page, url);
+await page.keyboard.press("Enter");
+await activeSidebarRun.locator(".run-row-menu").waitFor();
+await activeSidebarRun.locator("button[data-act='open-run-window']").focus();
 await page.keyboard.press("Enter");
 await page.waitForSelector(".run-window-error[role='alert']");
 const windowError = (await page.locator(".run-window-error").textContent())?.replace(/\s+/g, " ").trim() ?? "";
@@ -130,17 +153,18 @@ if (
   throw new Error("standalone Run window failure must not add, stop, restart, or replace a Run");
 }
 activeSidebarRun = page.locator(".side .run-row.waiting").first();
-await activeSidebarRun.hover();
-await activeSidebarRun.locator("button[data-act='open-run-window']").click();
+activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
+await activeSidebarMenu.locator("button[data-act='open-run-window']").click();
 await page.waitForFunction(() => window.__RUN_WINDOW_INVOKES__?.filter((call) => call.command === "open_run_window").length === 2);
 await page.waitForSelector(".run-window-error[role='alert']");
-await activeSidebarRun.locator("button[data-act='open-usage-run']").click();
+activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
+await activeSidebarMenu.locator("button[data-act='open-usage-run']").click();
 await page.waitForSelector(".usage-page");
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lanes");
 activeSidebarRun = page.locator(".side .run-row.waiting").first();
-await activeSidebarRun.hover();
-await activeSidebarRun.locator("button[data-act='stop-run']").click();
+activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
+await activeSidebarMenu.locator("button[data-act='stop-run']").click();
 await page.waitForSelector("[data-dialog-id='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='dismiss-dialog']");
 await page.click("button[data-act='dismiss-run-window-error']");

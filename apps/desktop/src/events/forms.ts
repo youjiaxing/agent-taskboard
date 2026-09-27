@@ -6,8 +6,9 @@ import { render } from "../render/app";
 import { restoreDialogTrigger } from "../components/dialog-controller";
 import { toLocalInput } from "../client-utils";
 import { ui } from "../ui";
-import { mobileClient } from "../view-helpers";
+import { browserClient, ensureBrowserClientSettings, mobileClient, saveBrowserClientSettings } from "../view-helpers";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
+import { focusStartedRun } from "./run-navigation";
 
 export function bindFormEvents(): void {
 ui.app.addEventListener("submit", async (event) => {
@@ -356,6 +357,15 @@ ui.app.addEventListener("change", async (event) => {
     });
     render();
   }
+  if (target.getAttribute("data-field") === "autoFocusNewRun" && "checked" in target) {
+    const enabled = (target as HTMLInputElement).checked;
+    if (browserClient()) {
+      saveBrowserClientSettings({ ...ensureBrowserClientSettings(), autoFocusNewRun: enabled });
+    } else {
+      await rpc("setAutoFocusNewRun", { enabled });
+    }
+    render();
+  }
   if (
     (target.getAttribute("data-field") === "notifyDesktop" ||
       target.getAttribute("data-field") === "notifySound") &&
@@ -560,6 +570,7 @@ ui.app.addEventListener("submit", async (event) => {
   if (launch && ui.snapshot && ui.launchDraft) {
     event.preventDefault();
     if (!mobileClient() && runPersistenceWritesBlocked(ui.snapshot)) return;
+    if (ui.snapshot.launchForm?.optionDiscoveryPending) return;
     const draft = {
       projectId: ui.launchDraft.projectId,
       issueId: ui.launchDraft.issueId,
@@ -567,9 +578,12 @@ ui.app.addEventListener("submit", async (event) => {
       values: launchValuesForHost(ui.launchDraft),
       openingText: ui.launchDraft.openingText,
     };
+    const snapshotBeforeStart = ui.snapshot;
+    let result: Awaited<ReturnType<typeof rpc>> | null = null;
     await runFormOperation(launchFormKey(draft.projectId), async () => {
-      await rpc("startUnboundRun", draft);
+      result = await rpc("startUnboundRun", draft);
     });
+    if (result && snapshotBeforeStart) await focusStartedRun(result, snapshotBeforeStart);
     return;
   }
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");

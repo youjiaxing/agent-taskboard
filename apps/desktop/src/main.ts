@@ -3,6 +3,7 @@ import {
   currentSystemAppearance,
   effectiveAppearancePreference,
   ensureBrowserAppearance,
+  loadBrowserClientSettings,
   loadBrowserAppearance,
   mobileOutputKey,
   mobileReadableRun,
@@ -67,6 +68,7 @@ import type {
 } from "./protocol";
 
 ui.browserAppearance = loadBrowserAppearance();
+ui.browserClientSettings = loadBrowserClientSettings();
 
 export function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
   if (kind === "waiting") return copy.notifyWaiting;
@@ -698,6 +700,12 @@ document.addEventListener("keydown", (event) => {
       ui.projectMenuId = "";
       render();
       ui.app.querySelector<HTMLButtonElement>(`button[data-act='project-menu'][data-id='${CSS.escape(projectId)}']`)?.focus();
+    } else if (ui.runMenuId) {
+      event.preventDefault();
+      const runId = ui.runMenuId;
+      ui.runMenuId = "";
+      render();
+      ui.app.querySelector<HTMLButtonElement>(`button[data-act='run-menu'][data-id='${CSS.escape(runId)}']`)?.focus();
     } else if (ui.mobileRunMenuId) {
       event.preventDefault();
       const runId = ui.mobileRunMenuId;
@@ -830,6 +838,7 @@ window.addEventListener("resize", () => {
     ui.mobileWorkspaceSection = "terminal";
     ui.mobileRunHistoryScope = "issue";
     ui.mobileProjectHistoryRunOpen = false;
+    ui.runMenuId = "";
     ui.mobileRunMenuId = "";
     render();
   }
@@ -883,4 +892,18 @@ rpc("snapshot")
 ui.app.addEventListener("click", (event) => {
   void handleAppClick(event);
 });
+
+ui.app.addEventListener("contextmenu", (event) => {
+  if (mobileClient()) return;
+  const target = (event.target as HTMLElement).closest<HTMLElement>(".run-row[data-run]");
+  if (!target || target.closest(".run-row-menu")) return;
+  const runId = target.dataset.run;
+  if (!runId || !ui.snapshot?.runs.some((run) => run.id === runId)) return;
+  event.preventDefault();
+  ui.projectMenuId = "";
+  ui.mobileRunMenuId = "";
+  ui.runMenuId = runId;
+  render();
+});
+
 bindFormEvents();

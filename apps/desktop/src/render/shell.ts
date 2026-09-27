@@ -2,21 +2,21 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, mobileClient, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
 import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, checkbox, formField, iconButton, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
-import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
+import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
+import { orderRunsForDisplay, runOrganizationActionDescriptors, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = orderRunsForDisplay((snap.runs ?? []).filter((run) => run.projectId === project.id));
   return `<div class="project-block" data-project="${escapeHtml(project.id)}">
     ${projectRow(copy, project, focusedId)}
-    ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
+    ${runs.map((run) => runRow(copy, run, snap)).join("")}
   </div>`;
 }
 
@@ -57,12 +57,37 @@ export function runIdentity(copy: ShellCopy, run: RunSummary): string {
   return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
 }
 
-export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
-  const identity = runIdentity(copy, run);
+function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapshot): ActionDescriptor[] {
   const localCopy = startupCopy(effectiveClientLanguage());
+  const actions: ActionDescriptor[] = [];
+  if (desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended") {
+    actions.push({
+      id: "open-run-window",
+      label: localCopy.openRunWindow,
+      data: { id: run.id },
+    });
+  }
+  actions.push({
+    id: "open-usage-run",
+    label: copy.openHostUsage,
+    data: { id: run.id },
+  });
+  if (run.status !== "ended") {
+    actions.push({
+      id: "stop-run",
+      label: copy.stopRun,
+      destructive: true,
+      disabled: runPersistenceWritesBlocked(snap),
+      data: { id: run.id },
+    });
+  }
+  actions.push(...runOrganizationActionDescriptors(snap, run));
+  return actions;
+}
+
+export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
+  const identity = runIdentity(copy, run);
   const organizationLabels = runOrganizationLabels();
-  const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
-  const runWritesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const stateClass =
     run.waitingForUser && run.status !== "ended"
       ? "waiting"
@@ -77,38 +102,29 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
         : run.status === "running"
           ? copy.running
           : "";
-  const actions = [
-    desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
-      ? iconButton(
-          { id: "open-run-window", label: localCopy.openRunWindow, icon: "↗", data: { id: run.id } },
-          { className: "run-row-action", attributes: { title: localCopy.openRunWindow } },
-        )
-      : "",
-    iconButton(
-      { id: "open-usage-run", label: copy.openHostUsage, icon: "▥", data: { id: run.id } },
-      { className: "run-row-action", attributes: { title: copy.openHostUsage } },
-    ),
-    run.status !== "ended"
-      ? iconButton(
-          { id: "stop-run", label: copy.stopRun, icon: "■", disabled: runWritesBlocked, data: { id: run.id } },
-          { className: "run-row-action danger", attributes: { title: runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.stopRun } },
-        )
-      : "",
-    ui.snapshot ? runOrganizationActions(ui.snapshot, run, "icons") : "",
-  ].join("");
   const pinMarker = run.pinnedAtMs != null
     ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
     : "";
-  return `<div class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
+  const runMenuLabel = `${organizationLabels.runMenu} · ${run.agentName} · ${identity}`;
+  const menuOpen = ui.runMenuId === run.id;
+  const details = [run.recentAction, run.failure, run.isolationNote]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(" · ");
+  return `<div class="run-row ${run.id === snap.focusedRunId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""} ${menuOpen ? "menu-open" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}"${details ? ` title="${escapeHtml(details)}"` : ""}>
     <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
       <b>${escapeHtml(run.agentName)}${pinMarker}</b>
-      <span>${escapeHtml(identity)}</span>
+      <span class="run-identity">${escapeHtml(identity)}</span>
       ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
-      ${action ? `<span class="run-action">${action}</span>` : ""}
-      ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
-      ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
     </button>
-    <div class="run-row-actions" role="group" aria-label="${escapeHtml(`${run.agentName} · ${identity}`)}">${actions}</div>
+    <div class="run-row-actions" role="group" aria-label="${escapeHtml(runMenuLabel)}">
+      <div class="run-row-menu-wrap">
+        ${button(
+          { id: "run-menu", label: organizationLabels.runMenu, ariaLabel: runMenuLabel, data: { id: run.id } },
+          { variant: "ghost", className: "run-row-action run-row-menu-trigger", attributes: { title: runMenuLabel, "aria-haspopup": "menu", "aria-expanded": menuOpen } },
+        )}
+        ${menuOpen ? menu({ label: runMenuLabel, className: "run-row-menu", actions: runRowActionDescriptors(copy, run, snap) }) : ""}
+      </div>
+    </div>
   </div>`;
 }
 
@@ -488,9 +504,22 @@ export function runHeader(copy: ShellCopy, run: RunSummary, includeOrganization 
 
 /** Host-reported Run conditions that every terminal surface must keep visible. */
 export function runNotices(copy: ShellCopy, run: RunSummary): string {
+  const localCopy = startupCopy(effectiveClientLanguage());
+  const startWarning = ui.runStartWarning?.runId === run.id
+    && ui.runStartWarning.message !== run.isolationNote
+    ? ui.runStartWarning.message
+    : "";
+  const focusError = ui.runFocusError?.runId === run.id ? ui.runFocusError.message : "";
   return `${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
-    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}`;
+    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
+    ${startWarning ? `<p class="notice">${escapeHtml(startWarning)}</p>` : ""}
+    ${focusError ? notice({
+      status: "danger",
+      role: "alert",
+      message: focusError,
+      actions: `<button type="button" data-act="retry-focus-run" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.retryFocusRun)}</button>`,
+    }) : ""}`;
 }
 
 export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string, includeOrganization = false): string {
@@ -506,6 +535,7 @@ export function readOnlyTerminal(copy: ShellCopy, run: RunSummary, includeOrgani
   const labels = focusWorkspaceLabels();
   return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
     ${runHeader(copy, run, includeOrganization)}
+    ${runNotices(copy, run)}
     <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
     <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
   </div>`;
@@ -719,6 +749,9 @@ export function settingsPage(
 ): string {
   const languageLabel = (language: Language) => language === "zh-CN" ? copy.languageZh : copy.languageEn;
   const project = snap.projects.find((item) => item.id === snap.focusedProjectId);
+  const autoFocusNewRun = browserClient()
+    ? ensureBrowserClientSettings().autoFocusNewRun
+    : autoFocusNewRunEnabled(snap);
   return `<section class="settings-page" data-primary-page="settings">
     <div class="content-toolbar" data-page-toolbar>
       <div class="board-head">
@@ -756,6 +789,12 @@ export function settingsPage(
       <section class="settings-section" data-settings-section="startup">
         <h2>${escapeHtml(localCopy.hostStartup)}</h2>
         ${startupSettings(localCopy, snap)}
+        ${checkbox({
+          label: localCopy.autoFocusNewRun,
+          checked: autoFocusNewRun,
+          attributes: { "data-field": "autoFocusNewRun" },
+        })}
+        <p class="hint">${escapeHtml(localCopy.autoFocusNewRunHelp)}</p>
         <div class="field">
           ${button({ id: "refresh-launch-environment", label: localCopy.rereadLaunchEnvironment, disabled: snap.hostMode === "client-only" })}
           ${launchEnvironmentStatus(localCopy)}

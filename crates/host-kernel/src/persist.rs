@@ -176,6 +176,8 @@ pub(crate) struct ClientSettingsFile {
     pub(crate) notify_desktop: bool,
     #[serde(default = "default_true")]
     pub(crate) notify_sound: bool,
+    #[serde(default = "default_true")]
+    pub(crate) auto_focus_new_run: bool,
 }
 
 pub(crate) fn default_true() -> bool {
@@ -210,6 +212,7 @@ pub(crate) fn load_or_init_appearance(
         bool,
         bool,
         bool,
+        bool,
     ),
     KernelError,
 > {
@@ -229,6 +232,7 @@ pub(crate) fn load_or_init_appearance(
                 file.show_command_preview,
                 file.notify_desktop,
                 file.notify_sound,
+                file.auto_focus_new_run,
             ));
         }
     }
@@ -247,6 +251,7 @@ pub(crate) fn load_or_init_appearance(
         show_command_preview: true,
         notify_desktop: true,
         notify_sound: true,
+        auto_focus_new_run: true,
     };
     write_json(path, &file)?;
     Ok((
@@ -255,6 +260,7 @@ pub(crate) fn load_or_init_appearance(
         Vec::new(),
         board::DEFAULT_RECENT_LIMIT,
         CenterView::Board,
+        true,
         true,
         true,
         true,

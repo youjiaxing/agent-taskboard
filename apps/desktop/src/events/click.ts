@@ -1,7 +1,7 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { activeRunForIssue, captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, coerceLaunchFieldValues, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
@@ -12,6 +12,7 @@ import { emptyDraft, ui } from "../ui";
 import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialog-controller";
 import { startupCopy } from "../startup-copy";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
+import { focusRunInWorkspace, focusStartedRun, retryRunFocus } from "./run-navigation";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
@@ -27,6 +28,7 @@ function closeMobileDrawer(): void {
 }
 
 function clearRunOrganizationContext(): void {
+  ui.runMenuId = "";
   ui.mobileRunMenuId = "";
   ui.archiveProjectFilter = "";
   ui.archiveSelectedRunId = "";
@@ -330,6 +332,8 @@ async function completeDeferredLaunchDiscovery(
   agentId: string,
 ): Promise<void> {
   const sequence = ++deferredLaunchDiscoverySequence;
+  const pendingForm = ui.snapshot?.launchForm;
+  if (!pendingForm) return;
   try {
     const result = await rpcDetached("prepareRunLaunch", {
       projectId,
@@ -345,14 +349,12 @@ async function completeDeferredLaunchDiscovery(
     ) {
       return;
     }
-    const draft = ui.launchDraft;
-    const previousValues = draft?.values ?? {};
-    const previousOpening = draft?.openingText;
     ui.snapshot = { ...ui.snapshot, launchForm: result.snapshot.launchForm };
     syncLaunchDraft(ui.snapshot);
-    if (ui.launchDraft) {
-      ui.launchDraft.values = { ...ui.launchDraft.values, ...previousValues };
-      ui.launchDraft.openingText = previousOpening ?? ui.launchDraft.openingText;
+    if (ui.launchDraft && result.snapshot.launchForm) {
+      ui.launchDraft.values = { ...result.snapshot.launchForm.values };
+      ui.launchDraft.openingText = result.snapshot.launchForm.openingText;
+      coerceLaunchFieldValues();
     }
     render();
   } catch {
@@ -376,10 +378,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target) {
-    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId || ui.mobileRunMenuId) {
+    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId || ui.runMenuId || ui.mobileRunMenuId) {
       ui.appearanceMenuOpen = false;
       ui.moreMenuOpen = false;
       ui.projectMenuId = "";
+      ui.runMenuId = "";
       ui.mobileRunMenuId = "";
       render();
     }
@@ -397,6 +400,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
   if (act !== "more-menu") ui.moreMenuOpen = false;
   if (act !== "project-menu") ui.projectMenuId = "";
+  if (act !== "run-menu") ui.runMenuId = "";
   if (act !== "mobile-run-menu") ui.mobileRunMenuId = "";
   if (act === "mobile-drawer") {
     rememberDialogTrigger("mobile-drawer", target);
@@ -406,6 +410,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "mobile-run-menu" && target.dataset.id) {
     ui.mobileRunMenuId = ui.mobileRunMenuId === target.dataset.id ? "" : target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "run-menu" && target.dataset.id) {
+    ui.runMenuId = ui.runMenuId === target.dataset.id ? "" : target.dataset.id;
     render();
     return;
   }
@@ -787,9 +796,17 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "continue-run" && target.dataset.id) {
     if (desktopRunWritesBlocked()) return;
-    await rpc("continueRun", { issueId: target.dataset.id });
-    ui.viewingRunId = activeRunForIssue(ui.snapshot, target.dataset.id)?.id ?? "";
-    render();
+    const snapshotBeforeStart = ui.snapshot;
+    const result = await rpc("continueRun", { issueId: target.dataset.id });
+    if (snapshotBeforeStart) {
+      await focusStartedRun(result, snapshotBeforeStart, { issueId: target.dataset.id });
+    } else {
+      render();
+    }
+    return;
+  }
+  if (act === "retry-focus-run" && target.dataset.id) {
+    await retryRunFocus(target.dataset.id);
     return;
   }
   if (act === "release-claim" && target.dataset.id) {
@@ -800,6 +817,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "switch-agent") {
     const form = ui.snapshot.launchForm;
     if (!form) return;
+    deferredLaunchDiscoverySequence += 1;
     ui.launchDraft = null;
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,
@@ -837,22 +855,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
-    const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
     const fromProjectHistory = mobileClient() && Boolean(target.closest("[data-run-history-scope='project']"));
-    enterPrimaryPage("focus-workspace", ui.snapshot);
-    ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
-    ui.viewingRunId = target.dataset.id;
-    await rpc("focusRun", { runId: target.dataset.id });
-    if (!fromProjectHistory && run?.issueId && ui.snapshot.board?.selected?.id === run.issueId) {
-      await loadSelectedIssueDocument();
-    }
-    if (mobileClient()) {
-      ui.mobileWorkspaceSection = "terminal";
-      ui.mobileProjectHistoryRunOpen = fromProjectHistory;
-      if (!fromProjectHistory) ui.mobileRunHistoryScope = "issue";
-      ui.mobileLiveTerminal = false;
-    }
-    render();
+    await focusRunInWorkspace(target.dataset.id, ui.snapshot, { fromProjectHistory });
     return;
   }
   if (act === "view-issue-run" && target.dataset.id) {

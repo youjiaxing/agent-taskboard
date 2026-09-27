@@ -159,7 +159,11 @@
 
 .run-row {
   position: relative;
+  display: flex;
+  align-items: center;
   width: calc(100% - 20px);
+  min-width: 0;
+  min-height: var(--control-height-sm);
   margin: 0 0 var(--space-2) var(--space-20);
   border-radius: var(--radius-md);
 }
@@ -181,29 +185,34 @@
 }
 
 .run-main {
-  display: block;
-  width: 100%;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  width: auto;
   min-width: 0;
+  min-height: var(--control-height-sm);
   border: 0;
   background: transparent;
   text-align: left;
-  padding: var(--space-6) calc(var(--space-48) * 2 + var(--space-20)) var(--space-6) var(--space-8);
+  gap: var(--space-6);
+  padding: 0 calc(var(--space-48) + var(--space-20)) 0 var(--space-8);
 }
 
 .run-row-actions {
   position: absolute;
-  top: var(--space-4);
+  top: 50%;
   right: var(--space-4);
+  z-index: var(--layer-sticky);
   display: flex;
   gap: var(--space-2);
+  transform: translateY(-50%);
   opacity: 0;
   visibility: hidden;
 }
 
-.run-row-actions > .run-organization-actions { display: contents; }
-
 .run-row:hover .run-row-actions,
-.run-row:focus-within .run-row-actions {
+.run-row:focus-within .run-row-actions,
+.run-row.menu-open .run-row-actions {
   opacity: 1;
   visibility: visible;
 }
@@ -231,6 +240,40 @@
 
 .run-row-actions .run-row-action.danger { color: var(--color-danger); }
 
+.run-row-menu-wrap { position: relative; }
+
+.run-row-menu-trigger {
+  width: auto !important;
+  min-width: 0 !important;
+  padding: 0 var(--space-6) !important;
+}
+
+.run-row-menu-trigger > span:not(.ui-button-icon) {
+  display: inline;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.run-row-menu {
+  position: absolute;
+  top: calc(100% + var(--space-4));
+  right: 0;
+  z-index: var(--layer-menu);
+  display: grid;
+  min-width: 190px;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.run-row-menu .ui-button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .run-row.running .run-main b::before,
 .run-row.waiting .run-main b::before,
 .run-row.execution-stopped .run-main b::before {
@@ -250,20 +293,30 @@
 
 .run-main > b,
 .run-main > span {
-  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.run-main > span { font-size: var(--font-size-xs); color: var(--color-text-secondary); font-weight: var(--font-weight-regular); margin-top: 0; }
+.run-main > b { flex: 0 1 auto; max-width: 42%; }
 
-.run-main .run-fail {
-  color: var(--color-accent);
-  white-space: pre-wrap;
+.run-main > span {
+  flex: 0 1 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular);
 }
 
-.run-main .run-state { color: var(--color-accent); }
+.run-main > span::before {
+  content: "·";
+  margin-right: var(--space-6);
+  color: var(--color-text-muted);
+}
+
+.run-main .run-state { max-width: 34%; color: var(--color-accent); }
+
+.run-main .run-identity { flex: 1 1 auto; }
 
 .run-window-error {
   position: fixed;

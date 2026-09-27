@@ -75,8 +75,9 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const folded = form.fields.filter((field) => field.folded);
   const key = launchFormKey(form.projectId);
   const pending = ui.formOperations.pending.has(key);
+  const discoveryPending = Boolean(form.optionDiscoveryPending);
   const error = ui.formOperations.errors.get(key) || form.error || "";
-  const body = `<fieldset class="launch-fields" ${pending ? "disabled" : ""}>
+  const body = `<fieldset class="launch-fields" ${pending || discoveryPending ? "disabled" : ""}>
     <div class="launch-agent">
       <b>${escapeHtml(form.agents.find((agent) => agent.id === form.selectedAgentId)?.name ?? form.selectedAgentId)}</b>
       ${button({ id: "switch-agent", label: copy.switchAgent })}
@@ -122,8 +123,8 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const actions = `${dialogDismissButton(copy.cancel, { disabled: pending })}${dialogActionButton({
     id: "submit-launch",
     label: pending ? copy.startRunPending : copy.startRun,
-    disabled: pending || persistenceBlocked,
-    busy: pending,
+    disabled: pending || discoveryPending || persistenceBlocked,
+    busy: pending || discoveryPending,
   }, { primary: true, type: "submit" })}`;
   return dialog({
     id: "launch",
@@ -139,7 +140,7 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
     panelTag: "form",
     panelAttributes: {
       "data-form": "launch",
-      "aria-busy": pending ? "true" : "false",
+      "aria-busy": pending || discoveryPending ? "true" : "false",
       novalidate: true,
     },
   });

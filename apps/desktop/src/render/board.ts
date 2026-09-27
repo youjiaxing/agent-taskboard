@@ -8,7 +8,7 @@ import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "..
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
 import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
-import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
+import { button, formField, notice, selectControl, textArea, textInput } from "../components/primitives";
 import { refreshStatus } from "../components/refresh-status";
 import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels } from "./run-organization";
 import { runPersistenceWritesBlocked } from "./run-organization";
@@ -456,6 +456,7 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail,
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
+  const runStartError = ui.runStartWarning?.issueId === issue.id ? ui.runStartWarning.message : "";
   const releaseClaim = !hasActive && issue.executionStopped
     ? `<button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
     : "";
@@ -472,7 +473,7 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail,
     : `${statusItems.join("")}${actionItems.concat(releaseClaim ? [releaseClaim] : [], issueMaintenanceActions).join("")}`;
   return `<div class="detail-meta">
     ${inner}
-  </div>${canWrite ? formFeedback(openKey) : ""}`;
+  </div>${runStartError ? notice({ status: "danger", role: "alert", message: runStartError }) : ""}${canWrite ? formFeedback(openKey) : ""}`;
 }
 
 function relationCount(links: IssueLink[]): string {

@@ -133,9 +133,19 @@ export async function executeRpc(
   result.snapshot.showCommandPreview = result.snapshot.showCommandPreview ?? true;
   result.snapshot.notifyDesktop = result.snapshot.notifyDesktop ?? true;
   result.snapshot.notifySound = result.snapshot.notifySound ?? true;
+  result.snapshot.autoFocusNewRun = result.snapshot.autoFocusNewRun ?? true;
   result.snapshot.usageOpen = result.snapshot.usageOpen ?? false;
   result.snapshot.refreshIntervalMs = result.snapshot.refreshIntervalMs ?? 60_000;
   result.events = result.events ?? [];
+  if (
+    result.runStart?.status === "started"
+    && result.runStart.warning
+  ) {
+    ui.runStartWarning = {
+      runId: result.runStart.runId,
+      message: result.runStart.warning,
+    };
+  }
   if (commit) commitRpcResult(result);
   return result;
 }

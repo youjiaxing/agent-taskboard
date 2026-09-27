@@ -17,32 +17,36 @@ fn boot_req(root: &Path) -> BootRequest {
 }
 
 fn start_run(host: &mut HostKernel, client_id: &str, project_id: &str) -> String {
-    host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "clientInstanceId": client_id,
-        "projectId": project_id,
-        "agentId": "grok-build",
-        "values": {
-            "model": "grok-4.6",
-            "effort": "high",
-            "permission-mode": "default",
-            "always-approve": "false",
-            "sandbox": "off",
-            "initial-instruction": "",
-            "additional-args": ""
-        },
-        "openingText": "client state integration",
-    }))
-    .unwrap()
-    .snapshot
-    .focused_run_id
+    let outcome = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "clientInstanceId": client_id,
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "client state integration",
+        }))
+        .unwrap();
+    assert!(outcome.snapshot.focused_run_id.is_empty());
+    match outcome.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    }
 }
 
 #[test]
 fn each_client_keeps_its_own_focused_run() {
     let tmp = tempfile::tempdir().unwrap();
     let garden = make_dir(tmp.path(), "work/garden");
-    let tracker = Arc::new(MemoryTracker::new());
+    let tracker: Arc<dyn host_kernel::TrackerSeam> = Arc::new(MemoryTracker::new());
     let mut host = HostKernel::boot_with(boot_req(tmp.path()), tracker).unwrap();
     let project_id = host
         .handle(serde_json::json!({
@@ -96,6 +100,26 @@ fn each_client_keeps_its_own_focused_run() {
         .unwrap();
     assert_eq!(browser.snapshot.focused_run_id, second_run);
     assert_eq!(browser.snapshot.workspace_view, WorkspaceView::Run);
+}
+
+#[test]
+fn auto_focus_new_run_setting_defaults_on_and_persists_per_client() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tracker: Arc<dyn host_kernel::TrackerSeam> = Arc::new(MemoryTracker::new());
+    let mut host = HostKernel::boot_with(boot_req(tmp.path()), Arc::clone(&tracker)).unwrap();
+
+    assert!(host.snapshot().auto_focus_new_run);
+    let updated = host
+        .handle(serde_json::json!({
+            "op": "setAutoFocusNewRun",
+            "enabled": false,
+        }))
+        .unwrap();
+    assert!(!updated.snapshot.auto_focus_new_run);
+
+    drop(host);
+    let restarted = HostKernel::boot_with(boot_req(tmp.path()), tracker).unwrap();
+    assert!(!restarted.snapshot().auto_focus_new_run);
 }
 
 fn make_dir(root: &Path, name: &str) -> std::path::PathBuf {

@@ -47,6 +47,7 @@ impl HostKernel {
             show_command_preview: self.show_command_preview,
             notify_desktop: self.notify_desktop,
             notify_sound: self.notify_sound,
+            auto_focus_new_run: self.auto_focus_new_run,
             auto_advance: self.host_auto_advance,
             pending_confirmation: self
                 .pending_advance
@@ -85,6 +86,7 @@ impl HostKernel {
             launch_environment: None,
             archived_runs: None,
             run_restore: None,
+            run_start: None,
         }
     }
 
