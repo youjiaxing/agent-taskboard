@@ -324,6 +324,7 @@
 .run-dock-hd .actions { margin-top: 0; }
 
 .lifted-terminal .pty-slot { min-height: 320px; }
+.readonly-terminal .pty-slot { min-height: 320px; }
 
 .run-thumbnails { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-8); }
 

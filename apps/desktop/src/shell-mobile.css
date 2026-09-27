@@ -122,6 +122,7 @@
     font: var(--font-size-sm)/1.5 var(--font-family-mono);
   }
   .mobile-live-terminal .pty-slot { min-height: 52vh; }
+  .readonly-terminal .pty-slot { min-height: 52vh; }
   .mobile-terminal-escape { align-self: flex-start; }
   .telemetry-mobile { display: block; }
 

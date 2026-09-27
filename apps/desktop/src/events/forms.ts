@@ -189,6 +189,8 @@ ui.app.addEventListener("submit", async (event) => {
     const input = inject.querySelector<HTMLInputElement>("input[name='text']");
     const text = input?.value ?? "";
     if (!runId || !text.trim()) return;
+    const run = ui.snapshot.runs.find((candidate) => candidate.id === runId);
+    if (!run || run.status === "ended") return;
     ui.terminalInputDrafts.set(runId, text);
     const success = await runFormOperation(injectFormKey(runId), async () => {
       await rpc("injectRunInput", { runId, text });

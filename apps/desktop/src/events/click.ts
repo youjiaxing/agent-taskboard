@@ -1021,6 +1021,10 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     if (ui.confirmationPending) return;
     const confirmation = ui.dangerConfirmation;
     ui.confirmationPending = true;
+    if (ui.ptyRunId === confirmation.runId) {
+      ui.ptyStopRequestedRunId = confirmation.runId;
+      if (ui.term) ui.term.options.disableStdin = true;
+    }
     render();
     try {
       await rpc("stopRun", { runId: confirmation.runId });
@@ -1030,6 +1034,10 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
       render();
       restoreDialogTrigger("stop-run");
     } catch (error) {
+      if (ui.ptyStopRequestedRunId === confirmation.runId) {
+        ui.ptyStopRequestedRunId = "";
+        if (ui.term) ui.term.options.disableStdin = false;
+      }
       ui.confirmationPending = false;
       ui.confirmationError = error instanceof Error ? error.message : String(error);
       render();

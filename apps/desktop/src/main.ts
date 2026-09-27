@@ -343,33 +343,60 @@ export function ensureTerminal(): void {
   ui.term.open(ui.termHost);
   hookTerminalEditMenu(ui.term);
   ui.term.onData((data) => {
-    if (!ui.ptyRunId) return;
+    if (!ui.ptyRunId || ui.ptyReadOnly || ui.ptyStopRequestedRunId === ui.ptyRunId) return;
     void sendPtyInput(ui.ptyRunId, data);
   });
+}
+
+export function discardTerminalCanvas(): void {
+  ui.ptyPumping = false;
+  ui.ptyReadInFlight = false;
+  ui.ptyReadOnly = false;
+  ui.ptyStopRequestedRunId = "";
+  ui.ptyCanvasMounted = false;
+  ui.ptyRunId = "";
+  ui.ptyRunHostId = "";
+  ui.ptyOffset = 0;
+  if (ui.term) {
+    ui.term.options.disableStdin = false;
+    ui.term.reset();
+  }
 }
 
 export function attachTerminal(snap: Snapshot): void {
   const run = workspaceRun(snap);
   const slot = ui.app?.querySelector<HTMLElement>(".pty-slot");
   if (!run || !slot) {
-    ui.ptyPumping = false;
+    if (ui.ptyReadOnly) discardTerminalCanvas();
+    else ui.ptyPumping = false;
     return;
   }
   ensureTerminal();
   if (ui.termHost && ui.termHost.parentElement !== slot) {
     slot.appendChild(ui.termHost);
   }
-  ui.fitAddon?.fit();
-  void sendPtyResize(run.id);
-  if (ui.ptyRunId !== run.id) {
+  const sameRun = ui.ptyRunId === run.id && ui.ptyRunHostId === snap.focusedHostId;
+  if (!sameRun) {
     ui.ptyRunId = run.id;
+    ui.ptyRunHostId = snap.focusedHostId;
     ui.ptyOffset = 0;
     ui.term?.reset();
   }
+  ui.ptyCanvasMounted = true;
   if (run.status === "ended") {
+    ui.ptyReadOnly = true;
+    if (ui.term) ui.term.options.disableStdin = true;
+    if (!ui.ptyReadInFlight) ui.ptyPumping = false;
+    return;
+  }
+  ui.ptyReadOnly = false;
+  if (ui.term) ui.term.options.disableStdin = false;
+  if (ui.ptyStopRequestedRunId === run.id) {
     ui.ptyPumping = false;
     return;
   }
+  ui.fitAddon?.fit();
+  void sendPtyResize(run.id);
   if (!ui.ptyPumping) {
     ui.ptyPumping = true;
     void pumpPty();
@@ -453,13 +480,22 @@ export async function sendPtyResize(runId: string): Promise<void> {
 }
 
 export async function pumpPty(): Promise<void> {
-  while (ui.ptyPumping && ui.snapshot?.focusedRunId && ui.ptyRunId === ui.snapshot.focusedRunId) {
+  while (
+    ui.ptyPumping
+    && ui.snapshot?.focusedRunId === ui.ptyRunId
+    && ui.snapshot.focusedHostId === ui.ptyRunHostId
+    && !ui.ptyReadOnly
+    && ui.ptyStopRequestedRunId !== ui.ptyRunId
+  ) {
     const runId = ui.ptyRunId;
+    const hostId = ui.ptyRunHostId;
     try {
+      ui.ptyReadInFlight = true;
       const response = await fetch(
         `${await protocolBase()}/runs/${encodeURIComponent(runId)}/output?after=${ui.ptyOffset}`,
       );
       if (!response.ok) {
+        ui.ptyReadInFlight = false;
         await rpc("snapshot");
         render();
         break;
@@ -469,26 +505,40 @@ export async function pumpPty(): Promise<void> {
         data: string;
         exited: number | null;
       };
-      if (ui.ptyRunId !== runId || ui.snapshot?.focusedRunId !== runId) {
+      if (ui.ptyRunId !== runId || ui.ptyRunHostId !== hostId || ui.snapshot?.focusedRunId !== runId || ui.snapshot.focusedHostId !== hostId) {
+        ui.ptyReadInFlight = false;
         break;
       }
       if (json.data) {
         const raw = atob(json.data);
         const bytes = new Uint8Array(raw.length);
         for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
-        ui.term?.write(bytes);
+        await new Promise<void>((resolve) => ui.term?.write(bytes, resolve) ?? resolve());
       }
       ui.ptyOffset = json.offset;
+      ui.ptyReadInFlight = false;
+      if (ui.ptyStopRequestedRunId === runId) break;
       if (json.exited != null) {
         await rpc("snapshot");
         render();
         break;
       }
+      if (ui.snapshot.runs.some((run) => run.id === runId && run.status === "ended")) break;
     } catch {
+      ui.ptyReadInFlight = false;
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
   }
+  ui.ptyReadInFlight = false;
   ui.ptyPumping = false;
+  if (
+    ui.snapshot?.focusedHostId === ui.ptyRunHostId
+    && ui.snapshot.runs.some((run) => run.id === ui.ptyRunId && run.status === "ended")
+    && ui.ptyCanvasMounted
+  ) {
+    ui.ptyReadOnly = true;
+    render();
+  }
 }
 
 ui.app.addEventListener("pointerdown", (event) => {
@@ -521,9 +571,9 @@ function finishFixedPanelResize(pointerId: number): void {
   if (ui.panelPointerInteraction?.pointerId !== pointerId) return;
   ui.panelPointerInteraction = null;
   saveClientPanelState();
-  ui.fitAddon?.fit();
+  if (!ui.ptyReadOnly && !ui.ptyStopRequestedRunId) ui.fitAddon?.fit();
   const runId = ui.snapshot?.focusedRunId;
-  if (runId && !mobileClient()) void sendPtyResize(runId);
+  if (runId && !mobileClient() && !ui.ptyReadOnly && !ui.ptyStopRequestedRunId) void sendPtyResize(runId);
 }
 
 window.addEventListener("pointerup", (event) => finishFixedPanelResize(event.pointerId));
@@ -833,9 +883,9 @@ window.addEventListener("resize", () => {
     ui.mobileRunMenuId = "";
     render();
   }
-  ui.fitAddon?.fit();
+  if (!ui.ptyReadOnly && !ui.ptyStopRequestedRunId) ui.fitAddon?.fit();
   const runId = ui.snapshot.focusedRunId;
-  if (runId && (!isMobile || ui.mobileLiveTerminal)) void sendPtyResize(runId);
+  if (runId && (!isMobile || ui.mobileLiveTerminal) && !ui.ptyReadOnly && !ui.ptyStopRequestedRunId) void sendPtyResize(runId);
 });
 
 rpc("snapshot")
