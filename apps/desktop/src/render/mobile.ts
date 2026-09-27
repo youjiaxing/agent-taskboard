@@ -4,7 +4,7 @@ import type { MobileWorkspaceSection, RunSummary, ShellCopy, Snapshot } from "..
 import type { StartupCopy } from "../startup-copy";
 import { appearancePreferenceLabel } from "../startup-copy";
 import { ui } from "../ui";
-import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, issueRuns, mobileOutputKey, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, issueRuns, latestBoundRunForIssue, mobileOutputKey, workspaceRun } from "../view-helpers";
 import { boardLanes, boardUnavailable, issueDetail, issueSearch, refreshBar, workspaceRailLabels, workspaceRunHistory } from "./board";
 import { loopbackNotice } from "./run";
 import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
@@ -154,6 +154,7 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
     return mobileProjectHistoryPage(copy, localCopy, snap);
   }
   const issue = ui.mobileProjectHistoryRunOpen && run?.unbound ? undefined : board?.selected;
+  const latestBoundRun = issue ? latestBoundRunForIssue(snap, issue.id) : undefined;
   const labels = workspaceRailLabels();
   const sections: Array<[MobileWorkspaceSection, string]> = [
     ["terminal", copy.mobileRun],
@@ -167,7 +168,19 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
       ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { dependencyGraph: false })}</aside>`
       : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`
     : section === "runs"
-      ? (issue ? workspaceRunHistory(copy, runs, { organizationSnapshot: snap, organizationMode: "menu", currentRunId: workspaceRun(snap)?.id, action: "view-issue-run" }) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
+      ? (issue
+        ? workspaceRunHistory(copy, runs, {
+            organizationSnapshot: snap,
+            organizationMode: "menu",
+            currentRunId: workspaceRun(snap)?.id,
+            action: "view-issue-run",
+            issueActions: {
+              issueId: issue.id,
+              latestBoundRunId: latestBoundRun?.id,
+              executionStopped: Boolean(issue.executionStopped),
+            },
+          })
+        : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
       : mobileTerminalPanel(copy, snap, run);
   return `<section class="mobile-workspace-view">
     ${ui.mobileProjectHistoryRunOpen

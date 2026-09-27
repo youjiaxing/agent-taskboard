@@ -12,12 +12,22 @@ const closeInspectorIfOpen = async () => {
 };
 
 let rpcFailure = null;
+let forceArchivedLatestBoundRun = false;
 await page.route("**/rpc", async (route) => {
   let request;
   try {
     request = route.request().postDataJSON();
   } catch {
     await route.continue();
+    return;
+  }
+  if (forceArchivedLatestBoundRun && request?.op) {
+    const response = await route.fetch();
+    const result = await response.json();
+    if (result.snapshot?.board?.selected) {
+      result.snapshot.board.selected.latestBoundRunId = "archived-latest-bound-run";
+    }
+    await route.fulfill({ response, json: result });
     return;
   }
   if (!rpcFailure || request?.op !== rpcFailure.op || !rpcFailure.matches(request)) {
@@ -176,10 +186,9 @@ await page.waitForSelector(".lifted-run .pty-slot");
 const initialRailSections = await page.$$eval(".workspace-rail-section", (sections) =>
   Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
 );
-if (!initialRailSections.runs || initialRailSections.issue || initialRailSections.actions) {
-  throw new Error(`an active Run should default to Run history only: ${JSON.stringify(initialRailSections)}`);
+if (!initialRailSections.runs || !initialRailSections.issue || initialRailSections.actions !== undefined) {
+  throw new Error(`a focused Run should default to Issue and Run history with no actions section: ${JSON.stringify(initialRailSections)}`);
 }
-await page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await page.waitForSelector(".lifted-run .issue-markdown:has-text('Keep the complete Issue beside the Terminal')");
 const liftedText = (await page.locator(".lifted-run").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecycle issue")) {
@@ -188,6 +197,19 @@ if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecyc
 await capture("issue-100-terminal-and-issue-1280x840.png");
 
 const activeRunId = await page.$eval(".lifted-terminal .pty-slot", (node) => node.dataset.run);
+const activeHistoryActions = await page.locator(`.workspace-run-history-item[data-id="${activeRunId}"] .workspace-run-history-actions [data-act]`).evaluateAll((nodes) =>
+  nodes.map((node) => node.dataset.act),
+);
+if (!activeHistoryActions.includes("stop-run") || activeHistoryActions.includes("continue-run")) {
+  throw new Error(`an active Run history row should expose Stop only: ${JSON.stringify(activeHistoryActions)}`);
+}
+await page.locator(`.workspace-run-history-item[data-id="${activeRunId}"] button[data-act="stop-run"]`).click();
+await page.waitForSelector("[data-dialog-id='stop-run']");
+if (await page.locator(".lifted-run").count() !== 1) {
+  throw new Error("stopping from a Run history row must not leave the workspace");
+}
+await page.click("[data-dialog-id='stop-run'] button[data-act='dismiss-dialog']");
+await page.waitForFunction((runId) => document.activeElement?.id === `workspace-run-control-${runId}`, activeRunId);
 await page.evaluate(() => { window.__FOCUS_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 await page.click(".lifted-terminal .pty-host");
 await page.keyboard.type("resume after approval");
@@ -318,8 +340,14 @@ if (endedOutputRequests !== 0 || await page.$('[data-terminal-surface="readonly"
 const endedDefaults = await page.$$eval(".workspace-rail-section", (sections) =>
   Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
 );
-if (!endedDefaults.issue || !endedDefaults.runs || endedDefaults.actions) {
+if (!endedDefaults.issue || !endedDefaults.runs || endedDefaults.actions !== undefined) {
   throw new Error(`an explicitly selected ended Run should keep Issue and Run history visible: ${JSON.stringify(endedDefaults)}`);
+}
+const stoppedIssueActions = await page.locator(".workspace-rail-header .workspace-detail-actions [data-act]").evaluateAll((nodes) =>
+  nodes.map((node) => node.dataset.act),
+);
+if (stoppedIssueActions.join("|") !== "continue-run|edit-issue|toggle-issue-open|open-issue|release-claim") {
+  throw new Error(`an execution-stopped Issue should keep primary actions in the two-column order: ${JSON.stringify(stoppedIssueActions)}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector(".changes-sheet .notice.bad");
@@ -328,8 +356,30 @@ if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationC
   throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
-await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
-await page.click(".issue-detail button[data-act='continue-run']");
+forceArchivedLatestBoundRun = true;
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
+await card("continue lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+await page.click('.board-run-history button[data-act="view-issue-run"]');
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+if (await page.locator(".workspace-rail-header button[data-act='continue-run']").count() !== 1) {
+  throw new Error("an archived latest bound Run must keep Continue in the Issue header");
+}
+if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 0) {
+  throw new Error("an archived latest bound Run must not expose Continue on an older visible history row");
+}
+forceArchivedLatestBoundRun = false;
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
+await card("continue lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+await page.click('.board-run-history button[data-act="view-issue-run"]');
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 1) {
+  throw new Error("the latest execution-stopped Run should expose Continue in its history row");
+}
+await page.click(".workspace-run-history-item button[data-act='continue-run']");
 await page.waitForSelector(".lifted-terminal .pty-slot");
 const continued = await hostSnapshot(page, url);
 const continuedRun = continued.runs.find((run) => run.issueId === "you/lifecycle#2" && run.status === "running");
@@ -353,7 +403,6 @@ if (await page.$(".lifted-run") || await page.$(".run-dock")) {
 }
 await page.click('.board-run-history button[data-act="view-issue-run"]');
 await page.waitForSelector('[data-terminal-surface="readonly"]');
-await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='release-claim']");
 await page.click("button[data-act='return-page']");
 await page.waitForSelector('[data-lane="frontier"] .issue-card:has-text("release lifecycle issue")');

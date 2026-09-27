@@ -53,8 +53,6 @@ if (await session.page.$(".lanes")) {
 if (!(await session.page.$(".side"))) {
   throw new Error("the global shell should keep the current Host sidebar while a Run is focused");
 }
-await session.page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
-await session.page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
 await session.page.waitForSelector(".lifted-terminal .xterm-viewport");

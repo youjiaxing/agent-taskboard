@@ -159,7 +159,7 @@ export const ui = {
   nativeRunWindowHostId: nativeRunWindowParameter("hostId"),
   nativeRunWindowProjectId: nativeRunWindowParameter("projectId"),
   viewingRunId: "",
-  workspaceRailOpenSections: new Map<string, Set<"actions" | "issue" | "runs">>(),
+  workspaceRailOpenSections: new Map<string, Set<"issue" | "runs">>(),
   renderedDetailIssueId: "",
   renderedBoardProjectId: "",
   renderedMobileWorkspaceKey: "",

@@ -302,6 +302,8 @@ impl HostKernel {
             selected.active_run_id = self.active_run_id_for_issue(&selected.id);
             selected.execution_stopped = self.execution_stopped(&selected.id);
             selected.waiting_for_user = self.issue_waiting(&selected.id);
+            selected.latest_bound_run_id =
+                self.last_bound_run(&selected.id).map(|run| run.id.clone());
         }
         Some(board)
     }
