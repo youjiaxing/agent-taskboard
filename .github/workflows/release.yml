@@ -53,7 +53,23 @@ jobs:
             }
             git fetch --tags --force
             if git show-ref --tags --verify --quiet "refs/tags/$INPUT_TAG"; then
-              git checkout --detach "$INPUT_TAG"
+              releases_json=$(gh api --paginate --slurp \
+                "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')
+              draft_count=$(jq --arg tag "$INPUT_TAG" '
+                [.[] | select(.tag_name == $tag and .draft)] | length
+              ' <<<"$releases_json")
+              published_count=$(jq --arg tag "$INPUT_TAG" '
+                [.[] | select(.tag_name == $tag and (.draft | not))] | length
+              ' <<<"$releases_json")
+              if [[ "$draft_count" -eq 1 && "$published_count" -eq 0 ]]; then
+                git fetch origin main --force
+                git checkout -B main origin/main
+              else
+                git checkout --detach "$INPUT_TAG"
+              fi
+            else
+              git fetch origin main --force
+              git checkout -B main origin/main
             fi
             current=$(node -p 'require("./apps/desktop/package.json").version')
             test "$INPUT_TAG" = "v$current" || {
@@ -152,11 +168,10 @@ jobs:
           {
             echo "publish=true"
             echo "tag=$tag"
-            if git show-ref --tags --verify --quiet "refs/tags/$tag"; then
-              echo "ref=$(git rev-list -n 1 "$tag")"
-            else
-              echo "ref=$(git rev-parse HEAD)"
-            fi
+            # A failed draft release must be able to retry with fixes that
+            # landed after the original tag was created. The tag job below
+            # safely retargets an unpublished release after all checks pass.
+            echo "ref=$(git rev-parse HEAD)"
           } >>"$GITHUB_OUTPUT"
 
   test:
@@ -241,28 +256,35 @@ jobs:
             exit 1
           fi
           if [[ "$(jq length <<<"$draft_ids")" -eq 1 ]]; then
-            echo "release_id=$(jq -r '.[0]' <<<"$draft_ids")" >>"$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "$published_count" -ne 0 ]]; then
+            release_id=$(jq -r '.[0]' <<<"$draft_ids")
+          elif [[ "$published_count" -ne 0 ]]; then
             echo "a published release already exists for $TAG"
             exit 1
+          else
+            release_body=$(printf '%s\n' \
+              '从本页下载适合当前电脑的安装包：' \
+              '- macOS Apple Silicon：文件名含 `darwin`、`aarch64`，扩展名为 `.dmg`' \
+              '- macOS Intel：文件名含 `darwin`、`x64`，扩展名为 `.dmg`' \
+              '- Windows 10 1809 或更高版本：文件名含 `windows`、`x64`，以 `-setup.exe` 结尾' \
+              '' \
+              'macOS 安装包仅做 ad-hoc 签名，Windows 安装包未做代码签名。首次打开时系统会显示安全提醒。')
+            release_json=$(gh api --method POST "repos/$REPOSITORY/releases" \
+              -f tag_name="$TAG" \
+              -f name="Agent Taskboard $version" \
+              -f body="$release_body" \
+              -F draft=true \
+              -F prerelease=false)
+            release_id=$(jq -r '.id' <<<"$release_json")
           fi
 
-          release_body=$(printf '%s\n' \
-            '从本页下载适合当前电脑的安装包：' \
-            '- macOS Apple Silicon：文件名含 `darwin`、`aarch64`，扩展名为 `.dmg`' \
-            '- macOS Intel：文件名含 `darwin`、`x64`，扩展名为 `.dmg`' \
-            '- Windows 10 1809 或更高版本：文件名含 `windows`、`x64`，以 `-setup.exe` 结尾' \
-            '' \
-            'macOS 安装包仅做 ad-hoc 签名，Windows 安装包未做代码签名。首次打开时系统会显示安全提醒。')
-          release_json=$(gh api --method POST "repos/$REPOSITORY/releases" \
-            -f tag_name="$TAG" \
-            -f name="Agent Taskboard $version" \
-            -f body="$release_body" \
-            -F draft=true \
-            -F prerelease=false)
-          echo "release_id=$(jq -r '.id' <<<"$release_json")" >>"$GITHUB_OUTPUT"
+          # A retry rebuilds every platform from the current ref, so discard
+          # artifacts produced by the failed attempt before uploading again.
+          release_json=$(gh api "repos/$REPOSITORY/releases/$release_id")
+          while IFS= read -r asset_id; do
+            test -n "$asset_id"
+            gh api --method DELETE "repos/$REPOSITORY/releases/assets/$asset_id" >/dev/null
+          done < <(jq -r '.assets[]?.id' <<<"$release_json")
+          echo "release_id=$release_id" >>"$GITHUB_OUTPUT"
 
   publish:
     if: needs.prepare.outputs.publish == 'true'
@@ -366,6 +388,8 @@ jobs:
           fetch-depth: 0
       - name: 自动版本创建标签
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
           EXPECTED_REF: ${{ needs.prepare.outputs.ref }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
@@ -374,10 +398,23 @@ jobs:
           expected=$(git rev-parse "$EXPECTED_REF")
           if git show-ref --tags --verify --quiet "refs/tags/$TAG"; then
             actual=$(git rev-list -n 1 "$TAG")
-            test "$actual" = "$expected" || {
-              echo "tag $TAG points to $actual, expected $expected"
+            if [[ "$actual" == "$expected" ]]; then
+              exit 0
+            fi
+            releases_json=$(gh api --paginate --slurp \
+              "repos/$REPOSITORY/releases?per_page=100" | jq 'add')
+            draft_count=$(jq --arg tag "$TAG" '
+              [.[] | select(.tag_name == $tag and .draft)] | length
+            ' <<<"$releases_json")
+            published_count=$(jq --arg tag "$TAG" '
+              [.[] | select(.tag_name == $tag and (.draft | not))] | length
+            ' <<<"$releases_json")
+            if [[ "$draft_count" -ne 1 || "$published_count" -ne 0 ]]; then
+              echo "tag $TAG points to $actual, expected $expected, and is not attached to exactly one unpublished Draft Release"
               exit 1
-            }
+            fi
+            git tag --force "$TAG" "$EXPECTED_REF"
+            git push --force origin "refs/tags/$TAG"
             exit 0
           fi
           git tag "$TAG"
