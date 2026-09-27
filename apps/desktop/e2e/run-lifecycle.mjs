@@ -386,7 +386,19 @@ await page.waitForSelector(".lanes");
 await card("continue lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".board-run-history");
 await page.click('.board-run-history button[data-act="view-issue-run"]');
-await page.waitForSelector('[data-terminal-surface="readonly"]');
+try {
+  await page.waitForSelector('[data-terminal-surface="readonly"]', { timeout: 30000 });
+} catch {
+  const diagnostic = await page.evaluate(() => ({
+    frame: document.querySelector(".frame")?.className,
+    lifted: Boolean(document.querySelector(".lifted-run")),
+    readonly: Boolean(document.querySelector('[data-terminal-surface="readonly"]')),
+    terminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
+    boardHistory: document.querySelector(".board-run-history")?.textContent?.replace(/\s+/g, " "),
+    issueRail: document.querySelector(".workspace-right-rail")?.textContent?.replace(/\s+/g, " "),
+  }));
+  throw new Error(`second stopped Run focus did not render readonly terminal: ${JSON.stringify(diagnostic)}`);
+}
 if (await page.locator(".workspace-rail-header button[data-act='continue-run']").count() !== 1) {
   throw new Error("an archived latest bound Run must keep Continue in the Issue header");
 }
