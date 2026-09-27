@@ -264,6 +264,9 @@ pub enum Command {
         desktop: bool,
         sound: bool,
     },
+    SetAutoFocusNewRun {
+        enabled: bool,
+    },
     WriteChangeNote {
         run_id: String,
         repo: String,
@@ -421,6 +424,21 @@ pub enum NotificationKind {
     CrashRecovered,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum RunStartResult {
+    Started {
+        #[serde(rename = "runId")]
+        run_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
+    Failed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandOutcome {
     pub snapshot: Box<HostSnapshot>,
@@ -459,6 +477,8 @@ pub struct CommandOutcome {
         skip_serializing_if = "Option::is_none"
     )]
     pub run_restore: Option<RunRestoreResult>,
+    #[serde(rename = "runStart", default, skip_serializing_if = "Option::is_none")]
+    pub run_start: Option<RunStartResult>,
 }
 
 impl CommandOutcome {
@@ -492,6 +512,9 @@ impl CommandOutcome {
         if let Some(run_restore) = &self.run_restore {
             value["runRestore"] =
                 serde_json::to_value(run_restore).expect("run restore result json");
+        }
+        if let Some(run_start) = &self.run_start {
+            value["runStart"] = serde_json::to_value(run_start).expect("run start result json");
         }
         value
     }
@@ -782,6 +805,7 @@ pub struct HostSnapshot {
     pub show_command_preview: bool,
     pub notify_desktop: bool,
     pub notify_sound: bool,
+    pub auto_focus_new_run: bool,
     pub auto_advance: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_confirmation: Option<PendingConfirmation>,

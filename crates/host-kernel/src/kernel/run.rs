@@ -878,7 +878,7 @@ impl HostKernel {
         issue_id: Option<String>,
         from_form: bool,
         previous: Option<PreviousRun>,
-    ) -> Result<(), KernelError> {
+    ) -> Result<RunStartResult, KernelError> {
         self.ensure_run_persistence_writable()?;
         if self.update_installing {
             return Err(KernelError::Denied("update install is starting".into()));
@@ -968,8 +968,8 @@ impl HostKernel {
                 .or_else(|| launch::opening_required(&config.opening_text, language))
             {
                 if let Some(form) = &mut self.launch_form {
-                    form.error = Some(err);
-                    return Ok(());
+                    form.error = Some(err.clone());
+                    return Ok(RunStartResult::Failed { warning: Some(err) });
                 }
                 return Err(KernelError::Protocol(err));
             }
@@ -995,15 +995,21 @@ impl HostKernel {
             if previous_run_id.is_none() {
                 if let Err(err) = self.require_live_tracker_for_issue(issue_id) {
                     if let Some(form) = &mut self.launch_form {
-                        form.error = Some(err.to_string());
-                        return Ok(());
+                        let warning = err.to_string();
+                        form.error = Some(warning.clone());
+                        return Ok(RunStartResult::Failed {
+                            warning: Some(warning),
+                        });
                     }
                     return Err(err);
                 }
                 if let Err(err) = self.claim_issue(issue_id) {
                     if let Some(form) = &mut self.launch_form {
-                        form.error = Some(err.to_string());
-                        return Ok(());
+                        let warning = err.to_string();
+                        form.error = Some(warning.clone());
+                        return Ok(RunStartResult::Failed {
+                            warning: Some(warning),
+                        });
                     }
                     return Err(err);
                 }
@@ -1114,20 +1120,46 @@ impl HostKernel {
             if let Some(form) = &mut self.launch_form {
                 form.error = Some(err.to_string());
             }
-            return Err(err);
+            return Ok(RunStartResult::Failed {
+                warning: Some(err.to_string()),
+            });
         }
         self.runs = runs;
         self.run_persistence_write_error = None;
-        self.focused_run_id = Some(result.record.id.clone());
+        let run_id = result.record.id.clone();
         self.pending_events.push(HostEvent::RunStatusChanged {
-            run_id: result.record.id.clone(),
+            run_id: run_id.clone(),
             status: result.record.status,
         });
+        let mut start_result = if result.session.is_some() {
+            RunStartResult::Started {
+                run_id: run_id.clone(),
+                warning: result.record.isolation_note.clone(),
+            }
+        } else {
+            RunStartResult::Failed {
+                warning: result.record.failure.clone(),
+            }
+        };
         if let Some(session) = result.session {
-            self.live.insert(result.record.id.clone(), session);
-            self.remember_launch(project_id, &config)?;
+            self.live.insert(run_id, session);
+            let mut warnings = Vec::new();
+            if let Err(err) = self.remember_launch(project_id, &config) {
+                warnings.push(err.to_string());
+            }
             self.launch_form = None;
-            self.clear_pending_notes(project_id, issue_id.as_deref())?;
+            if let Err(err) = self.clear_pending_notes(project_id, issue_id.as_deref()) {
+                warnings.push(err.to_string());
+            }
+            if !warnings.is_empty() {
+                if let RunStartResult::Started { warning, .. } = &mut start_result {
+                    let suffix = warnings.join("; ");
+                    *warning = Some(match warning.take() {
+                        Some(existing) => format!("{existing}; {suffix}"),
+                        None => suffix,
+                    });
+                }
+            }
         } else {
             if let Some(issue_id) = provisional_claim.as_deref() {
                 let _ = self.release_issue(issue_id);
@@ -1136,10 +1168,13 @@ impl HostKernel {
                 form.error = result.record.failure.clone();
             }
         }
-        Ok(())
+        Ok(start_result)
     }
 
-    pub(crate) fn start_bound_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+    pub(crate) fn start_bound_run(
+        &mut self,
+        issue_id: &str,
+    ) -> Result<RunStartResult, KernelError> {
         self.ensure_run_persistence_writable()?;
         let project_id = self.project_id_for_issue(issue_id)?;
         let issue = self
@@ -1167,7 +1202,7 @@ impl HostKernel {
         )
     }
 
-    pub(crate) fn continue_run(&mut self, issue_id: &str) -> Result<(), KernelError> {
+    pub(crate) fn continue_run(&mut self, issue_id: &str) -> Result<RunStartResult, KernelError> {
         self.ensure_run_persistence_writable()?;
         if !self.execution_stopped(issue_id) {
             return Err(KernelError::Denied("issue is not execution-stopped".into()));

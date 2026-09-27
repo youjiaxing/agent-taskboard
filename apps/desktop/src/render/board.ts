@@ -8,7 +8,7 @@ import { fixedPanelResizeHandle, fixedPanelWidth, workbenchIssuePanel } from "..
 import { ui } from "../ui";
 import { GRAPH_RELATION_META } from "../graph-meta";
 import { issueCard, issueIdentity, issueStateBadge, issueTags, type IssueCardAction, type IssueDisplayTag, type IssueLaneState } from "../components/issue";
-import { button, formField, selectControl, textArea, textInput } from "../components/primitives";
+import { button, formField, notice, selectControl, textArea, textInput } from "../components/primitives";
 import { refreshStatus } from "../components/refresh-status";
 import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels } from "./run-organization";
 import { runPersistenceWritesBlocked } from "./run-organization";
@@ -449,6 +449,7 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail)
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
+  const runStartError = ui.runStartWarning?.issueId === issue.id ? ui.runStartWarning.message : "";
   return `<div class="detail-meta">
     ${lane ? issueStateBadge(copy, lane) : ""}
     ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
@@ -460,7 +461,7 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail)
     ${canStartEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
     ${canWrite ? `<button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
     <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
-  </div>${canWrite ? formFeedback(openKey) : ""}`;
+  </div>${runStartError ? notice({ status: "danger", role: "alert", message: runStartError }) : ""}${canWrite ? formFeedback(openKey) : ""}`;
 }
 
 function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, showDependencyGraph: boolean): string {

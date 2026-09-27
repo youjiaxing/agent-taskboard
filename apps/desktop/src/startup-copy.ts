@@ -15,6 +15,9 @@ export type StartupCopy = {
   hostModeHelp: string;
   hostModeActiveRuns: string;
   restartToApply: string;
+  autoFocusNewRun: string;
+  autoFocusNewRunHelp: string;
+  retryFocusRun: string;
   startAtLogin: string;
   startAtLoginHelp: string;
   desktopStartupBrowser: string;
@@ -60,6 +63,9 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     hostModeHelp: "仅作为 Client 时不会启动本机 Host、Tracker、Agent 或 10529 回环页，仍可连接已配对的远程 Host。",
     hostModeActiveRuns: "还有运行中的 Run，不能切换为仅 Client。请先让它们结束或停止。",
     restartToApply: "重启应用后生效。",
+    autoFocusNewRun: "启动 Run 后自动进入终端",
+    autoFocusNewRunHelp: "开启后，手动启动成功的 Run 会切换到终端视图；后台自动推进不会抢占当前页面。",
+    retryFocusRun: "重试进入终端",
     startAtLogin: "登录时自动启动",
     startAtLoginHelp: "默认关闭。开启后由系统登录启动项拉起 Agent Taskboard。",
     desktopStartupBrowser: "Host 启动模式和系统启动项只能在桌面应用中修改。",
@@ -110,6 +116,9 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     hostModeHelp: "Client only does not start the local Host, Tracker, Agent, or port 10529 loopback page. Paired remote Hosts remain available.",
     hostModeActiveRuns: "Client only cannot be enabled while Runs are active. Let them finish or stop them first.",
     restartToApply: "Restart the app to apply this change.",
+    autoFocusNewRun: "Open the terminal after starting a Run",
+    autoFocusNewRunHelp: "When enabled, a manually started Run opens in the terminal view. Background auto-advance never takes over the current page.",
+    retryFocusRun: "Retry opening terminal",
     startAtLogin: "Start at login",
     startAtLoginHelp: "Off by default. When enabled, the system login item starts Agent Taskboard.",
     desktopStartupBrowser: "Host startup mode and the system login item can only be changed in the desktop app.",

@@ -5,7 +5,7 @@ impl HostKernel {
         &mut self,
         issue_id: &str,
         agent_id: &str,
-    ) -> Result<(), KernelError> {
+    ) -> Result<RunStartResult, KernelError> {
         let project_id = self.project_id_for_issue(issue_id)?;
         let issue = self
             .issue_by_id(issue_id)

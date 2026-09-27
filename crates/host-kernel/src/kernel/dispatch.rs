@@ -3,6 +3,7 @@ use super::super::*;
 impl HostKernel {
     pub fn dispatch(&mut self, command: Command) -> Result<CommandOutcome, KernelError> {
         self.observe_live_runs();
+        let mut run_start = None;
         match command {
             Command::HideWindow => self.window_visible = false,
             Command::ShowWindow => {
@@ -238,10 +239,10 @@ impl HostKernel {
                 self.require_live_tracker_for_issue(&issue_id)?;
             }
             Command::StartBoundRun { issue_id } => {
-                self.start_bound_run(&issue_id)?;
+                run_start = Some(self.start_bound_run(&issue_id)?);
             }
             Command::ContinueRun { issue_id } => {
-                self.continue_run(&issue_id)?;
+                run_start = Some(self.continue_run(&issue_id)?);
             }
             Command::PrepareRunLaunch {
                 project_id,
@@ -272,7 +273,7 @@ impl HostKernel {
             }
             Command::StartUnboundRun { project_id } => {
                 let agent = self.default_agent_for_project(&project_id)?;
-                self.start_unbound_run(
+                run_start = Some(self.start_unbound_run(
                     &project_id,
                     RunLaunchConfig {
                         agent_id: agent.id().to_string(),
@@ -282,14 +283,15 @@ impl HostKernel {
                     None,
                     false,
                     None,
-                )?;
+                )?);
             }
             Command::StartUnboundRunWithConfig {
                 project_id,
                 config,
                 issue_id,
             } => {
-                self.start_unbound_run(&project_id, config, issue_id, true, None)?;
+                run_start =
+                    Some(self.start_unbound_run(&project_id, config, issue_id, true, None)?);
             }
             Command::SetShowCommandPreview { show } => {
                 self.show_command_preview = show;
@@ -298,6 +300,10 @@ impl HostKernel {
             Command::SetNotificationPrefs { desktop, sound } => {
                 self.notify_desktop = desktop;
                 self.notify_sound = sound;
+                self.persist_client_settings(&self.appearance.clone())?;
+            }
+            Command::SetAutoFocusNewRun { enabled } => {
+                self.auto_focus_new_run = enabled;
                 self.persist_client_settings(&self.appearance.clone())?;
             }
             Command::StopRun { run_id } => {
@@ -439,7 +445,9 @@ impl HostKernel {
                 self.open_run_from_usage(&run_id)?;
             }
         }
-        Ok(self.outcome())
+        let mut outcome = self.outcome();
+        outcome.run_start = run_start;
+        Ok(outcome)
     }
 
     pub(crate) fn dispatch_background_tick(

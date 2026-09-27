@@ -91,7 +91,17 @@ fn start_run(host: &mut HostKernel, project_id: &str, client_id: Option<&str>) -
     if let Some(client_id) = client_id {
         request["clientInstanceId"] = client_id.into();
     }
-    host.handle(request).unwrap().snapshot.focused_run_id
+    let started = host.handle(request).unwrap();
+    let run_id = match started.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    };
+    host.handle(serde_json::json!({
+        "op": "focusRun",
+        "runId": run_id,
+    }))
+    .unwrap();
+    run_id
 }
 
 fn stop_run(host: &mut HostKernel, run_id: &str) {
@@ -1049,7 +1059,10 @@ fn issue_links_hide_archived_runs_but_continue_keeps_the_history() {
             "openingText": "bound work",
         }))
         .unwrap();
-    let run_id = started.snapshot.focused_run_id.clone();
+    let run_id = match started.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    };
     stop_run(&mut host, &run_id);
     host.handle(serde_json::json!({
         "op": "focusIssue",

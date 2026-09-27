@@ -12,6 +12,7 @@ import { emptyDraft, ui } from "../ui";
 import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialog-controller";
 import { startupCopy } from "../startup-copy";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
+import { focusRunInWorkspace, focusStartedRun, retryRunFocus } from "./run-navigation";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
@@ -787,9 +788,17 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "continue-run" && target.dataset.id) {
     if (desktopRunWritesBlocked()) return;
-    await rpc("continueRun", { issueId: target.dataset.id });
-    ui.viewingRunId = activeRunForIssue(ui.snapshot, target.dataset.id)?.id ?? "";
-    render();
+    const snapshotBeforeStart = ui.snapshot;
+    const result = await rpc("continueRun", { issueId: target.dataset.id });
+    if (snapshotBeforeStart) {
+      await focusStartedRun(result, snapshotBeforeStart, { issueId: target.dataset.id });
+    } else {
+      render();
+    }
+    return;
+  }
+  if (act === "retry-focus-run" && target.dataset.id) {
+    await retryRunFocus(target.dataset.id);
     return;
   }
   if (act === "release-claim" && target.dataset.id) {
@@ -837,22 +846,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     return;
   }
   if (act === "focus-run" && target.dataset.id) {
-    const run = (ui.snapshot.runs ?? []).find((candidate) => candidate.id === target.dataset.id);
     const fromProjectHistory = mobileClient() && Boolean(target.closest("[data-run-history-scope='project']"));
-    enterPrimaryPage("focus-workspace", ui.snapshot);
-    ui.clientView.panels.rightSide = ui.nativeRunWindowRunId ? "hidden" : "rail";
-    ui.viewingRunId = target.dataset.id;
-    await rpc("focusRun", { runId: target.dataset.id });
-    if (!fromProjectHistory && run?.issueId && ui.snapshot.board?.selected?.id === run.issueId) {
-      await loadSelectedIssueDocument();
-    }
-    if (mobileClient()) {
-      ui.mobileWorkspaceSection = "terminal";
-      ui.mobileProjectHistoryRunOpen = fromProjectHistory;
-      if (!fromProjectHistory) ui.mobileRunHistoryScope = "issue";
-      ui.mobileLiveTerminal = false;
-    }
-    render();
+    await focusRunInWorkspace(target.dataset.id, ui.snapshot, { fromProjectHistory });
     return;
   }
   if (act === "view-issue-run" && target.dataset.id) {
