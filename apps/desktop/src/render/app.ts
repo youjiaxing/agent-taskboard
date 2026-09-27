@@ -1,4 +1,4 @@
-import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, syncGraphSelection } from "../main";
+import { attachTerminal, captureActiveField, centerGraphViewport, dependencyGraphRenderKey, discardTerminalCanvas, emptyActionAct, emptyActionLabel, paintGraphEdges, pumpMobileOutput, restoreActiveField, syncGraphSelection } from "../main";
 import { clientCopy, restoreGraphAnchor } from "../view-helpers";
 import { appearancePreferenceLabel, startupCopy } from "../startup-copy";
 import type { ScrollPosition } from "../protocol";
@@ -397,6 +397,23 @@ export function render(): void {
   ui.renderedDetailIssueId = selectedIssue?.id ?? "";
   ui.renderedBoardProjectId = nextLanes ? snap.focusedProjectId : "";
   ui.renderedMobileWorkspaceKey = nextWorkspace ? nextMobileWorkspaceKey : "";
+  if (
+    ui.ptyCanvasMounted
+    && ui.ptyRunId
+    && (
+      ui.clientView.page !== "focus-workspace"
+      || ui.ptyRunId !== snap.focusedRunId
+      || ui.ptyRunHostId !== snap.focusedHostId
+    )
+  ) {
+    discardTerminalCanvas();
+  } else if (isMobile && !ui.mobileLiveTerminal && ui.ptyCanvasMounted) {
+    discardTerminalCanvas();
+  } else if (ui.ptyReadOnly && !ui.app.querySelector(`.pty-slot[data-run="${CSS.escape(ui.ptyRunId)}"]`)) {
+    discardTerminalCanvas();
+  } else if (ui.app.querySelector(`.pty-slot[data-run="${CSS.escape(ui.ptyRunId)}"]`)) {
+    ui.ptyCanvasMounted = true;
+  }
   if (isMobile && !ui.mobileLiveTerminal) {
     ui.ptyPumping = false;
     void pumpMobileOutput(snap);

@@ -388,10 +388,60 @@ await page.click("form[data-act='usage-custom'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".usage-page .form-feedback"));
 if (failure.requests !== 2) throw new Error(`custom usage retry should issue one new request: ${failure.requests}`);
 rpcFailure = null;
+let returnedTerminalReadFromStart = false;
+const observeReturnedTerminalRead = (request) => {
+  if (request.url().includes("/output?after=0")) returnedTerminalReadFromStart = true;
+};
+page.on("request", observeReturnedTerminalRead);
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lifted-terminal");
+await page.waitForTimeout(100);
+page.off("request", observeReturnedTerminalRead);
+if (!returnedTerminalReadFromStart) {
+  throw new Error("returning from usage must reset the live terminal read offset instead of reusing the old canvas state");
+}
+await page.evaluate(() => {
+  window.__FROZEN_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host");
+});
+let stoppedInputRequests = 0;
+let stoppedResizeRequests = 0;
+let stoppedOutputRequests = 0;
+let stopRpcStarted = false;
+const countOutputAfterStopRequest = (request) => {
+  if (request.url().endsWith("/rpc") && request.postData()?.includes('"op":"stopRun"')) {
+    stopRpcStarted = true;
+  }
+  if (request.url().includes("/output") && stopRpcStarted) stoppedOutputRequests += 1;
+};
+page.on("request", countOutputAfterStopRequest);
 await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+page.off("request", countOutputAfterStopRequest);
+const countReadonlyTerminalRequests = (request) => {
+  if (request.url().includes("/input")) stoppedInputRequests += 1;
+  if (request.url().includes("/resize")) stoppedResizeRequests += 1;
+};
+page.on("request", countReadonlyTerminalRequests);
+const frozenTerminal = await page.evaluate(() => ({
+  sameHost: window.__FROZEN_TERMINAL_HOST__ === document.querySelector('[data-terminal-surface="readonly"] .pty-host'),
+  hasPtySlot: Boolean(document.querySelector('[data-terminal-surface="readonly"] .pty-slot')),
+  hasSummary: Boolean(document.querySelector('[data-terminal-surface="readonly"] .readonly-terminal-output')),
+  hasXterm: Boolean(document.querySelector('[data-terminal-surface="readonly"] .xterm')),
+}));
+await page.locator('[data-terminal-surface="readonly"] .pty-host').click();
+await page.keyboard.type("must not reach stopped Run");
+await page.waitForTimeout(100);
+page.off("request", countReadonlyTerminalRequests);
+if (!frozenTerminal.sameHost || !frozenTerminal.hasPtySlot || frozenTerminal.hasSummary || !frozenTerminal.hasXterm) {
+  throw new Error(`stopping the focused Run must freeze the existing xterm in place: ${JSON.stringify(frozenTerminal)}`);
+}
+if (stoppedInputRequests !== 0 || stoppedResizeRequests !== 0) {
+  throw new Error(`a stopped Run must reject input and PTY resize requests: ${JSON.stringify({ stoppedInputRequests, stoppedResizeRequests })}`);
+}
+if (stoppedOutputRequests !== 0) {
+  throw new Error(`a stop request must not start another PTY output poll: ${stoppedOutputRequests}`);
+}
 await page.click("button[data-act='return-page']");
 try {
   await page.waitForSelector(".lanes", { timeout: 2000 });

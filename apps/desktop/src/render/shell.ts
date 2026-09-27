@@ -534,11 +534,16 @@ export function terminalPanel(copy: ShellCopy, run: RunSummary, className: strin
 
 export function readOnlyTerminal(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
   const labels = focusWorkspaceLabels();
+  const keepCanvas = ui.ptyCanvasMounted
+    && ui.ptyRunId === run.id
+    && ui.ptyRunHostId === ui.snapshot?.focusedHostId;
   return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
     ${runHeader(copy, run, includeOrganization)}
     ${runNotices(copy, run)}
     <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
-    <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
+    ${keepCanvas
+      ? `<div class="pty-slot" data-run="${escapeHtml(run.id)}" aria-readonly="true"></div>`
+      : `<pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>`}
   </div>`;
 }
 
