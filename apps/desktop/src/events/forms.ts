@@ -298,9 +298,9 @@ ui.app.addEventListener("toggle", (event) => {
     else ui.issueMaintenanceOpen.delete(issueDraftKey(details.dataset.id));
     return;
   }
-  const section = details.dataset.workspaceSection as "actions" | "issue" | "runs" | undefined;
+  const section = details.dataset.workspaceSection as "issue" | "runs" | undefined;
   if (details.dataset.section !== "workspace-rail" || !section) return;
-  const open = ui.workspaceRailOpenSections.get(details.dataset.id) ?? new Set<"actions" | "issue" | "runs">();
+  const open = ui.workspaceRailOpenSections.get(details.dataset.id) ?? new Set<"issue" | "runs">();
   if (details.open) open.add(section);
   else open.delete(section);
   ui.workspaceRailOpenSections.set(details.dataset.id, open);

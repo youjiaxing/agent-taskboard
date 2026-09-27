@@ -510,6 +510,9 @@ const endedRun = await session.page.$eval(".mobile-workspace-panel .workspace-ru
 if (!endedRun?.includes("已结束")) {
   throw new Error(`the mobile Run history should read the ended Run state, got ${endedRun}`);
 }
+if (await session.page.locator(".mobile-workspace-panel button[data-act='continue-run']").count() !== 1) {
+  throw new Error("mobile Issue Run history should expose Continue for the stopped latest Run");
+}
 const issueHistoryRunIds = await session.page.$$eval(".mobile-workspace-panel .workspace-run-history-item", (nodes) => nodes.map((node) => node.dataset.id).sort());
 const issueHistoryExpected = (await snapshot()).runs
   .filter((run) => run.issueId === mobileFrontierIssueId)

@@ -371,6 +371,17 @@ export function issueRuns(snap: Snapshot, issueId = snap.board?.selected?.id): R
   return (snap.runs ?? []).filter((run) => run.issueId === issueId && !run.archivedAtMs);
 }
 
+/** Uses Host-provided ordering so an archived latest Run never points Continue at an older visible Run. */
+export function latestBoundRunForIssue(snap: Snapshot, issueId = snap.board?.selected?.id): RunSummary | undefined {
+  if (!issueId) return undefined;
+  const selected = snap.board?.selected;
+  if (selected?.id === issueId) {
+    if (!selected.latestBoundRunId) return undefined;
+    return (snap.runs ?? []).find((run) => run.id === selected.latestBoundRunId);
+  }
+  return [...(snap.runs ?? [])].reverse().find((run) => run.issueId === issueId);
+}
+
 export function workspaceRun(snap: Snapshot): RunSummary | undefined {
   if (mobileClient()) {
     const focused = focusedRun(snap);

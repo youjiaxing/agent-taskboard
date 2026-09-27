@@ -1,6 +1,6 @@
 import { connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, effectiveClientLanguage, issueRuns, mobileClient, workspaceRun } from "../view-helpers";
+import { currentProject, effectiveClientLanguage, issueRuns, latestBoundRunForIssue, mobileClient, workspaceRun } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
@@ -433,45 +433,66 @@ function issueCanWrite(board: BoardSnapshot, issue: IssueDetail): boolean {
   return !board.issueOptions.length || board.issueOptions.some((option) => option.id === issue.id);
 }
 
-function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail): string {
+function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, options: { workspace?: boolean } = {}): string {
   const claim = issue.claimedBy.length ? `${copy.claimed} ${issue.claimedBy.join(", ")}` : "";
   const hasActive = Boolean(issue.activeRunId);
   const lane = selectedIssueLane(board);
   const writesBlocked = !mobileClient() && Boolean(ui.snapshot && runPersistenceWritesBlocked(ui.snapshot));
   const blockedAttributes = writesBlocked ? ` disabled title="${escapeHtml(copy.runPersistenceWriteBlocked)}"` : "";
-  const primaryActions = hasActive
-    ? ""
+  const statusItems = [
+    lane ? issueStateBadge(copy, lane) : "",
+    issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : "",
+    issueTags(issueMetadataTags(issue.labels, false)),
+    claim ? `<span class="tag">${escapeHtml(claim)}</span>` : "",
+    issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : "",
+    issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : "",
+  ].filter(Boolean);
+  const actionItems = hasActive
+    ? []
     : issue.executionStopped
-      ? `<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.continueRun)}</button>
-         <button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
-      : `<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.executeRun)}</button>`;
+      ? [`<button type="button" class="primary" data-act="continue-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.continueRun)}</button>`]
+      : [`<button type="button" class="primary" data-act="execute-run" data-id="${escapeHtml(issue.id)}"${blockedAttributes}>${escapeHtml(copy.executeRun)}</button>`];
   const canWrite = issueCanWrite(board, issue);
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const openKey = issueOpenFormKey(issue.id);
   const openPending = ui.formOperations.pending.has(openKey);
   const runStartError = ui.runStartWarning?.issueId === issue.id ? ui.runStartWarning.message : "";
+  const releaseClaim = !hasActive && issue.executionStopped
+    ? `<button type="button" data-act="release-claim" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.releaseClaim)}</button>`
+    : "";
+  const issueMaintenanceActions = [
+    ...(canStartEdit ? [`<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>`] : []),
+    ...(canWrite
+      ? [`<button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>`]
+      : []),
+    `<button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>`,
+  ];
+  const inner = options.workspace
+    ? `<div class="workspace-detail-statuses">${statusItems.join("")}</div>
+       <div class="workspace-detail-actions">${actionItems.concat(issueMaintenanceActions, releaseClaim ? [releaseClaim] : []).join("")}</div>`
+    : `${statusItems.join("")}${actionItems.concat(releaseClaim ? [releaseClaim] : [], issueMaintenanceActions).join("")}`;
   return `<div class="detail-meta">
-    ${lane ? issueStateBadge(copy, lane) : ""}
-    ${issue.triageRole ? `<span class="tag">${escapeHtml(issue.triageRole)}</span>` : ""}
-    ${issueTags(issueMetadataTags(issue.labels, false))}
-    ${claim ? `<span class="tag">${escapeHtml(claim)}</span>` : ""}
-    ${issue.waitingForUser ? `<span class="tag">${escapeHtml(copy.waiting)}</span>` : ""}
-    ${issue.executionStopped ? `<span class="tag">${escapeHtml(copy.executionStopped)}</span>` : ""}
-    ${primaryActions}
-    ${canStartEdit ? `<button type="button" data-act="edit-issue" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.editIssue)}</button>` : ""}
-    ${canWrite ? `<button type="button" data-act="toggle-issue-open" data-id="${escapeHtml(issue.id)}" ${openPending ? "disabled" : ""}>${escapeHtml(openPending ? copy.operationPending : issue.open ? copy.closeIssue : copy.reopenIssue)}</button>` : ""}
-    <button type="button" data-act="open-issue" data-url="${escapeHtml(issue.url)}">${escapeHtml(copy.openIssue)}</button>
+    ${inner}
   </div>${runStartError ? notice({ status: "danger", role: "alert", message: runStartError }) : ""}${canWrite ? formFeedback(openKey) : ""}`;
 }
 
-function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, showDependencyGraph: boolean): string {
+function relationCount(links: IssueLink[]): string {
+  if (!links.length) return "0";
+  return links.some((link) => !link.visible) ? "?" : String(links.length);
+}
+
+function issueBody(
+  copy: ShellCopy,
+  board: BoardSnapshot,
+  issue: IssueDetail,
+  showDependencyGraph: boolean,
+  options: { collapsibleRelations?: boolean } = {},
+): string {
   const canWrite = issueCanWrite(board, issue);
   const canStartEdit = canWrite && issue.document.kind === "ready";
   const editOpen = ui.issueEditOpenIds.has(issueDraftKey(issue.id));
   const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issueDraftKey(issue.id)));
-  return `${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
-    ${showEditForm ? issueEditForm(copy, issue) : ""}
-    <section class="detail-block">
+  const relationSections = `<section class="${options.collapsibleRelations ? "detail-relation-group" : "detail-block"}">
       <h4>${escapeHtml(copy.family)}</h4>
       <div class="tiny">${escapeHtml(copy.parent)}</div>
       ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
@@ -479,14 +500,28 @@ function issueBody(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail, sh
       ${issue.children.length ? issue.children.map((child) => issueLink(copy, child)).join("") : `<span class="muted">${escapeHtml(copy.noKids)}</span>`}
       ${issue.children.length ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>` : ""}
     </section>
-    <section class="detail-block">
+    <section class="${options.collapsibleRelations ? "detail-relation-group" : "detail-block"}">
       <h4>${escapeHtml(copy.deps)}</h4>
       ${showDependencyGraph ? `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>` : ""}
       <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
       ${issue.blockedBy.length ? issue.blockedBy.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`}
       <div class="tiny">${escapeHtml(copy.blocking)}</div>
       ${issue.blocking.length ? issue.blocking.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.none)}</span>`}
-    </section>
+    </section>`;
+  const relationBody = options.collapsibleRelations
+    ? `<details class="detail-block detail-relations">
+        <summary>
+          <span>${effectiveClientLanguage() === "zh-CN" ? "关系" : "Relations"}</span>
+          <span class="detail-summary-meta">${effectiveClientLanguage() === "zh-CN"
+            ? `父 ${relationCount(issue.parent ? [issue.parent] : [])} · 子 ${relationCount(issue.children)} · 依赖 ${relationCount([...issue.blockedBy, ...issue.blocking])}`
+            : `Parent ${relationCount(issue.parent ? [issue.parent] : [])} · Child ${relationCount(issue.children)} · Dependencies ${relationCount([...issue.blockedBy, ...issue.blocking])}`}</span>
+        </summary>
+        <div class="detail-relations-body">${relationSections}</div>
+      </details>`
+    : relationSections;
+  return `${issueDocument(copy, issue.document ?? { kind: "unloaded" }, issue.url)}
+    ${showEditForm ? issueEditForm(copy, issue) : ""}
+    ${relationBody}
     ${canWrite
       ? `<details class="detail-block detail-maintenance" data-section="issue-maintenance" data-id="${escapeHtml(issue.id)}" ${ui.issueMaintenanceOpen.has(issueDraftKey(issue.id)) ? "open" : ""}>
           <summary>${escapeHtml(copy.issueUpdates)}</summary>
@@ -514,16 +549,23 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: Issu
     <div class="detail-scroll">${options.runHistory ?? ""}${issueBody(copy, board, issue, options.dependencyGraph ?? true)}</div>`;
 }
 
-export function workspaceRailLabels(): { actions: string; issue: string; runs: string; emptyRuns: string } {
+export function workspaceRailLabels(): { issue: string; runs: string; emptyRuns: string } {
   return effectiveClientLanguage() === "zh-CN"
-    ? { actions: "认领与操作", issue: "Issue 正文", runs: "运行记录", emptyRuns: "还没有运行记录" }
-    : { actions: "Claim and actions", issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
+    ? { issue: "Issue 正文", runs: "运行记录", emptyRuns: "还没有运行记录" }
+    : { issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
 }
 
 export function workspaceRunHistory(
   copy: ShellCopy,
   runs: RunSummary[],
-  options: { showIdentity?: boolean; organizationSnapshot?: Snapshot; organizationMode?: "text" | "menu"; currentRunId?: string; action?: string } = {},
+  options: {
+    showIdentity?: boolean;
+    organizationSnapshot?: Snapshot;
+    organizationMode?: "text" | "menu";
+    currentRunId?: string;
+    action?: string;
+    issueActions?: { issueId: string; latestBoundRunId?: string; executionStopped: boolean };
+  } = {},
 ): string {
   const labels = workspaceRailLabels();
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
@@ -537,13 +579,58 @@ export function workspaceRunHistory(
     const pinMarker = run.pinnedAtMs != null
       ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
       : "";
+    const writesBlocked = !mobileClient() && options.organizationSnapshot
+      ? runPersistenceWritesBlocked(options.organizationSnapshot)
+      : false;
+    const showContinue = Boolean(
+      options.issueActions
+      && options.issueActions.executionStopped
+      && options.issueActions.latestBoundRunId === run.id,
+    );
+    const showStop = Boolean(options.issueActions && run.status !== "ended");
+    const directActions = [
+      showContinue
+        ? button(
+            { id: "continue-run", label: copy.continueRun, disabled: writesBlocked, data: { id: options.issueActions?.issueId } },
+            {
+              variant: "primary",
+              className: "workspace-run-action",
+              attributes: {
+                id: `workspace-run-control-${run.id}`,
+                "data-stop": "true",
+                title: writesBlocked ? copy.runPersistenceWriteBlocked : copy.continueRun,
+              },
+            },
+          )
+        : "",
+      showStop
+        ? button(
+            { id: "stop-run", label: copy.stopRun, disabled: writesBlocked, destructive: true, data: { id: run.id } },
+            {
+              variant: "danger",
+              className: "workspace-run-action",
+              attributes: {
+                id: `workspace-run-control-${run.id}`,
+                "data-stop": "true",
+                title: writesBlocked ? copy.runPersistenceWriteBlocked : copy.stopRun,
+              },
+            },
+          )
+        : "",
+    ].filter(Boolean).join("");
+    const organizationActions = options.organizationSnapshot
+      ? runOrganizationActions(options.organizationSnapshot, run, options.organizationMode ?? "text")
+      : "";
+    const actionMarkup = directActions
+      ? `<div class="workspace-run-history-actions">${directActions}${organizationActions}</div>`
+      : organizationActions;
     return `<article class="workspace-run-history-item ${run.pinnedAtMs != null ? "pinned" : ""} ${current ? "current" : ""}" data-act="${action}" data-id="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
       <button type="button" class="workspace-run-history-main" data-act="${action}" data-id="${escapeHtml(run.id)}" ${current ? 'aria-current="true"' : ""}>
         <span><b>${escapeHtml(run.agentName)}${pinMarker}</b><small>${escapeHtml(status)}${run.startedAtMs ? ` · ${new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage())}` : ""}</small></span>
         ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
         ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
       </button>
-      ${options.organizationSnapshot ? runOrganizationActions(options.organizationSnapshot, run, options.organizationMode ?? "text") : ""}
+      ${actionMarkup}
     </article>`;
   }).join("")}</div>`;
 }
@@ -553,23 +640,36 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
   const issue = board?.selected;
   if (!board || !issue || ui.clientView.panels.rightSide !== "rail") return "";
   const runs = issueRuns(snap, issue.id);
-  const hasActive = runs.some((run) => run.status !== "ended");
   let open = ui.workspaceRailOpenSections.get(issue.id);
   if (!open) {
-    open = new Set<"actions" | "issue" | "runs">(hasActive ? ["runs"] : ["issue", "runs"]);
+    open = new Set<"issue" | "runs">(["issue", "runs"]);
     ui.workspaceRailOpenSections.set(issue.id, open);
   }
+  const latestBoundRun = latestBoundRunForIssue(snap, issue.id);
   const labels = workspaceRailLabels();
-  const section = (id: "actions" | "issue" | "runs", label: string, body: string, bodyClass = "") =>
+  const section = (id: "issue" | "runs", label: string, body: string, bodyClass = "") =>
     `<details class="workspace-rail-section" data-section="workspace-rail" data-id="${escapeHtml(issue.id)}" data-workspace-section="${id}" ${open?.has(id) ? "open" : ""}>
       <summary>${escapeHtml(label)}</summary>
       <div class="workspace-rail-section-body ${bodyClass}">${body}</div>
     </details>`;
   return `<aside class="issue-detail fixed-right-rail workspace-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
-    ${section("actions", labels.actions, `<div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>${issueActions(copy, board, issue)}`)}
-    ${section("issue", labels.issue, issueBody(copy, board, issue, true), "detail-scroll")}
-    ${section("runs", labels.runs, workspaceRunHistory(copy, runs, { organizationSnapshot: snap, currentRunId: workspaceRun(snap)?.id, action: "view-issue-run" }))}
+    <header class="workspace-rail-header">
+      <div class="workspace-rail-kicker">${effectiveClientLanguage() === "zh-CN" ? "当前 Issue" : "Current Issue"}</div>
+      <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+      ${issueActions(copy, board, issue, { workspace: true })}
+    </header>
+    ${section("issue", labels.issue, issueBody(copy, board, issue, true, { collapsibleRelations: true }), "detail-scroll")}
+    ${section("runs", labels.runs, workspaceRunHistory(copy, runs, {
+      organizationSnapshot: snap,
+      currentRunId: workspaceRun(snap)?.id,
+      action: "view-issue-run",
+      issueActions: {
+        issueId: issue.id,
+        latestBoundRunId: latestBoundRun?.id,
+        executionStopped: Boolean(issue.executionStopped),
+      },
+    }))}
   </aside>`;
 }
 

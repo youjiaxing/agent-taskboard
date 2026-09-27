@@ -511,6 +511,7 @@ export type IssueDetail = {
   executionStopped?: boolean;
   waitingForUser?: boolean;
   activeRunId?: string | null;
+  latestBoundRunId?: string | null;
 };
 
 export type IssueDocumentFailure = {
