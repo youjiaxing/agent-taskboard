@@ -9,14 +9,14 @@ import { ui } from "../ui";
 import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../startup-copy";
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
-import { button, checkbox, formField, iconButton, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
-import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
+import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
+import { orderRunsForDisplay, runOrganizationActionDescriptors, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = orderRunsForDisplay((snap.runs ?? []).filter((run) => run.projectId === project.id));
   return `<div class="project-block" data-project="${escapeHtml(project.id)}">
     ${projectRow(copy, project, focusedId)}
-    ${runs.map((run) => runRow(copy, run, snap.focusedRunId)).join("")}
+    ${runs.map((run) => runRow(copy, run, snap)).join("")}
   </div>`;
 }
 
@@ -57,12 +57,37 @@ export function runIdentity(copy: ShellCopy, run: RunSummary): string {
   return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
 }
 
-export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): string {
-  const identity = runIdentity(copy, run);
+function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapshot): ActionDescriptor[] {
   const localCopy = startupCopy(effectiveClientLanguage());
+  const actions: ActionDescriptor[] = [];
+  if (desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended") {
+    actions.push({
+      id: "open-run-window",
+      label: localCopy.openRunWindow,
+      data: { id: run.id },
+    });
+  }
+  actions.push({
+    id: "open-usage-run",
+    label: copy.openHostUsage,
+    data: { id: run.id },
+  });
+  if (run.status !== "ended") {
+    actions.push({
+      id: "stop-run",
+      label: copy.stopRun,
+      destructive: true,
+      disabled: runPersistenceWritesBlocked(snap),
+      data: { id: run.id },
+    });
+  }
+  actions.push(...runOrganizationActionDescriptors(snap, run));
+  return actions;
+}
+
+export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
+  const identity = runIdentity(copy, run);
   const organizationLabels = runOrganizationLabels();
-  const action = run.recentAction?.trim() ? escapeHtml(run.recentAction) : "";
-  const runWritesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const stateClass =
     run.waitingForUser && run.status !== "ended"
       ? "waiting"
@@ -77,38 +102,29 @@ export function runRow(copy: ShellCopy, run: RunSummary, focusedId: string): str
         : run.status === "running"
           ? copy.running
           : "";
-  const actions = [
-    desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
-      ? iconButton(
-          { id: "open-run-window", label: localCopy.openRunWindow, icon: "↗", data: { id: run.id } },
-          { className: "run-row-action", attributes: { title: localCopy.openRunWindow } },
-        )
-      : "",
-    iconButton(
-      { id: "open-usage-run", label: copy.openHostUsage, icon: "▥", data: { id: run.id } },
-      { className: "run-row-action", attributes: { title: copy.openHostUsage } },
-    ),
-    run.status !== "ended"
-      ? iconButton(
-          { id: "stop-run", label: copy.stopRun, icon: "■", disabled: runWritesBlocked, data: { id: run.id } },
-          { className: "run-row-action danger", attributes: { title: runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.stopRun } },
-        )
-      : "",
-    ui.snapshot ? runOrganizationActions(ui.snapshot, run, "icons") : "",
-  ].join("");
   const pinMarker = run.pinnedAtMs != null
     ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
     : "";
-  return `<div class="run-row ${run.id === focusedId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
+  const runMenuLabel = `${organizationLabels.runMenu} · ${run.agentName} · ${identity}`;
+  const menuOpen = ui.runMenuId === run.id;
+  const details = [run.recentAction, run.failure, run.isolationNote]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(" · ");
+  return `<div class="run-row ${run.id === snap.focusedRunId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""} ${menuOpen ? "menu-open" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}"${details ? ` title="${escapeHtml(details)}"` : ""}>
     <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
       <b>${escapeHtml(run.agentName)}${pinMarker}</b>
-      <span>${escapeHtml(identity)}</span>
+      <span class="run-identity">${escapeHtml(identity)}</span>
       ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
-      ${action ? `<span class="run-action">${action}</span>` : ""}
-      ${run.failure ? `<span class="run-fail">${escapeHtml(run.failure)}</span>` : ""}
-      ${run.isolationNote ? `<span class="run-action">${escapeHtml(run.isolationNote)}</span>` : ""}
     </button>
-    <div class="run-row-actions" role="group" aria-label="${escapeHtml(`${run.agentName} · ${identity}`)}">${actions}</div>
+    <div class="run-row-actions" role="group" aria-label="${escapeHtml(runMenuLabel)}">
+      <div class="run-row-menu-wrap">
+        ${button(
+          { id: "run-menu", label: organizationLabels.runMenu, ariaLabel: runMenuLabel, data: { id: run.id } },
+          { variant: "ghost", className: "run-row-action run-row-menu-trigger", attributes: { title: runMenuLabel, "aria-haspopup": "menu", "aria-expanded": menuOpen } },
+        )}
+        ${menuOpen ? menu({ label: runMenuLabel, className: "run-row-menu", actions: runRowActionDescriptors(copy, run, snap) }) : ""}
+      </div>
+    </div>
   </div>`;
 }
 
