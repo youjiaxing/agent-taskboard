@@ -13,6 +13,8 @@ import {
 } from "./acceptance-manifest-lib.mjs";
 
 const INPUTS = ["Cargo.lock", "src", "assets/baseline.png"];
+// Windows does not expose POSIX executable bits through fs.stat.
+const EXPECTS_POSIX_EXECUTABLE_BITS = process.platform !== "win32";
 
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), "agent-taskboard-manifest-"));
@@ -41,7 +43,7 @@ test("manifest generation is canonical and records Git semantic modes", async ()
       ["assets/baseline.png", "100644"],
       ["src/current.ts", "120000"],
       ["src/main.ts", "100644"],
-      ["src/tool.sh", "100755"],
+      ["src/tool.sh", EXPECTS_POSIX_EXECUTABLE_BITS ? "100755" : "100644"],
     ],
   );
 });
@@ -56,12 +58,15 @@ test("exact-match comparison reports content, mode, added, and removed inputs", 
   await writeFile(path.join(root, "assets/baseline.png"), Buffer.from([0x89, 0x50]));
   const current = await collectManifest(root, ["Cargo.lock", "src"]);
 
-  assert.deepEqual(compareManifests(accepted, current), [
+  const differences = [
     "removed: assets/baseline.png",
     "added: src/added.ts",
     "changed content: src/main.ts",
-    "changed mode: src/tool.sh (100755 -> 100644)",
-  ]);
+  ];
+  if (EXPECTS_POSIX_EXECUTABLE_BITS) {
+    differences.push("changed mode: src/tool.sh (100755 -> 100644)");
+  }
+  assert.deepEqual(compareManifests(accepted, current), differences);
 });
 
 test("excluded acceptance records do not affect the manifest", async () => {
