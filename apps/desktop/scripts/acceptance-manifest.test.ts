@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,8 +13,12 @@ import {
 } from "./acceptance-manifest-lib.mjs";
 
 const INPUTS = ["Cargo.lock", "src", "assets/baseline.png"];
-// Windows does not expose POSIX executable bits through fs.stat.
-const EXPECTS_POSIX_EXECUTABLE_BITS = process.platform !== "win32";
+const TOOL_PATH = "src/tool.sh";
+
+async function observesExecutableBits(root) {
+  const stats = await lstat(path.join(root, TOOL_PATH));
+  return Boolean(stats.mode & 0o111);
+}
 
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), "agent-taskboard-manifest-"));
@@ -33,6 +37,7 @@ test("manifest generation is canonical and records Git semantic modes", async ()
   const root = await fixture();
   const first = await collectManifest(root, INPUTS);
   const second = await collectManifest(root, [...INPUTS].reverse());
+  const expectsExecutableBits = await observesExecutableBits(root);
 
   assert.equal(canonicalManifest(first), canonicalManifest(second));
   assert.equal(manifestDigest(first), manifestDigest(second));
@@ -43,7 +48,7 @@ test("manifest generation is canonical and records Git semantic modes", async ()
       ["assets/baseline.png", "100644"],
       ["src/current.ts", "120000"],
       ["src/main.ts", "100644"],
-      ["src/tool.sh", EXPECTS_POSIX_EXECUTABLE_BITS ? "100755" : "100644"],
+      ["src/tool.sh", expectsExecutableBits ? "100755" : "100644"],
     ],
   );
 });
@@ -51,6 +56,7 @@ test("manifest generation is canonical and records Git semantic modes", async ()
 test("exact-match comparison reports content, mode, added, and removed inputs", async () => {
   const root = await fixture();
   const accepted = await collectManifest(root, INPUTS);
+  const expectsExecutableBits = await observesExecutableBits(root);
 
   await writeFile(path.join(root, "src/main.ts"), "export const value = 2;\n");
   await chmod(path.join(root, "src/tool.sh"), 0o644);
@@ -63,7 +69,7 @@ test("exact-match comparison reports content, mode, added, and removed inputs", 
     "added: src/added.ts",
     "changed content: src/main.ts",
   ];
-  if (EXPECTS_POSIX_EXECUTABLE_BITS) {
+  if (expectsExecutableBits) {
     differences.push("changed mode: src/tool.sh (100755 -> 100644)");
   }
   assert.deepEqual(compareManifests(accepted, current), differences);
