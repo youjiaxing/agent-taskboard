@@ -150,7 +150,7 @@ impl AgentPort for CodexAdapter {
         executable: &Path,
         env: &LaunchEnvironment,
     ) -> Result<AgentConfigDiscovery, String> {
-        let response = codex_model_list(executable, env)?;
+        let (config, response) = codex_discovery(executable, env)?;
         let help = discovery::run_cli(executable, &["--help"], env)?;
         let models = response
             .pointer("/result/data")
@@ -158,6 +158,7 @@ impl AgentPort for CodexAdapter {
             .ok_or_else(|| "Codex CLI model/list returned no model data".to_string())?;
         let mut fields = self.config_fields();
         let mut seed = self.seed_config();
+        apply_config_seed(&mut seed, config.as_ref());
         let mut model_options = Vec::new();
         let mut efforts_by_model = BTreeMap::new();
         let mut defaults_by_model = BTreeMap::new();
@@ -299,6 +300,21 @@ impl AgentPort for CodexAdapter {
     }
 }
 
+fn apply_config_seed(seed: &mut BTreeMap<String, String>, config: Option<&Value>) {
+    let Some(config) = config else {
+        return;
+    };
+    for (config_key, field_id) in [("approval_policy", "approval"), ("sandbox_mode", "sandbox")] {
+        if let Some(value) = config
+            .get(config_key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            seed.insert(field_id.into(), value.to_string());
+        }
+    }
+}
+
 fn stop_codex_app_server(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
@@ -324,7 +340,10 @@ fn stop_codex_app_server(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value, String> {
+fn codex_discovery(
+    executable: &Path,
+    env: &LaunchEnvironment,
+) -> Result<(Option<Value>, Value), String> {
     let mut command = discovery::configured_command(executable, env);
     command
         .args(["app-server", "--stdio"])
@@ -392,24 +411,47 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
         return Err(format!("could not initialize Codex app-server: {err}"));
     }
     let started = Instant::now();
-    let mut requested_models = false;
+    let mut requested_probes = false;
+    let mut config_request_done = false;
+    let mut config = None;
+    let mut model_response = None;
     loop {
         let remaining = discovery::PROBE_TIMEOUT.saturating_sub(started.elapsed());
         if remaining.is_zero() {
+            if model_response.is_some() {
+                if !config_request_done {
+                    stop_codex_app_server(&mut child);
+                    return Err("Codex CLI config/read returned no response".into());
+                }
+                break;
+            }
             stop_codex_app_server(&mut child);
+            if config_request_done {
+                return Err("Codex CLI model/list returned no response".into());
+            }
             return Err("Codex CLI option discovery timed out".into());
         }
         let line = match receiver.recv_timeout(remaining) {
             Ok(line) => line,
+            Err(_) if model_response.is_some() => {
+                if !config_request_done {
+                    stop_codex_app_server(&mut child);
+                    return Err("Codex CLI config/read returned no response".into());
+                }
+                break;
+            }
             Err(_) => {
                 stop_codex_app_server(&mut child);
+                if config_request_done {
+                    return Err("Codex CLI model/list returned no response".into());
+                }
                 return Err("Codex CLI option discovery timed out".into());
             }
         };
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if message.get("id").and_then(Value::as_i64) == Some(0) && !requested_models {
+        if message.get("id").and_then(Value::as_i64) == Some(0) && !requested_probes {
             if let Err(err) = writeln!(
                 stdin,
                 "{}",
@@ -425,8 +467,23 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
                 stdin,
                 "{}",
                 serde_json::json!({
-                    "method": "model/list",
+                    "method": "config/read",
                     "id": 1,
+                    "params": {
+                        "cwd": env.cwd.display().to_string(),
+                        "includeLayers": false
+                    }
+                })
+            ) {
+                stop_codex_app_server(&mut child);
+                return Err(format!("could not request Codex config: {err}"));
+            }
+            if let Err(err) = writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({
+                    "method": "model/list",
+                    "id": 2,
                     "params": { "limit": 100 }
                 })
             ) {
@@ -435,23 +492,47 @@ fn codex_model_list(executable: &Path, env: &LaunchEnvironment) -> Result<Value,
             }
             if let Err(err) = stdin.flush() {
                 stop_codex_app_server(&mut child);
-                return Err(format!("could not request Codex models: {err}"));
+                return Err(format!("could not request Codex config and models: {err}"));
             }
-            requested_models = true;
+            requested_probes = true;
             continue;
         }
         if message.get("id").and_then(Value::as_i64) == Some(1) {
-            stop_codex_app_server(&mut child);
-            drop(receiver);
-            let _ = stdout_reader.join();
-            let stderr = stderr_reader.join().unwrap_or_default();
-            if let Some(error) = message.get("error") {
-                return Err(format!(
-                    "Codex CLI model/list failed: {error}{}",
-                    discovery::stderr_suffix(&stderr)
-                ));
+            config_request_done = true;
+            if message.get("error").is_none() {
+                let Some(found) = message
+                    .pointer("/result/config")
+                    .filter(|value| value.is_object())
+                    .cloned()
+                else {
+                    stop_codex_app_server(&mut child);
+                    return Err("Codex CLI config/read returned no config data".into());
+                };
+                config = Some(found);
             }
-            return Ok(message);
+            if model_response.is_some() {
+                break;
+            }
+            continue;
+        }
+        if message.get("id").and_then(Value::as_i64) == Some(2) {
+            model_response = Some(message);
+            if config_request_done {
+                break;
+            }
         }
     }
+    stop_codex_app_server(&mut child);
+    drop(receiver);
+    let _ = stdout_reader.join();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    let model_response =
+        model_response.ok_or_else(|| "Codex CLI model/list returned no response".to_string())?;
+    if let Some(error) = model_response.get("error") {
+        return Err(format!(
+            "Codex CLI model/list failed: {error}{}",
+            discovery::stderr_suffix(&stderr)
+        ));
+    }
+    Ok((config, model_response))
 }
