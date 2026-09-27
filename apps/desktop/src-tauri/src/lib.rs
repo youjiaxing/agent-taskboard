@@ -21,7 +21,7 @@ use tauri::menu::{
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_log::RotationStrategy;
+use tauri_plugin_log::{log::LevelFilter, RotationStrategy};
 use tauri_plugin_opener::OpenerExt;
 
 const LOG_FILE_SIZE_BYTES: u128 = 5 * 1024 * 1024;
@@ -123,6 +123,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
+                .level(LevelFilter::Info)
+                .level_for("tauri_plugin_updater", LevelFilter::Debug)
                 .max_file_size(LOG_FILE_SIZE_BYTES)
                 .rotation_strategy(RotationStrategy::KeepSome(LOG_FILE_COUNT))
                 .build(),
