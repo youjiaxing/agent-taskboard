@@ -8,6 +8,7 @@ const [
   packageLock,
   cargo,
   hostCargo,
+  cargoLock,
   renderedSettings,
   formEvents,
 ] = await Promise.all([
@@ -17,15 +18,34 @@ const [
   readJson(new URL("../package-lock.json", import.meta.url)),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
   readFile(new URL("../../../crates/host-kernel/Cargo.toml", import.meta.url), "utf8"),
+  readFile(new URL("../../../Cargo.lock", import.meta.url), "utf8"),
   readFile(new URL("../src/render/shell.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/events/forms.ts", import.meta.url), "utf8"),
 ]);
 
 const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 const hostCargoVersion = hostCargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-const versions = [config.version, desktopPackage.version, cargoVersion, hostCargoVersion];
+const cargoLockVersions = Object.fromEntries(
+  [...cargoLock.matchAll(/\[\[package\]\]\s+name = "(agent-taskboard|host-kernel)"\s+version = "([^"]+)"/g)]
+    .map(([, name, version]) => [name, version]),
+);
+const versionEntries = {
+  "tauri.conf.json": config.version,
+  "package.json": desktopPackage.version,
+  "package-lock.json": packageLock.version,
+  "package-lock root": packageLock.packages?.[""]?.version,
+  "src-tauri/Cargo.toml": cargoVersion,
+  "host-kernel/Cargo.toml": hostCargoVersion,
+  "Cargo.lock agent-taskboard": cargoLockVersions["agent-taskboard"],
+  "Cargo.lock host-kernel": cargoLockVersions["host-kernel"],
+};
+const versions = Object.values(versionEntries);
 if (versions.some((version) => !version) || new Set(versions).size !== 1) {
-  fail(`version mismatch: ${versions.join(", ")}`);
+  fail(
+    `version mismatch: ${Object.entries(versionEntries)
+      .map(([name, version]) => `${name}=${version ?? "<missing>"}`)
+      .join(", ")}`,
+  );
 }
 
 const tag = process.argv[2] || process.env.RELEASE_TAG;
