@@ -463,11 +463,6 @@ jobs:
               any($names[]; . == "latest.json" or startswith("latest.json.pending"))
           ' <<<"$release_json" >/dev/null
 
-          pending_asset_ids=$(jq -r '
-            .assets[]
-            | select(.name == "latest.json.pending" or (.name | startswith("latest.json.pending.")))
-            | .id
-          ' <<<"$release_json")
           latest_asset=$(jq -ce '[.assets[] | select(.name == "latest.json")] | first // empty' <<<"$release_json" || true)
           source_asset="$latest_asset"
           if [[ -z "$source_asset" ]]; then
@@ -511,6 +506,13 @@ jobs:
           mv latest.json.tmp latest.json
 
           pending_name="latest.json.pending.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          existing_pending_asset_id=$(jq -r --arg name "$pending_name" '
+            [.assets[] | select(.name == $name) | .id] | first // empty
+          ' <<<"$release_json")
+          if [[ -n "$existing_pending_asset_id" ]]; then
+            gh api --method DELETE \
+              "repos/$REPOSITORY/releases/assets/$existing_pending_asset_id" >/dev/null
+          fi
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
@@ -557,7 +559,18 @@ jobs:
             test -n "$old_pending_asset_id"
             gh api --method DELETE \
               "repos/$REPOSITORY/releases/assets/$old_pending_asset_id" >/dev/null
-          done <<<"$pending_asset_ids"
+          done < <(
+            jq -r --arg pending_name "$pending_name" '
+              .assets[]
+              | select(
+                  (
+                    .name == "latest.json.pending" or
+                    (.name | startswith("latest.json.pending."))
+                  ) and .name != $pending_name
+                )
+              | .id
+            ' <<<"$release_json"
+          )
           gh api --method DELETE \
             "repos/$REPOSITORY/releases/assets/$pending_asset_id" >/dev/null
           gh api --method PATCH "repos/$REPOSITORY/releases/$release_id" -F draft=false >/dev/null
