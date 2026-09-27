@@ -2,7 +2,7 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, effectiveClientLanguage, mobileClient, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
 import { ui } from "../ui";
@@ -504,9 +504,22 @@ export function runHeader(copy: ShellCopy, run: RunSummary, includeOrganization 
 
 /** Host-reported Run conditions that every terminal surface must keep visible. */
 export function runNotices(copy: ShellCopy, run: RunSummary): string {
+  const localCopy = startupCopy(effectiveClientLanguage());
+  const startWarning = ui.runStartWarning?.runId === run.id
+    && ui.runStartWarning.message !== run.isolationNote
+    ? ui.runStartWarning.message
+    : "";
+  const focusError = ui.runFocusError?.runId === run.id ? ui.runFocusError.message : "";
   return `${run.waitingForUser && run.status !== "ended" ? `<p class="notice">${escapeHtml(copy.waiting)}</p>` : ""}
     ${run.failure ? `<p class="notice bad">${escapeHtml(run.failure)}</p>` : ""}
-    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}`;
+    ${run.isolationNote ? `<p class="notice">${escapeHtml(run.isolationNote)}</p>` : ""}
+    ${startWarning ? `<p class="notice">${escapeHtml(startWarning)}</p>` : ""}
+    ${focusError ? notice({
+      status: "danger",
+      role: "alert",
+      message: focusError,
+      actions: `<button type="button" data-act="retry-focus-run" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.retryFocusRun)}</button>`,
+    }) : ""}`;
 }
 
 export function terminalPanel(copy: ShellCopy, run: RunSummary, className: string, includeOrganization = false): string {
@@ -522,6 +535,7 @@ export function readOnlyTerminal(copy: ShellCopy, run: RunSummary, includeOrgani
   const labels = focusWorkspaceLabels();
   return `<div class="focus-terminal-surface readonly-terminal" data-terminal-panel data-terminal-surface="readonly" data-run="${escapeHtml(run.id)}">
     ${runHeader(copy, run, includeOrganization)}
+    ${runNotices(copy, run)}
     <div class="readonly-terminal-label">${escapeHtml(labels.recentOutput)}</div>
     <pre class="readonly-terminal-output" aria-readonly="true">${escapeHtml(run.recentOutput ?? "")}</pre>
   </div>`;
@@ -735,6 +749,9 @@ export function settingsPage(
 ): string {
   const languageLabel = (language: Language) => language === "zh-CN" ? copy.languageZh : copy.languageEn;
   const project = snap.projects.find((item) => item.id === snap.focusedProjectId);
+  const autoFocusNewRun = browserClient()
+    ? ensureBrowserClientSettings().autoFocusNewRun
+    : autoFocusNewRunEnabled(snap);
   return `<section class="settings-page" data-primary-page="settings">
     <div class="content-toolbar" data-page-toolbar>
       <div class="board-head">
@@ -772,6 +789,12 @@ export function settingsPage(
       <section class="settings-section" data-settings-section="startup">
         <h2>${escapeHtml(localCopy.hostStartup)}</h2>
         ${startupSettings(localCopy, snap)}
+        ${checkbox({
+          label: localCopy.autoFocusNewRun,
+          checked: autoFocusNewRun,
+          attributes: { "data-field": "autoFocusNewRun" },
+        })}
+        <p class="hint">${escapeHtml(localCopy.autoFocusNewRunHelp)}</p>
         <div class="field">
           ${button({ id: "refresh-launch-environment", label: localCopy.rereadLaunchEnvironment, disabled: snap.hostMode === "client-only" })}
           ${launchEnvironmentStatus(localCopy)}

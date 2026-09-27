@@ -530,20 +530,30 @@ pub fn start_unbound_grok(
     host: &mut host_kernel::HostKernel,
     project_id: &str,
 ) -> host_kernel::CommandOutcome {
+    let started = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "project integration",
+        }))
+        .unwrap();
+    let run_id = match started.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    };
     host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": project_id,
-        "agentId": "grok-build",
-        "values": {
-            "model": "grok-4.6",
-            "effort": "high",
-            "permission-mode": "default",
-            "always-approve": "false",
-            "sandbox": "off",
-            "initial-instruction": "",
-            "additional-args": ""
-        },
-        "openingText": "project integration",
+        "op": "focusRun",
+        "runId": run_id,
     }))
     .unwrap()
 }
@@ -553,21 +563,31 @@ pub fn start_bound_grok(
     project_id: &str,
     issue_id: &str,
 ) -> host_kernel::CommandOutcome {
+    let started = host
+        .handle(serde_json::json!({
+            "op": "startUnboundRun",
+            "projectId": project_id,
+            "issueId": issue_id,
+            "agentId": "grok-build",
+            "values": {
+                "model": "grok-4.6",
+                "effort": "high",
+                "permission-mode": "default",
+                "always-approve": "false",
+                "sandbox": "off",
+                "initial-instruction": "",
+                "additional-args": ""
+            },
+            "openingText": "browser board integration",
+        }))
+        .unwrap();
+    let run_id = match started.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    };
     host.handle(serde_json::json!({
-        "op": "startUnboundRun",
-        "projectId": project_id,
-        "issueId": issue_id,
-        "agentId": "grok-build",
-        "values": {
-            "model": "grok-4.6",
-            "effort": "high",
-            "permission-mode": "default",
-            "always-approve": "false",
-            "sandbox": "off",
-            "initial-instruction": "",
-            "additional-args": ""
-        },
-        "openingText": "browser board integration",
+        "op": "focusRun",
+        "runId": run_id,
     }))
     .unwrap()
 }

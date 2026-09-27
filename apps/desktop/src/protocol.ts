@@ -650,6 +650,7 @@ export type Snapshot = {
   showCommandPreview?: boolean;
   notifyDesktop?: boolean;
   notifySound?: boolean;
+  autoFocusNewRun?: boolean;
   autoAdvance?: boolean;
   pendingConfirmation?: PendingConfirmation | null;
   usageOpen?: boolean;
@@ -840,7 +841,11 @@ export type RunRestoreResult =
         | "active-project-tombstone-conflict";
       tombstone?: ProjectTombstone;
       conflictingProjectId?: string;
-    };
+  };
+
+export type RunStartResult =
+  | { status: "started"; runId: string; warning?: string | null }
+  | { status: "failed"; warning?: string | null };
 
 export type RunPersistenceRecovery = {
   kind: "unreadable" | "invalid-json" | "invalid-run-record" | "write-failed";
@@ -996,6 +1001,7 @@ export type RpcResult = {
   viewChanges?: ViewChanges;
   archivedRuns?: RunSummary[];
   runRestore?: RunRestoreResult;
+  runStart?: RunStartResult;
 };
 
 export type PrimaryPage =
@@ -1057,4 +1063,7 @@ export type BoardScrollPosition = ScrollPosition & {
 export type BrowserAppearance = {
   language: Language;
   appearancePreference: AppearancePreference;
+};
+export type BrowserClientSettings = {
+  autoFocusNewRun: boolean;
 };

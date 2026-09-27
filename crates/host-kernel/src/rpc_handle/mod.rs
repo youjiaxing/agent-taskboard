@@ -68,6 +68,7 @@ impl HostKernel {
             | "revokeClient"
             | "setAppearancePreference"
             | "setClientView"
+            | "setAutoFocusNewRun"
             | "setHostAutoAdvance"
             | "setLanguage"
             | "setNotificationPrefs"

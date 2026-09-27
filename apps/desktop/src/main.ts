@@ -3,6 +3,7 @@ import {
   currentSystemAppearance,
   effectiveAppearancePreference,
   ensureBrowserAppearance,
+  loadBrowserClientSettings,
   loadBrowserAppearance,
   mobileOutputKey,
   mobileReadableRun,
@@ -67,6 +68,7 @@ import type {
 } from "./protocol";
 
 ui.browserAppearance = loadBrowserAppearance();
+ui.browserClientSettings = loadBrowserClientSettings();
 
 export function notificationTitle(copy: ShellCopy, kind: NotificationKind): string {
   if (kind === "waiting") return copy.notifyWaiting;

@@ -120,6 +120,9 @@ impl HostKernel {
         if let Some(run_restore) = response.get("runRestore").cloned() {
             outcome.run_restore = serde_json::from_value(run_restore).ok();
         }
+        if let Some(run_start) = response.get("runStart").cloned() {
+            outcome.run_start = serde_json::from_value(run_start).ok();
+        }
     }
 
     pub(crate) fn capture_client_navigation(&self) -> ClientNavigationState {
@@ -233,6 +236,7 @@ impl HostKernel {
             show_command_preview: self.show_command_preview,
             notify_desktop: self.notify_desktop,
             notify_sound: self.notify_sound,
+            auto_focus_new_run: self.auto_focus_new_run,
         };
         write_json(&self.data.desktop_client_settings_path, &file)?;
         let secrets = ClientSecretsFile {
@@ -657,6 +661,11 @@ mod tests {
                     "runId": "run-1",
                     "projectId": "project-1",
                     "reason": "tombstone-missing"
+                },
+                "runStart": {
+                    "status": "started",
+                    "runId": "run-2",
+                    "warning": "tree pending"
                 }
             }),
         );
@@ -667,6 +676,11 @@ mod tests {
                 reason: RunRestoreConflictReason::TombstoneMissing,
                 ..
             })
+        ));
+        assert!(matches!(
+            outcome.run_start,
+            Some(RunStartResult::Started { run_id, warning })
+                if run_id == "run-2" && warning.as_deref() == Some("tree pending")
         ));
     }
 }

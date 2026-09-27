@@ -1,5 +1,12 @@
 use super::*;
 
+fn started_run_id(outcome: host_kernel::CommandOutcome) -> String {
+    match outcome.run_start {
+        Some(host_kernel::RunStartResult::Started { run_id, .. }) => run_id,
+        other => panic!("expected a started Run, got {other:?}"),
+    }
+}
+
 #[test]
 fn browser_renders_incomplete_state_then_recovers_all_board_flows() {
     let tmp = tempfile::tempdir().unwrap();
@@ -185,8 +192,8 @@ Paragraph six confirms that entering a Run must retain this same complete Issue 
         .expect("stopped Run")
         .recent_output
         .ends_with("ended recent output"));
-    let garden_unbound_run_id = host
-        .handle(serde_json::json!({
+    let garden_unbound_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": garden_project_id,
             "agentId": "grok-build",
@@ -201,9 +208,8 @@ Paragraph six confirms that entering a Run must retain this same complete Issue 
             },
             "openingText": "garden unbound history integration",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .expect("garden unbound Run session")
@@ -340,8 +346,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
     )
     .unwrap();
 
-    let archived_run_id = host
-        .handle(serde_json::json!({
+    let archived_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": garden_project_id,
             "agentId": "grok-build",
@@ -356,9 +362,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "archived garden Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -372,8 +377,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
 
     let tools_dir = make_dir(tmp.path(), "work/tools");
     let tools_project_id = register(&mut host, "tools", &tools_dir, "you/tools");
-    let active_run_id = host
-        .handle(serde_json::json!({
+    let active_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": tools_project_id,
             "agentId": "grok-build",
@@ -388,9 +393,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "active pinned tools Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -413,8 +417,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
         .push_output(b"mobile bound history output\n");
     host.handle(serde_json::json!({ "op": "stopRun", "runId": mobile_bound_run_id }))
         .unwrap();
-    let mobile_active_run_id = host
-        .handle(serde_json::json!({
+    let mobile_active_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": mobile_project_id,
             "agentId": "grok-build",
@@ -429,9 +433,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "mobile active waiting Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -439,8 +442,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
     sessions.last_session().unwrap().set_waiting(true);
     host.handle(serde_json::json!({ "op": "snapshot" }))
         .unwrap();
-    let mobile_ended_run_id = host
-        .handle(serde_json::json!({
+    let mobile_ended_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": mobile_project_id,
             "agentId": "grok-build",
@@ -455,9 +458,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "mobile ended Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -472,8 +474,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
         &mobile_removed_dir,
         "you/mobile-removed",
     );
-    let mobile_removed_run_id = host
-        .handle(serde_json::json!({
+    let mobile_removed_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": mobile_removed_project_id,
             "agentId": "grok-build",
@@ -488,9 +490,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "mobile removed Project archived Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -506,8 +507,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
 
     let legacy_dir = make_dir(tmp.path(), "work/legacy");
     let legacy_project_id = register(&mut host, "legacy", &legacy_dir, "you/legacy");
-    let removed_run_id = host
-        .handle(serde_json::json!({
+    let removed_run_id = started_run_id(
+        host.handle(serde_json::json!({
             "op": "startUnboundRun",
             "projectId": legacy_project_id,
             "agentId": "grok-build",
@@ -522,9 +523,8 @@ fn browser_delivers_desktop_run_organization_workflows() {
             },
             "openingText": "removed Project archived Run",
         }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+        .unwrap(),
+    );
     sessions
         .last_session()
         .unwrap()
@@ -558,25 +558,25 @@ fn browser_delivers_desktop_run_organization_workflows() {
     pin_board_test_time(&mut remote_host);
     let remote_dir = make_dir(remote_tmp.path(), "work/remote");
     let remote_project_id = register(&mut remote_host, "remote", &remote_dir, "you/remote");
-    let remote_run_id = remote_host
-        .handle(serde_json::json!({
-            "op": "startUnboundRun",
-            "projectId": remote_project_id,
-            "agentId": "grok-build",
-            "values": {
-                "model": "grok-4.6",
-                "effort": "high",
-                "permission-mode": "default",
-                "always-approve": "false",
-                "sandbox": "off",
-                "initial-instruction": "",
-                "additional-args": ""
-            },
-            "openingText": "remote pinned Run",
-        }))
-        .unwrap()
-        .snapshot
-        .focused_run_id;
+    let remote_run_id = started_run_id(
+        remote_host
+            .handle(serde_json::json!({
+                "op": "startUnboundRun",
+                "projectId": remote_project_id,
+                "agentId": "grok-build",
+                "values": {
+                    "model": "grok-4.6",
+                    "effort": "high",
+                    "permission-mode": "default",
+                    "always-approve": "false",
+                    "sandbox": "off",
+                    "initial-instruction": "",
+                    "additional-args": ""
+                },
+                "openingText": "remote pinned Run",
+            }))
+            .unwrap(),
+    );
     remote_host
         .handle(serde_json::json!({ "op": "setRunPinned", "runId": remote_run_id, "pinned": true }))
         .unwrap();

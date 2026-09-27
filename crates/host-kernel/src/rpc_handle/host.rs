@@ -143,6 +143,12 @@ impl HostKernel {
                     .and_then(|value| value.as_bool())
                     .ok_or_else(|| KernelError::Protocol("missing sound".into()))?,
             }),
+            "setAutoFocusNewRun" => self.dispatch(Command::SetAutoFocusNewRun {
+                enabled: request
+                    .get("enabled")
+                    .and_then(|value| value.as_bool())
+                    .ok_or_else(|| KernelError::Protocol("missing enabled".into()))?,
+            }),
             "setHostAutoAdvance" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
