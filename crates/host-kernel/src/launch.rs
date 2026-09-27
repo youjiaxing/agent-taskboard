@@ -303,17 +303,6 @@ pub fn missing_required(
     None
 }
 
-pub fn opening_required(opening: &str, language: Language) -> Option<String> {
-    if opening.trim().is_empty() {
-        Some(match language {
-            Language::ZhCn => "请填写任务说明。".into(),
-            Language::En => "Enter a task description.".into(),
-        })
-    } else {
-        None
-    }
-}
-
 pub fn command_preview(argv: &[String]) -> String {
     argv.join(" ")
 }
