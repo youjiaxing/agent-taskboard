@@ -27,6 +27,7 @@ function closeMobileDrawer(): void {
 }
 
 function clearRunOrganizationContext(): void {
+  ui.runMenuId = "";
   ui.mobileRunMenuId = "";
   ui.archiveProjectFilter = "";
   ui.archiveSelectedRunId = "";
@@ -376,10 +377,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (!ui.snapshot) return;
   const target = (event.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!target) {
-    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId || ui.mobileRunMenuId) {
+    if (ui.appearanceMenuOpen || ui.moreMenuOpen || ui.projectMenuId || ui.runMenuId || ui.mobileRunMenuId) {
       ui.appearanceMenuOpen = false;
       ui.moreMenuOpen = false;
       ui.projectMenuId = "";
+      ui.runMenuId = "";
       ui.mobileRunMenuId = "";
       render();
     }
@@ -397,6 +399,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act !== "appearance-menu" && act !== "appearance") ui.appearanceMenuOpen = false;
   if (act !== "more-menu") ui.moreMenuOpen = false;
   if (act !== "project-menu") ui.projectMenuId = "";
+  if (act !== "run-menu") ui.runMenuId = "";
   if (act !== "mobile-run-menu") ui.mobileRunMenuId = "";
   if (act === "mobile-drawer") {
     rememberDialogTrigger("mobile-drawer", target);
@@ -406,6 +409,11 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   }
   if (act === "mobile-run-menu" && target.dataset.id) {
     ui.mobileRunMenuId = ui.mobileRunMenuId === target.dataset.id ? "" : target.dataset.id;
+    render();
+    return;
+  }
+  if (act === "run-menu" && target.dataset.id) {
+    ui.runMenuId = ui.runMenuId === target.dataset.id ? "" : target.dataset.id;
     render();
     return;
   }

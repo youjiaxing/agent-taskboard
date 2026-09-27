@@ -182,6 +182,7 @@ export const ui = {
   archiveProjectFilter: "",
   archiveSelectedRunId: "",
   recentlyRestoredRunId: "",
+  runMenuId: "",
   mobileRunMenuId: "",
   runOrganizationPending: new Set<string>(),
   runOrganizationRetry: null as null | {
