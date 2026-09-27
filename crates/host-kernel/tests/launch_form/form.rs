@@ -320,7 +320,7 @@ fn opening_text_is_sent_without_generated_prefix() {
 }
 
 #[test]
-fn required_instruction_keeps_form_and_creates_no_run() {
+fn empty_instruction_starts_interactive_run_without_submitting_text() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path());
@@ -341,10 +341,18 @@ fn required_instruction_keeps_form_and_creates_no_run() {
             "openingText": "  ",
         }))
         .unwrap();
-    let form = out.snapshot.launch_form.as_ref().unwrap();
-    assert_eq!(form.error.as_deref(), Some("请填写任务说明。"));
-    assert!(out.snapshot.runs.is_empty());
-    assert_eq!(h.sessions.spawn_count(), 0);
+    assert!(out.snapshot.launch_form.is_none());
+    assert_eq!(out.snapshot.runs.len(), 1);
+    assert_eq!(h.sessions.spawn_count(), 1);
+    assert!(
+        h.sessions
+            .last_session()
+            .unwrap()
+            .read_after(0, Duration::from_millis(10))
+            .data
+            .is_empty(),
+        "an empty opening instruction must not be submitted to the Agent"
+    );
 }
 
 #[test]

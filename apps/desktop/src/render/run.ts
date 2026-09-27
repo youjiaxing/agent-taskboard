@@ -86,12 +86,10 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
     ${formField({
       id: "opening-text",
       label: copy.openingPlaceholder,
-      required: true,
       control: textArea({
         id: "opening-text",
         value: draft.openingText,
         rows: 4,
-        required: true,
         placeholder: copy.openingPlaceholder,
         attributes: { "data-field": "openingText" },
       }),

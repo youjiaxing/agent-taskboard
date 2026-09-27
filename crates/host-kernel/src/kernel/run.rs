@@ -964,9 +964,7 @@ impl HostKernel {
                 launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
         }
         if from_form {
-            if let Some(err) = launch::missing_required(&fields, &config.values, language)
-                .or_else(|| launch::opening_required(&config.opening_text, language))
-            {
+            if let Some(err) = launch::missing_required(&fields, &config.values, language) {
                 if let Some(form) = &mut self.launch_form {
                     form.error = Some(err.clone());
                     return Ok(RunStartResult::Failed { warning: Some(err) });
