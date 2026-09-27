@@ -161,10 +161,10 @@ jobs:
 
   test:
     if: needs.prepare.outputs.publish == 'true'
-    name: 测试
+    name: 快速发布门禁
     needs: prepare
-    # Keep the browser release gate on a known image with enough resources for
-    # the concurrent Chromium contexts used by the recovery journeys.
+    # Keep deterministic checks in the blocking release path. Full browser
+    # journeys run in .github/workflows/browser-e2e.yml instead.
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
@@ -179,23 +179,90 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci --prefix apps/desktop
-      - run: npx --prefix apps/desktop playwright install chromium
       - run: npm --prefix apps/desktop run verify:release
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
       - run: npm --prefix apps/desktop run build
-      # Browser journeys launch real Chromium processes and share constrained runner CPU.
-      # Keep the release gate deterministic instead of weakening interaction/timing assertions.
-      - name: 运行测试
+      - run: cargo check --workspace --all-targets
+      - name: 运行核心测试
         shell: bash
         run: |
-          set -o pipefail
-          # Browser journeys can occasionally time out on a hosted runner.
-          # Require a complete second run before failing the release gate.
-          cargo test -- --test-threads=1 || cargo test -- --test-threads=1
+          set -euo pipefail
+
+          cargo test --workspace --lib -- --test-threads=1
+          targets=$(cargo metadata --no-deps --format-version 1 | jq -r '
+            .packages[]
+            | select(.name == "host-kernel")
+            | .targets[]
+            | select(.kind | index("test"))
+            | .name
+            | select(. != "board")
+          ')
+          while IFS= read -r target; do
+            test -n "$target"
+            cargo test -p host-kernel --test "$target" -- --test-threads=1
+          done <<<"$targets"
+
+          # The board target mixes deterministic kernel projection tests with
+          # real Chromium journeys. Keep the former in the fast gate.
+          cargo test -p host-kernel --test board -- --skip browser_ --test-threads=1
+
+  draft_release:
+    if: needs.prepare.outputs.publish == 'true'
+    name: 准备 Draft Release
+    needs:
+      - prepare
+      - test
+      - tag
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: release
+        name: 创建或复用 Draft Release
         env:
-          # Cross-version macOS font rasterization differs while the explicit
-          # geometry, overlap, overflow, and interaction assertions stay exact.
-          VISUAL_DIFF_MAX_RATIO: "0.05"
-          E2E_NAVIGATION_BUDGET_MS: "1000"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          releases_json=$(gh api --paginate --slurp \
+            "repos/$REPOSITORY/releases?per_page=100" | jq 'add')
+          draft_ids=$(jq --arg tag "$TAG" '
+            [.[] | select(.tag_name == $tag and .draft) | .id]
+          ' <<<"$releases_json")
+          published_count=$(jq --arg tag "$TAG" '
+            [.[] | select(.tag_name == $tag and (.draft | not))] | length
+          ' <<<"$releases_json")
+          if [[ "$(jq length <<<"$draft_ids")" -gt 1 ]]; then
+            echo "multiple draft releases found for $TAG"
+            exit 1
+          fi
+          if [[ "$(jq length <<<"$draft_ids")" -eq 1 ]]; then
+            echo "release_id=$(jq -r '.[0]' <<<"$draft_ids")" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$published_count" -ne 0 ]]; then
+            echo "a published release already exists for $TAG"
+            exit 1
+          fi
+
+          release_body=$(printf '%s\n' \
+            '从本页下载适合当前电脑的安装包：' \
+            '- macOS Apple Silicon：文件名含 `darwin`、`aarch64`，扩展名为 `.dmg`' \
+            '- macOS Intel：文件名含 `darwin`、`x64`，扩展名为 `.dmg`' \
+            '- Windows 10 1809 或更高版本：文件名含 `windows`、`x64`，以 `-setup.exe` 结尾' \
+            '' \
+            'macOS 安装包仅做 ad-hoc 签名，Windows 安装包未做代码签名。首次打开时系统会显示安全提醒。')
+          release_json=$(gh api --method POST "repos/$REPOSITORY/releases" \
+            -f tag_name="$TAG" \
+            -f name="Agent Taskboard $version" \
+            -f body="$release_body" \
+            -F draft=true \
+            -F prerelease=false)
+          echo "release_id=$(jq -r '.id' <<<"$release_json")" >>"$GITHUB_OUTPUT"
 
   publish:
     if: needs.prepare.outputs.publish == 'true'
@@ -204,6 +271,7 @@ jobs:
       - prepare
       - test
       - tag
+      - draft_release
     strategy:
       fail-fast: false
       matrix:
@@ -246,16 +314,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: Agent Taskboard __VERSION__
-          releaseBody: |
-            从本页下载适合当前电脑的安装包：
-            - macOS Apple Silicon：文件名含 `darwin`、`aarch64`，扩展名为 `.dmg`
-            - macOS Intel：文件名含 `darwin`、`x64`，扩展名为 `.dmg`
-            - Windows 10 1809 或更高版本：文件名含 `windows`、`x64`，以 `-setup.exe` 结尾
-
-            macOS 安装包仅做 ad-hoc 签名，Windows 安装包未做代码签名。首次打开时系统会显示安全提醒。
-          releaseDraft: false
+          releaseId: ${{ needs.draft_release.outputs.release_id }}
+          releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
           releaseAssetNamePattern: Agent.Taskboard_[version]_[platform]_[arch][setup][ext]
@@ -325,7 +385,7 @@ jobs:
 
   finalize-updater:
     if: needs.prepare.outputs.publish == 'true'
-    name: 固定 updater 下载地址
+    name: 完成并公开 Release
     needs:
       - prepare
       - publish
@@ -339,7 +399,68 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release download "$TAG" --repo "$REPOSITORY" --pattern latest.json --output latest.json --clobber
+          version="${TAG#v}"
+          release_json=$(gh api --paginate --jq '.[] | select(.draft == true)' \
+            "repos/$REPOSITORY/releases?per_page=100" |
+            jq -s --arg tag "$TAG" '
+              [.[] | select(.tag_name == $tag)] |
+              if length == 1 then .[0]
+              else error("expected one draft release for " + $tag + ", found \(length)")
+              end
+            ')
+          release_id=$(jq -r '.id' <<<"$release_json")
+          upload_url=$(jq -r '.upload_url' <<<"$release_json")
+          upload_url="${upload_url%%\{*}"
+          jq -e --arg version "$version" '
+            [.assets[].name] as $names |
+            [
+              "Agent.Taskboard_\($version)_darwin_aarch64.dmg",
+              "Agent.Taskboard_\($version)_darwin_aarch64.app.tar.gz",
+              "Agent.Taskboard_\($version)_darwin_aarch64.app.tar.gz.sig",
+              "Agent.Taskboard_\($version)_darwin_x64.dmg",
+              "Agent.Taskboard_\($version)_darwin_x64.app.tar.gz",
+              "Agent.Taskboard_\($version)_darwin_x64.app.tar.gz.sig",
+              "Agent.Taskboard_\($version)_windows_x64-setup.exe",
+              "Agent.Taskboard_\($version)_windows_x64-setup.exe.sig"
+            ] | all(. as $asset | $names | index($asset) != null) and
+              any($names[]; . == "latest.json" or startswith("latest.json.pending"))
+          ' <<<"$release_json" >/dev/null
+
+          pending_asset_ids=$(jq -r '
+            .assets[]
+            | select(.name == "latest.json.pending" or (.name | startswith("latest.json.pending.")))
+            | .id
+          ' <<<"$release_json")
+          latest_asset=$(jq -ce '[.assets[] | select(.name == "latest.json")] | first // empty' <<<"$release_json" || true)
+          source_asset="$latest_asset"
+          if [[ -z "$source_asset" ]]; then
+            source_asset=$(jq -ce '
+              [.assets[] | select(.name == "latest.json.pending" or (.name | startswith("latest.json.pending.")))]
+              | last // empty
+            ' <<<"$release_json" || true)
+          fi
+          test -n "$source_asset"
+          source_asset_id=$(jq -r '.id' <<<"$source_asset")
+          gh api --header "Accept: application/octet-stream" \
+            "repos/$REPOSITORY/releases/assets/$source_asset_id" >latest.json.source
+          jq -e --arg version "$version" '.version == $version' latest.json.source >/dev/null
+          jq -e --arg version "$version" '
+            .version == $version and
+            [
+              "darwin-aarch64",
+              "darwin-aarch64-app",
+              "darwin-x86_64",
+              "darwin-x86_64-app",
+              "windows-x86_64",
+              "windows-x86_64-nsis"
+            ] as $platforms |
+            .platforms as $entries |
+            all($platforms[];
+              . as $platform |
+              ($entries[$platform].url // "") != "" and
+              ($entries[$platform].signature // "") != ""
+            )
+          ' latest.json.source >/dev/null
           jq --arg tag "$TAG" --arg repository "$REPOSITORY" '
             (.version) as $version |
             .platforms |= with_entries(
@@ -349,6 +470,57 @@ jobs:
                  elif (.key | startswith("windows-x86_64")) then "Agent.Taskboard_" + $version + "_windows_x64-setup.exe"
                  else error("unsupported updater platform: " + .key)
                  end))
-            )' latest.json > latest.json.tmp
+            )' latest.json.source > latest.json.tmp
           mv latest.json.tmp latest.json
-          gh release upload "$TAG" latest.json --repo "$REPOSITORY" --clobber
+
+          pending_name="latest.json.pending.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @latest.json \
+            "$upload_url?name=$pending_name" >latest-pending-upload.json
+          pending_asset_id=$(jq -r '.id' latest-pending-upload.json)
+
+          if [[ -n "$latest_asset" ]]; then
+            latest_asset_id=$(jq -r '.id' <<<"$latest_asset")
+            gh api --method DELETE "repos/$REPOSITORY/releases/assets/$latest_asset_id" >/dev/null
+          fi
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary @latest.json \
+            "$upload_url?name=latest.json" >latest-upload.json
+          latest_asset_id=$(jq -r '.id' latest-upload.json)
+          gh api --header "Accept: application/octet-stream" \
+            "repos/$REPOSITORY/releases/assets/$latest_asset_id" >latest.json.verified
+          jq -e --arg prefix "https://github.com/$REPOSITORY/releases/download/$TAG/" '
+            [
+              "darwin-aarch64",
+              "darwin-aarch64-app",
+              "darwin-x86_64",
+              "darwin-x86_64-app",
+              "windows-x86_64",
+              "windows-x86_64-nsis"
+            ] as $platforms |
+            .platforms as $entries |
+            all($platforms[];
+              . as $platform |
+              ($entries[$platform].url // "") | startswith($prefix)
+            ) and
+            all($platforms[];
+              . as $platform |
+              ($entries[$platform].signature // "") != ""
+            )
+          ' latest.json.verified >/dev/null
+          while IFS= read -r old_pending_asset_id; do
+            test -n "$old_pending_asset_id"
+            gh api --method DELETE \
+              "repos/$REPOSITORY/releases/assets/$old_pending_asset_id" >/dev/null
+          done <<<"$pending_asset_ids"
+          gh api --method DELETE \
+            "repos/$REPOSITORY/releases/assets/$pending_asset_id" >/dev/null
+          gh api --method PATCH "repos/$REPOSITORY/releases/$release_id" -F draft=false >/dev/null

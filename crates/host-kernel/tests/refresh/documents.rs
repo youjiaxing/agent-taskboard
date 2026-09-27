@@ -169,7 +169,6 @@ fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
     );
     tracker.set_issue_body("you/garden#1", "slow body");
     tracker.set_issue_body("you/garden#2", "fast body");
-    tracker.set_read_document_delay_ms(350);
     let project_dir = dir.clone();
     let mut kernel = boot_seam(tmp.path(), Arc::clone(&tracker));
     register(&mut kernel, "garden", &project_dir, "you/garden");
@@ -187,6 +186,7 @@ fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
         &protocol,
         serde_json::json!({ "op": "focusIssue", "issueId": "you/garden#1" }),
     );
+    let (captured, release) = tracker.hold_next_document_response();
     let loading = std::thread::spawn({
         let protocol = protocol.clone();
         move || {
@@ -199,7 +199,7 @@ fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
             )
         }
     });
-    std::thread::sleep(Duration::from_millis(40));
+    captured.recv_timeout(Duration::from_secs(5)).unwrap();
     let started = Instant::now();
     post_rpc(
         &protocol,
@@ -210,6 +210,7 @@ fn slow_issue_document_read_does_not_block_switching_to_another_issue() {
         "switching Issue was blocked by the slow document read: {:?}",
         started.elapsed()
     );
+    release.send(()).unwrap();
     loading.join().unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(2);
