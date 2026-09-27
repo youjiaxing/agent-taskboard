@@ -9,37 +9,44 @@ use host_kernel::{
     SystemAppearance, CODEX_BIN, CODEX_ID, CODEX_NAME,
 };
 
-fn make_discoverable_codex(dir: &std::path::Path) -> PathBuf {
+fn make_codex_app_server(dir: &std::path::Path, app_server_body: &str) -> PathBuf {
     let path = dir.join("codex");
-    std::fs::write(
-        &path,
-        r#"#!/bin/sh
+    let script = r#"#!/bin/sh
 if [ "$1" = "--help" ]; then
   printf '%s\n' '  -s, --sandbox <SANDBOX_MODE>' '          [possible values: read-only, workspace-write, danger-full-access]' '  -a, --ask-for-approval <APPROVAL_POLICY>' '          Possible values:' '          - untrusted:' '          - on-request:' '          - never:'
   exit 0
 fi
 if [ "$1" = "app-server" ]; then
-  read initialize
-  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
-  read initialized
-  case "$initialized" in
-    *'"method":"initialized"'*) ;;
-    *) exit 3 ;;
-  esac
-  read models
-  printf '%s\n' '{"id":1,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"}]},{"id":"gpt-deep","model":"gpt-deep","isDefault":false,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"},{"reasoningEffort":"max"}]}],"nextCursor":null}}'
-  exit 0
+__APP_SERVER_BODY__
 fi
 exit 2
-"#,
-    )
-    .unwrap();
+"#
+    .replace("__APP_SERVER_BODY__", app_server_body);
+    std::fs::write(&path, script).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     path
+}
+
+fn make_discoverable_codex(dir: &std::path::Path) -> PathBuf {
+    make_codex_app_server(
+        dir,
+        r#"  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  case "$initialized" in
+    *'"method":"initialized"'*) ;;
+    *) exit 3 ;;
+  esac
+  read config
+  read models
+  printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"}]},{"id":"gpt-deep","model":"gpt-deep","isDefault":false,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"},{"reasoningEffort":"max"}]}],"nextCursor":null}}'
+  printf '%s\n' '{"id":1,"result":{"config":{"approval_policy":"never","sandbox_mode":"read-only"},"origins":{},"layers":null}}'
+  exit 0"#,
+    )
 }
 
 #[test]
@@ -117,6 +124,8 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
     assert_eq!(filter.defaults_by_value["gpt-deep"], "high");
     assert_eq!(discovery.seed["model"], "gpt-fast");
     assert_eq!(discovery.seed["effort"], "low");
+    assert_eq!(discovery.seed["approval"], "never");
+    assert_eq!(discovery.seed["sandbox"], "read-only");
     assert_eq!(
         discovery
             .fields
@@ -134,6 +143,88 @@ fn codex_adapter_discovers_models_and_model_specific_efforts_from_the_cli() {
             .unwrap()
             .options,
         vec!["read-only", "workspace-write", "danger-full-access"]
+    );
+}
+
+#[test]
+fn codex_adapter_uses_seed_when_config_read_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_codex_app_server(
+        tmp.path(),
+        r#"  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  read config
+  printf '%s\n' '{"id":1,"error":{"code":-32601,"message":"config/read unavailable"}}'
+  read models
+  printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}],"nextCursor":null}}'
+  exit 0"#,
+    );
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+
+    let discovery = CodexAdapter
+        .discover_config(&executable, &env)
+        .expect("config/read failure must not fail model discovery");
+    assert_eq!(discovery.seed["approval"], "on-request");
+    assert_eq!(discovery.seed["sandbox"], "workspace-write");
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_adapter_waits_for_config_read_after_model_response() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_codex_app_server(
+        tmp.path(),
+        r#"  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  read config
+  read models
+  printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}],"nextCursor":null}}'
+  /bin/sleep 1
+  printf '%s\n' '{"id":1,"result":{"config":{"approval_policy":"never","sandbox_mode":"danger-full-access"},"origins":{},"layers":null}}'
+  exit 0"#,
+    );
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+
+    let discovery = CodexAdapter
+        .discover_config(&executable, &env)
+        .expect("a slower config/read response must still be used");
+    assert_eq!(discovery.seed["approval"], "never");
+    assert_eq!(discovery.seed["sandbox"], "danger-full-access");
+}
+
+#[test]
+fn codex_adapter_rejects_config_read_success_without_config_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_codex_app_server(
+        tmp.path(),
+        r#"  read initialize
+  printf '%s\n' '{"id":0,"result":{"userAgent":"fake"}}'
+  read initialized
+  read config
+  printf '%s\n' '{"id":1,"result":{"config":null}}'
+  read models
+  printf '%s\n' '{"id":2,"result":{"data":[{"id":"gpt-fast","model":"gpt-fast","isDefault":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[{"reasoningEffort":"low"}]}],"nextCursor":null}}'
+  exit 0"#,
+    );
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([("PATH".into(), tmp.path().to_string_lossy().into_owned())]),
+    );
+
+    let error = CodexAdapter
+        .discover_config(&executable, &env)
+        .expect_err("a successful config/read response without config data must fail");
+    assert!(
+        error.contains("config/read returned no config data"),
+        "{error}"
     );
 }
 

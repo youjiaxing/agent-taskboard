@@ -1,7 +1,7 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { activeRunForIssue, captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory } from "../view-helpers";
 import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
-import { checkForUpdates, chooseProjectDirectory, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
+import { checkForUpdates, chooseProjectDirectory, coerceLaunchFieldValues, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
 import { saveClientPanelState } from "../workbench";
@@ -330,6 +330,8 @@ async function completeDeferredLaunchDiscovery(
   agentId: string,
 ): Promise<void> {
   const sequence = ++deferredLaunchDiscoverySequence;
+  const pendingForm = ui.snapshot?.launchForm;
+  if (!pendingForm) return;
   try {
     const result = await rpcDetached("prepareRunLaunch", {
       projectId,
@@ -345,14 +347,12 @@ async function completeDeferredLaunchDiscovery(
     ) {
       return;
     }
-    const draft = ui.launchDraft;
-    const previousValues = draft?.values ?? {};
-    const previousOpening = draft?.openingText;
     ui.snapshot = { ...ui.snapshot, launchForm: result.snapshot.launchForm };
     syncLaunchDraft(ui.snapshot);
-    if (ui.launchDraft) {
-      ui.launchDraft.values = { ...ui.launchDraft.values, ...previousValues };
-      ui.launchDraft.openingText = previousOpening ?? ui.launchDraft.openingText;
+    if (ui.launchDraft && result.snapshot.launchForm) {
+      ui.launchDraft.values = { ...result.snapshot.launchForm.values };
+      ui.launchDraft.openingText = result.snapshot.launchForm.openingText;
+      coerceLaunchFieldValues();
     }
     render();
   } catch {
@@ -800,6 +800,7 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "switch-agent") {
     const form = ui.snapshot.launchForm;
     if (!form) return;
+    deferredLaunchDiscoverySequence += 1;
     ui.launchDraft = null;
     await rpc("prepareRunLaunch", {
       projectId: form.projectId,

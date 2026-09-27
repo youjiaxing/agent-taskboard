@@ -560,6 +560,7 @@ ui.app.addEventListener("submit", async (event) => {
   if (launch && ui.snapshot && ui.launchDraft) {
     event.preventDefault();
     if (!mobileClient() && runPersistenceWritesBlocked(ui.snapshot)) return;
+    if (ui.snapshot.launchForm?.optionDiscoveryPending) return;
     const draft = {
       projectId: ui.launchDraft.projectId,
       issueId: ui.launchDraft.issueId,
