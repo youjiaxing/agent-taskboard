@@ -112,14 +112,15 @@ export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string
     .join(" · ");
   return `<div class="run-row ${run.id === snap.focusedRunId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""} ${menuOpen ? "menu-open" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}"${details ? ` title="${escapeHtml(details)}"` : ""}>
     <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-      <b>${escapeHtml(run.agentName)}${pinMarker}</b>
+      <b title="${escapeHtml(run.agentName)}">${escapeHtml(run.agentName)}</b>
+      ${pinMarker}
       <span class="run-identity">${escapeHtml(identity)}</span>
-      ${stateTag ? `<span class="run-state">${escapeHtml(stateTag)}</span>` : ""}
+      ${stateTag ? `<span class="run-state" title="${escapeHtml(stateTag)}">${escapeHtml(stateTag)}</span>` : ""}
     </button>
     <div class="run-row-actions" role="group" aria-label="${escapeHtml(runMenuLabel)}">
       <div class="run-row-menu-wrap">
         ${button(
-          { id: "run-menu", label: organizationLabels.runMenu, ariaLabel: runMenuLabel, data: { id: run.id } },
+          { id: "run-menu", label: organizationLabels.runActions, ariaLabel: runMenuLabel, data: { id: run.id } },
           { variant: "ghost", className: "run-row-action run-row-menu-trigger", attributes: { title: runMenuLabel, "aria-haspopup": "menu", "aria-expanded": menuOpen } },
         )}
         ${menuOpen ? menu({ label: runMenuLabel, className: "run-row-menu", actions: runRowActionDescriptors(copy, run, snap) }) : ""}

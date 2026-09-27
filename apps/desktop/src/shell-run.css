@@ -175,6 +175,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 18px;
   width: 18px;
   height: 18px;
   margin-left: var(--space-4);
@@ -182,6 +183,12 @@
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
   vertical-align: middle;
+}
+
+.run-main > .run-pin-marker {
+  color: var(--color-accent);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
 }
 
 .run-main {
@@ -195,7 +202,7 @@
   background: transparent;
   text-align: left;
   gap: var(--space-6);
-  padding: 0 calc(var(--space-48) + var(--space-20)) 0 var(--space-8);
+  padding: 0 calc(var(--space-48) + var(--space-8)) 0 var(--space-8);
 }
 
 .run-row-actions {
@@ -212,6 +219,7 @@
 
 .run-row:hover .run-row-actions,
 .run-row:focus-within .run-row-actions,
+.run-row.active .run-row-actions,
 .run-row.menu-open .run-row-actions {
   opacity: 1;
   visibility: visible;
@@ -299,7 +307,7 @@
   white-space: nowrap;
 }
 
-.run-main > b { flex: 0 1 auto; max-width: 42%; }
+.run-main > b { flex: 0 1 31%; max-width: 31%; }
 
 .run-main > span {
   flex: 0 1 auto;
@@ -308,15 +316,11 @@
   font-weight: var(--font-weight-regular);
 }
 
-.run-main > span::before {
-  content: "·";
-  margin-right: var(--space-6);
-  color: var(--color-text-muted);
-}
+.run-main > span::before { content: none; }
 
-.run-main .run-state { max-width: 34%; color: var(--color-accent); }
+.run-main .run-state { flex: 0 1 auto; max-width: 28%; color: var(--color-accent); }
 
-.run-main .run-identity { flex: 1 1 auto; }
+.run-main .run-identity { flex: 1 1 0; }
 
 .run-window-error {
   position: fixed;
