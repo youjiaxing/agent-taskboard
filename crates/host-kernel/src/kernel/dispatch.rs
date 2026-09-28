@@ -1,6 +1,21 @@
 use super::super::*;
 
 impl HostKernel {
+    /// Marks the main window as visible without starting a Tracker read.
+    ///
+    /// Native window activation runs on the Tauri main thread. Tracker reads
+    /// must stay on the existing RPC/deferred-refresh paths so they cannot
+    /// block window activation.
+    pub fn mark_window_visible(&mut self) -> bool {
+        if !self.process_alive() {
+            return false;
+        }
+        let became_visible = !self.window_visible;
+        self.window_visible = true;
+        self.now_ms = refresh::wall_ms();
+        became_visible
+    }
+
     pub fn dispatch(&mut self, command: Command) -> Result<CommandOutcome, KernelError> {
         self.observe_live_runs();
         let mut run_start = None;

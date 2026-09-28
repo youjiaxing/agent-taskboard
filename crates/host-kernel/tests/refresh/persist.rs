@@ -159,6 +159,11 @@ fn opening_foreground_and_manual_refresh_pull_while_fresh_focus_reuses_cache() {
 
     host.handle(serde_json::json!({ "op": "hideWindow" }))
         .unwrap();
+    let before_mark_visible = tracker.read_count("you/garden");
+    assert!(host.mark_window_visible());
+    assert!(host.snapshot().window_visible);
+    assert_eq!(tracker.read_count("you/garden"), before_mark_visible);
+    assert!(!host.mark_window_visible());
     host.handle(serde_json::json!({ "op": "showWindow" }))
         .unwrap();
     assert_eq!(tracker.read_count("you/garden"), after_register_garden + 1);
