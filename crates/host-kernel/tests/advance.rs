@@ -426,6 +426,13 @@ fn self_check_stops_when_still_open_or_abnormal() {
     assert_eq!(h.sessions.spawn_count(), 2);
     assert!(active_issue_ids(&h.host).contains(&"you/garden#1".into()));
     assert!(h.host.snapshot().pending_confirmation.is_none());
+    let snapshot = h.host.snapshot();
+    let self_check = snapshot
+        .runs
+        .iter()
+        .find(|run| run.self_check)
+        .expect("self-check Run");
+    assert_eq!(self_check.task_summary.as_deref(), Some("自检"));
 
     h.sessions.last_session().unwrap().set_session_end(true);
     h.sessions.last_session().unwrap().finish(0);

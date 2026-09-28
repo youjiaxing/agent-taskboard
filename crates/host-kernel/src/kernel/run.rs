@@ -5,6 +5,7 @@ use super::super::*;
 pub(crate) struct PreviousRun {
     pub(crate) id: String,
     pub(crate) native_session_id: Option<String>,
+    pub(crate) task_summary: Option<String>,
     pub(crate) working_directory: String,
     pub(crate) isolated: bool,
     pub(crate) self_check: bool,
@@ -972,9 +973,18 @@ impl HostKernel {
                 return Err(KernelError::Protocol(err));
             }
         }
+        let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
+        let task_summary = previous
+            .as_ref()
+            .and_then(|previous| previous.task_summary.clone())
+            .or_else(|| {
+                issue_id
+                    .as_deref()
+                    .and_then(|issue_id| self.issue_by_id(issue_id))
+                    .map(|issue| launch::task_summary_for_issue(&issue))
+            })
+            .or_else(|| launch::task_summary_from_opening(&config.opening_text, &pending));
         if !from_form {
-            let pending =
-                changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
             config.opening_text = changes::append_notes(&config.opening_text, &pending);
         }
         let (previous_run_id, resume_session_id) = match &previous {
@@ -1059,6 +1069,7 @@ impl HostKernel {
             resume_session_id.as_deref(),
             hook_plan.as_ref(),
         );
+        result.record.task_summary = task_summary;
         result.record.hook_dir = hook_dir;
         result.record.hooks_attached = hook_plan.is_some();
         let using_recorded_tree = previous.as_ref().is_some_and(|previous| previous.isolated)
@@ -1233,6 +1244,7 @@ impl HostKernel {
             Some(PreviousRun {
                 id: last.id.clone(),
                 native_session_id: last.native_session_id.clone(),
+                task_summary: last.task_summary.clone(),
                 working_directory: last.working_directory.clone(),
                 isolated: last.isolated,
                 self_check: false,

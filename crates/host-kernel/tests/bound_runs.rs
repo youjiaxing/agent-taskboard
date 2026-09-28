@@ -722,6 +722,7 @@ fn continue_links_previous_run_and_resumes_native_session() {
         .find(|run| run.id != first.id)
         .unwrap();
     assert_eq!(continued.status, RunStatus::Running);
+    assert_eq!(continued.task_summary, first.task_summary);
     assert_eq!(
         continued.previous_run_id.as_deref(),
         Some(first.id.as_str())

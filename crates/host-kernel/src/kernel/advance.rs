@@ -302,6 +302,9 @@ impl HostKernel {
                 Some(kernel::run::PreviousRun {
                     id: previous.id.clone(),
                     native_session_id: previous.native_session_id.clone(),
+                    task_summary: Some(
+                        advance::self_check_summary(self.appearance.language).into(),
+                    ),
                     working_directory: previous.working_directory.clone(),
                     isolated: previous.isolated,
                     self_check: true,
