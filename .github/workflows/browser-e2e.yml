@@ -72,7 +72,11 @@ jobs:
           failed_tests=()
           while IFS= read -r test_name; do
             failed_tests+=("$test_name")
-          done < <(sed -nE 's/^test (.+) \.\.\. FAILED$/\1/p' "$first_log")
+          done < <(perl -ne '
+            s/\e\[[0-9;]*m//g;
+            s/\r$//;
+            print "$1\n" if /^\s*test\s+(.+?)\s+\.\.\.\s+FAILED\s*$/;
+          ' "$first_log")
           if [[ "${#failed_tests[@]}" -eq 0 ]]; then
             {
               echo "### 浏览器验收首轮失败"
