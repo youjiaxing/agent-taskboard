@@ -1035,6 +1035,7 @@ fn issue_links_hide_archived_runs_but_continue_keeps_the_history() {
     let tracker = Arc::new(MemoryTracker::new());
     tracker.add_issue(IssueRecord::open("you/garden", 1, "organized work"));
     let agent = Arc::new(MemoryAgent::installed_grok());
+    agent.set_native_session_id(Some("organization-session".into()));
     let sessions = MemorySessionFactory::new();
     let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
