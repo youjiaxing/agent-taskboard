@@ -955,8 +955,7 @@ fn show_main(app: &AppHandle) {
     let mut became_visible = false;
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut kernel) = state.kernel.lock() {
-            became_visible = !kernel.snapshot().window_visible;
-            let _ = kernel.dispatch(Command::ShowWindow);
+            became_visible = kernel.mark_window_visible();
         }
     }
     if let Some(window) = app.get_webview_window("main") {
