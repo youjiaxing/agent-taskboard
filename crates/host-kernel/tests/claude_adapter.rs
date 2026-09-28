@@ -145,3 +145,20 @@ fn claude_attach_hooks_passes_settings_inside_sink() {
     assert!(sink.join("claude-settings.json").is_file());
     assert!(!project.join(".claude").exists());
 }
+
+#[test]
+fn claude_resume_uses_only_the_native_session_id() {
+    let argv = ClaudeAdapter.assemble_argv_for_resume(
+        &PathBuf::from("/opt/fake/claude"),
+        &BTreeMap::from([("model".into(), "ignored".into())]),
+        "session-123",
+    );
+    assert_eq!(
+        argv,
+        vec![
+            "/opt/fake/claude".to_string(),
+            "--resume".to_string(),
+            "session-123".to_string()
+        ]
+    );
+}

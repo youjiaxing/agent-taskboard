@@ -41,6 +41,7 @@ fn antigravity_adapter_only_uses_agy() {
     assert_eq!(adapter.skill_invocation("wayfinder"), "/wayfinder");
     assert_eq!(adapter.skill_invocation("implement"), "/implement");
     assert!(!adapter.native_isolation());
+    assert!(!adapter.resume_confirmation_supported());
     assert!(adapter
         .isolation_unavailable_reason(Language::ZhCn)
         .contains("--worktree"));
@@ -175,11 +176,89 @@ fn antigravity_adapter_assembles_mode_not_permission_flag() {
 }
 
 #[test]
-fn antigravity_does_not_claim_per_run_completion_hooks() {
-    assert!(!AntigravityAdapter.completion_hooks_supported());
+fn antigravity_attaches_and_restores_project_hooks() {
     let tmp = tempfile::tempdir().unwrap();
-    let err = AntigravityAdapter
-        .attach_completion_hooks(&tmp.path().join("sink"), tmp.path())
-        .unwrap_err();
-    assert!(!err.is_empty());
+    let project = tmp.path().join("project");
+    let sink = tmp.path().join("sink");
+    std::fs::create_dir_all(&project).unwrap();
+    let hooks = project.join(".agents").join("hooks.json");
+    let original = br#"{"user-hook":{"Stop":[{"type":"command","command":"./stop.sh"}]}}"#;
+    std::fs::create_dir_all(hooks.parent().unwrap()).unwrap();
+    std::fs::write(&hooks, original).unwrap();
+
+    assert!(AntigravityAdapter.completion_hooks_supported());
+    AntigravityAdapter
+        .attach_completion_hooks(&sink, &project)
+        .unwrap();
+    let body = std::fs::read_to_string(&hooks).unwrap();
+    assert!(body.contains("agent-taskboard-"));
+    assert!(body.contains("PreInvocation"));
+    assert!(body.contains("Stop"));
+    AntigravityAdapter
+        .cleanup_completion_hooks(&sink, &project)
+        .unwrap();
+    assert_eq!(std::fs::read(&hooks).unwrap(), original);
+}
+
+#[test]
+fn antigravity_restores_a_missing_project_hooks_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let sink = tmp.path().join("sink");
+    std::fs::create_dir_all(&project).unwrap();
+    let hooks = project.join(".agents").join("hooks.json");
+
+    AntigravityAdapter
+        .attach_completion_hooks(&sink, &project)
+        .unwrap();
+    assert!(hooks.is_file());
+    AntigravityAdapter
+        .cleanup_completion_hooks(&sink, &project)
+        .unwrap();
+    assert!(!hooks.exists());
+}
+
+#[test]
+fn antigravity_concurrent_project_hooks_restore_missing_file_after_each_run_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let first_sink = tmp.path().join("first");
+    let second_sink = tmp.path().join("second");
+    std::fs::create_dir_all(&project).unwrap();
+    let hooks = project.join(".agents").join("hooks.json");
+
+    AntigravityAdapter
+        .attach_completion_hooks(&first_sink, &project)
+        .unwrap();
+    AntigravityAdapter
+        .attach_completion_hooks(&second_sink, &project)
+        .unwrap();
+    AntigravityAdapter
+        .cleanup_completion_hooks(&first_sink, &project)
+        .unwrap();
+    assert!(hooks.is_file());
+    assert!(std::fs::read_to_string(&hooks)
+        .unwrap()
+        .contains("agent-taskboard-"));
+    AntigravityAdapter
+        .cleanup_completion_hooks(&second_sink, &project)
+        .unwrap();
+    assert!(!hooks.exists());
+}
+
+#[test]
+fn antigravity_resume_uses_only_the_native_conversation_id() {
+    let argv = AntigravityAdapter.assemble_argv_for_resume(
+        &PathBuf::from("/opt/fake/agy"),
+        &BTreeMap::from([("model".into(), "ignored".into())]),
+        "conversation-123",
+    );
+    assert_eq!(
+        argv,
+        vec![
+            "/opt/fake/agy".to_string(),
+            "--conversation".to_string(),
+            "conversation-123".to_string()
+        ]
+    );
 }

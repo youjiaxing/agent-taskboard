@@ -184,7 +184,14 @@ impl HostKernel {
     }
 
     pub(crate) fn harvest_live_signals(&mut self) {
-        let ids: Vec<String> = self.live.keys().cloned().collect();
+        let ids: Vec<String> = self
+            .runs
+            .iter()
+            .filter(|run| {
+                run.is_active() || (run.native_session_id.is_none() && run.hook_dir.is_some())
+            })
+            .map(|run| run.id.clone())
+            .collect();
         for id in ids {
             let _ = self.harvest_run_signals(&id);
         }
@@ -219,11 +226,19 @@ impl HostKernel {
             run.session_end || session_signals.session_end || file_signals.session_end;
         let stop_failure =
             run.stop_failure || session_signals.stop_failure || file_signals.stop_failure;
-        if run.session_end == session_end && run.stop_failure == stop_failure {
+        let native_session_id = file_signals
+            .native_session_id
+            .or(session_signals.native_session_id)
+            .or_else(|| run.native_session_id.clone());
+        if run.session_end == session_end
+            && run.stop_failure == stop_failure
+            && run.native_session_id == native_session_id
+        {
             return Ok(());
         }
         run.session_end = session_end;
         run.stop_failure = stop_failure;
+        run.native_session_id = native_session_id;
         self.commit_run_records(runs)
     }
 
@@ -289,29 +304,30 @@ impl HostKernel {
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
         let opening = advance::self_check_text(self.appearance.language);
-        if self
-            .start_unbound_run(
-                &previous.project_id,
-                RunLaunchConfig {
-                    agent_id: previous.agent_id.clone(),
-                    values,
-                    opening_text: opening,
-                },
-                Some(issue_id.to_string()),
-                false,
-                Some(kernel::run::PreviousRun {
-                    id: previous.id.clone(),
-                    native_session_id: previous.native_session_id.clone(),
-                    task_summary: Some(
-                        advance::self_check_summary(self.appearance.language).into(),
-                    ),
-                    working_directory: previous.working_directory.clone(),
-                    isolated: previous.isolated,
-                    self_check: true,
-                }),
-            )
-            .is_err()
-        {
+        if let Err(error) = self.start_unbound_run(
+            &previous.project_id,
+            RunLaunchConfig {
+                agent_id: previous.agent_id.clone(),
+                values,
+                opening_text: opening,
+            },
+            Some(issue_id.to_string()),
+            false,
+            Some(kernel::run::PreviousRun {
+                id: previous.id.clone(),
+                native_session_id: previous.native_session_id.clone(),
+                task_summary: Some(advance::self_check_summary(self.appearance.language).into()),
+                working_directory: previous.working_directory.clone(),
+                isolated: previous.isolated,
+                self_check: true,
+            }),
+        ) {
+            let mut runs = self.runs.clone();
+            if let Some(run) = runs.iter_mut().find(|run| run.id == previous.id) {
+                run.self_check_attempted = true;
+                run.failure = Some(format!("自动自检启动失败，未开启新会话：{error}"));
+            }
+            let _ = self.commit_run_records(runs);
             return;
         }
     }

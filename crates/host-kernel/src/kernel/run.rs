@@ -306,6 +306,23 @@ impl HostKernel {
         self.persist_host_settings()
     }
 
+    fn append_run_failure(&mut self, run_id: &str, diagnostic: String) -> Result<(), KernelError> {
+        let mut runs = self.runs.clone();
+        let run = runs
+            .iter_mut()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| KernelError::Protocol("unknown source Run".into()))?;
+        run.failure = Some(match run.failure.take() {
+            Some(previous) if !previous.is_empty() => format!("{previous}\n{diagnostic}"),
+            _ => diagnostic,
+        });
+        self.commit_run_records(runs)
+    }
+
+    fn persist_resume_failure(&mut self, run_id: &str, reason: &str) -> Result<(), KernelError> {
+        self.append_run_failure(run_id, format!("Continue failed: {reason}"))
+    }
+
     pub(crate) fn stop_run(&mut self, run_id: &str) -> Result<(), KernelError> {
         self.ensure_run_persistence_writable()?;
         let run = self
@@ -715,6 +732,19 @@ impl HostKernel {
         self.ensure_run_persistence_writable()?;
         self.harvest_run_signals(run_id)?;
         let recent_output = self.live.get(run_id).map(|session| session.recent_output());
+        let hook_cleanup = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .and_then(|run| {
+                run.hook_dir.as_ref().map(|hook_dir| {
+                    (
+                        run.agent_id.clone(),
+                        hook_dir.clone(),
+                        run.project_id.clone(),
+                    )
+                })
+            });
         let mut issue_id = None;
         let mut project_id = None;
         let mut newly_ended = false;
@@ -754,6 +784,19 @@ impl HostKernel {
             return Err(KernelError::Protocol("unknown run".into()));
         }
         self.live.remove(run_id);
+        if let Some((agent_id, hook_dir, project_id)) = hook_cleanup {
+            if let (Some(agent), Some(project)) = (
+                self.agents.iter().find(|agent| agent.id() == agent_id),
+                self.projects
+                    .iter()
+                    .find(|project| project.id == project_id),
+            ) {
+                if let Err(error) = agent.cleanup_completion_hooks(&hook_dir, &project.local_path) {
+                    let _ = self
+                        .append_run_failure(run_id, format!("Run hook cleanup failed: {error}"));
+                }
+            }
+        }
         if let Some(issue_id) = issue_id {
             if self.execution_stopped(&issue_id) {
                 self.pending_events.push(HostEvent::ExecutionStopped {
@@ -896,10 +939,19 @@ impl HostKernel {
             .find(|agent| agent.id() == config.agent_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        if previous.as_ref().is_some_and(|previous| {
+            previous
+                .native_session_id
+                .as_deref()
+                .is_none_or(|id| id.is_empty())
+        }) {
+            return Err(KernelError::Denied(
+                "上次 Run 没有可恢复的 Agent 原生会话 ID。".into(),
+            ));
+        }
         let language = self.appearance.language;
         let (supported, _) = launch::isolation_availability(agent.as_ref(), &project_dir, language);
         let mut cwd = project_dir.clone();
-        let mut isolation_note = None;
         let mut isolate = false;
         if let Some(previous) = &previous {
             if self
@@ -911,13 +963,25 @@ impl HostKernel {
                     super::isolation::pending_directory_note(language),
                 ));
             }
+            if previous.isolated
+                && !launch::is_project_worktree(
+                    &project_dir,
+                    Path::new(&previous.working_directory),
+                )
+            {
+                return Err(KernelError::Denied(
+                    super::isolation::missing_directory_note(language),
+                ));
+            }
             config.values.remove(launch::ISOLATION_FIELD);
             if previous.isolated {
                 let recorded = PathBuf::from(&previous.working_directory);
-                if !previous.working_directory.is_empty() && recorded.exists() {
+                if !previous.working_directory.is_empty() && recorded.is_dir() {
                     cwd = recorded;
                 } else {
-                    isolation_note = Some(launch::isolation_missing_tree_note(language));
+                    return Err(KernelError::Denied(
+                        super::isolation::missing_directory_note(language),
+                    ));
                 }
             }
         } else {
@@ -1038,15 +1102,21 @@ impl HostKernel {
             Some(changes::record_baselines(&cwd))
         };
         let mut hook_plan = None;
-        let mut hook_dir = None;
+        let mut hook_dir = previous.as_ref().and_then(|previous| {
+            self.runs
+                .iter()
+                .find(|run| run.id == previous.id)
+                .and_then(|run| run.hook_dir.clone())
+        });
         if issue_id.is_some() && agent.completion_hooks_supported() {
-            let dir = self
-                .data
-                .host_dir
-                .join("projects")
-                .join(project_id)
-                .join("hooks")
-                .join(pairing::random_id());
+            let dir = hook_dir.clone().unwrap_or_else(|| {
+                self.data
+                    .host_dir
+                    .join("projects")
+                    .join(project_id)
+                    .join("hooks")
+                    .join(pairing::random_id())
+            });
             if let Ok(mut plan) = agent.attach_completion_hooks(&dir, &project_dir) {
                 plan.extra_env
                     .entry("AGENT_TASKBOARD_HOOK_SINK".into())
@@ -1054,6 +1124,17 @@ impl HostKernel {
                 hook_dir = Some(dir);
                 hook_plan = Some(plan);
             }
+        }
+        if previous.is_some()
+            && issue_id.is_some()
+            && agent.completion_hooks_supported()
+            && hook_plan.is_none()
+        {
+            let reason = "无法为恢复后的 Run 重新挂载原生会话 recorder。";
+            if let Some(previous_run_id) = previous_run_id.as_deref() {
+                self.persist_resume_failure(previous_run_id, reason)?;
+            }
+            return Err(KernelError::Denied(reason.into()));
         }
         let mut result = run::start_unbound(
             project_id,
@@ -1070,14 +1151,25 @@ impl HostKernel {
             hook_plan.as_ref(),
         );
         result.record.task_summary = task_summary;
-        result.record.hook_dir = hook_dir;
+        result.record.hook_dir = hook_dir.clone();
         result.record.hooks_attached = hook_plan.is_some();
-        let using_recorded_tree = previous.as_ref().is_some_and(|previous| previous.isolated)
-            && isolation_note.is_none()
-            && cwd != project_dir;
+        if result.session.is_none() {
+            if let (Some(agent), Some(hook_dir)) = (Some(agent.as_ref()), hook_dir.as_ref()) {
+                if let Err(error) = agent.cleanup_completion_hooks(hook_dir, &project_dir) {
+                    result.record.failure = Some(match result.record.failure.take() {
+                        Some(previous) if !previous.is_empty() => {
+                            format!("{previous}\nRun hook cleanup failed: {error}")
+                        }
+                        _ => format!("Run hook cleanup failed: {error}"),
+                    });
+                }
+            }
+        }
+        let using_recorded_tree =
+            previous.as_ref().is_some_and(|previous| previous.isolated) && cwd != project_dir;
         result.record.working_directory = cwd.display().to_string();
         result.record.isolated = (isolate && result.session.is_some()) || using_recorded_tree;
-        result.record.isolation_note = isolation_note;
+        result.record.isolation_note = None;
         if isolate && result.session.is_some() {
             if let Some(tree) = agent
                 .isolation_tree_after_launch(&project_dir, &before)
@@ -1117,9 +1209,22 @@ impl HostKernel {
             result.record.self_check = true;
             result.record.self_check_attempted = true;
         }
+        if previous.is_some() && result.session.is_none() {
+            let reason = result
+                .record
+                .failure
+                .unwrap_or_else(|| "Agent 原生会话恢复失败，未创建新的 Run。".into());
+            if let Some(previous_run_id) = previous_run_id.as_deref() {
+                self.persist_resume_failure(previous_run_id, &reason)?;
+            }
+            return Err(KernelError::Denied(reason));
+        }
         runs.push(result.record.clone());
         if let Err(err) = self.persist_run_records(&runs) {
             self.note_run_persistence_write_error(&err);
+            if let Some(hook_dir) = hook_dir.as_ref() {
+                let _ = agent.cleanup_completion_hooks(hook_dir, &project_dir);
+            }
             if let Some(session) = result.session.as_ref() {
                 session.stop();
             }
@@ -1153,8 +1258,10 @@ impl HostKernel {
         if let Some(session) = result.session {
             self.live.insert(run_id, session);
             let mut warnings = Vec::new();
-            if let Err(err) = self.remember_launch(project_id, &config) {
-                warnings.push(err.to_string());
+            if previous.is_none() {
+                if let Err(err) = self.remember_launch(project_id, &config) {
+                    warnings.push(err.to_string());
+                }
             }
             self.launch_form = None;
             if let Err(err) = self.clear_pending_notes(project_id, issue_id.as_deref()) {
@@ -1216,27 +1323,49 @@ impl HostKernel {
         if !self.execution_stopped(issue_id) {
             return Err(KernelError::Denied("issue is not execution-stopped".into()));
         }
-        let last = self
+        let last_id = self
             .last_bound_run(issue_id)
+            .map(|run| run.id.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.harvest_run_signals(&last_id)?;
+        let last = self
+            .runs
+            .iter()
+            .find(|run| run.id == last_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
-        let agent = self
-            .agents
+        if last
+            .native_session_id
+            .as_deref()
+            .is_none_or(|id| id.is_empty())
+        {
+            self.persist_resume_failure(&last.id, "上次 Run 没有可恢复的 Agent 原生会话 ID。")?;
+            return Err(KernelError::Denied(
+                "上次 Run 没有可恢复的 Agent 原生会话 ID。".into(),
+            ));
+        }
+        let project_dir = self
+            .projects
             .iter()
-            .find(|agent| agent.id() == last.agent_id)
-            .cloned()
-            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
-        let values = self
-            .launch_defaults
-            .get(&last.project_id)
-            .and_then(|agents| agents.get(&last.agent_id))
-            .cloned()
-            .unwrap_or_else(|| agent.seed_config());
+            .find(|project| project.id == last.project_id)
+            .map(|project| project.local_path.as_path())
+            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
+        if last.isolated
+            && !launch::is_project_worktree(project_dir, Path::new(&last.working_directory))
+        {
+            self.persist_resume_failure(
+                &last.id,
+                &super::isolation::missing_directory_note(self.appearance.language),
+            )?;
+            return Err(KernelError::Denied(
+                super::isolation::missing_directory_note(self.appearance.language),
+            ));
+        }
         self.start_unbound_run(
             &last.project_id,
             RunLaunchConfig {
                 agent_id: last.agent_id.clone(),
-                values,
+                values: Default::default(),
                 opening_text: String::new(),
             },
             Some(issue_id.to_string()),
@@ -1308,6 +1437,46 @@ impl HostKernel {
         self.runs = runs;
         self.run_persistence_recovery = None;
         self.run_persistence_write_error = None;
+        for run_id in &crashed_ids {
+            let cleanup = self
+                .runs
+                .iter()
+                .find(|run| &run.id == run_id)
+                .and_then(|run| {
+                    run.hook_dir.as_ref().map(|hook_dir| {
+                        (
+                            run.agent_id.clone(),
+                            hook_dir.clone(),
+                            run.project_id.clone(),
+                        )
+                    })
+                });
+            let Some((agent_id, hook_dir, project_id)) = cleanup else {
+                continue;
+            };
+            let Some(agent) = self
+                .agents
+                .iter()
+                .find(|agent| agent.id() == agent_id)
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(project_dir) = self
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .map(|project| project.local_path.clone())
+            else {
+                continue;
+            };
+            if let Err(error) = agent.cleanup_completion_hooks(&hook_dir, &project_dir) {
+                let _ = self.append_run_failure(
+                    run_id,
+                    format!("Run hook cleanup failed after host restart: {error}"),
+                );
+            }
+        }
         crashed_ids
     }
 
