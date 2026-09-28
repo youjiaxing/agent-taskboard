@@ -375,3 +375,20 @@ fn grok_attach_hooks_stays_inside_sink_and_sets_grok_home() {
     assert!(home.join("hooks").join("agent-taskboard.json").is_file());
     assert!(!project.join(".grok").exists());
 }
+
+#[test]
+fn grok_resume_uses_only_the_native_session_id() {
+    let argv = GrokAdapter.assemble_argv_for_resume(
+        &PathBuf::from("/opt/fake/grok"),
+        &BTreeMap::from([("model".into(), "ignored".into())]),
+        "session-123",
+    );
+    assert_eq!(
+        argv,
+        vec![
+            "/opt/fake/grok".to_string(),
+            "--resume".to_string(),
+            "session-123".to_string()
+        ]
+    );
+}

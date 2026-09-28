@@ -125,6 +125,19 @@ impl AgentPort for ClaudeAdapter {
         argv
     }
 
+    fn assemble_argv_for_resume(
+        &self,
+        executable: &Path,
+        _values: &BTreeMap<String, String>,
+        session_id: &str,
+    ) -> Vec<String> {
+        vec![
+            executable.to_string_lossy().into_owned(),
+            "--resume".into(),
+            session_id.to_string(),
+        ]
+    }
+
     fn native_isolation(&self) -> bool {
         true
     }

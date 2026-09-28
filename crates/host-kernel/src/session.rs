@@ -113,6 +113,14 @@ impl SessionFactory for MemorySessionFactory {
             return Err(message);
         }
         let session = Arc::new(MemorySession::new());
+        if let Some(session_id) = request
+            .argv
+            .windows(2)
+            .find(|pair| pair[0] == "--resume")
+            .map(|pair| pair[1].clone())
+        {
+            session.set_native_session_id(Some(session_id));
+        }
         self.live
             .lock()
             .expect("memory sessions")
@@ -129,6 +137,7 @@ pub struct MemorySession {
     waiting: AtomicBool,
     session_end: AtomicBool,
     stop_failure: AtomicBool,
+    native_session_id: Mutex<Option<String>>,
     write_fail: Mutex<Option<String>>,
     pulse: Condvar,
 }
@@ -142,6 +151,7 @@ impl MemorySession {
             waiting: AtomicBool::new(false),
             session_end: AtomicBool::new(false),
             stop_failure: AtomicBool::new(false),
+            native_session_id: Mutex::new(None),
             write_fail: Mutex::new(None),
             pulse: Condvar::new(),
         }
@@ -157,6 +167,10 @@ impl MemorySession {
 
     pub fn set_stop_failure(&self, value: bool) {
         self.stop_failure.store(value, Ordering::SeqCst);
+    }
+
+    pub fn set_native_session_id(&self, session_id: Option<String>) {
+        *self.native_session_id.lock().expect("memory session") = session_id;
     }
 
     pub fn fail_next_write(&self, message: impl Into<String>) {
@@ -222,6 +236,11 @@ impl AgentSession for MemorySession {
             session_end: self.session_end.load(Ordering::SeqCst),
             stop_failure: self.stop_failure.load(Ordering::SeqCst),
             waiting_for_user: self.waiting.load(Ordering::SeqCst),
+            native_session_id: self
+                .native_session_id
+                .lock()
+                .expect("memory session")
+                .clone(),
         }
     }
 

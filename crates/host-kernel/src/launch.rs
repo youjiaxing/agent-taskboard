@@ -377,10 +377,9 @@ pub fn side_effect_warnings(
 
 pub fn isolation_missing_tree_note(language: Language) -> String {
     match language {
-        Language::ZhCn => "上次的隔离执行目录已经不在，已回到 Project 主目录。".into(),
+        Language::ZhCn => "上次的隔离执行目录已经不在，无法继续恢复。".into(),
         Language::En => {
-            "The previous isolated work directory is gone. This Run uses the Project directory."
-                .into()
+            "The previous isolated work directory is gone; the session cannot be resumed.".into()
         }
     }
 }
@@ -400,6 +399,34 @@ pub fn git_worktrees(project_dir: &Path) -> Vec<PathBuf> {
         .lines()
         .filter_map(|line| line.strip_prefix("worktree ").map(PathBuf::from))
         .collect()
+}
+
+pub fn is_project_worktree(project_dir: &Path, candidate: &Path) -> bool {
+    if !candidate.is_dir()
+        || !git_worktrees(project_dir)
+            .iter()
+            .any(|path| same_path(path, candidate))
+    {
+        return false;
+    }
+    git_common_dir(project_dir).is_some_and(|project_git| {
+        git_common_dir(candidate)
+            .is_some_and(|candidate_git| same_path(&project_git, &candidate_git))
+    })
+}
+
+fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common_dir = String::from_utf8(output.stdout).ok()?;
+    let common_dir = PathBuf::from(common_dir.trim());
+    common_dir.is_dir().then_some(common_dir)
 }
 
 pub fn new_git_worktree(project_dir: &Path, before: &[PathBuf]) -> Option<PathBuf> {

@@ -14,6 +14,10 @@ pub(crate) fn pending_directory_note(language: Language) -> String {
     }
 }
 
+pub(crate) fn missing_directory_note(language: Language) -> String {
+    launch::isolation_missing_tree_note(language)
+}
+
 impl HostKernel {
     pub(crate) fn isolation_directory_unconfirmed(&self, run: &RunSummary) -> bool {
         run.isolation_pending.is_some()

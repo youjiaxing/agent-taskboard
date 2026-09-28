@@ -450,6 +450,27 @@ fn codex_attach_hooks_uses_per_run_config_not_home() {
         .extra_argv
         .iter()
         .any(|arg| arg.contains("UserPromptSubmit")));
+    assert!(plan
+        .extra_argv
+        .iter()
+        .any(|arg| arg.contains("SessionStart")));
     assert!(plan.extra_argv.iter().any(|arg| arg.contains("SessionEnd")));
     assert!(!project.join(".codex").exists());
+}
+
+#[test]
+fn codex_resume_uses_only_the_native_session_id() {
+    let argv = CodexAdapter.assemble_argv_for_resume(
+        &PathBuf::from("/opt/fake/codex"),
+        &BTreeMap::from([("model".into(), "ignored".into())]),
+        "session-123",
+    );
+    assert_eq!(
+        argv,
+        vec![
+            "/opt/fake/codex".to_string(),
+            "resume".to_string(),
+            "session-123".to_string()
+        ]
+    );
 }

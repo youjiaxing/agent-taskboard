@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use super::{
     additional_args_field, append_additional_args, append_flag, append_switch, boolean_field,
-    discovery, initial_instruction_field, local_bin, probe_binary, select_field, text_field,
-    AgentConfigDiscovery, AgentField, AgentPort, ProbeResult,
+    discovery, hooks, initial_instruction_field, local_bin, probe_binary, select_field, text_field,
+    AgentConfigDiscovery, AgentField, AgentPort, CompletionHookPlan, ProbeResult,
 };
 use crate::{Language, LaunchEnvironment};
 
@@ -143,6 +143,23 @@ impl AgentPort for AntigravityAdapter {
         argv
     }
 
+    fn assemble_argv_for_resume(
+        &self,
+        executable: &Path,
+        _values: &BTreeMap<String, String>,
+        session_id: &str,
+    ) -> Vec<String> {
+        vec![
+            executable.to_string_lossy().into_owned(),
+            "--conversation".into(),
+            session_id.to_string(),
+        ]
+    }
+
+    fn resume_confirmation_supported(&self) -> bool {
+        false
+    }
+
     fn isolation_unavailable_reason(&self, language: Language) -> String {
         match language {
             Language::ZhCn => "Antigravity CLI 没有原生 --worktree，隔离不可用。".into(),
@@ -150,6 +167,31 @@ impl AgentPort for AntigravityAdapter {
                 "Antigravity CLI has no native --worktree, so isolation is unavailable.".into()
             }
         }
+    }
+
+    fn completion_hooks_supported(&self) -> bool {
+        true
+    }
+
+    fn attach_completion_hooks(
+        &self,
+        sink_dir: &Path,
+        project_dir: &Path,
+    ) -> Result<CompletionHookPlan, String> {
+        let recorder = hooks::write_recorder(sink_dir)?;
+        hooks::write_antigravity_hooks(
+            &project_dir.join(".agents").join("hooks.json"),
+            &recorder,
+            sink_dir,
+        )?;
+        Ok(CompletionHookPlan {
+            extra_argv: Vec::new(),
+            extra_env: hooks::sink_env(sink_dir),
+        })
+    }
+
+    fn cleanup_completion_hooks(&self, sink_dir: &Path, project_dir: &Path) -> Result<(), String> {
+        hooks::cleanup_antigravity_hooks(&project_dir.join(".agents").join("hooks.json"), sink_dir)
     }
 }
 

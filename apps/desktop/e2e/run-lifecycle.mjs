@@ -330,21 +330,18 @@ if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationC
 await page.click(".chrome button[data-act='view-changes']");
 await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='continue-run']");
-await page.waitForSelector(".lifted-terminal .pty-slot");
+await page.waitForTimeout(100);
 const continued = await hostSnapshot(page, url);
-const continuedRun = continued.runs.find((run) => run.issueId === "you/lifecycle#2" && run.status === "running");
-if (!continuedRun?.previousRunId) {
-  throw new Error(`Continue must link a new Run to the stopped Run: ${JSON.stringify(continued.runs)}`);
+const lifecycleRuns = continued.runs.filter((run) => run.issueId === "you/lifecycle#2");
+if (lifecycleRuns.length !== 1 || lifecycleRuns[0].status !== "ended") {
+  throw new Error(`Continue must not fall back from a missing isolated worktree: ${JSON.stringify(lifecycleRuns)}`);
 }
-const continueText = (await page.locator(".lifted-terminal").textContent())?.replace(/\s+/g, " ") ?? "";
-if (!continueText.includes("隔离执行目录已经不在") || !continueText.includes("Project 主目录")) {
-  throw new Error(`missing isolated work directory must fall back with a recovery explanation: ${continueText}`);
+if (!lifecycleRuns[0].failure?.includes("Continue failed")) {
+  throw new Error(`a rejected Continue attempt must leave a persistent diagnosis: ${JSON.stringify(lifecycleRuns[0])}`);
 }
-await page.click(".lifted-terminal button[data-act='stop-run']");
-await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
+
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lanes");
-
 await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".board-run-history");

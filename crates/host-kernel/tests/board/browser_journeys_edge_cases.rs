@@ -437,6 +437,7 @@ fn browser_keeps_issue_and_run_lifecycles_distinct_through_terminal_actions() {
     );
     let sessions = host_kernel::MemorySessionFactory::new();
     let agent = Arc::new(host_kernel::MemoryAgent::installed_grok());
+    agent.set_native_session_id(Some("lifecycle-session".into()));
     let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         host_kernel::KernelPorts {
@@ -514,11 +515,13 @@ fn browser_recovers_when_a_bound_pty_disconnects_mid_journey() {
         "PTY disconnect issue",
     ));
     let sessions = MemorySessionFactory::new();
+    let agent = Arc::new(MemoryAgent::installed_grok());
+    agent.set_native_session_id(Some("disconnect-session".into()));
     let mut host = HostKernel::boot_with_ports(
         boot_req(tmp.path()),
         KernelPorts {
             tracker,
-            agents: vec![Arc::new(MemoryAgent::installed_grok()) as _],
+            agents: vec![agent as _],
             launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
             sessions: Arc::clone(&sessions) as _,
         },

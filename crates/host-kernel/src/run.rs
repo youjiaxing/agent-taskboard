@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -13,6 +14,7 @@ use crate::{Language, LaunchEnvPort};
 
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 24;
+const RESUME_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) fn submitted_input(text: &str) -> Vec<u8> {
     // Keep Enter outside the paste so interactive TUIs do not absorb it into
@@ -250,6 +252,31 @@ pub fn start_unbound(
                     env.vars.insert(key.clone(), value.clone());
                 }
             }
+            if resume_session_id.is_some() {
+                if let Some(sink) = env.vars.get("AGENT_TASKBOARD_HOOK_SINK") {
+                    for signal in [
+                        "native-session-id",
+                        "session-end",
+                        "stop-failure",
+                        "waiting-for-user",
+                    ] {
+                        match std::fs::remove_file(Path::new(sink).join(signal)) {
+                            Ok(()) => {}
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(err) => {
+                                record.status = RunStatus::Ended;
+                                record.ended_reason = Some(RunEndedReason::Abnormal);
+                                record.failure =
+                                    Some(format!("could not reset resume hook state: {err}"));
+                                return StartResult {
+                                    record,
+                                    session: None,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
             let opening_text = config.opening_text.trim();
             let opening_submitted_at_launch =
                 !opening_text.is_empty() && agent.append_opening_prompt(&mut argv, opening_text);
@@ -262,6 +289,21 @@ pub fn start_unbound(
             };
             match sessions.spawn(request) {
                 Ok(session) => {
+                    if resume_session_id.is_some() && agent.resume_confirmation_supported() {
+                        if let Err(err) = verify_resume_startup(
+                            session.as_ref(),
+                            resume_session_id.expect("checked above"),
+                        ) {
+                            session.stop();
+                            record.status = RunStatus::Ended;
+                            record.ended_reason = Some(RunEndedReason::Abnormal);
+                            record.failure = Some(err);
+                            return StartResult {
+                                record,
+                                session: None,
+                            };
+                        }
+                    }
                     if !opening_text.is_empty() && !opening_submitted_at_launch {
                         let opening = submitted_input(opening_text);
                         if let Err(err) = session.write(&opening) {
@@ -293,5 +335,78 @@ pub fn start_unbound(
                 }
             }
         }
+    }
+}
+
+fn verify_resume_startup(
+    session: &dyn AgentSession,
+    expected_session_id: &str,
+) -> Result<(), String> {
+    let deadline = Instant::now() + RESUME_CONFIRMATION_TIMEOUT;
+    loop {
+        if let Some(session_id) = session.completion_signals().native_session_id {
+            if session_id == expected_session_id {
+                return Ok(());
+            }
+            return Err(format!(
+                "Agent resumed a different native session ({session_id}) than requested ({expected_session_id})."
+            ));
+        }
+        if let Some(exit_code) = session.exit_code() {
+            let output = session.recent_output();
+            return Err(if output.is_empty() {
+                format!(
+                    "Agent exited during native session resume startup (exit code {exit_code})."
+                )
+            } else {
+                format!(
+                    "Agent exited during native session resume startup (exit code {exit_code}): {output}"
+                )
+            });
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Agent did not confirm native session resume ({expected_session_id}) within 2 seconds."
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_a_resume_process_that_exits_during_startup() {
+        let session = crate::session::PtySessionFactory
+            .spawn(SpawnRequest {
+                argv: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "printf 'session not found'; exit 23".into(),
+                ],
+                cwd: std::env::current_dir().unwrap(),
+                env: Default::default(),
+                cols: DEFAULT_PTY_COLS,
+                rows: DEFAULT_PTY_ROWS,
+            })
+            .unwrap();
+
+        let error = verify_resume_startup(session.as_ref(), "expected-session").unwrap_err();
+        assert!(error.contains("exit code 23"), "{error}");
+        assert!(error.contains("session not found"), "{error}");
+    }
+
+    #[test]
+    fn confirms_that_resume_started_the_requested_native_session() {
+        let session = crate::session::MemorySession::new();
+        session.set_native_session_id(Some("expected-session".into()));
+        assert!(verify_resume_startup(&session, "expected-session").is_ok());
+
+        session.set_native_session_id(Some("new-session".into()));
+        let error = verify_resume_startup(&session, "expected-session").unwrap_err();
+        assert!(error.contains("different native session"), "{error}");
     }
 }
