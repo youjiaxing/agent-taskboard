@@ -549,10 +549,28 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: Issu
     <div class="detail-scroll">${options.runHistory ?? ""}${issueBody(copy, board, issue, options.dependencyGraph ?? true)}</div>`;
 }
 
-export function workspaceRailLabels(): { issue: string; runs: string; emptyRuns: string } {
+export function workspaceRailLabels(): {
+  issue: string;
+  runs: string;
+  projectRuns: string;
+  emptyRuns: string;
+  unnamedRun: string;
+} {
   return effectiveClientLanguage() === "zh-CN"
-    ? { issue: "Issue 正文", runs: "运行记录", emptyRuns: "还没有运行记录" }
-    : { issue: "Issue body", runs: "Run history", emptyRuns: "No Run history yet" };
+    ? {
+        issue: "Issue 正文",
+        runs: "运行记录",
+        projectRuns: "当前 Project 的运行记录",
+        emptyRuns: "还没有运行记录",
+        unnamedRun: "未命名 Run",
+      }
+    : {
+        issue: "Issue body",
+        runs: "Run history",
+        projectRuns: "Current Project run history",
+        emptyRuns: "No Run history yet",
+        unnamedRun: "Unnamed Run",
+      };
 }
 
 export function workspaceRunHistory(
@@ -573,7 +591,11 @@ export function workspaceRunHistory(
   const displayRuns = orderRunsForDisplay([...runs].reverse());
   return `<div class="workspace-run-history">${displayRuns.map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
-    const identity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
+    const startedAt = run.startedAtMs ? new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage()) : "";
+    const taskSummary = run.taskSummary?.trim();
+    const taskIdentity = taskSummary || `${labels.unnamedRun}${startedAt ? ` · ${startedAt}` : ""}`;
+    const targetIdentity = run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
+    const statusTime = startedAt && taskSummary ? ` · ${startedAt}` : "";
     const action = options.action ?? "focus-run";
     const current = run.id === options.currentRunId;
     const pinMarker = run.pinnedAtMs != null
@@ -626,8 +648,9 @@ export function workspaceRunHistory(
       : organizationActions;
     return `<article class="workspace-run-history-item ${run.pinnedAtMs != null ? "pinned" : ""} ${current ? "current" : ""}" data-act="${action}" data-id="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}">
       <button type="button" class="workspace-run-history-main" data-act="${action}" data-id="${escapeHtml(run.id)}" ${current ? 'aria-current="true"' : ""}>
-        <span><b>${escapeHtml(run.agentName)}${pinMarker}</b><small>${escapeHtml(status)}${run.startedAtMs ? ` · ${new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage())}` : ""}</small></span>
-        ${options.showIdentity ? `<span class="workspace-run-history-identity">${escapeHtml(identity)}</span>` : ""}
+        <span><b>${escapeHtml(run.agentName)}${pinMarker}</b><small>${escapeHtml(status)}${escapeHtml(statusTime)}</small></span>
+        <span class="workspace-run-history-identity" data-run-task>${escapeHtml(taskIdentity)}</span>
+        ${options.showIdentity ? `<span class="workspace-run-history-target">${escapeHtml(targetIdentity)}</span>` : ""}
         ${run.recentAction ? `<span>${escapeHtml(run.recentAction)}</span>` : ""}
       </button>
       ${actionMarkup}
@@ -682,7 +705,7 @@ export function focusWorkspaceProjectRail(copy: ShellCopy, snap: Snapshot): stri
   return `<aside class="issue-detail fixed-right-rail workspace-right-rail project-run-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
     <header class="detail-sticky"><div class="detail-hd">${escapeHtml(project.name)}</div><p class="muted">${escapeHtml(project.localPath)}</p></header>
-    <div class="workspace-rail-section-body"><h3>${escapeHtml(labels.runs)}</h3>${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap })}</div>
+    <div class="workspace-rail-section-body"><h3>${escapeHtml(labels.projectRuns)}</h3>${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, currentRunId: workspaceRun(snap)?.id })}</div>
   </aside>`;
 }
 

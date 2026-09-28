@@ -788,6 +788,7 @@ export type RunSummary = {
   agentId: string;
   agentName: string;
   issueId?: string | null;
+  taskSummary?: string | null;
   unbound: boolean;
   status: RunStatus;
   waitingForUser?: boolean;

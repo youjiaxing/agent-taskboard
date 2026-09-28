@@ -229,7 +229,7 @@ if (projectHistoryShape.runIds.slice().sort().join("|") !== expectedGardenRunIds
 if (projectHistoryShape.runIds.some((runId) => toolsRunIds.includes(runId))) {
   throw new Error(`Project history leaked a tools Run: ${JSON.stringify(projectHistoryShape.runIds)}`);
 }
-if (!projectHistoryShape.heading?.includes("garden") || !projectHistoryShape.heading.includes("历史") || !projectHistoryShape.text?.includes("未绑定 Issue")) {
+if (!projectHistoryShape.heading?.includes("garden") || !projectHistoryShape.heading.includes("当前 Project 的运行记录") || !projectHistoryShape.text?.includes("未绑定 Issue")) {
   throw new Error(`Project history should identify its Project and unbound Runs: ${JSON.stringify(projectHistoryShape)}`);
 }
 if (projectHistoryShape.pageOverflow > 0) throw new Error(`Project history must not create horizontal overflow: ${projectHistoryShape.pageOverflow}`);

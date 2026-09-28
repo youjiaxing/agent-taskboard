@@ -151,7 +151,7 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   const board = snap.board;
   const run = workspaceRun(snap);
   if (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs") {
-    return mobileProjectHistoryPage(copy, localCopy, snap);
+    return mobileProjectHistoryPage(copy, snap);
   }
   const issue = ui.mobileProjectHistoryRunOpen && run?.unbound ? undefined : board?.selected;
   const latestBoundRun = issue ? latestBoundRunForIssue(snap, issue.id) : undefined;
@@ -203,17 +203,23 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   </section>`;
 }
 
-function mobileProjectHistoryPage(copy: ShellCopy, localCopy: StartupCopy, snap: Snapshot): string {
+function mobileProjectHistoryPage(copy: ShellCopy, snap: Snapshot): string {
   const project = snap.projects.find((candidate) => candidate.id === snap.focusedProjectId);
   const runs = (snap.runs ?? []).filter((run) => run.projectId === snap.focusedProjectId);
+  const labels = workspaceRailLabels();
   return `<section class="mobile-workspace-view mobile-project-history" data-focused-run="${escapeHtml(snap.focusedRunId)}">
     ${runPersistenceBanner(copy, snap)}
     <header class="mobile-project-history-head">
-      <div><span>${escapeHtml(localCopy.mobileHistory)}</span><h2>${escapeHtml(project?.name ?? copy.projects)}</h2></div>
+      <div><span>${escapeHtml(labels.projectRuns)}</span><h2>${escapeHtml(project?.name ?? copy.projects)}</h2></div>
       <small>${runs.length}</small>
     </header>
     <div class="mobile-workspace-panel" data-run-history-scope="project">
-      ${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, organizationMode: "menu" })}
+      ${workspaceRunHistory(copy, runs, {
+        showIdentity: true,
+        organizationSnapshot: snap,
+        organizationMode: "menu",
+        currentRunId: workspaceRun(snap)?.id,
+      })}
     </div>
   </section>`;
 }
