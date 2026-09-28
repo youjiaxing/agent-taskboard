@@ -6,8 +6,9 @@ import { render } from "../render/app";
 import { restoreDialogTrigger } from "../components/dialog-controller";
 import { toLocalInput } from "../client-utils";
 import { ui } from "../ui";
-import { mobileClient } from "../view-helpers";
+import { browserClient, ensureBrowserClientSettings, mobileClient, saveBrowserClientSettings } from "../view-helpers";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
+import { focusStartedRun } from "./run-navigation";
 
 export function bindFormEvents(): void {
 ui.app.addEventListener("submit", async (event) => {
@@ -189,6 +190,8 @@ ui.app.addEventListener("submit", async (event) => {
     const input = inject.querySelector<HTMLInputElement>("input[name='text']");
     const text = input?.value ?? "";
     if (!runId || !text.trim()) return;
+    const run = ui.snapshot.runs.find((candidate) => candidate.id === runId);
+    if (!run || run.status === "ended") return;
     ui.terminalInputDrafts.set(runId, text);
     const success = await runFormOperation(injectFormKey(runId), async () => {
       await rpc("injectRunInput", { runId, text });
@@ -297,9 +300,9 @@ ui.app.addEventListener("toggle", (event) => {
     else ui.issueMaintenanceOpen.delete(issueDraftKey(details.dataset.id));
     return;
   }
-  const section = details.dataset.workspaceSection as "actions" | "issue" | "runs" | undefined;
+  const section = details.dataset.workspaceSection as "issue" | "runs" | undefined;
   if (details.dataset.section !== "workspace-rail" || !section) return;
-  const open = ui.workspaceRailOpenSections.get(details.dataset.id) ?? new Set<"actions" | "issue" | "runs">();
+  const open = ui.workspaceRailOpenSections.get(details.dataset.id) ?? new Set<"issue" | "runs">();
   if (details.open) open.add(section);
   else open.delete(section);
   ui.workspaceRailOpenSections.set(details.dataset.id, open);
@@ -354,6 +357,15 @@ ui.app.addEventListener("change", async (event) => {
     await rpc("setShowCommandPreview", {
       show: (target as HTMLInputElement).checked,
     });
+    render();
+  }
+  if (target.getAttribute("data-field") === "autoFocusNewRun" && "checked" in target) {
+    const enabled = (target as HTMLInputElement).checked;
+    if (browserClient()) {
+      saveBrowserClientSettings({ ...ensureBrowserClientSettings(), autoFocusNewRun: enabled });
+    } else {
+      await rpc("setAutoFocusNewRun", { enabled });
+    }
     render();
   }
   if (
@@ -568,9 +580,12 @@ ui.app.addEventListener("submit", async (event) => {
       values: launchValuesForHost(ui.launchDraft),
       openingText: ui.launchDraft.openingText,
     };
+    const snapshotBeforeStart = ui.snapshot;
+    let result: Awaited<ReturnType<typeof rpc>> | null = null;
     await runFormOperation(launchFormKey(draft.projectId), async () => {
-      await rpc("startUnboundRun", draft);
+      result = await rpc("startUnboundRun", draft);
     });
+    if (result && snapshotBeforeStart) await focusStartedRun(result, snapshotBeforeStart);
     return;
   }
   const form = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-form='project']");

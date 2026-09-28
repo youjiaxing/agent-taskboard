@@ -1,4 +1,4 @@
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./board-harness.mjs";
 
 export async function runDesktopBoardRun(session) {
 const emptyRunsOverviewResponse = async (route) => {
@@ -27,7 +27,7 @@ const emptyRunsOverviewResponse = async (route) => {
       hasActiveRun: false,
       hasExecutionStopped: false,
     }));
-  await route.fulfill({ response, json: result });
+  await route.fulfill({ status: response.status(), headers: response.headers(), json: result });
 };
 await session.page.route("**/*", emptyRunsOverviewResponse);
 await session.page.click("button[data-act='open-overview']");
@@ -53,8 +53,6 @@ if (await session.page.$(".lanes")) {
 if (!(await session.page.$(".side"))) {
   throw new Error("the global shell should keep the current Host sidebar while a Run is focused");
 }
-await session.page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
-await session.page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-text('active work')");
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
 await session.page.waitForSelector(".lifted-terminal .xterm-viewport");
@@ -302,12 +300,80 @@ await openingText.fill("e2e unbound run");
 await session.page.click(".launch-sheet button[type='submit']");
 await session.page.waitForFunction(() => !document.querySelector(".launch-sheet"));
 await session.page.waitForSelector(".side .run-row");
-const runRowText = await session.page.locator(".side .run-row").last().textContent();
+const unboundRun = await session.page.evaluate(async (protocol) => {
+  const response = await fetch(`${protocol}/rpc`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ op: "snapshot" }),
+  });
+  return (await response.json()).snapshot.runs.find((run) => run.taskSummary === "e2e unbound run");
+}, session.url);
+if (!unboundRun?.id) throw new Error("new unbound Run missing from Host snapshot");
+const runRow = session.page.locator(`.side .run-row[data-run='${unboundRun.id}']`);
+const runRowText = await runRow.textContent();
 if (!runRowText?.includes("Grok Build") || (!runRowText.includes("未绑定 Issue") && !runRowText.includes("Unbound Issue"))) {
   throw new Error(`unbound Run row missing identity, got ${runRowText}`);
 }
-await session.page.locator(".side .run-row").last().locator(".run-main").click();
+const unboundRunId = unboundRun.id;
+await runRow.locator(".run-main").click();
 await session.page.waitForSelector(".lifted-terminal .pty-slot");
+await session.page.waitForSelector(".project-run-rail .workspace-run-history-item.current");
+if (await session.page.locator(`.project-run-rail .workspace-run-history-item.current[data-id='${unboundRunId}']`).count() !== 1) {
+  throw new Error("the current Project Run must be the focused unbound Run");
+}
+if (await session.page.$(".project-run-rail .workspace-rail-section[data-workspace-section='issue']")) {
+  throw new Error("a focused unbound Run must show the current Project Run history, not an Issue rail");
+}
+const projectRunTitle = await session.page.$eval(".project-run-rail h3", (node) => node.textContent?.trim());
+if (projectRunTitle !== "当前 Project 的运行记录" && projectRunTitle !== "Current Project run history") {
+  throw new Error(`Project Run history must name its scope, got ${projectRunTitle}`);
+}
+const currentProjectRun = session.page.locator(`.project-run-rail .workspace-run-history-item[data-id='${unboundRunId}']`);
+if (await currentProjectRun.locator(".workspace-run-history-identity").textContent() !== "e2e unbound run") {
+  throw new Error("the current Project Run history row must show the task summary");
+}
+const legacyFallbackTime = new Date(unboundRun.startedAtMs).toLocaleString("zh-CN");
+let legacyFallbackZeroTime = false;
+const legacySnapshotRoute = async (route) => {
+  const response = await route.fetch();
+  const result = await response.json();
+  const legacyRun = result.snapshot?.runs?.find((run) => run.id === unboundRunId);
+  if (legacyRun) {
+    delete legacyRun.taskSummary;
+    if (legacyFallbackZeroTime) legacyRun.startedAtMs = 0;
+  }
+  await route.fulfill({ status: response.status(), headers: response.headers(), json: result });
+};
+const legacyPage = await session.context.newPage();
+legacyPage.on("pageerror", (error) => console.error("pageerror", error));
+await installDeterministicHostProtocol(legacyPage, session.url);
+await legacyPage.route("**/rpc", legacySnapshotRoute);
+await legacyPage.addInitScript(() => {
+  window.__OPENED_URLS__ = [];
+  window.open = (target) => {
+    window.__OPENED_URLS__.push(String(target));
+    return null;
+  };
+});
+await legacyPage.goto(session.url, { waitUntil: "domcontentloaded" });
+await legacyPage.waitForSelector(".side");
+await legacyPage.waitForSelector(`.side .run-row[data-run='${unboundRunId}']`);
+await legacyPage.click(`.side .run-row[data-run='${unboundRunId}'] .run-main`);
+await legacyPage.waitForSelector(`.project-run-rail .workspace-run-history-item.current[data-id='${unboundRunId}']`);
+const legacyProjectRunTask = await legacyPage.locator(`.project-run-rail .workspace-run-history-item[data-id='${unboundRunId}'] [data-run-task]`).textContent();
+if (legacyProjectRunTask !== `未命名 Run · ${legacyFallbackTime}`) {
+  throw new Error(`legacy Project Run fallback must show unnamed plus time, got ${legacyProjectRunTask}`);
+}
+legacyFallbackZeroTime = true;
+await legacyPage.reload({ waitUntil: "domcontentloaded" });
+await legacyPage.waitForSelector(`.side .run-row[data-run='${unboundRunId}']`);
+await legacyPage.click(`.side .run-row[data-run='${unboundRunId}'] .run-main`);
+await legacyPage.waitForSelector(`.project-run-rail .workspace-run-history-item.current[data-id='${unboundRunId}']`);
+const legacyProjectRunWithoutTime = await legacyPage.locator(`.project-run-rail .workspace-run-history-item[data-id='${unboundRunId}'] [data-run-task]`).textContent();
+if (legacyProjectRunWithoutTime !== "未命名 Run") {
+  throw new Error(`legacy Project Run fallback must omit a missing time, got ${legacyProjectRunWithoutTime}`);
+}
+await legacyPage.close();
 await session.page.click(".xterm-helper-textarea");
 await session.page.keyboard.press("?");
 if (await session.page.$(".keyboard-help")) {

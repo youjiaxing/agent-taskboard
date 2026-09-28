@@ -35,6 +35,8 @@ await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
 await page.waitForSelector(".side .run-row[data-run]");
 const firstRunId = await page.locator(".side .run-row[data-run]").last().getAttribute("data-run");
 if (!firstRunId) throw new Error("the UI-created Run must be observable in the sidebar");
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
 releasePtyRead();
 
 // CI runners can briefly starve the Host tick loop while Chromium is painting

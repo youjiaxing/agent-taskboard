@@ -4,6 +4,7 @@ import type {
   AppearancePreference,
   BoardViewMemory,
   BrowserAppearance,
+  BrowserClientSettings,
   GraphViewportAnchor,
   PrimaryPage,
   Project,
@@ -26,6 +27,7 @@ export function viewportClass(): "mobile" | "compact-desktop" | "full-desktop" {
   return "full-desktop";
 }
 const BROWSER_APPEARANCE_KEY = "agent-taskboard-browser-appearance";
+const BROWSER_CLIENT_SETTINGS_KEY = "agent-taskboard-browser-client-settings";
 
 export function mobileClient(): boolean {
   return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 0.02}px)`).matches;
@@ -55,7 +57,10 @@ export function loadBrowserAppearance(): BrowserAppearance | null {
       (value.language === "zh-CN" || value.language === "en")
       && APPEARANCE_PREFERENCES.includes(value.appearancePreference as AppearancePreference)
     ) {
-      return value as BrowserAppearance;
+      return {
+        language: value.language,
+        appearancePreference: value.appearancePreference as AppearancePreference,
+      };
     }
   } catch {
     // Invalid local settings use the new defaults.
@@ -74,6 +79,37 @@ export function ensureBrowserAppearance(): BrowserAppearance {
 export function saveBrowserAppearance(appearance: BrowserAppearance): void {
   ui.browserAppearance = appearance;
   localStorage.setItem(BROWSER_APPEARANCE_KEY, JSON.stringify(appearance));
+}
+
+export function defaultBrowserClientSettings(): BrowserClientSettings {
+  return { autoFocusNewRun: true };
+}
+
+export function loadBrowserClientSettings(): BrowserClientSettings | null {
+  try {
+    const raw = localStorage.getItem(BROWSER_CLIENT_SETTINGS_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<BrowserClientSettings>;
+    if (typeof value.autoFocusNewRun === "boolean") {
+      return { autoFocusNewRun: value.autoFocusNewRun };
+    }
+  } catch {
+    // Invalid local settings use the new defaults.
+  }
+  return null;
+}
+
+export function ensureBrowserClientSettings(): BrowserClientSettings {
+  if (!ui.browserClientSettings) {
+    ui.browserClientSettings = defaultBrowserClientSettings();
+    saveBrowserClientSettings(ui.browserClientSettings);
+  }
+  return ui.browserClientSettings;
+}
+
+export function saveBrowserClientSettings(settings: BrowserClientSettings): void {
+  ui.browserClientSettings = settings;
+  localStorage.setItem(BROWSER_CLIENT_SETTINGS_KEY, JSON.stringify(settings));
 }
 
 export function resolveTheme(
@@ -335,6 +371,17 @@ export function issueRuns(snap: Snapshot, issueId = snap.board?.selected?.id): R
   return (snap.runs ?? []).filter((run) => run.issueId === issueId && !run.archivedAtMs);
 }
 
+/** Uses Host-provided ordering so an archived latest Run never points Continue at an older visible Run. */
+export function latestBoundRunForIssue(snap: Snapshot, issueId = snap.board?.selected?.id): RunSummary | undefined {
+  if (!issueId) return undefined;
+  const selected = snap.board?.selected;
+  if (selected?.id === issueId) {
+    if (!selected.latestBoundRunId) return undefined;
+    return (snap.runs ?? []).find((run) => run.id === selected.latestBoundRunId);
+  }
+  return [...(snap.runs ?? [])].reverse().find((run) => run.issueId === issueId);
+}
+
 export function workspaceRun(snap: Snapshot): RunSummary | undefined {
   if (mobileClient()) {
     const focused = focusedRun(snap);
@@ -372,4 +419,8 @@ export function clientCopy(language: import("./protocol").Language, fallback: Sh
 export function effectiveClientLanguage(): import("./protocol").Language {
   if (browserClient()) return ensureBrowserAppearance().language;
   return ui.snapshot?.appearance.language ?? "en";
+}
+
+export function autoFocusNewRunEnabled(snap: Snapshot): boolean {
+  return browserClient() ? ensureBrowserClientSettings().autoFocusNewRun : snap.autoFocusNewRun !== false;
 }

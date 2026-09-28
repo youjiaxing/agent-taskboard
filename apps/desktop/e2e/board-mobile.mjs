@@ -229,7 +229,7 @@ if (projectHistoryShape.runIds.slice().sort().join("|") !== expectedGardenRunIds
 if (projectHistoryShape.runIds.some((runId) => toolsRunIds.includes(runId))) {
   throw new Error(`Project history leaked a tools Run: ${JSON.stringify(projectHistoryShape.runIds)}`);
 }
-if (!projectHistoryShape.heading?.includes("garden") || !projectHistoryShape.heading.includes("历史") || !projectHistoryShape.text?.includes("未绑定 Issue")) {
+if (!projectHistoryShape.heading?.includes("garden") || !projectHistoryShape.heading.includes("当前 Project 的运行记录") || !projectHistoryShape.text?.includes("未绑定 Issue")) {
   throw new Error(`Project history should identify its Project and unbound Runs: ${JSON.stringify(projectHistoryShape)}`);
 }
 if (projectHistoryShape.pageOverflow > 0) throw new Error(`Project history must not create horizontal overflow: ${projectHistoryShape.pageOverflow}`);
@@ -509,6 +509,9 @@ await session.page.waitForSelector(".mobile-workspace-panel .workspace-run-histo
 const endedRun = await session.page.$eval(".mobile-workspace-panel .workspace-run-history-item", (node) => node.textContent?.replace(/\s+/g, " ").trim());
 if (!endedRun?.includes("已结束")) {
   throw new Error(`the mobile Run history should read the ended Run state, got ${endedRun}`);
+}
+if (await session.page.locator(".mobile-workspace-panel button[data-act='continue-run']").count() !== 1) {
+  throw new Error("mobile Issue Run history should expose Continue for the stopped latest Run");
 }
 const issueHistoryRunIds = await session.page.$$eval(".mobile-workspace-panel .workspace-run-history-item", (nodes) => nodes.map((node) => node.dataset.id).sort());
 const issueHistoryExpected = (await snapshot()).runs

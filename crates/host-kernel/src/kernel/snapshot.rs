@@ -47,6 +47,7 @@ impl HostKernel {
             show_command_preview: self.show_command_preview,
             notify_desktop: self.notify_desktop,
             notify_sound: self.notify_sound,
+            auto_focus_new_run: self.auto_focus_new_run,
             auto_advance: self.host_auto_advance,
             pending_confirmation: self
                 .pending_advance
@@ -85,6 +86,7 @@ impl HostKernel {
             launch_environment: None,
             archived_runs: None,
             run_restore: None,
+            run_start: None,
         }
     }
 
@@ -302,6 +304,8 @@ impl HostKernel {
             selected.active_run_id = self.active_run_id_for_issue(&selected.id);
             selected.execution_stopped = self.execution_stopped(&selected.id);
             selected.waiting_for_user = self.issue_waiting(&selected.id);
+            selected.latest_bound_run_id =
+                self.last_bound_run(&selected.id).map(|run| run.id.clone());
         }
         Some(board)
     }

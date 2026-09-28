@@ -263,6 +263,98 @@
   overflow: auto;
 }
 
+.workspace-rail-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--layer-sticky);
+  padding: var(--space-16);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.workspace-rail-kicker {
+  margin-bottom: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.workspace-rail-header .detail-hd {
+  overflow-wrap: anywhere;
+}
+
+.workspace-rail-header .detail-meta {
+  display: grid;
+  gap: var(--space-8);
+  margin-top: var(--space-12);
+}
+
+.workspace-detail-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.workspace-detail-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-8);
+}
+
+.workspace-detail-actions > button {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-detail-actions > button[data-act="release-claim"] {
+  grid-column: 1 / -1;
+  justify-self: start;
+  width: auto;
+  padding-inline: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.detail-relations > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  list-style-position: inside;
+}
+
+.detail-relations[open] > summary {
+  margin-bottom: var(--space-10);
+  color: var(--color-text);
+}
+
+.detail-summary-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  text-align: right;
+}
+
+.detail-relations-body {
+  display: grid;
+  gap: var(--space-10);
+}
+
+.detail-relation-group {
+  padding-top: var(--space-10);
+  border-top: 1px solid var(--color-border);
+}
+
+.detail-relation-group:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
 .workspace-rail-section {
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -308,6 +400,7 @@
 
 .workspace-run-history-item small,
 .workspace-run-history-identity,
+.workspace-run-history-target,
 .workspace-run-history-main > span:last-child {
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);

@@ -7,10 +7,11 @@ use crate::agent::{
     AgentField, AgentFieldKind, AgentPort, AgentSummary, PrefillSource, ProbeResult,
     RunLaunchConfig, RunLaunchForm,
 };
-use crate::{IssueRecord, Language, LaunchEnvPort};
+use crate::{ChangeNote, IssueRecord, Language, LaunchEnvPort};
 
 pub const INITIAL_INSTRUCTION: &str = "initial-instruction";
 pub const ISOLATION_FIELD: &str = "isolation";
+const MAX_TASK_SUMMARY_CHARS: usize = 120;
 
 pub fn is_ephemeral_field(id: &str) -> bool {
     id == INITIAL_INSTRUCTION || id == ISOLATION_FIELD
@@ -135,6 +136,44 @@ pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
         issue.url,
         issue.title
     )
+}
+
+pub fn task_summary_for_issue(issue: &IssueRecord) -> String {
+    bounded_task_summary(&format!("#{} {}", issue.number, issue.title))
+}
+
+pub fn task_summary_from_opening(opening: &str, notes: &[ChangeNote]) -> Option<String> {
+    let opening = opening_without_notes(opening, notes);
+    let first_line = opening
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then(|| bounded_task_summary(&normalized))
+}
+
+fn opening_without_notes<'a>(opening: &'a str, notes: &[ChangeNote]) -> &'a str {
+    let formatted = crate::changes::format_notes(notes);
+    if formatted.is_empty() {
+        return opening;
+    }
+    let opening = opening.trim_end();
+    opening
+        .strip_suffix(&formatted)
+        .map(|without_notes| without_notes.trim_end())
+        .unwrap_or(opening)
+}
+
+fn bounded_task_summary(text: &str) -> String {
+    if text.chars().count() <= MAX_TASK_SUMMARY_CHARS {
+        return text.to_string();
+    }
+    let mut truncated = text
+        .chars()
+        .take(MAX_TASK_SUMMARY_CHARS - 3)
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 pub fn localize_fields(
@@ -301,17 +340,6 @@ pub fn missing_required(
         }
     }
     None
-}
-
-pub fn opening_required(opening: &str, language: Language) -> Option<String> {
-    if opening.trim().is_empty() {
-        Some(match language {
-            Language::ZhCn => "请填写任务说明。".into(),
-            Language::En => "Enter a task description.".into(),
-        })
-    } else {
-        None
-    }
 }
 
 pub fn command_preview(argv: &[String]) -> String {
@@ -529,8 +557,16 @@ pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) 
 
 #[cfg(test)]
 mod tests {
-    use super::localize_fields;
+    use super::{bounded_task_summary, localize_fields, MAX_TASK_SUMMARY_CHARS};
     use crate::{AgentPort, AntigravityAdapter, CodexAdapter, GrokAdapter, Language};
+
+    #[test]
+    fn task_summary_is_bounded_by_character_count() {
+        let text = "任".repeat(MAX_TASK_SUMMARY_CHARS + 1);
+        let summary = bounded_task_summary(&text);
+        assert_eq!(summary.chars().count(), MAX_TASK_SUMMARY_CHARS);
+        assert!(summary.ends_with("..."));
+    }
 
     #[test]
     fn localized_codex_fields_explain_sandbox_approval_and_profile() {

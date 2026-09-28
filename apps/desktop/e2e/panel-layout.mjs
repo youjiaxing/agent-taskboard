@@ -190,7 +190,6 @@ assertNear(await widthOf(browserPage, ".side"), 308, "resized sidebar width");
 await browserPage.locator(".issue-card-main", { hasText: "panel layout issue" }).click();
 await browserPage.waitForSelector(".lifted-run");
 await browserPage.waitForSelector('[data-fixed-panel="right-rail"]');
-await browserPage.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await browserPage.waitForSelector('[data-document-state="ready"]');
 assertNear(await widthOf(browserPage, '[data-fixed-panel="right-rail"]'), 320, "default right rail width");
 await dragBy(browserPage, '[data-panel-resize="right-rail"]', -80);

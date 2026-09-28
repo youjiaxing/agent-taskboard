@@ -4,7 +4,7 @@ import type { MobileWorkspaceSection, RunSummary, ShellCopy, Snapshot } from "..
 import type { StartupCopy } from "../startup-copy";
 import { appearancePreferenceLabel } from "../startup-copy";
 import { ui } from "../ui";
-import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, issueRuns, mobileOutputKey, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, currentProject, effectiveAppearancePreference, focusedRun, issueRuns, latestBoundRunForIssue, mobileOutputKey, workspaceRun } from "../view-helpers";
 import { boardLanes, boardUnavailable, issueDetail, issueSearch, refreshBar, workspaceRailLabels, workspaceRunHistory } from "./board";
 import { loopbackNotice } from "./run";
 import { emptyTerminalSurface, injectRunForm, projectTrackerIdentity, readOnlyTerminal, runHeader, runNotices, telemetryBar, terminalPanel } from "./shell";
@@ -151,9 +151,10 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   const board = snap.board;
   const run = workspaceRun(snap);
   if (ui.mobileRunHistoryScope === "project" && ui.mobileWorkspaceSection === "runs") {
-    return mobileProjectHistoryPage(copy, localCopy, snap);
+    return mobileProjectHistoryPage(copy, snap);
   }
   const issue = ui.mobileProjectHistoryRunOpen && run?.unbound ? undefined : board?.selected;
+  const latestBoundRun = issue ? latestBoundRunForIssue(snap, issue.id) : undefined;
   const labels = workspaceRailLabels();
   const sections: Array<[MobileWorkspaceSection, string]> = [
     ["terminal", copy.mobileRun],
@@ -167,7 +168,19 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
       ? `<aside class="issue-detail mobile-issue-panel">${issueDetail(copy, board!, { dependencyGraph: false })}</aside>`
       : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`
     : section === "runs"
-      ? (issue ? workspaceRunHistory(copy, runs, { organizationSnapshot: snap, organizationMode: "menu", currentRunId: workspaceRun(snap)?.id, action: "view-issue-run" }) : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
+      ? (issue
+        ? workspaceRunHistory(copy, runs, {
+            organizationSnapshot: snap,
+            organizationMode: "menu",
+            currentRunId: workspaceRun(snap)?.id,
+            action: "view-issue-run",
+            issueActions: {
+              issueId: issue.id,
+              latestBoundRunId: latestBoundRun?.id,
+              executionStopped: Boolean(issue.executionStopped),
+            },
+          })
+        : `<p class="board-empty">${escapeHtml(copy.pickIssue)}</p>`)
       : mobileTerminalPanel(copy, snap, run);
   return `<section class="mobile-workspace-view">
     ${ui.mobileProjectHistoryRunOpen
@@ -190,17 +203,23 @@ export function mobileWorkspacePage(copy: ShellCopy, localCopy: StartupCopy, sna
   </section>`;
 }
 
-function mobileProjectHistoryPage(copy: ShellCopy, localCopy: StartupCopy, snap: Snapshot): string {
+function mobileProjectHistoryPage(copy: ShellCopy, snap: Snapshot): string {
   const project = snap.projects.find((candidate) => candidate.id === snap.focusedProjectId);
   const runs = (snap.runs ?? []).filter((run) => run.projectId === snap.focusedProjectId);
+  const labels = workspaceRailLabels();
   return `<section class="mobile-workspace-view mobile-project-history" data-focused-run="${escapeHtml(snap.focusedRunId)}">
     ${runPersistenceBanner(copy, snap)}
     <header class="mobile-project-history-head">
-      <div><span>${escapeHtml(localCopy.mobileHistory)}</span><h2>${escapeHtml(project?.name ?? copy.projects)}</h2></div>
+      <div><span>${escapeHtml(labels.projectRuns)}</span><h2>${escapeHtml(project?.name ?? copy.projects)}</h2></div>
       <small>${runs.length}</small>
     </header>
     <div class="mobile-workspace-panel" data-run-history-scope="project">
-      ${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, organizationMode: "menu" })}
+      ${workspaceRunHistory(copy, runs, {
+        showIdentity: true,
+        organizationSnapshot: snap,
+        organizationMode: "menu",
+        currentRunId: workspaceRun(snap)?.id,
+      })}
     </div>
   </section>`;
 }

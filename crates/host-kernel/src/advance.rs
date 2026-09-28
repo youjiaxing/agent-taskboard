@@ -82,6 +82,13 @@ pub fn self_check_text(language: Language) -> String {
     }
 }
 
+pub fn self_check_summary(language: Language) -> &'static str {
+    match language {
+        Language::ZhCn => "自检",
+        Language::En => "Self-check",
+    }
+}
+
 pub fn clamp_restore_delay_ms(delay_ms: u64) -> u64 {
     delay_ms.min(600_000)
 }

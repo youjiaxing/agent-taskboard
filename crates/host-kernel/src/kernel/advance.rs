@@ -166,8 +166,9 @@ impl HostKernel {
         let next = self.next_auto_pool(project_id);
         if let Some(issue_id) = next {
             match self.start_bound_run_with_agent(&issue_id, &pending.agent_id) {
-                Ok(()) => self.clear_pending(project_id, true),
+                Ok(RunStartResult::Started { .. }) => self.clear_pending(project_id, true),
                 Err(_) => self.clear_pending(project_id, false),
+                Ok(RunStartResult::Failed { .. }) => self.clear_pending(project_id, false),
             }
         } else {
             self.clear_pending(project_id, false);
@@ -315,6 +316,7 @@ impl HostKernel {
             Some(kernel::run::PreviousRun {
                 id: previous.id.clone(),
                 native_session_id: previous.native_session_id.clone(),
+                task_summary: Some(advance::self_check_summary(self.appearance.language).into()),
                 working_directory: previous.working_directory.clone(),
                 isolated: previous.isolated,
                 self_check: true,

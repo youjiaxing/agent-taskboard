@@ -84,9 +84,9 @@ if (!issueAfterFailure || issueAfterFailure.claimedBy.length !== 0) {
 
 await page.click("form[data-form='launch'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".launch-sheet"));
-await page.waitForSelector(".side .run-row");
-if (await page.$(".run-dock") || await page.$(".lifted-terminal")) {
-  throw new Error("starting a Run from the Board must not mount the full Terminal on the Board");
+await page.waitForSelector(".focus-workspace-layout [data-terminal-panel]");
+if (await page.$(".launch-sheet") || !(await page.$(".lifted-terminal"))) {
+  throw new Error("starting a Run should open the full Terminal in the focus workspace");
 }
 const afterRetry = await hostSnapshot(page, url);
 const running = afterRetry.runs.filter((run) => run.issueId === issueId && run.status === "running");

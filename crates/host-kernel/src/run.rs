@@ -67,6 +67,8 @@ pub struct RunSummary {
     pub agent_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_summary: Option<String>,
     pub unbound: bool,
     pub status: RunStatus,
     #[serde(default)]
@@ -180,6 +182,7 @@ pub fn start_unbound(
         agent_id: agent.id().to_string(),
         agent_name: agent.name().to_string(),
         issue_id: issue_id.filter(|id| !id.is_empty()).map(ToOwned::to_owned),
+        task_summary: None,
         unbound: issue_id.map(|id| id.is_empty()).unwrap_or(true),
         status: RunStatus::Starting,
         waiting_for_user: false,

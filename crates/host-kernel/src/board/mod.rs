@@ -152,6 +152,8 @@ pub struct IssueDetail {
     pub waiting_for_user: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_bound_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -73,4 +73,4 @@ export async function createBoardSession() {
   session.close = async () => { await browser.close(); };
   return session;
 }
-export { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap };
+export { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol };

@@ -164,6 +164,7 @@ pub struct HostKernel {
     show_command_preview: bool,
     notify_desktop: bool,
     notify_sound: bool,
+    auto_focus_new_run: bool,
     change_notes: Vec<ChangeNote>,
     host_auto_advance: bool,
     pending_advance: BTreeMap<String, advance::PendingAdvance>,
@@ -219,6 +220,7 @@ impl HostKernel {
             show_command_preview,
             notify_desktop,
             notify_sound,
+            auto_focus_new_run,
         ) = load_or_init_appearance(
             &data.desktop_client_settings_path,
             &request.system_locale,
@@ -360,6 +362,7 @@ impl HostKernel {
             show_command_preview,
             notify_desktop,
             notify_sound,
+            auto_focus_new_run,
             change_notes: Vec::new(),
             host_auto_advance: settings.auto_advance,
             pending_advance: BTreeMap::new(),

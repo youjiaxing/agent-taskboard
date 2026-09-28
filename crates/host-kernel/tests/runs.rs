@@ -125,6 +125,10 @@ fn missing_grok_lists_command_path_and_known_locations() {
     assert!(run.issue_id.is_none());
     assert_eq!(run.status, RunStatus::Ended);
     assert_eq!(run.agent_name, "Grok Build");
+    assert_eq!(
+        run.task_summary.as_deref(),
+        Some("run lifecycle integration")
+    );
     let failure = run.failure.as_deref().unwrap();
     assert!(failure.contains("grok"), "{failure}");
     assert!(failure.contains("/opt/empty"), "{failure}");
@@ -134,7 +138,36 @@ fn missing_grok_lists_command_path_and_known_locations() {
         "{failure}"
     );
     assert!(!failure.contains("先开终端"), "{failure}");
+    assert!(matches!(
+        out.run_start,
+        Some(host_kernel::RunStartResult::Failed { .. })
+    ));
     assert_eq!(h.sessions.spawn_count(), 0);
+}
+
+#[test]
+fn run_task_summary_persists_and_legacy_records_load_unnamed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+
+    let started = start_unbound(&mut h.host, &project_id).unwrap();
+    assert_eq!(
+        started.snapshot.runs[0].task_summary.as_deref(),
+        Some("run lifecycle integration")
+    );
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    drop(h);
+
+    let mut legacy: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(&runs_path).unwrap()).unwrap();
+    legacy[0].as_object_mut().unwrap().remove("taskSummary");
+    std::fs::write(&runs_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+    let h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    assert!(h.host.snapshot().run_persistence_recovery.is_none());
+    assert_eq!(h.host.snapshot().runs[0].task_summary, None);
 }
 
 #[test]
@@ -158,7 +191,11 @@ fn new_unbound_run_does_not_claim_and_shows_grok() {
     assert_eq!(out.snapshot.copy.unbound_issue, "未绑定 Issue");
     assert!(out.snapshot.projects[0].has_active_run);
     assert_eq!(out.snapshot.projects[0].active_run_count, 1);
-    assert_eq!(out.snapshot.focused_run_id, run.id);
+    assert!(out.snapshot.focused_run_id.is_empty());
+    assert!(matches!(
+        out.run_start,
+        Some(host_kernel::RunStartResult::Started { ref run_id, .. }) if run_id == &run.id
+    ));
     assert_eq!(h.launch_env.capture_count(), 3);
     assert_eq!(
         h.launch_env.captured_dirs(),
@@ -231,10 +268,13 @@ fn run_start_write_failure_keeps_the_previous_collection_and_stops_the_new_sessi
     let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
     let previous = block_runs_file(&runs_path);
 
-    let err = start_unbound(&mut h.host, &project_id).unwrap_err();
+    let failed = start_unbound(&mut h.host, &project_id).unwrap();
 
-    assert!(!err.to_string().is_empty());
-    assert_eq!(h.host.snapshot().runs.len(), 1);
+    assert!(matches!(
+        failed.run_start,
+        Some(host_kernel::RunStartResult::Failed { warning: Some(_) })
+    ));
+    assert_eq!(failed.snapshot.runs.len(), 1);
     assert!(h.sessions.last_session().unwrap().stopped());
     restore_runs_file(&runs_path, &previous);
     let stored: Vec<serde_json::Value> =
