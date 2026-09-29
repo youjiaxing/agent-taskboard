@@ -179,7 +179,7 @@ jobs:
     name: 快速发布门禁
     needs: prepare
     # Keep deterministic checks in the blocking release path. Full browser
-    # journeys run in .github/workflows/browser-e2e.yml instead.
+    # journeys are intentionally kept out of GitHub Actions.
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4

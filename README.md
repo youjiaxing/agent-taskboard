@@ -134,7 +134,7 @@ cargo check --workspace --all-targets
 npm --prefix apps/desktop run verify:release
 ```
 
-快速发布门禁会构建前端并运行确定性的 Rust 核心测试；完整浏览器验收由独立的定时或手动 workflow 执行。正式发布会构建 Windows NSIS 安装包并检查产物，但不做 Windows 安装启动冒烟。
+快速发布门禁会构建前端并运行确定性的 Rust 核心测试；完整浏览器验收仅保留为本地测试，不由 GitHub Actions 自动执行。正式发布会构建 Windows NSIS 安装包并检查产物，但不做 Windows 安装启动冒烟。
 
 ## 项目结构
 
