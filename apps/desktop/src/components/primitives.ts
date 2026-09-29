@@ -5,12 +5,20 @@ export type ActionDescriptor = {
   label: string;
   ariaLabel?: string;
   icon?: string;
+  iconName?: "archive";
   disabled?: boolean;
   busy?: boolean;
   destructive?: boolean;
   pressed?: boolean;
   data?: Record<string, string | number | undefined>;
 };
+
+function actionIcon(action: ActionDescriptor): string {
+  if (action.iconName === "archive") {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></svg>';
+  }
+  return escapeHtml(action.icon ?? "×");
+}
 
 export type AttributeValue = string | number | boolean | null | undefined;
 
@@ -53,7 +61,7 @@ export function button(
   const className = ["ui-button", variant, action.pressed ? "active" : "", action.busy ? "is-busy" : "", options.className ?? ""]
     .filter(Boolean)
     .join(" ");
-  const content = `${action.icon ? `<span class="ui-button-icon" aria-hidden="true">${escapeHtml(action.icon)}</span>` : ""}<span>${escapeHtml(action.label)}</span>`;
+  const content = `${action.icon || action.iconName ? `<span class="ui-button-icon" aria-hidden="true">${actionIcon(action)}</span>` : ""}<span>${escapeHtml(action.label)}</span>`;
   return `<button${htmlAttributes({
     type: options.type ?? "button",
     class: className,
@@ -74,7 +82,7 @@ export function iconButton(
     disabled: action.disabled || action.busy || undefined,
     ...actionData(action),
     ...(options.attributes ?? {}),
-  })}><span aria-hidden="true">${escapeHtml(action.icon ?? "×")}</span><span class="sr-only">${escapeHtml(action.label)}</span></button>`;
+  })}><span aria-hidden="true">${actionIcon(action)}</span><span class="sr-only">${escapeHtml(action.label)}</span></button>`;
 }
 
 export function formField(options: {

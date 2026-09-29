@@ -206,7 +206,6 @@
 
 .run-row:hover .run-main,
 .run-row:focus-within .run-main,
-.run-row.active .run-main,
 .run-row.menu-open .run-main {
   padding-right: calc(var(--space-48) + var(--space-48) + var(--space-12));
 }
@@ -250,7 +249,6 @@
 
 .run-row:hover .run-row-actions,
 .run-row:focus-within .run-row-actions,
-.run-row.active .run-row-actions,
 .run-row.menu-open .run-row-actions {
   opacity: 1;
   visibility: visible;

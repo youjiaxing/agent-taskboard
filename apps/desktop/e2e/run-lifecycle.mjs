@@ -61,13 +61,14 @@ await page.click("button[data-act='appearance-menu']");
 
 let activeSidebarRun = page.locator(".side .run-row.waiting").first();
 await activeSidebarRun.evaluate((row) => row.classList.add("active"));
+await page.mouse.move(0, 0);
 try {
-  const activeRunActionsVisible = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
+  const activeRunActionsHidden = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
     opacity: getComputedStyle(node).opacity,
     visibility: getComputedStyle(node).visibility,
   }));
-  if (activeRunActionsVisible.opacity !== "1" || activeRunActionsVisible.visibility !== "visible") {
-    throw new Error(`the selected Run should keep its labeled actions entry visible: ${JSON.stringify(activeRunActionsVisible)}`);
+  if (activeRunActionsHidden.opacity !== "0" || activeRunActionsHidden.visibility !== "hidden") {
+    throw new Error(`a selected Run should hide its actions after the pointer leaves: ${JSON.stringify(activeRunActionsHidden)}`);
   }
 } finally {
   await activeSidebarRun.evaluate((row) => row.classList.remove("active"));
@@ -78,7 +79,7 @@ for (const width of sidebarWidths) {
     document.querySelector(".frame")?.style.setProperty("--client-sidebar-width", `${sidebarWidth}px`);
   }, width);
   const layout = await activeSidebarRun.evaluate((row) => {
-    row.classList.add("active");
+    row.classList.add("menu-open");
     const main = row.querySelector(".run-main");
     const title = main?.querySelector(".run-title");
     const number = main?.querySelector(".run-number");
@@ -108,7 +109,7 @@ for (const width of sidebarWidths) {
     trigger.textContent = originalTrigger;
     if (originalTitle == null) title.removeAttribute("title");
     else title.setAttribute("title", originalTitle);
-    row.classList.remove("active");
+    row.classList.remove("menu-open");
     return measurement;
   });
   if (
@@ -159,8 +160,8 @@ const englishActionLayout = await activeSidebarRun.evaluate((row) => {
   if (!(trigger instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) {
     throw new Error("active Run should expose its operation entry, title, and status");
   }
-  const wasActive = row.classList.contains("active");
-  row.classList.add("active");
+  const wasMenuOpen = row.classList.contains("menu-open");
+  row.classList.add("menu-open");
   const originalLabel = trigger.textContent;
   trigger.textContent = "Actions";
   const layout = {
@@ -169,7 +170,7 @@ const englishActionLayout = await activeSidebarRun.evaluate((row) => {
     status: status.getBoundingClientRect().toJSON(),
   };
   trigger.textContent = originalLabel;
-  if (!wasActive) row.classList.remove("active");
+  if (!wasMenuOpen) row.classList.remove("menu-open");
   return layout;
 });
 if (englishActionLayout.title.right > englishActionLayout.label.left || englishActionLayout.status.right > englishActionLayout.label.left) {
@@ -190,6 +191,8 @@ const activeSidebarActions = await activeSidebarMenu.locator("button").evaluateA
 if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
   throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
 }
+await activeSidebarRun.locator("button[data-act='run-menu']").click();
+await activeSidebarRun.locator(".run-row-menu").waitFor({ state: "detached" });
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
 for (const runId of endedRunIds) {
   const endedRun = page.locator(`.side .run-row[data-run="${runId}"]`);
@@ -199,6 +202,15 @@ for (const runId of endedRunIds) {
   );
   if (endedActions.join("|") !== "open-usage-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
+  }
+  const archiveIcon = endedRun.locator("[data-run-organization='archive-run'] svg");
+  if (
+    await archiveIcon.count() !== 1
+    || await archiveIcon.getAttribute("viewBox") !== "0 0 24 24"
+    || await archiveIcon.locator("rect").count() !== 1
+    || await archiveIcon.locator("path").count() !== 2
+  ) {
+    throw new Error(`ended sidebar Run archive action should use an archive-box icon, got ${await endedRun.locator("[data-run-organization='archive-run']").innerHTML()}`);
   }
 }
 
@@ -221,7 +233,10 @@ if (hoverVisibility.opacity !== "1" || hoverVisibility.visibility !== "visible")
   throw new Error(`pointer hover must reveal sidebar Run actions: ${JSON.stringify(hoverVisibility)}`);
 }
 
+await page.mouse.move(0, 0);
 await activeSidebarRun.locator(".run-main").focus();
+await page.keyboard.press("Shift+Tab");
+await page.keyboard.press("Tab");
 const focusVisibility = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
   opacity: getComputedStyle(node).opacity,
   visibility: getComputedStyle(node).visibility,
@@ -236,6 +251,8 @@ await page.waitForSelector(".lanes");
 
 activeSidebarRun = page.locator(".side .run-row.waiting").first();
 await activeSidebarRun.locator(".run-main").focus();
+await page.keyboard.press("Shift+Tab");
+await page.keyboard.press("Tab");
 await page.keyboard.press("Tab");
 const keyboardAction = await page.evaluate(() => document.activeElement?.getAttribute("data-act"));
 if (keyboardAction !== "set-run-pinned") {
@@ -245,6 +262,7 @@ await page.keyboard.press("Enter");
 const keyboardRunId = await activeSidebarRun.getAttribute("data-run");
 await page.waitForSelector(`.side .run-row[data-run='${keyboardRunId}'][data-pinned='true']`);
 activeSidebarRun = page.locator(`.side .run-row[data-run='${keyboardRunId}']`);
+await activeSidebarRun.hover();
 await activeSidebarRun.locator("button[data-act='run-menu']").click();
 await activeSidebarRun.locator(".run-row-menu").waitFor();
 const beforeWindowFailure = await hostSnapshot(page, url);
