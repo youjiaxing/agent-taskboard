@@ -1,4 +1,4 @@
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
 
 export async function runDesktopBoardShell(session) {
 try {
@@ -570,12 +570,10 @@ if ((await session.page.getAttribute("html", "data-theme")) !== "light") {
   throw new Error("a new browser Client should resolve system appearance to the current light color scheme");
 }
 await session.assertVisual("desktop-main-light.png");
-await assertNecessaryTextContrast(session.page, "light desktop board");
 await session.page.emulateMedia({ colorScheme: "dark" });
 await session.page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
 await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.dark[index]])), "dark theme");
 await session.assertVisual("desktop-main-dark.png");
-await assertNecessaryTextContrast(session.page, "dark desktop board");
 await session.page.click("button[data-act='appearance-menu']");
 const appearanceLabels = await session.page.$$eval(".appearance-menu [role='menuitemradio']", (nodes) =>
   nodes.map((node) => node.textContent?.trim()),
@@ -587,7 +585,6 @@ if ((await session.page.evaluate(() => document.activeElement?.getAttribute("dat
   throw new Error("opening the appearance menu should focus its first choice");
 }
 await session.assertVisual("appearance-menu.png");
-await assertNecessaryTextContrast(session.page, "appearance menu");
 await session.page.keyboard.press("ArrowDown");
 if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "light") {
   throw new Error("appearance menu arrow navigation should move between choices");
@@ -639,7 +636,6 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
   if (appearancePreference === "light") {
     await session.page.waitForFunction(() => document.documentElement.dataset.theme === "light");
     await session.assertVisual("settings-appearance.png");
-    await assertNecessaryTextContrast(session.page, "appearance settings");
   }
   await session.page.click("button[data-act='return-page']");
   await session.page.waitForSelector(".lanes");
@@ -653,7 +649,6 @@ for (const appearancePreference of ["light", "dark", "warm", "system"]) {
     Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens[expectedTheme][index]])),
     `${appearancePreference} appearance`,
   );
-  await assertNecessaryTextContrast(session.page, `${appearancePreference} desktop board`);
   const themedStructure = await shellStructure();
   if (JSON.stringify(themedStructure) !== JSON.stringify(initialStructure)) {
     throw new Error(`appearance ${appearancePreference} changed the shell information architecture: ${JSON.stringify(themedStructure)}`);

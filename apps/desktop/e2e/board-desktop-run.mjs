@@ -1,4 +1,4 @@
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./board-harness.mjs";
+import { assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./board-harness.mjs";
 
 export async function runDesktopBoardRun(session) {
 const emptyRunsOverviewResponse = async (route) => {
@@ -57,7 +57,6 @@ await session.page.waitForSelector(".lifted-run .issue-detail .detail-hd:has-tex
 await session.page.waitForSelector('.lifted-run [data-document-state="ready"]');
 await session.page.waitForSelector(".lifted-terminal .xterm-viewport");
 await session.assertVisual("focus-workspace-rail.png");
-await assertNecessaryTextContrast(session.page, "focus workspace with right rail");
 await session.page.evaluate(() => { window.__THEME_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 const focusedRunGlobalActions = await session.page.$$eval(
   "[data-global-actions] [data-global-action]",

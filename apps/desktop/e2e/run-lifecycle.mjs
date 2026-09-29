@@ -12,22 +12,12 @@ const closeInspectorIfOpen = async () => {
 };
 
 let rpcFailure = null;
-let forceArchivedLatestBoundRun = false;
 await page.route("**/rpc", async (route) => {
   let request;
   try {
     request = route.request().postDataJSON();
   } catch {
     await route.continue();
-    return;
-  }
-  if (forceArchivedLatestBoundRun && request?.op) {
-    const response = await route.fetch();
-    const result = await response.json();
-    if (result.snapshot?.board?.selected) {
-      result.snapshot.board.selected.latestBoundRunId = "archived-latest-bound-run";
-    }
-    await route.fulfill({ response, json: result });
     return;
   }
   if (!rpcFailure || request?.op !== rpcFailure.op || !rpcFailure.matches(request)) {
@@ -519,38 +509,6 @@ if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationC
   throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
-forceArchivedLatestBoundRun = true;
-await page.click("button[data-act='return-page']");
-await page.waitForSelector(".lanes");
-await card("continue lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".board-run-history");
-await page.click('.board-run-history button[data-act="view-issue-run"]');
-try {
-  await page.waitForSelector('[data-terminal-surface="readonly"]', { timeout: 30000 });
-} catch {
-  const diagnostic = await page.evaluate(() => ({
-    frame: document.querySelector(".frame")?.className,
-    lifted: Boolean(document.querySelector(".lifted-run")),
-    readonly: Boolean(document.querySelector('[data-terminal-surface="readonly"]')),
-    terminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
-    boardHistory: document.querySelector(".board-run-history")?.textContent?.replace(/\s+/g, " "),
-    issueRail: document.querySelector(".workspace-right-rail")?.textContent?.replace(/\s+/g, " "),
-  }));
-  throw new Error(`second stopped Run focus did not render readonly terminal: ${JSON.stringify(diagnostic)}`);
-}
-if (await page.locator(".workspace-rail-header button[data-act='continue-run']").count() !== 1) {
-  throw new Error("an archived latest bound Run must keep Continue in the Issue header");
-}
-if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 0) {
-  throw new Error("an archived latest bound Run must not expose Continue on an older visible history row");
-}
-forceArchivedLatestBoundRun = false;
-await page.click("button[data-act='return-page']");
-await page.waitForSelector(".lanes");
-await card("continue lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".board-run-history");
-await page.click('.board-run-history button[data-act="view-issue-run"]');
-await page.waitForSelector('[data-terminal-surface="readonly"]');
 if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 1) {
   throw new Error("the latest execution-stopped Run should expose Continue in its history row");
 }

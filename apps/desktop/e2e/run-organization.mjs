@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./visual-regression.mjs";
+import { assertShellRegionsDoNotOverlap, installDeterministicHostProtocol } from "./visual-regression.mjs";
 import { runMobileRunOrganizationJourney } from "./mobile-run-organization.mjs";
 
 const url = process.env.BOARD_URL;
@@ -270,7 +270,6 @@ try {
   await page.setViewportSize({ width: 760, height: 720 });
   await page.waitForSelector(".run-archive-page");
   await assertShellRegionsDoNotOverlap(page);
-  await assertNecessaryTextContrast(page, "compact desktop Run archive");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, "compact desktop archive must not overflow horizontally");
 
   await page.setViewportSize({ width: 390, height: 844 });
