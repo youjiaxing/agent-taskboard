@@ -243,6 +243,27 @@ async function performRunOrganizationAction(action: RunOrganizationAction): Prom
   }
 }
 
+async function retryNativeSync(runId: string): Promise<void> {
+  const key = `native-sync:${runId}`;
+  if (ui.runOrganizationPending.has(key)) return;
+  ui.runOrganizationRetry = null;
+  ui.runOrganizationPending.add(key);
+  render();
+  try {
+    await rpc("retryNativeSync", { runId });
+    if (ui.clientView.page === "run-archive") await loadArchivedRuns();
+  } catch (error) {
+    ui.runOrganizationRetry = {
+      action: { op: "retryNativeSync", runId },
+      message: error instanceof Error ? error.message : String(error),
+    };
+    await refreshSnapshotAfterRunOrganizationError();
+  } finally {
+    ui.runOrganizationPending.delete(key);
+    render();
+  }
+}
+
 function showRestoreConflict(result: Extract<RunRestoreResult, { status: "conflict" }>, error = ""): void {
   ui.restoreRunDialog = { result, error, pending: false };
   render();
@@ -974,6 +995,10 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     await performRunOrganizationAction({ op: "archiveRun", runId: target.dataset.id });
     return;
   }
+  if (act === "retry-native-sync" && target.dataset.id) {
+    await retryNativeSync(target.dataset.id);
+    return;
+  }
   if (act === "restore-run" && target.dataset.id) {
     await prepareRunRestore(target.dataset.id, target);
     return;
@@ -1015,6 +1040,8 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
         confirmProjectRecreate: action.confirmProjectRecreate,
         expectedTombstoneRevision: action.expectedTombstoneRevision,
       });
+    } else if (action.op === "retryNativeSync") {
+      await retryNativeSync(action.runId);
     } else {
       await performRunOrganizationAction(action);
     }

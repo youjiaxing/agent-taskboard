@@ -781,6 +781,14 @@ export type LaunchDraft = {
 
 export type RunStatus = "starting" | "running" | "ended";
 
+export type NativeSyncSummary = {
+  desiredState: "active" | "archived";
+  state: "pending" | "syncing" | "failed" | "synced" | "unsupported" | "missing-native-session";
+  attempts: number;
+  nextRetryAtMs?: number | null;
+  lastError?: string | null;
+};
+
 export type RunSummary = {
   id: string;
   projectId: string;
@@ -796,6 +804,7 @@ export type RunSummary = {
   failure?: string | null;
   previousRunId?: string | null;
   nativeSessionId?: string | null;
+  nativeSync?: NativeSyncSummary | null;
   endedReason?: "exited" | "stopped" | "abnormal" | "crash" | null;
   workingDirectory?: string;
   isolated?: boolean;

@@ -240,6 +240,9 @@ pub enum Command {
         confirm_project_recreate: bool,
         expected_tombstone_revision: Option<String>,
     },
+    RetryNativeSync {
+        run_id: String,
+    },
     RetryRunPersistenceLoad,
     OpenHostOverview,
     ReturnToBoard,

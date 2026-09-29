@@ -222,6 +222,7 @@ impl AgentSession for MemorySession {
             session_end: self.session_end.load(Ordering::SeqCst),
             stop_failure: self.stop_failure.load(Ordering::SeqCst),
             waiting_for_user: self.waiting.load(Ordering::SeqCst),
+            session_id: None,
         }
     }
 

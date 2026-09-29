@@ -373,6 +373,18 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
         let run = &self.runs[position];
         if run.is_archived() {
+            if run.native_sync.is_none() {
+                let mut runs = self.runs.clone();
+                let mut private = self.native_sync_private.clone();
+                let summary = self.prepare_native_sync_intent(
+                    &runs[position],
+                    &mut private,
+                    NativeSyncDesiredState::Archived,
+                    self.now_ms,
+                );
+                runs[position].native_sync = Some(summary);
+                self.commit_run_records_with_private(runs, private)?;
+            }
             return Ok(());
         }
         if run.status != RunStatus::Ended {
@@ -383,7 +395,15 @@ impl HostKernel {
         let mut runs = self.runs.clone();
         runs[position].pinned_at_ms = None;
         runs[position].archived_at_ms = Some(self.now_ms);
-        self.commit_run_records(runs)?;
+        let mut private = self.native_sync_private.clone();
+        let summary = self.prepare_native_sync_intent(
+            &runs[position],
+            &mut private,
+            NativeSyncDesiredState::Archived,
+            self.now_ms,
+        );
+        runs[position].native_sync = Some(summary);
+        self.commit_run_records_with_private(runs, private)?;
         self.clear_run_navigation(run_id);
         Ok(())
     }
@@ -538,7 +558,15 @@ impl HostKernel {
     fn unarchive_run(&mut self, position: usize) -> Result<(), KernelError> {
         let mut runs = self.runs.clone();
         runs[position].archived_at_ms = None;
-        self.commit_run_records(runs)
+        let mut private = self.native_sync_private.clone();
+        let summary = self.prepare_native_sync_intent(
+            &runs[position],
+            &mut private,
+            NativeSyncDesiredState::Active,
+            self.now_ms,
+        );
+        runs[position].native_sync = Some(summary);
+        self.commit_run_records_with_private(runs, private)
     }
 
     pub(crate) fn list_archived_runs(&self, project_id: Option<&str>) -> Vec<RunSummary> {
@@ -611,6 +639,7 @@ impl HostKernel {
     }
 
     pub(crate) fn observe_live_runs(&mut self) {
+        self.reconcile_native_sync();
         self.discover_isolated_directories();
         self.ingest_telemetry();
         self.harvest_live_signals();
@@ -655,6 +684,7 @@ impl HostKernel {
                 .push(HostEvent::Waiting { run_id: id.clone() });
             self.push_notification(NotificationKind::Waiting, &id);
         }
+        self.reconcile_native_sync();
     }
 
     pub(crate) fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
@@ -713,6 +743,18 @@ impl HostKernel {
     ) -> Result<(), KernelError> {
         self.ensure_run_persistence_writable()?;
         self.harvest_run_signals(run_id)?;
+        for _ in 0..5 {
+            let captured = self
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .is_some_and(|run| run.native_session_id.is_some());
+            if captured {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            self.harvest_run_signals(run_id)?;
+        }
         let recent_output = self.live.get(run_id).map(|session| session.recent_output());
         let mut issue_id = None;
         let mut project_id = None;
@@ -1029,7 +1071,7 @@ impl HostKernel {
         };
         let mut hook_plan = None;
         let mut hook_dir = None;
-        if issue_id.is_some() && agent.completion_hooks_supported() {
+        if agent.completion_hooks_supported() {
             let dir = self
                 .data
                 .host_dir
@@ -1107,7 +1149,17 @@ impl HostKernel {
             result.record.self_check_attempted = true;
         }
         runs.push(result.record.clone());
-        if let Err(err) = self.persist_run_records(&runs) {
+        let mut private = self.native_sync_private.clone();
+        if let Some(context) = result.native_sync_context.take() {
+            private.insert(
+                result.record.id.clone(),
+                native_sync::NativeSyncPrivate {
+                    revision: 0,
+                    context,
+                },
+            );
+        }
+        if let Err(err) = self.persist_run_records_with_private(&runs, &private) {
             self.note_run_persistence_write_error(&err);
             if let Some(session) = result.session.as_ref() {
                 session.stop();
@@ -1123,6 +1175,7 @@ impl HostKernel {
             });
         }
         self.runs = runs;
+        self.native_sync_private = private;
         self.run_persistence_write_error = None;
         let run_id = result.record.id.clone();
         self.pending_events.push(HostEvent::RunStatusChanged {
@@ -1242,8 +1295,8 @@ impl HostKernel {
 
     pub(crate) fn load_persisted_runs(&mut self) -> Vec<String> {
         let was_recovering = self.run_persistence_recovery.is_some();
-        let mut runs = match self.read_persisted_runs() {
-            Ok(Some(runs)) => runs,
+        let (mut runs, mut private) = match self.read_persisted_runs() {
+            Ok(Some(records)) => records,
             Ok(None) if !was_recovering => {
                 self.run_persistence_recovery = None;
                 return Vec::new();
@@ -1273,6 +1326,13 @@ impl HostKernel {
                 crashed_ids.push(run.id.clone());
                 persisted_changes = true;
             }
+            if let Some(native_sync) = &mut run.native_sync {
+                if native_sync.state == NativeSyncState::Syncing {
+                    native_sync.state = NativeSyncState::Pending;
+                    native_sync.next_retry_at_ms = Some(self.now_ms);
+                    persisted_changes = true;
+                }
+            }
             if !run.is_archived()
                 && !self
                     .projects
@@ -1281,11 +1341,18 @@ impl HostKernel {
             {
                 run.pinned_at_ms = None;
                 run.archived_at_ms = Some(self.now_ms);
+                let snapshot = run.clone();
+                run.native_sync = Some(self.prepare_native_sync_intent(
+                    &snapshot,
+                    &mut private,
+                    NativeSyncDesiredState::Archived,
+                    self.now_ms,
+                ));
                 persisted_changes = true;
             }
         }
         if persisted_changes {
-            if let Err(err) = self.persist_run_records(&runs) {
+            if let Err(err) = self.persist_run_records_with_private(&runs, &private) {
                 self.set_run_persistence_recovery(
                     RunPersistenceFailureKind::WriteFailed,
                     err.to_string(),
@@ -1294,8 +1361,10 @@ impl HostKernel {
             }
         }
         self.runs = runs;
+        self.native_sync_private = std::mem::take(&mut private);
         self.run_persistence_recovery = None;
         self.run_persistence_write_error = None;
+        self.reharvest_persisted_hook_state();
         crashed_ids
     }
 
@@ -1306,7 +1375,15 @@ impl HostKernel {
         self.load_persisted_runs()
     }
 
-    fn read_persisted_runs(&self) -> Result<Option<Vec<RunSummary>>, RunPersistenceRecovery> {
+    fn read_persisted_runs(
+        &self,
+    ) -> Result<
+        Option<(
+            Vec<RunSummary>,
+            BTreeMap<String, native_sync::NativeSyncPrivate>,
+        )>,
+        RunPersistenceRecovery,
+    > {
         let path = self.runs_path();
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -1321,10 +1398,24 @@ impl HostKernel {
         let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|err| {
             run_persistence_recovery(RunPersistenceFailureKind::InvalidJson, err.to_string())
         })?;
-        let runs = serde_json::from_value::<Vec<RunSummary>>(value).map_err(|err| {
-            run_persistence_recovery(RunPersistenceFailureKind::InvalidRunRecord, err.to_string())
-        })?;
-        Ok(Some(runs))
+        let records =
+            serde_json::from_value::<Vec<native_sync::StoredRunRecord>>(value).map_err(|err| {
+                run_persistence_recovery(
+                    RunPersistenceFailureKind::InvalidRunRecord,
+                    err.to_string(),
+                )
+            })?;
+        let mut private = BTreeMap::new();
+        let runs = records
+            .into_iter()
+            .map(|record| {
+                if let Some(native_sync_private) = record.native_sync_private {
+                    private.insert(record.summary.id.clone(), native_sync_private);
+                }
+                record.summary
+            })
+            .collect();
+        Ok(Some((runs, private)))
     }
 
     fn set_run_persistence_recovery(&mut self, kind: RunPersistenceFailureKind, detail: String) {

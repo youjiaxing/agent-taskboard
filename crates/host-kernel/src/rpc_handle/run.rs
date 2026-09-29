@@ -181,6 +181,14 @@ impl HostKernel {
                         .map(ToOwned::to_owned),
                 })
             }
+            "retryNativeSync" => {
+                if let Some(outcome) = self.forward_if_remote(&request)? {
+                    return Ok(outcome);
+                }
+                self.dispatch(Command::RetryNativeSync {
+                    run_id: required_string(&request, "runId")?,
+                })
+            }
             "retryRunPersistenceLoad" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);

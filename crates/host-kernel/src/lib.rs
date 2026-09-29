@@ -10,6 +10,7 @@ mod kernel;
 mod launch;
 mod launch_env;
 mod local_rpc;
+mod native_sync;
 mod owner;
 mod pairing;
 mod persist;
@@ -23,11 +24,11 @@ mod tracker;
 mod tracker_seam;
 mod usage;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 pub use advance::{PendingConfirmation, DEFAULT_RESTORE_DELAY_MS, PENDING_CONFIRM_MS};
@@ -35,9 +36,9 @@ pub use agent::{
     builtin_agents, probe_binary, AgentConfigDiscovery, AgentField, AgentFieldKind,
     AgentFieldOptionFilter, AgentPort, AgentSummary, AntigravityAdapter, ClaudeAdapter,
     CodexAdapter, CompletionHookPlan, CompletionSignals, GrokAdapter, IntentOption, MemoryAgent,
-    PrefillSource, ProbeResult, RunLaunchConfig, RunLaunchForm, ANTIGRAVITY_BIN, ANTIGRAVITY_ID,
-    ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID, CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID,
-    CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
+    NativeSyncLaunchContext, PrefillSource, ProbeResult, RunLaunchConfig, RunLaunchForm,
+    ANTIGRAVITY_BIN, ANTIGRAVITY_ID, ANTIGRAVITY_NAME, CLAUDE_BIN, CLAUDE_CODE_ID,
+    CLAUDE_CODE_NAME, CODEX_BIN, CODEX_ID, CODEX_NAME, GROK_BIN, GROK_BUILD_ID, GROK_BUILD_NAME,
 };
 pub use board::{
     clamp_recent_limit, BoardColumns, BoardEmptyReason, BoardSnapshot, CenterView, DependencyGraph,
@@ -62,7 +63,10 @@ pub use persist::DataLayout;
 pub use project::ProjectInference;
 pub use protocol::*;
 pub use refresh::DEFAULT_REFRESH_INTERVAL_MS;
-pub use run::{QuitOffer, RunEndedReason, RunStatus, RunSummary, UpdateInstallGate};
+pub use run::{
+    NativeSyncDesiredState, NativeSyncState, NativeSyncSummary, QuitOffer, RunEndedReason,
+    RunStatus, RunSummary, UpdateInstallGate,
+};
 pub use session::{
     AgentSession, MemorySession, MemorySessionFactory, PtyChunk, PtySessionFactory, SessionFactory,
     SpawnRequest,
@@ -173,6 +177,10 @@ pub struct HostKernel {
     usage_query: usage::UsageQuery,
     usage_samples: Vec<TelemetrySample>,
     update_installing: bool,
+    native_sync_private: BTreeMap<String, native_sync::NativeSyncPrivate>,
+    native_sync_jobs: mpsc::Sender<native_sync::NativeSyncJob>,
+    native_sync_results: mpsc::Receiver<native_sync::NativeSyncResult>,
+    native_sync_inflight: BTreeSet<String>,
 }
 
 impl HostKernel {
@@ -207,6 +215,7 @@ impl HostKernel {
             sessions,
         } = ports;
         let data = DataLayout::prepare(&request.app_local_data_dir, &request.app_log_dir)?;
+        let native_sync_queue = native_sync::spawn_worker(data.host_dir.join("native-sync"));
         let settings = load_or_init_host_settings(&data.host_settings_path)?;
         let host_id = settings.id;
         let paired_clients = load_paired_clients(&data.host_secrets_path)?;
@@ -371,6 +380,10 @@ impl HostKernel {
             usage_query: usage::UsageQuery::default(),
             usage_samples: Vec::new(),
             update_installing: false,
+            native_sync_private: BTreeMap::new(),
+            native_sync_jobs: native_sync_queue.jobs,
+            native_sync_results: native_sync_queue.results,
+            native_sync_inflight: BTreeSet::new(),
         };
         let project_ids: Vec<String> = host
             .projects
@@ -392,6 +405,7 @@ impl HostKernel {
             if let Some(project_id) = host.focused_project_id.clone() {
                 host.refresh_project(&project_id, RefreshTrigger::Immediate);
             }
+            host.reconcile_native_sync();
         } else if !host.focused_host_id.is_empty() {
             let focused = host.focused_host_id.clone();
             let _ = host.refresh_remote_view(&focused);

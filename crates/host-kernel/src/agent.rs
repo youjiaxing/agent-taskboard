@@ -24,6 +24,22 @@ pub(crate) fn read_completion_signals(sink: &Path) -> CompletionSignals {
     hooks::read_signals(sink)
 }
 
+pub(crate) fn executable_in_for_sync(dir: &Path, bin: &str) -> Option<PathBuf> {
+    executable_in(dir, bin)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSyncLaunchContext {
+    pub program: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv_prefix: Vec<String>,
+    pub cwd: PathBuf,
+    pub fallback_cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
+}
+
 pub fn builtin_agents() -> Vec<Arc<dyn AgentPort>> {
     vec![
         Arc::new(GrokAdapter),
@@ -193,6 +209,18 @@ pub trait AgentPort: Send + Sync {
     }
 
     fn native_session_id(&self) -> Option<String> {
+        None
+    }
+
+    fn native_sync_supported(&self) -> bool {
+        false
+    }
+
+    fn native_sync_context(
+        &self,
+        _executable: &Path,
+        _env: &LaunchEnvironment,
+    ) -> Option<NativeSyncLaunchContext> {
         None
     }
 

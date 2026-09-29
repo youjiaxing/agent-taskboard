@@ -190,6 +190,18 @@ impl HostKernel {
         }
     }
 
+    pub(crate) fn reharvest_persisted_hook_state(&mut self) {
+        let ids = self
+            .runs
+            .iter()
+            .filter(|run| run.hook_dir.is_some())
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            let _ = self.harvest_run_signals(&id);
+        }
+    }
+
     pub(crate) fn harvest_run_signals(&mut self, run_id: &str) -> Result<(), KernelError> {
         let session_signals = self
             .live
@@ -219,11 +231,43 @@ impl HostKernel {
             run.session_end || session_signals.session_end || file_signals.session_end;
         let stop_failure =
             run.stop_failure || session_signals.stop_failure || file_signals.stop_failure;
-        if run.session_end == session_end && run.stop_failure == stop_failure {
+        let native_session_id = run
+            .native_session_id
+            .clone()
+            .or(session_signals.session_id)
+            .or(file_signals.session_id);
+        if run.session_end == session_end
+            && run.stop_failure == stop_failure
+            && run.native_session_id == native_session_id
+        {
             return Ok(());
         }
         run.session_end = session_end;
         run.stop_failure = stop_failure;
+        run.native_session_id = native_session_id;
+        if run.native_session_id.is_some()
+            && run
+                .native_sync
+                .as_ref()
+                .is_some_and(|sync| sync.state == NativeSyncState::MissingNativeSession)
+        {
+            let desired_state = run
+                .native_sync
+                .as_ref()
+                .map(|sync| sync.desired_state)
+                .unwrap_or(if run.is_archived() {
+                    NativeSyncDesiredState::Archived
+                } else {
+                    NativeSyncDesiredState::Active
+                });
+            run.native_sync = Some(NativeSyncSummary {
+                desired_state,
+                state: NativeSyncState::Pending,
+                attempts: 0,
+                next_retry_at_ms: Some(self.now_ms),
+                last_error: None,
+            });
+        }
         self.commit_run_records(runs)
     }
 
