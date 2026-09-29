@@ -2,7 +2,6 @@ import { chromium } from "playwright";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  assertNecessaryTextContrast,
   assertShellRegionsDoNotOverlap,
   createVisualAssert,
   installDeterministicHostProtocol,
@@ -73,4 +72,4 @@ export async function createBoardSession() {
   session.close = async () => { await browser.close(); };
   return session;
 }
-export { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap, installDeterministicHostProtocol };
+export { assertShellRegionsDoNotOverlap, installDeterministicHostProtocol };

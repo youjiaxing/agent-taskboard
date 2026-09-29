@@ -595,7 +595,7 @@ export function workspaceRunHistory(
   options: {
     showIdentity?: boolean;
     organizationSnapshot?: Snapshot;
-    organizationMode?: "text" | "menu";
+    organizationMode?: "icons" | "text" | "menu";
     currentRunId?: string;
     action?: string;
     issueActions?: { issueId: string; latestBoundRunId?: string; executionStopped: boolean };
@@ -605,7 +605,7 @@ export function workspaceRunHistory(
   if (!runs.length) return `<p class="muted">${escapeHtml(labels.emptyRuns)}</p>`;
   const organizationLabels = runOrganizationLabels();
   const displayRuns = orderRunsForDisplay([...runs].reverse());
-  return `<div class="workspace-run-history">${displayRuns.map((run) => {
+  return `<div class="workspace-run-history" tabindex="-1">${displayRuns.map((run) => {
     const status = run.status === "ended" ? copy.runGroupEnded : run.waitingForUser ? copy.waiting : copy.running;
     const startedAt = run.startedAtMs ? new Date(run.startedAtMs).toLocaleString(effectiveClientLanguage()) : "";
     const taskSummary = run.taskSummary?.trim();
@@ -704,6 +704,7 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
     ${section("issue", labels.issue, issueBody(copy, board, issue, true, { collapsibleRelations: true }), "detail-scroll")}
     ${section("runs", labels.runs, workspaceRunHistory(copy, runs, {
       organizationSnapshot: snap,
+      organizationMode: "icons",
       currentRunId: workspaceRun(snap)?.id,
       action: "view-issue-run",
       issueActions: {
@@ -724,7 +725,7 @@ export function focusWorkspaceProjectRail(copy: ShellCopy, snap: Snapshot): stri
   return `<aside class="issue-detail fixed-right-rail workspace-right-rail project-run-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}
     <header class="detail-sticky"><div class="detail-hd">${escapeHtml(project.name)}</div><p class="muted">${escapeHtml(project.localPath)}</p></header>
-    <div class="workspace-rail-section-body"><h3>${escapeHtml(labels.projectRuns)}</h3>${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, currentRunId: workspaceRun(snap)?.id })}</div>
+    <div class="workspace-rail-section-body"><h3>${escapeHtml(labels.projectRuns)}</h3>${workspaceRunHistory(copy, runs, { showIdentity: true, organizationSnapshot: snap, organizationMode: "icons", currentRunId: workspaceRun(snap)?.id })}</div>
   </aside>`;
 }
 

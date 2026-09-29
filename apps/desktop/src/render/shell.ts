@@ -10,11 +10,11 @@ import { appearancePreferenceLabel, startupCopy, type StartupCopy } from "../sta
 import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
-import { orderRunsForDisplay, runOrganizationActionDescriptors, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
+import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = orderRunsForDisplay((snap.runs ?? []).filter((run) => run.projectId === project.id));
-  return `<div class="project-block" data-project="${escapeHtml(project.id)}">
+  return `<div class="project-block" data-project="${escapeHtml(project.id)}" tabindex="-1">
     ${projectRow(copy, project, focusedId)}
     ${runs.map((run) => runRow(copy, run, snap)).join("")}
   </div>`;
@@ -139,7 +139,6 @@ function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapsho
       data: { id: run.id },
     });
   }
-  actions.push(...runOrganizationActionDescriptors(snap, run));
   return actions;
 }
 
@@ -168,6 +167,7 @@ export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string
       <span class="sr-only">${escapeHtml(accessibleLabel)}</span>
     </button>
     <div class="run-row-actions" role="group" aria-label="${escapeHtml(runMenuLabel)}">
+      ${runOrganizationActions(snap, run, "icons")}
       <div class="run-row-menu-wrap">
         ${button(
           { id: "run-menu", label: organizationLabels.runActions, ariaLabel: runMenuLabel, data: { id: run.id } },
@@ -406,7 +406,7 @@ export function hostOverviewPage(copy: ShellCopy, snap: Snapshot, includeOrganiz
             .map(
               ([id, title, runs]) => `<section class="overview-group" data-run-group="${id}">
                 <div class="lane-hd">${escapeHtml(title)} <span>${runs.length}</span></div>
-                <div class="run-thumbnails">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap, includeOrganization)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
+                <div class="run-thumbnails" tabindex="-1">${runs.length ? runs.map((run) => runThumbnail(copy, run, snap, includeOrganization)).join("") : `<p class="lane-empty">${escapeHtml(copy.noItems)}</p>`}</div>
               </section>`,
             )
             .join("")}
@@ -451,13 +451,13 @@ export function overviewProjectCard(copy: ShellCopy, project: Project): string {
 export function runThumbnail(copy: ShellCopy, run: RunSummary, snap: Snapshot, includeOrganization = true): string {
   const project = snap.projects.find((item) => item.id === run.projectId);
   const action = run.recentAction?.trim() || run.failure?.trim() || "";
-  return `<article class="run-thumbnail">
+  return `<article class="run-thumbnail" data-run="${escapeHtml(run.id)}">
     <button type="button" class="run-thumbnail-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
       <span class="run-project">${escapeHtml(project?.name ?? run.projectId)}</span>
       <b>${escapeHtml(runIdentity(copy, run))}</b>
       <span>${escapeHtml(run.agentName)}${action ? ` · ${escapeHtml(action)}` : ""}</span>
     </button>
-    ${includeOrganization ? runOrganizationActions(snap, run) : ""}
+    ${includeOrganization ? runOrganizationActions(snap, run, "icons") : ""}
   </article>`;
 }
 

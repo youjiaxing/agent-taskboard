@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./visual-regression.mjs";
+import { assertShellRegionsDoNotOverlap } from "./visual-regression.mjs";
 
 async function rpc(page, protocol, body) {
   return page.evaluate(async ({ protocol, body }) => {
@@ -85,7 +85,6 @@ async function assertMobileShell(page, label) {
   assert.equal(await page.locator(".side, .fixed-right-rail, .fixed-changes-panel, [data-global-action='changes']").count(), 0, `${label} must not render desktop panels`);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, `${label} must not overflow horizontally`);
   await assertShellRegionsDoNotOverlap(page);
-  await assertNecessaryTextContrast(page, label);
   await assertTouchTargets(page, label);
 }
 

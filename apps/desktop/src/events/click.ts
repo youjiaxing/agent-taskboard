@@ -174,6 +174,58 @@ function runOrganizationActionKey(action: RunOrganizationAction): string {
   return `restore:${action.runId}`;
 }
 
+function runOrganizationPending(runId: string): boolean {
+  return ui.runOrganizationPending.has(`pin:${runId}`)
+    || ui.runOrganizationPending.has(`archive:${runId}`);
+}
+
+type RunOrganizationFocus = {
+  actionId: "set-run-pinned" | "archive-run";
+  runId: string;
+  fallbackRunId: string;
+};
+
+function captureRunOrganizationFocus(action: RunOrganizationAction): RunOrganizationFocus | null {
+  if (action.op !== "setRunPinned" && action.op !== "archiveRun") return null;
+  const active = document.activeElement as HTMLElement | null;
+  if (!active?.matches("[data-run-organization]")) return null;
+  const row = active.closest<HTMLElement>(".run-row[data-run], .run-thumbnail[data-run], .workspace-run-history-item[data-id]");
+  const list = row?.parentElement;
+  if (!row || !list) return null;
+  const rows = [...list.children].filter((candidate): candidate is HTMLElement =>
+    candidate instanceof HTMLElement
+      && candidate.matches(".run-row[data-run], .run-thumbnail[data-run], .workspace-run-history-item[data-id]"),
+  );
+  const index = rows.indexOf(row);
+  const fallback = rows[index + 1] ?? rows[index - 1];
+  return {
+    actionId: action.op === "setRunPinned" ? "set-run-pinned" : "archive-run",
+    runId: action.runId,
+    fallbackRunId: fallback?.dataset.run ?? fallback?.dataset.id ?? "",
+  };
+}
+
+function restoreRunOrganizationFocus(focus: RunOrganizationFocus | null): void {
+  if (!focus) return;
+  const direct = ui.app.querySelector<HTMLButtonElement>(
+    `[data-run-organization="${focus.actionId}"][data-id="${CSS.escape(focus.runId)}"]`,
+  );
+  if (direct && !direct.disabled) {
+    direct.focus();
+    return;
+  }
+  if (focus.fallbackRunId) {
+    const fallback = ui.app.querySelector<HTMLButtonElement>(
+      `[data-run="${CSS.escape(focus.fallbackRunId)}"] [data-run-organization], [data-id="${CSS.escape(focus.fallbackRunId)}"] [data-run-organization]`,
+    );
+    if (fallback && !fallback.disabled) {
+      fallback.focus();
+      return;
+    }
+  }
+  ui.app.querySelector<HTMLElement>(".side .project-block, .run-thumbnails, .workspace-run-history")?.focus();
+}
+
 function clearArchivedRunClientReferences(runId: string, wasFocused: boolean): void {
   if (ui.clientView.returnPoint?.runId === runId) ui.clientView.returnPoint.runId = null;
   for (const returnPoint of ui.returnPointHistory) {
@@ -216,6 +268,8 @@ async function performRunOrganizationAction(action: RunOrganizationAction): Prom
   if (!ui.snapshot?.capabilities.runOrganization) return false;
   const key = runOrganizationActionKey(action);
   if (ui.runOrganizationPending.has(key)) return false;
+  if ((action.op === "setRunPinned" || action.op === "archiveRun") && runOrganizationPending(action.runId)) return false;
+  const focus = captureRunOrganizationFocus(action);
   ui.runOrganizationRetry = null;
   ui.runOrganizationPending.add(key);
   const wasFocused = ui.snapshot.focusedRunId === action.runId;
@@ -240,6 +294,7 @@ async function performRunOrganizationAction(action: RunOrganizationAction): Prom
   } finally {
     ui.runOrganizationPending.delete(key);
     render();
+    restoreRunOrganizationFocus(focus);
   }
 }
 

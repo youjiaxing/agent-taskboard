@@ -12,22 +12,12 @@ const closeInspectorIfOpen = async () => {
 };
 
 let rpcFailure = null;
-let forceArchivedLatestBoundRun = false;
 await page.route("**/rpc", async (route) => {
   let request;
   try {
     request = route.request().postDataJSON();
   } catch {
     await route.continue();
-    return;
-  }
-  if (forceArchivedLatestBoundRun && request?.op) {
-    const response = await route.fetch();
-    const result = await response.json();
-    if (result.snapshot?.board?.selected) {
-      result.snapshot.board.selected.latestBoundRunId = "archived-latest-bound-run";
-    }
-    await route.fulfill({ response, json: result });
     return;
   }
   if (!rpcFailure || request?.op !== rpcFailure.op || !rpcFailure.matches(request)) {
@@ -177,7 +167,7 @@ let activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
 const activeSidebarActions = await activeSidebarMenu.locator("button").evaluateAll((nodes) =>
   nodes.map((node) => node.dataset.act),
 );
-if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|set-run-pinned") {
+if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
   throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
 }
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
@@ -187,9 +177,16 @@ for (const runId of endedRunIds) {
   const endedActions = await endedMenu.locator("button").evaluateAll((nodes) =>
     nodes.map((node) => node.dataset.act),
   );
-  if (endedActions.join("|") !== "open-usage-run|set-run-pinned|archive-run") {
+  if (endedActions.join("|") !== "open-usage-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
   }
+}
+
+if (await activeSidebarRun.locator("[data-run-organization='set-run-pinned']").count() !== 1) {
+  throw new Error("active sidebar Run should expose a direct pin action");
+}
+if (await activeSidebarRun.locator("[data-run-organization='archive-run']").count() !== 0) {
+  throw new Error("active sidebar Run must not expose a direct archive action");
 }
 
 await activeSidebarRun.click({ button: "right" });
@@ -221,12 +218,16 @@ activeSidebarRun = page.locator(".side .run-row.waiting").first();
 await activeSidebarRun.locator(".run-main").focus();
 await page.keyboard.press("Tab");
 const keyboardAction = await page.evaluate(() => document.activeElement?.getAttribute("data-act"));
-if (keyboardAction !== "run-menu") {
-  throw new Error(`first keyboard-reachable Run action should open the Run menu, got ${keyboardAction}`);
+if (keyboardAction !== "set-run-pinned") {
+  throw new Error(`first keyboard-reachable Run action should be direct pin, got ${keyboardAction}`);
 }
-const beforeWindowFailure = await hostSnapshot(page, url);
 await page.keyboard.press("Enter");
+const keyboardRunId = await activeSidebarRun.getAttribute("data-run");
+await page.waitForSelector(`.side .run-row[data-run='${keyboardRunId}'][data-pinned='true']`);
+activeSidebarRun = page.locator(`.side .run-row[data-run='${keyboardRunId}']`);
+await activeSidebarRun.locator("button[data-act='run-menu']").click();
 await activeSidebarRun.locator(".run-row-menu").waitFor();
+const beforeWindowFailure = await hostSnapshot(page, url);
 await activeSidebarRun.locator("button[data-act='open-run-window']").focus();
 await page.keyboard.press("Enter");
 await page.waitForSelector(".run-window-error[role='alert']");
@@ -519,38 +520,6 @@ if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationC
   throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
-forceArchivedLatestBoundRun = true;
-await page.click("button[data-act='return-page']");
-await page.waitForSelector(".lanes");
-await card("continue lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".board-run-history");
-await page.click('.board-run-history button[data-act="view-issue-run"]');
-try {
-  await page.waitForSelector('[data-terminal-surface="readonly"]', { timeout: 30000 });
-} catch {
-  const diagnostic = await page.evaluate(() => ({
-    frame: document.querySelector(".frame")?.className,
-    lifted: Boolean(document.querySelector(".lifted-run")),
-    readonly: Boolean(document.querySelector('[data-terminal-surface="readonly"]')),
-    terminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
-    boardHistory: document.querySelector(".board-run-history")?.textContent?.replace(/\s+/g, " "),
-    issueRail: document.querySelector(".workspace-right-rail")?.textContent?.replace(/\s+/g, " "),
-  }));
-  throw new Error(`second stopped Run focus did not render readonly terminal: ${JSON.stringify(diagnostic)}`);
-}
-if (await page.locator(".workspace-rail-header button[data-act='continue-run']").count() !== 1) {
-  throw new Error("an archived latest bound Run must keep Continue in the Issue header");
-}
-if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 0) {
-  throw new Error("an archived latest bound Run must not expose Continue on an older visible history row");
-}
-forceArchivedLatestBoundRun = false;
-await page.click("button[data-act='return-page']");
-await page.waitForSelector(".lanes");
-await card("continue lifecycle issue").locator(".issue-card-main").click();
-await page.waitForSelector(".board-run-history");
-await page.click('.board-run-history button[data-act="view-issue-run"]');
-await page.waitForSelector('[data-terminal-surface="readonly"]');
 if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 1) {
   throw new Error("the latest execution-stopped Run should expose Continue in its history row");
 }

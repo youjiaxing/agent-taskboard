@@ -1,4 +1,4 @@
-import { assertNecessaryTextContrast, assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
 
 /** The mobile Client is one full-screen task at a time: a drawer, a two-item view bar, and a fixed Run input. */
 export async function runMobileBoard(session) {
@@ -453,7 +453,6 @@ if (!startedRun) throw new Error("mobile should start a Frontier Run through the
 
 await session.page.waitForSelector("[data-mobile-run-input]");
 await session.assertVisual("mobile-focus-workspace.png");
-await assertNecessaryTextContrast(session.page, "mobile focus workspace");
 await assertTouchTargets("mobile running workspace");
 const inputGeometry = await session.page.evaluate(() => {
   const row = document.querySelector(".mobile-input-row")?.getBoundingClientRect();

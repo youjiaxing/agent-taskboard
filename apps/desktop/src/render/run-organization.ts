@@ -171,11 +171,12 @@ export function runOrganizationActionDescriptors(
   const pinLabel = pinned ? labels.unpin : labels.pin;
   const pinPending = ui.runOrganizationPending.has(actionKey("pin", run.id));
   const archivePending = ui.runOrganizationPending.has(actionKey("archive", run.id));
+  const organizationPending = pinPending || archivePending;
   const pin: ActionDescriptor = {
     id: "set-run-pinned",
     label: pinLabel,
     icon: pinned ? "↓" : "↑",
-    disabled: !writable,
+    disabled: !writable || organizationPending,
     busy: pinPending,
     pressed: pinned,
     data: { id: run.id, pinned: pinned ? "false" : "true" },
@@ -185,7 +186,7 @@ export function runOrganizationActionDescriptors(
         id: "archive-run",
         label: labels.archiveRun,
         icon: "▣",
-        disabled: !writable,
+        disabled: !writable || organizationPending,
         busy: archivePending,
         data: { id: run.id },
       }
@@ -214,7 +215,7 @@ export function runOrganizationActions(
   const renderAction = (action: ActionDescriptor) => mode === "icons"
     ? iconButton(action, {
         className: "run-row-action",
-        attributes: { title: action.label, "aria-pressed": action.pressed, "data-run-organization": action.id, "data-disabled-reason": disabledReason || undefined },
+        attributes: { title: disabledReason || action.label, "aria-pressed": action.pressed, "data-run-organization": action.id, "data-disabled-reason": disabledReason || undefined },
       })
     : button(action, {
         variant: "ghost",
