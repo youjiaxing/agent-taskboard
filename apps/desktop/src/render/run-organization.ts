@@ -185,7 +185,7 @@ export function runOrganizationActionDescriptors(
     ? {
         id: "archive-run",
         label: labels.archiveRun,
-        icon: "▣",
+        iconName: "archive",
         disabled: !writable || organizationPending,
         busy: archivePending,
         data: { id: run.id },
