@@ -57,6 +57,64 @@ export function runIdentity(copy: ShellCopy, run: RunSummary): string {
   return run.unbound || !run.issueId ? copy.unboundIssue : run.issueId;
 }
 
+type RunAgentVisual = {
+  shortLabel: string;
+  className: string;
+};
+
+function runAgentVisual(run: RunSummary): RunAgentVisual {
+  const agentId = run.agentId.toLowerCase();
+  const agentName = run.agentName.trim();
+  if (agentId === "codex" || agentName.toLowerCase().includes("codex")) {
+    return { shortLabel: "Cx", className: "codex" };
+  }
+  if (agentId.includes("grok") || agentName.toLowerCase().includes("grok")) {
+    return { shortLabel: "Gk", className: "grok" };
+  }
+  if (agentId.includes("gemini") || agentName.toLowerCase().includes("gemini")) {
+    return { shortLabel: "Ge", className: "gemini" };
+  }
+  if (agentId.includes("claude") || agentName.toLowerCase().includes("claude")) {
+    return { shortLabel: "Cl", className: "claude" };
+  }
+  if (agentId.includes("antigravity") || agentName.toLowerCase().includes("antigravity")) {
+    return { shortLabel: "Ag", className: "antigravity" };
+  }
+  const words = agentName.split(/\s+/).filter(Boolean);
+  const fallback = words.length > 1
+    ? `${words[0][0] ?? ""}${words[1][0] ?? ""}`
+    : `${words[0]?.[0] ?? "A"}${words[0]?.[1] ?? ""}`;
+  return { shortLabel: fallback.slice(0, 2).toUpperCase(), className: "other" };
+}
+
+function runTitle(run: RunSummary): string {
+  const summary = run.taskSummary?.trim();
+  const issueBoundToTracker = !run.unbound && Boolean(run.issueId);
+  const displaySummary = issueBoundToTracker
+    ? summary?.replace(/^#\d+\s+/, "").trim()
+    : summary;
+  return displaySummary || (effectiveClientLanguage() === "zh-CN" ? "未命名 Run" : "Unnamed Run");
+}
+
+function runIssueNumber(snap: Snapshot, run: RunSummary): string {
+  const project = snap.projects.find((candidate) => candidate.id === run.projectId);
+  if (project?.tracker !== "github" || run.unbound || !run.issueId) return "";
+  const number = run.issueId.match(/#(\d+)$/)?.[1];
+  return number ? `#${number}` : "";
+}
+
+function runStatus(copy: ShellCopy, run: RunSummary): { className: string; label: string } {
+  if (run.waitingForUser && run.status !== "ended") {
+    return { className: "waiting", label: copy.waiting };
+  }
+  if (run.endedReason && run.endedReason !== "exited") {
+    return { className: "execution-stopped", label: copy.executionStopped };
+  }
+  if (run.status === "starting") return { className: "starting", label: copy.startRunPending };
+  if (run.status === "running") return { className: "running", label: copy.running };
+  return { className: "ended", label: copy.runGroupEnded };
+}
+
 function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapshot): ActionDescriptor[] {
   const localCopy = startupCopy(effectiveClientLanguage());
   const actions: ActionDescriptor[] = [];
@@ -86,36 +144,28 @@ function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapsho
 }
 
 export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string {
-  const identity = runIdentity(copy, run);
+  const title = runTitle(run);
+  const issueNumber = runIssueNumber(snap, run);
+  const agent = runAgentVisual(run);
+  const status = runStatus(copy, run);
   const organizationLabels = runOrganizationLabels();
-  const stateClass =
-    run.waitingForUser && run.status !== "ended"
-      ? "waiting"
-      : run.endedReason && run.endedReason !== "exited"
-        ? "execution-stopped"
-        : run.status;
-  const stateTag =
-    run.waitingForUser && run.status !== "ended"
-      ? copy.waiting
-      : run.endedReason && run.endedReason !== "exited"
-        ? copy.executionStopped
-        : run.status === "running"
-          ? copy.running
-          : "";
   const pinMarker = run.pinnedAtMs != null
     ? `<span class="run-pin-marker" role="img" aria-label="${escapeHtml(organizationLabels.pinnedMarker)}" title="${escapeHtml(organizationLabels.pinnedMarker)}">↑</span>`
     : "";
-  const runMenuLabel = `${organizationLabels.runMenu} · ${run.agentName} · ${identity}`;
+  const runMenuLabel = `${organizationLabels.runMenu} · ${run.agentName} · ${title}`;
   const menuOpen = ui.runMenuId === run.id;
   const details = [run.recentAction, run.failure, run.isolationNote]
     .filter((value): value is string => Boolean(value?.trim()))
     .join(" · ");
-  return `<div class="run-row ${run.id === snap.focusedRunId ? "active" : ""} ${escapeHtml(stateClass)} ${run.pinnedAtMs != null ? "pinned" : ""} ${menuOpen ? "menu-open" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}"${details ? ` title="${escapeHtml(details)}"` : ""}>
-    <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}">
-      <b title="${escapeHtml(run.agentName)}">${escapeHtml(run.agentName)}</b>
+  const accessibleLabel = [title, run.agentName, issueNumber, status.label].filter(Boolean).join(" · ");
+  return `<div class="run-row ${run.id === snap.focusedRunId ? "active" : ""} ${escapeHtml(status.className)} ${run.pinnedAtMs != null ? "pinned" : ""} ${menuOpen ? "menu-open" : ""}" data-run="${escapeHtml(run.id)}" data-pinned="${run.pinnedAtMs != null}"${details ? ` title="${escapeHtml(details)}"` : ""}>
+    <button type="button" class="run-main" data-act="focus-run" data-id="${escapeHtml(run.id)}" aria-label="${escapeHtml(accessibleLabel)}">
+      <span class="run-agent-mark ${escapeHtml(agent.className)}" aria-hidden="true" title="${escapeHtml(run.agentName)}">${escapeHtml(agent.shortLabel)}</span>
       ${pinMarker}
-      <span class="run-identity">${escapeHtml(identity)}</span>
-      ${stateTag ? `<span class="run-state" title="${escapeHtml(stateTag)}">${escapeHtml(stateTag)}</span>` : ""}
+      <span class="run-title" data-run-title title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+      ${issueNumber ? `<span class="run-number" title="${escapeHtml(issueNumber)}">${escapeHtml(issueNumber)}</span>` : ""}
+      <span class="run-status ${escapeHtml(status.className)}" role="img" aria-label="${escapeHtml(status.label)}" title="${escapeHtml(status.label)}"></span>
+      <span class="sr-only">${escapeHtml(accessibleLabel)}</span>
     </button>
     <div class="run-row-actions" role="group" aria-label="${escapeHtml(runMenuLabel)}">
       <div class="run-row-menu-wrap">

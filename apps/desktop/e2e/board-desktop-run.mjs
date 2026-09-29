@@ -311,8 +311,9 @@ const unboundRun = await session.page.evaluate(async (protocol) => {
 if (!unboundRun?.id) throw new Error("new unbound Run missing from Host snapshot");
 const runRow = session.page.locator(`.side .run-row[data-run='${unboundRun.id}']`);
 const runRowText = await runRow.textContent();
-if (!runRowText?.includes("Grok Build") || (!runRowText.includes("未绑定 Issue") && !runRowText.includes("Unbound Issue"))) {
-  throw new Error(`unbound Run row missing identity, got ${runRowText}`);
+const unboundAgentMark = await runRow.locator(".run-agent-mark").textContent();
+if (!runRowText?.includes("e2e unbound run") || unboundAgentMark !== "Gk" || await runRow.locator(".run-number").count() !== 0) {
+  throw new Error(`unbound Run row should keep its title without an Issue placeholder, got ${JSON.stringify({ text: runRowText, agent: unboundAgentMark })}`);
 }
 const unboundRunId = unboundRun.id;
 await runRow.locator(".run-main").click();
