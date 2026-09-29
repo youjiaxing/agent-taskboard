@@ -201,7 +201,14 @@
   border: 0;
   background: transparent;
   text-align: left;
-  padding: 0 calc(var(--space-48) + var(--space-48) + var(--space-12)) 0 var(--space-8);
+  padding: 0 var(--space-8);
+}
+
+.run-row:hover .run-main,
+.run-row:focus-within .run-main,
+.run-row.active .run-main,
+.run-row.menu-open .run-main {
+  padding-right: calc(var(--space-48) + var(--space-48) + var(--space-12));
 }
 
 .run-agent-mark {
