@@ -82,63 +82,88 @@ try {
 } finally {
   await activeSidebarRun.evaluate((row) => row.classList.remove("active"));
 }
-const runRowHeights = await page.$$eval(".side .run-row", (nodes) =>
-  nodes.map((node) => Math.round(node.getBoundingClientRect().height)),
-);
-if (runRowHeights.some((height) => height > 34)) {
-  throw new Error(`sidebar Run rows should stay single-line, got heights: ${JSON.stringify(runRowHeights)}`);
-}
-const longAgentLayout = await activeSidebarRun.evaluate((row) => {
-  const main = row.querySelector(".run-main");
-  const name = main?.querySelector("b");
-  const identity = main?.querySelector(".run-identity");
-  const state = main?.querySelector(".run-state");
-  if (!(main instanceof HTMLElement) || !(name instanceof HTMLElement) || !(identity instanceof HTMLElement) || !(state instanceof HTMLElement)) {
-    throw new Error("waiting Run row should expose its name, identity, and state");
+const sidebarWidths = [216, 248, 320];
+for (const width of sidebarWidths) {
+  await page.evaluate((sidebarWidth) => {
+    document.querySelector(".frame")?.style.setProperty("--client-sidebar-width", `${sidebarWidth}px`);
+  }, width);
+  const layout = await activeSidebarRun.evaluate((row) => {
+    row.classList.add("active");
+    const main = row.querySelector(".run-main");
+    const title = main?.querySelector(".run-title");
+    const number = main?.querySelector(".run-number");
+    const status = main?.querySelector(".run-status");
+    const agent = main?.querySelector(".run-agent-mark");
+    const trigger = row.querySelector(".run-row-menu-trigger > span:not(.ui-button-icon)");
+    if (!(main instanceof HTMLElement) || !(title instanceof HTMLElement) || !(number instanceof HTMLElement) || !(status instanceof HTMLElement) || !(agent instanceof HTMLElement) || !(trigger instanceof HTMLElement)) {
+      throw new Error("waiting Run row should expose title, Issue number, Agent mark, status, and menu");
+    }
+    const originalTitle = title.getAttribute("title");
+    const originalMarkup = title.innerHTML;
+    const originalTrigger = trigger.textContent;
+    title.textContent = "这是一个非常长的会话标题，用来验证标题可以截断但 Issue 编号和状态仍然保留";
+    trigger.textContent = "Actions";
+    const measurement = {
+      rowHeight: row.getBoundingClientRect().height,
+      titleWidth: title.getBoundingClientRect().width,
+      titleScrollWidth: title.scrollWidth,
+      numberWidth: number.getBoundingClientRect().width,
+      statusWidth: status.getBoundingClientRect().width,
+      agentWidth: agent.getBoundingClientRect().width,
+      titleRight: title.getBoundingClientRect().right,
+      statusRight: status.getBoundingClientRect().right,
+      menuLeft: trigger.getBoundingClientRect().left,
+    };
+    title.innerHTML = originalMarkup;
+    trigger.textContent = originalTrigger;
+    if (originalTitle == null) title.removeAttribute("title");
+    else title.setAttribute("title", originalTitle);
+    row.classList.remove("active");
+    return measurement;
+  });
+  if (
+    layout.rowHeight > 34
+    || layout.titleScrollWidth <= layout.titleWidth
+    || layout.numberWidth <= 0
+    || layout.statusWidth <= 0
+    || layout.agentWidth < 20
+    || layout.titleRight > layout.menuLeft
+    || layout.statusRight > layout.menuLeft
+  ) {
+    throw new Error(`sidebar Run row violates the single-line A layout at ${width}px: ${JSON.stringify(layout)}`);
   }
-  const originalTitle = name.getAttribute("title");
-  const originalMarkup = name.innerHTML;
-  name.textContent = "Claude Code Enterprise Worker Hosted Runtime";
-  const measurement = {
-    mainWidth: main.getBoundingClientRect().width,
-    nameWidth: name.getBoundingClientRect().width,
-    nameScrollWidth: name.scrollWidth,
-    identityWidth: identity.getBoundingClientRect().width,
-    stateWidth: state.getBoundingClientRect().width,
-  };
-  name.innerHTML = originalMarkup;
-  if (originalTitle == null) name.removeAttribute("title");
-  else name.setAttribute("title", originalTitle);
-  return measurement;
-});
-if (
-  longAgentLayout.nameWidth > longAgentLayout.mainWidth * 0.36
-  || longAgentLayout.nameScrollWidth <= longAgentLayout.nameWidth
-  || longAgentLayout.identityWidth < 24
-  || longAgentLayout.stateWidth < 24
-) {
-  throw new Error(`a long Agent name must truncate without hiding Issue or state: ${JSON.stringify(longAgentLayout)}`);
 }
-if (!(await activeSidebarRun.locator(".run-main > b").getAttribute("title"))) {
-  throw new Error("Agent name should expose its full value on hover");
+await page.evaluate(() => {
+  document.querySelector(".frame")?.style.removeProperty("--client-sidebar-width");
+});
+if (!(await activeSidebarRun.locator(".run-title").getAttribute("title"))) {
+  throw new Error("Run title should expose its full value on hover");
+}
+if (!(await activeSidebarRun.locator(".run-agent-mark").getAttribute("title"))) {
+  throw new Error("Agent mark should expose its full Agent name on hover");
+}
+if (await activeSidebarRun.locator(".run-agent-mark").textContent() !== "Gk") {
+  throw new Error("Grok must use the distinct Gk Agent mark");
 }
 const englishActionLayout = await activeSidebarRun.evaluate((row) => {
   const trigger = row.querySelector(".run-row-menu-trigger > span:not(.ui-button-icon)");
-  const state = row.querySelector(".run-state");
-  if (!(trigger instanceof HTMLElement) || !(state instanceof HTMLElement)) {
-    throw new Error("active Run should expose its operation entry and state");
+  const title = row.querySelector(".run-title");
+  const status = row.querySelector(".run-status");
+  if (!(trigger instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) {
+    throw new Error("active Run should expose its operation entry, title, and status");
   }
   const originalLabel = trigger.textContent;
   trigger.textContent = "Actions";
   const layout = {
     label: trigger.getBoundingClientRect().toJSON(),
-    state: state.getBoundingClientRect().toJSON(),
+    title: title.getBoundingClientRect().toJSON(),
+    status: status.getBoundingClientRect().toJSON(),
   };
   trigger.textContent = originalLabel;
   return layout;
 });
-if (englishActionLayout.state.right > englishActionLayout.label.left) {
-  throw new Error(`the operation entry must not cover the Run state in English: ${JSON.stringify(englishActionLayout)}`);
+if (englishActionLayout.title.right > englishActionLayout.label.left || englishActionLayout.status.right > englishActionLayout.label.left) {
+  throw new Error(`the operation entry must not cover Run content in English: ${JSON.stringify(englishActionLayout)}`);
 }
 const openSidebarRunMenu = async (run) => {
   const openMenu = page.locator(".side .run-row.menu-open button[data-act='run-menu']");
