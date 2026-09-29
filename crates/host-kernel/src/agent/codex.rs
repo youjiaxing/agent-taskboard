@@ -318,6 +318,7 @@ impl AgentPort for CodexAdapter {
         let recorder = hooks::write_recorder(sink_dir)?;
         let permission_request = hooks::recorder_command(&recorder, "PermissionRequest");
         let user_prompt_submit = hooks::recorder_command(&recorder, "UserPromptSubmit");
+        let session_start = hooks::recorder_command(&recorder, "SessionStart");
         let session_end = hooks::recorder_command(&recorder, "SessionEnd");
         let stop_failure = hooks::recorder_command(&recorder, "StopFailure");
         Ok(CompletionHookPlan {
@@ -329,7 +330,7 @@ impl AgentPort for CodexAdapter {
                 "features.hooks=true".into(),
                 "-c".into(),
                 format!(
-                    "[[hooks.PermissionRequest]]\n[[hooks.PermissionRequest.hooks]]\ntype = \"command\"\ncommand = {permission_request:?}\ntimeout = 3\n\n[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"command\"\ncommand = {user_prompt_submit:?}\ntimeout = 3\n\n[[hooks.SessionEnd]]\n[[hooks.SessionEnd.hooks]]\ntype = \"command\"\ncommand = {session_end:?}\ntimeout = 3\n\n[[hooks.StopFailure]]\n[[hooks.StopFailure.hooks]]\ntype = \"command\"\ncommand = {stop_failure:?}\ntimeout = 3"
+                    "[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = {session_start:?}\ntimeout = 3\n\n[[hooks.PermissionRequest]]\n[[hooks.PermissionRequest.hooks]]\ntype = \"command\"\ncommand = {permission_request:?}\ntimeout = 3\n\n[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"command\"\ncommand = {user_prompt_submit:?}\ntimeout = 3\n\n[[hooks.SessionEnd]]\n[[hooks.SessionEnd.hooks]]\ntype = \"command\"\ncommand = {session_end:?}\ntimeout = 3\n\n[[hooks.StopFailure]]\n[[hooks.StopFailure.hooks]]\ntype = \"command\"\ncommand = {stop_failure:?}\ntimeout = 3"
                 ),
             ],
             extra_env: hooks::sink_env(sink_dir),

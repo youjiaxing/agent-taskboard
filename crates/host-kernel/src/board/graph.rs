@@ -439,6 +439,7 @@ pub(super) fn detail(issue: &IssueRecord, mapping_active: bool) -> IssueDetail {
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,
+        latest_bound_run_id: None,
     }
 }
 
@@ -461,6 +462,7 @@ pub(super) fn link_detail(issue: &IssueRef) -> IssueDetail {
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,
+        latest_bound_run_id: None,
     }
 }
 
@@ -484,6 +486,7 @@ pub(super) fn unclear_detail(repository: Option<&str>, number: Option<u64>) -> I
         execution_stopped: false,
         waiting_for_user: false,
         active_run_id: None,
+        latest_bound_run_id: None,
     }
 }
 

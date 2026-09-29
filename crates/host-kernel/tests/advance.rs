@@ -415,6 +415,8 @@ fn self_check_stops_when_still_open_or_abnormal() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     let mut h = harness(tmp.path(), vec![ready(1, "open work"), ready(2, "next")]);
+    h.agent
+        .set_native_session_id(Some("self-check-session".into()));
     let project_id = register(&mut h.host, &dir);
     enable_both(&mut h.host, &project_id);
     start_bound(&mut h.host, &project_id, "you/garden#1");
@@ -426,6 +428,13 @@ fn self_check_stops_when_still_open_or_abnormal() {
     assert_eq!(h.sessions.spawn_count(), 2);
     assert!(active_issue_ids(&h.host).contains(&"you/garden#1".into()));
     assert!(h.host.snapshot().pending_confirmation.is_none());
+    let snapshot = h.host.snapshot();
+    let self_check = snapshot
+        .runs
+        .iter()
+        .find(|run| run.self_check)
+        .expect("self-check Run");
+    assert_eq!(self_check.task_summary.as_deref(), Some("自检"));
 
     h.sessions.last_session().unwrap().set_session_end(true);
     h.sessions.last_session().unwrap().finish(0);
@@ -436,6 +445,36 @@ fn self_check_stops_when_still_open_or_abnormal() {
     assert!(!active_issue_ids(&h.host).contains(&"you/garden#1".into()));
     assert!(h.host.snapshot().pending_confirmation.is_none());
     assert!(claimed(&h.host, "you/garden#2").is_empty());
+}
+
+#[test]
+fn self_check_without_native_session_id_is_recorded_without_new_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), vec![ready(1, "open work")]);
+    let project_id = register(&mut h.host, &dir);
+    enable_both(&mut h.host, &project_id);
+    let run_id = start_bound(&mut h.host, &project_id, "you/garden#1");
+    h.sessions.last_session().unwrap().set_session_end(true);
+    h.sessions.last_session().unwrap().finish(0);
+
+    let snapshot = h
+        .host
+        .handle(serde_json::json!({"op":"snapshot"}))
+        .unwrap()
+        .snapshot;
+
+    assert_eq!(h.sessions.spawn_count(), 1);
+    assert_eq!(snapshot.runs.len(), 1);
+    let run = snapshot.runs.iter().find(|run| run.id == run_id).unwrap();
+    assert!(run.self_check_attempted);
+    assert!(
+        run.failure
+            .as_deref()
+            .is_some_and(|failure| failure.contains("原生会话 ID")),
+        "{:?}",
+        run.failure
+    );
 }
 
 #[test]

@@ -722,6 +722,7 @@ fn continue_links_previous_run_and_resumes_native_session() {
         .find(|run| run.id != first.id)
         .unwrap();
     assert_eq!(continued.status, RunStatus::Running);
+    assert_eq!(continued.task_summary, first.task_summary);
     assert_eq!(
         continued.previous_run_id.as_deref(),
         Some(first.id.as_str())
@@ -732,6 +733,248 @@ fn continue_links_previous_run_and_resumes_native_session() {
         .argv
         .windows(2)
         .any(|pair| pair == ["--resume", "sess-1"]));
+}
+
+#[test]
+fn continue_without_native_session_id_does_not_start_a_new_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":first.id}))
+        .unwrap();
+
+    let error = h
+        .host
+        .handle(serde_json::json!({
+            "op":"continueRun",
+            "issueId":"you/garden#1",
+        }))
+        .unwrap_err();
+
+    assert!(error.to_string().contains("原生会话"), "{error}");
+    assert_eq!(h.sessions.spawn_count(), 1);
+    let runs = h.host.snapshot().runs;
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0]
+        .failure
+        .as_deref()
+        .is_some_and(|failure| failure.contains("Continue failed")));
+    assert_eq!(claimed_by(&mut h.host, "you/garden#1"), vec!["me"]);
+}
+
+#[test]
+fn failed_native_resume_leaves_diagnostic_without_creating_a_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.agent.set_native_session_id(Some("sess-failure".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":first.id}))
+        .unwrap();
+    h.sessions.fail_next("resume rejected");
+
+    let error = h
+        .host
+        .handle(serde_json::json!({"op":"continueRun", "issueId":"you/garden#1"}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("resume rejected"), "{error}");
+    let runs = h.host.snapshot().runs;
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0]
+        .failure
+        .as_deref()
+        .is_some_and(|failure| failure.contains("resume rejected")));
+}
+
+#[test]
+fn continue_does_not_start_when_resume_hooks_cannot_be_attached() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-hook-failure".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":first.id}))
+        .unwrap();
+    h.agent.fail_attach_hooks();
+
+    let error = h
+        .host
+        .handle(serde_json::json!({"op":"continueRun", "issueId":"you/garden#1"}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("recorder"), "{error}");
+    assert_eq!(h.sessions.spawn_count(), 1);
+    let runs = h.host.snapshot().runs;
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0]
+        .failure
+        .as_deref()
+        .is_some_and(|failure| failure.contains("recorder")));
+}
+
+#[test]
+fn continue_uses_a_session_id_captured_after_the_run_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound_from_form(&mut h.host, &project_id, "you/garden#1")
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    let hook_dir = first.hook_dir.expect("per-run hook sink");
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":first.id}))
+        .unwrap();
+    assert!(h
+        .host
+        .snapshot()
+        .runs
+        .iter()
+        .find(|run| run.id == first.id)
+        .unwrap()
+        .native_session_id
+        .is_none());
+    std::fs::write(hook_dir.join("native-session-id"), "captured-session").unwrap();
+    let captured = h
+        .host
+        .handle(serde_json::json!({"op":"snapshot"}))
+        .unwrap()
+        .snapshot
+        .runs
+        .into_iter()
+        .find(|run| run.id == first.id)
+        .unwrap();
+    assert_eq!(
+        captured.native_session_id.as_deref(),
+        Some("captured-session")
+    );
+
+    for signal in ["session-end", "stop-failure", "waiting-for-user"] {
+        std::fs::write(hook_dir.join(signal), "").unwrap();
+    }
+    let out = h
+        .host
+        .handle(serde_json::json!({
+            "op":"continueRun",
+            "issueId":"you/garden#1",
+        }))
+        .unwrap();
+    let resumed = out
+        .snapshot
+        .runs
+        .iter()
+        .find(|run| run.id != first.id)
+        .unwrap();
+    assert_eq!(resumed.native_session_id, None);
+    for signal in [
+        "native-session-id",
+        "session-end",
+        "stop-failure",
+        "waiting-for-user",
+    ] {
+        assert!(
+            !hook_dir.join(signal).exists(),
+            "stale {signal} was retained"
+        );
+    }
+    assert_eq!(
+        h.sessions.last_spawn().unwrap().argv,
+        vec![
+            "/mem/grok".to_string(),
+            "--resume".to_string(),
+            "captured-session".to_string()
+        ]
+    );
+    std::fs::write(hook_dir.join("native-session-id"), "resumed-session").unwrap();
+    let resumed = h
+        .host
+        .handle(serde_json::json!({"op":"snapshot"}))
+        .unwrap()
+        .snapshot
+        .runs
+        .into_iter()
+        .find(|run| run.id == resumed.id)
+        .unwrap();
+    assert_eq!(
+        resumed.native_session_id.as_deref(),
+        Some("resumed-session")
+    );
+}
+
+#[test]
+fn continue_does_not_replace_project_launch_defaults_with_empty_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    h.agent.set_native_session_id(Some("sess-defaults".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = h
+        .host
+        .handle(serde_json::json!({
+            "op":"startUnboundRun",
+            "projectId":project_id,
+            "issueId":"you/garden#1",
+            "agentId":"grok-build",
+            "values":{
+                "model":"remembered-model",
+                "effort":"high",
+                "permission-mode":"default",
+                "always-approve":"false",
+                "sandbox":"off",
+                "initial-instruction":"",
+                "additional-args":""
+            },
+            "openingText":"ready work\nhttps://github.com/you/garden/issues/1"
+        }))
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":first.id}))
+        .unwrap();
+    h.host
+        .handle(serde_json::json!({"op":"continueRun", "issueId":"you/garden#1"}))
+        .unwrap();
+
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op":"prepareRunLaunch",
+            "projectId":project_id,
+            "agentId":"grok-build"
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert_eq!(
+        form.values.get("model").map(String::as_str),
+        Some("remembered-model")
+    );
 }
 
 #[test]

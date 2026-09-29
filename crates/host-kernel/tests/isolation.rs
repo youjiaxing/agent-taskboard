@@ -34,6 +34,44 @@ fn init_git(dir: &Path) {
         .status()
         .unwrap();
     assert!(status.success());
+    for (key, value) in [
+        ("user.name", "Taskboard Tests"),
+        ("user.email", "taskboard-tests@example.invalid"),
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(["config", key, value])
+            .current_dir(dir)
+            .status()
+            .unwrap()
+            .success());
+    }
+    assert!(std::process::Command::new("git")
+        .args(["commit", "--allow-empty", "-qm", "test base"])
+        .current_dir(dir)
+        .status()
+        .unwrap()
+        .success());
+}
+
+fn add_worktree(project: &Path, tree: &Path) {
+    let status = std::process::Command::new("git")
+        .args(["worktree", "add", "--detach", "-q"])
+        .arg(tree)
+        .arg("HEAD")
+        .current_dir(project)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn remove_worktree(project: &Path, tree: &Path) {
+    let status = std::process::Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(tree)
+        .current_dir(project)
+        .status()
+        .unwrap();
+    assert!(status.success());
 }
 
 fn git_worktree_count(dir: &Path) -> usize {
@@ -329,7 +367,8 @@ fn isolated_run_passes_worktree_and_does_not_add_a_tree() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
-    let tree = make_dir(tmp.path(), "work/garden-iso");
+    let tree = tmp.path().join("work/garden-iso");
+    add_worktree(&dir, &tree);
     let mut h = harness(tmp.path());
     h.agent.set_isolation_tree(Some(tree.clone()));
     let project_id = register(&mut h.host, &dir);
@@ -352,6 +391,7 @@ fn delayed_native_tree_is_discovered_before_changes_or_continue_use_it() {
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
     let mut h = harness(tmp.path());
+    h.agent.set_native_session_id(Some("sess-late".into()));
     let project_id = register(&mut h.host, &dir);
     let first = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
     let changes = h
@@ -368,7 +408,8 @@ fn delayed_native_tree_is_discovered_before_changes_or_continue_use_it() {
         .unwrap()
         .contains("尚未确认隔离执行目录"));
 
-    let tree = make_dir(tmp.path(), "work/late-tree");
+    let tree = tmp.path().join("work/late-tree");
+    add_worktree(&dir, &tree);
     h.agent.set_isolation_tree(Some(tree.clone()));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
@@ -401,6 +442,8 @@ fn unresolved_isolation_cannot_continue_in_the_main_directory() {
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
     let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-unresolved".into()));
     let project_id = register(&mut h.host, &dir);
     let run = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
     h.host
@@ -439,8 +482,9 @@ fn overlapping_unconfirmed_isolation_is_rejected_before_spawning() {
 fn continue_reuses_the_recorded_directory_without_worktree() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
-    mark_git(&dir);
-    let tree = make_dir(tmp.path(), "work/garden-iso");
+    init_git(&dir);
+    let tree = tmp.path().join("work/garden-iso");
+    add_worktree(&dir, &tree);
     let mut h = harness(tmp.path());
     h.agent.set_isolation_tree(Some(tree.clone()));
     h.agent.set_native_session_id(Some("sess-iso".into()));
@@ -476,16 +520,59 @@ fn continue_reuses_the_recorded_directory_without_worktree() {
         .argv
         .windows(2)
         .any(|pair| pair == ["--resume", "sess-iso"]));
+    assert_eq!(continued.native_session_id.as_deref(), Some("sess-iso"));
 }
 
 #[test]
-fn continue_falls_back_to_the_project_directory_when_the_tree_is_gone() {
+fn continue_harvests_a_native_session_id_after_host_restart() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
-    mark_git(&dir);
-    let tree = make_dir(tmp.path(), "work/garden-iso");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let first = start_bound(&mut h.host, &project_id, false).snapshot.runs[0].clone();
+    let hook_dir = first.hook_dir.expect("per-run hook sink");
+    assert!(first.native_session_id.is_none());
+    std::fs::write(hook_dir.join("native-session-id"), "late-session-id").unwrap();
+
+    let mut rebooted = reboot(h, tmp.path());
+    let before_continue = rebooted
+        .host
+        .snapshot()
+        .runs
+        .into_iter()
+        .find(|run| run.id == first.id)
+        .unwrap();
+    assert_eq!(
+        before_continue.ended_reason,
+        Some(host_kernel::RunEndedReason::Crash)
+    );
+    assert!(before_continue.native_session_id.is_none());
+
+    rebooted
+        .host
+        .handle(serde_json::json!({"op":"continueRun", "issueId":"you/garden#1"}))
+        .unwrap();
+    assert_eq!(
+        rebooted.sessions.last_spawn().unwrap().argv,
+        vec![
+            "/mem/grok".to_string(),
+            "--resume".to_string(),
+            "late-session-id".to_string()
+        ]
+    );
+}
+
+#[test]
+fn continue_rejects_a_missing_isolated_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    init_git(&dir);
+    let tree = tmp.path().join("work/garden-iso");
+    add_worktree(&dir, &tree);
     let mut h = harness(tmp.path());
     h.agent.set_isolation_tree(Some(tree.clone()));
+    h.agent
+        .set_native_session_id(Some("sess-missing-tree".into()));
     let project_id = register(&mut h.host, &dir);
     let first = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
     h.host
@@ -494,28 +581,49 @@ fn continue_falls_back_to_the_project_directory_when_the_tree_is_gone() {
             "runId": first.id,
         }))
         .unwrap();
-    std::fs::remove_dir_all(&tree).unwrap();
+    remove_worktree(&dir, &tree);
+    std::fs::create_dir_all(&tree).unwrap();
 
-    let out = h
+    let error = h
         .host
         .handle(serde_json::json!({
             "op": "continueRun",
             "issueId": "you/garden#1",
         }))
+        .unwrap_err();
+    assert!(error.to_string().contains("隔离执行目录"), "{error}");
+    assert_eq!(h.sessions.spawn_count(), 1);
+    assert_eq!(h.host.snapshot().runs.len(), 1);
+}
+
+#[test]
+fn continue_rejects_a_replaced_worktree_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    init_git(&dir);
+    let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-replaced-tree".into()));
+    let project_id = register(&mut h.host, &dir);
+    let run = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
+    let tree = tmp.path().join("work/replaced-tree");
+    add_worktree(&dir, &tree);
+    wait_for_directory(&mut h, &run.id, &tree);
+    h.host
+        .handle(serde_json::json!({"op":"stopRun", "runId":run.id}))
         .unwrap();
-    let continued = out
-        .snapshot
-        .runs
-        .iter()
-        .find(|run| run.id != first.id)
-        .unwrap();
-    assert_eq!(continued.status, RunStatus::Running);
-    assert_eq!(continued.working_directory, dir.display().to_string());
-    let note = continued.isolation_note.as_deref().unwrap();
-    assert!(note.contains("主目录"), "{note}");
-    let spawn = h.sessions.last_spawn().unwrap();
-    assert_eq!(spawn.cwd, dir);
-    assert!(!spawn.argv.iter().any(|arg| arg == "--worktree"));
+
+    std::fs::remove_dir_all(&tree).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    init_git(&tree);
+
+    let error = h
+        .host
+        .handle(serde_json::json!({"op":"continueRun", "issueId":"you/garden#1"}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("无法继续恢复"), "{error}");
+    assert_eq!(h.sessions.spawn_count(), 1);
 }
 
 #[test]
@@ -559,13 +667,15 @@ fn lock_files_and_sibling_runs_warn_but_do_not_block_launch() {
 fn english_fallback_note_uses_the_client_language() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");
-    mark_git(&dir);
-    let tree = make_dir(tmp.path(), "work/garden-iso");
+    init_git(&dir);
+    let tree = tmp.path().join("work/garden-iso");
+    add_worktree(&dir, &tree);
     let mut h = harness(tmp.path());
     h.host
         .dispatch(host_kernel::Command::SetLanguage(Language::En))
         .unwrap();
     h.agent.set_isolation_tree(Some(tree.clone()));
+    h.agent.set_native_session_id(Some("sess-english".into()));
     let project_id = register(&mut h.host, &dir);
     let first = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
     h.host
@@ -574,21 +684,15 @@ fn english_fallback_note_uses_the_client_language() {
             "runId": first.id,
         }))
         .unwrap();
-    std::fs::remove_dir_all(&tree).unwrap();
-    let continued = h
+    remove_worktree(&dir, &tree);
+    let error = h
         .host
         .handle(serde_json::json!({
             "op": "continueRun",
             "issueId": "you/garden#1",
         }))
-        .unwrap()
-        .snapshot
-        .runs
-        .into_iter()
-        .find(|run| run.id != first.id)
-        .unwrap();
-    let note = continued.isolation_note.as_deref().unwrap();
-    assert!(note.to_ascii_lowercase().contains("project"), "{note}");
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot be resumed"), "{error}");
 }
 
 #[test]
@@ -647,9 +751,12 @@ fn pending_isolation_recovers_after_host_restart() {
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
     let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-restart-tree".into()));
     let project_id = register(&mut h.host, &dir);
     let run = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
-    let tree = make_dir(tmp.path(), "work/tree");
+    let tree = tmp.path().join("work/tree");
+    add_worktree(&dir, &tree);
     let mut rebooted = reboot(h, tmp.path());
     rebooted.agent.set_isolation_tree(Some(tree.clone()));
     wait_for_directory(&mut rebooted, &run.id, &tree);
@@ -666,6 +773,8 @@ fn stopped_unresolved_launch_does_not_claim_the_next_runs_tree() {
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
     let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-legacy-tree".into()));
     let project_id = register(&mut h.host, &dir);
     let first = start_unbound(&mut h.host, &project_id, true, "first")
         .snapshot
@@ -680,7 +789,8 @@ fn stopped_unresolved_launch_does_not_claim_the_next_runs_tree() {
         .last()
         .unwrap()
         .clone();
-    let tree = make_dir(tmp.path(), "work/second-tree");
+    let tree = tmp.path().join("work/second-tree");
+    add_worktree(&dir, &tree);
     h.agent.set_isolation_tree(Some(tree.clone()));
     wait_for_directory(&mut h, &second.id, &tree);
     let snapshot = h
@@ -699,6 +809,8 @@ fn legacy_isolated_main_directory_cannot_show_changes_or_continue() {
     let dir = make_dir(tmp.path(), "work/garden");
     init_git(&dir);
     let mut h = harness(tmp.path());
+    h.agent
+        .set_native_session_id(Some("sess-legacy-tree".into()));
     let project_id = register(&mut h.host, &dir);
     let run = start_bound(&mut h.host, &project_id, true).snapshot.runs[0].clone();
     h.host

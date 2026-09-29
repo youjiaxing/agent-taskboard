@@ -12,12 +12,22 @@ const closeInspectorIfOpen = async () => {
 };
 
 let rpcFailure = null;
+let forceArchivedLatestBoundRun = false;
 await page.route("**/rpc", async (route) => {
   let request;
   try {
     request = route.request().postDataJSON();
   } catch {
     await route.continue();
+    return;
+  }
+  if (forceArchivedLatestBoundRun && request?.op) {
+    const response = await route.fetch();
+    const result = await response.json();
+    if (result.snapshot?.board?.selected) {
+      result.snapshot.board.selected.latestBoundRunId = "archived-latest-bound-run";
+    }
+    await route.fulfill({ response, json: result });
     return;
   }
   if (!rpcFailure || request?.op !== rpcFailure.op || !rpcFailure.matches(request)) {
@@ -60,11 +70,75 @@ await page.click("button[data-act='appearance-menu']");
 await page.click("button[data-act='appearance-menu']");
 
 let activeSidebarRun = page.locator(".side .run-row.waiting").first();
+await activeSidebarRun.evaluate((row) => row.classList.add("active"));
+try {
+  const activeRunActionsVisible = await activeSidebarRun.locator(".run-row-actions").evaluate((node) => ({
+    opacity: getComputedStyle(node).opacity,
+    visibility: getComputedStyle(node).visibility,
+  }));
+  if (activeRunActionsVisible.opacity !== "1" || activeRunActionsVisible.visibility !== "visible") {
+    throw new Error(`the selected Run should keep its labeled actions entry visible: ${JSON.stringify(activeRunActionsVisible)}`);
+  }
+} finally {
+  await activeSidebarRun.evaluate((row) => row.classList.remove("active"));
+}
 const runRowHeights = await page.$$eval(".side .run-row", (nodes) =>
   nodes.map((node) => Math.round(node.getBoundingClientRect().height)),
 );
 if (runRowHeights.some((height) => height > 34)) {
   throw new Error(`sidebar Run rows should stay single-line, got heights: ${JSON.stringify(runRowHeights)}`);
+}
+const longAgentLayout = await activeSidebarRun.evaluate((row) => {
+  const main = row.querySelector(".run-main");
+  const name = main?.querySelector("b");
+  const identity = main?.querySelector(".run-identity");
+  const state = main?.querySelector(".run-state");
+  if (!(main instanceof HTMLElement) || !(name instanceof HTMLElement) || !(identity instanceof HTMLElement) || !(state instanceof HTMLElement)) {
+    throw new Error("waiting Run row should expose its name, identity, and state");
+  }
+  const originalTitle = name.getAttribute("title");
+  const originalMarkup = name.innerHTML;
+  name.textContent = "Claude Code Enterprise Worker Hosted Runtime";
+  const measurement = {
+    mainWidth: main.getBoundingClientRect().width,
+    nameWidth: name.getBoundingClientRect().width,
+    nameScrollWidth: name.scrollWidth,
+    identityWidth: identity.getBoundingClientRect().width,
+    stateWidth: state.getBoundingClientRect().width,
+  };
+  name.innerHTML = originalMarkup;
+  if (originalTitle == null) name.removeAttribute("title");
+  else name.setAttribute("title", originalTitle);
+  return measurement;
+});
+if (
+  longAgentLayout.nameWidth > longAgentLayout.mainWidth * 0.36
+  || longAgentLayout.nameScrollWidth <= longAgentLayout.nameWidth
+  || longAgentLayout.identityWidth < 24
+  || longAgentLayout.stateWidth < 24
+) {
+  throw new Error(`a long Agent name must truncate without hiding Issue or state: ${JSON.stringify(longAgentLayout)}`);
+}
+if (!(await activeSidebarRun.locator(".run-main > b").getAttribute("title"))) {
+  throw new Error("Agent name should expose its full value on hover");
+}
+const englishActionLayout = await activeSidebarRun.evaluate((row) => {
+  const trigger = row.querySelector(".run-row-menu-trigger > span:not(.ui-button-icon)");
+  const state = row.querySelector(".run-state");
+  if (!(trigger instanceof HTMLElement) || !(state instanceof HTMLElement)) {
+    throw new Error("active Run should expose its operation entry and state");
+  }
+  const originalLabel = trigger.textContent;
+  trigger.textContent = "Actions";
+  const layout = {
+    label: trigger.getBoundingClientRect().toJSON(),
+    state: state.getBoundingClientRect().toJSON(),
+  };
+  trigger.textContent = originalLabel;
+  return layout;
+});
+if (englishActionLayout.state.right > englishActionLayout.label.left) {
+  throw new Error(`the operation entry must not cover the Run state in English: ${JSON.stringify(englishActionLayout)}`);
 }
 const openSidebarRunMenu = async (run) => {
   const openMenu = page.locator(".side .run-row.menu-open button[data-act='run-menu']");
@@ -200,10 +274,9 @@ await page.waitForSelector(".lifted-run .pty-slot");
 const initialRailSections = await page.$$eval(".workspace-rail-section", (sections) =>
   Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
 );
-if (!initialRailSections.runs || initialRailSections.issue || initialRailSections.actions) {
-  throw new Error(`an active Run should default to Run history only: ${JSON.stringify(initialRailSections)}`);
+if (!initialRailSections.runs || !initialRailSections.issue || initialRailSections.actions !== undefined) {
+  throw new Error(`a focused Run should default to Issue and Run history with no actions section: ${JSON.stringify(initialRailSections)}`);
 }
-await page.click('.workspace-rail-section[data-workspace-section="issue"] > summary');
 await page.waitForSelector(".lifted-run .issue-markdown:has-text('Keep the complete Issue beside the Terminal')");
 const liftedText = (await page.locator(".lifted-run").textContent())?.replace(/\s+/g, " ") ?? "";
 if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecycle issue")) {
@@ -212,6 +285,19 @@ if (!liftedText.includes("等待操作") || !liftedText.includes("active lifecyc
 await capture("issue-100-terminal-and-issue-1280x840.png");
 
 const activeRunId = await page.$eval(".lifted-terminal .pty-slot", (node) => node.dataset.run);
+const activeHistoryActions = await page.locator(`.workspace-run-history-item[data-id="${activeRunId}"] .workspace-run-history-actions [data-act]`).evaluateAll((nodes) =>
+  nodes.map((node) => node.dataset.act),
+);
+if (!activeHistoryActions.includes("stop-run") || activeHistoryActions.includes("continue-run")) {
+  throw new Error(`an active Run history row should expose Stop only: ${JSON.stringify(activeHistoryActions)}`);
+}
+await page.locator(`.workspace-run-history-item[data-id="${activeRunId}"] button[data-act="stop-run"]`).click();
+await page.waitForSelector("[data-dialog-id='stop-run']");
+if (await page.locator(".lifted-run").count() !== 1) {
+  throw new Error("stopping from a Run history row must not leave the workspace");
+}
+await page.click("[data-dialog-id='stop-run'] button[data-act='dismiss-dialog']");
+await page.waitForFunction((runId) => document.activeElement?.id === `workspace-run-control-${runId}`, activeRunId);
 await page.evaluate(() => { window.__FOCUS_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host"); });
 await page.click(".lifted-terminal .pty-host");
 await page.keyboard.type("resume after approval");
@@ -302,10 +388,60 @@ await page.click("form[data-act='usage-custom'] button[type='submit']");
 await page.waitForFunction(() => !document.querySelector(".usage-page .form-feedback"));
 if (failure.requests !== 2) throw new Error(`custom usage retry should issue one new request: ${failure.requests}`);
 rpcFailure = null;
+let returnedTerminalReadFromStart = false;
+const observeReturnedTerminalRead = (request) => {
+  if (request.url().includes("/output?after=0")) returnedTerminalReadFromStart = true;
+};
+page.on("request", observeReturnedTerminalRead);
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lifted-terminal");
+await page.waitForTimeout(100);
+page.off("request", observeReturnedTerminalRead);
+if (!returnedTerminalReadFromStart) {
+  throw new Error("returning from usage must reset the live terminal read offset instead of reusing the old canvas state");
+}
+await page.evaluate(() => {
+  window.__FROZEN_TERMINAL_HOST__ = document.querySelector(".lifted-terminal .pty-host");
+});
+let stoppedInputRequests = 0;
+let stoppedResizeRequests = 0;
+let stoppedOutputRequests = 0;
+let stopRpcStarted = false;
+const countOutputAfterStopRequest = (request) => {
+  if (request.url().endsWith("/rpc") && request.postData()?.includes('"op":"stopRun"')) {
+    stopRpcStarted = true;
+  }
+  if (request.url().includes("/output") && stopRpcStarted) stoppedOutputRequests += 1;
+};
+page.on("request", countOutputAfterStopRequest);
 await page.click(".lifted-terminal button[data-act='stop-run']");
 await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+page.off("request", countOutputAfterStopRequest);
+const countReadonlyTerminalRequests = (request) => {
+  if (request.url().includes("/input")) stoppedInputRequests += 1;
+  if (request.url().includes("/resize")) stoppedResizeRequests += 1;
+};
+page.on("request", countReadonlyTerminalRequests);
+const frozenTerminal = await page.evaluate(() => ({
+  sameHost: window.__FROZEN_TERMINAL_HOST__ === document.querySelector('[data-terminal-surface="readonly"] .pty-host'),
+  hasPtySlot: Boolean(document.querySelector('[data-terminal-surface="readonly"] .pty-slot')),
+  hasSummary: Boolean(document.querySelector('[data-terminal-surface="readonly"] .readonly-terminal-output')),
+  hasXterm: Boolean(document.querySelector('[data-terminal-surface="readonly"] .xterm')),
+}));
+await page.locator('[data-terminal-surface="readonly"] .pty-host').click();
+await page.keyboard.type("must not reach stopped Run");
+await page.waitForTimeout(100);
+page.off("request", countReadonlyTerminalRequests);
+if (!frozenTerminal.sameHost || !frozenTerminal.hasPtySlot || frozenTerminal.hasSummary || !frozenTerminal.hasXterm) {
+  throw new Error(`stopping the focused Run must freeze the existing xterm in place: ${JSON.stringify(frozenTerminal)}`);
+}
+if (stoppedInputRequests !== 0 || stoppedResizeRequests !== 0) {
+  throw new Error(`a stopped Run must reject input and PTY resize requests: ${JSON.stringify({ stoppedInputRequests, stoppedResizeRequests })}`);
+}
+if (stoppedOutputRequests !== 0) {
+  throw new Error(`a stop request must not start another PTY output poll: ${stoppedOutputRequests}`);
+}
 await page.click("button[data-act='return-page']");
 try {
   await page.waitForSelector(".lanes", { timeout: 2000 });
@@ -342,8 +478,14 @@ if (endedOutputRequests !== 0 || await page.$('[data-terminal-surface="readonly"
 const endedDefaults = await page.$$eval(".workspace-rail-section", (sections) =>
   Object.fromEntries(sections.map((section) => [section.dataset.workspaceSection, section.open])),
 );
-if (!endedDefaults.issue || !endedDefaults.runs || endedDefaults.actions) {
+if (!endedDefaults.issue || !endedDefaults.runs || endedDefaults.actions !== undefined) {
   throw new Error(`an explicitly selected ended Run should keep Issue and Run history visible: ${JSON.stringify(endedDefaults)}`);
+}
+const stoppedIssueActions = await page.locator(".workspace-rail-header .workspace-detail-actions [data-act]").evaluateAll((nodes) =>
+  nodes.map((node) => node.dataset.act),
+);
+if (stoppedIssueActions.join("|") !== "continue-run|edit-issue|toggle-issue-open|open-issue|release-claim") {
+  throw new Error(`an execution-stopped Issue should keep primary actions in the two-column order: ${JSON.stringify(stoppedIssueActions)}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
 await page.waitForSelector(".changes-sheet .notice.bad");
@@ -352,23 +494,54 @@ if (!missingIsolationChanges.includes("隔离执行目录") || missingIsolationC
   throw new Error(`missing isolation changes must stay unavailable instead of falling back: ${missingIsolationChanges}`);
 }
 await page.click(".chrome button[data-act='view-changes']");
-await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
-await page.click(".issue-detail button[data-act='continue-run']");
-await page.waitForSelector(".lifted-terminal .pty-slot");
-const continued = await hostSnapshot(page, url);
-const continuedRun = continued.runs.find((run) => run.issueId === "you/lifecycle#2" && run.status === "running");
-if (!continuedRun?.previousRunId) {
-  throw new Error(`Continue must link a new Run to the stopped Run: ${JSON.stringify(continued.runs)}`);
-}
-const continueText = (await page.locator(".lifted-terminal").textContent())?.replace(/\s+/g, " ") ?? "";
-if (!continueText.includes("隔离执行目录已经不在") || !continueText.includes("Project 主目录")) {
-  throw new Error(`missing isolated work directory must fall back with a recovery explanation: ${continueText}`);
-}
-await page.click(".lifted-terminal button[data-act='stop-run']");
-await page.click("[data-dialog-id='stop-run'] button[data-act='confirm-stop-run']");
+forceArchivedLatestBoundRun = true;
 await page.click("button[data-act='return-page']");
 await page.waitForSelector(".lanes");
+await card("continue lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+await page.click('.board-run-history button[data-act="view-issue-run"]');
+try {
+  await page.waitForSelector('[data-terminal-surface="readonly"]', { timeout: 30000 });
+} catch {
+  const diagnostic = await page.evaluate(() => ({
+    frame: document.querySelector(".frame")?.className,
+    lifted: Boolean(document.querySelector(".lifted-run")),
+    readonly: Boolean(document.querySelector('[data-terminal-surface="readonly"]')),
+    terminal: Boolean(document.querySelector('[data-terminal-surface="live"]')),
+    boardHistory: document.querySelector(".board-run-history")?.textContent?.replace(/\s+/g, " "),
+    issueRail: document.querySelector(".workspace-right-rail")?.textContent?.replace(/\s+/g, " "),
+  }));
+  throw new Error(`second stopped Run focus did not render readonly terminal: ${JSON.stringify(diagnostic)}`);
+}
+if (await page.locator(".workspace-rail-header button[data-act='continue-run']").count() !== 1) {
+  throw new Error("an archived latest bound Run must keep Continue in the Issue header");
+}
+if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 0) {
+  throw new Error("an archived latest bound Run must not expose Continue on an older visible history row");
+}
+forceArchivedLatestBoundRun = false;
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
+await card("continue lifecycle issue").locator(".issue-card-main").click();
+await page.waitForSelector(".board-run-history");
+await page.click('.board-run-history button[data-act="view-issue-run"]');
+await page.waitForSelector('[data-terminal-surface="readonly"]');
+if (await page.locator(".workspace-run-history-item button[data-act='continue-run']").count() !== 1) {
+  throw new Error("the latest execution-stopped Run should expose Continue in its history row");
+}
+await page.click(".workspace-run-history-item button[data-act='continue-run']");
+await page.waitForTimeout(100);
+const continued = await hostSnapshot(page, url);
+const lifecycleRuns = continued.runs.filter((run) => run.issueId === "you/lifecycle#2");
+if (lifecycleRuns.length !== 1 || lifecycleRuns[0].status !== "ended") {
+  throw new Error(`Continue must not fall back from a missing isolated worktree: ${JSON.stringify(lifecycleRuns)}`);
+}
+if (!lifecycleRuns[0].failure?.includes("Continue failed")) {
+  throw new Error(`a rejected Continue attempt must leave a persistent diagnosis: ${JSON.stringify(lifecycleRuns[0])}`);
+}
 
+await page.click("button[data-act='return-page']");
+await page.waitForSelector(".lanes");
 await closeInspectorIfOpen();
 await card("release lifecycle issue").locator(".issue-card-main").click();
 await page.waitForSelector(".board-run-history");
@@ -377,7 +550,6 @@ if (await page.$(".lifted-run") || await page.$(".run-dock")) {
 }
 await page.click('.board-run-history button[data-act="view-issue-run"]');
 await page.waitForSelector('[data-terminal-surface="readonly"]');
-await page.click('.workspace-rail-section[data-workspace-section="actions"] > summary');
 await page.click(".issue-detail button[data-act='release-claim']");
 await page.click("button[data-act='return-page']");
 await page.waitForSelector('[data-lane="frontier"] .issue-card:has-text("release lifecycle issue")');

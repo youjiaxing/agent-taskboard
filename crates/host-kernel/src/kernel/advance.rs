@@ -184,19 +184,14 @@ impl HostKernel {
     }
 
     pub(crate) fn harvest_live_signals(&mut self) {
-        let ids: Vec<String> = self.live.keys().cloned().collect();
-        for id in ids {
-            let _ = self.harvest_run_signals(&id);
-        }
-    }
-
-    pub(crate) fn reharvest_persisted_hook_state(&mut self) {
-        let ids = self
+        let ids: Vec<String> = self
             .runs
             .iter()
-            .filter(|run| run.hook_dir.is_some())
+            .filter(|run| {
+                run.is_active() || (run.native_session_id.is_none() && run.hook_dir.is_some())
+            })
             .map(|run| run.id.clone())
-            .collect::<Vec<_>>();
+            .collect();
         for id in ids {
             let _ = self.harvest_run_signals(&id);
         }
@@ -231,11 +226,10 @@ impl HostKernel {
             run.session_end || session_signals.session_end || file_signals.session_end;
         let stop_failure =
             run.stop_failure || session_signals.stop_failure || file_signals.stop_failure;
-        let native_session_id = run
+        let native_session_id = file_signals
             .native_session_id
-            .clone()
-            .or(session_signals.session_id)
-            .or(file_signals.session_id);
+            .or(session_signals.native_session_id)
+            .or_else(|| run.native_session_id.clone());
         if run.session_end == session_end
             && run.stop_failure == stop_failure
             && run.native_session_id == native_session_id
@@ -317,6 +311,20 @@ impl HostKernel {
         if previous.self_check {
             return;
         }
+        if previous
+            .native_session_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            let mut runs = self.runs.clone();
+            if let Some(run) = runs.iter_mut().find(|run| run.id == previous.id) {
+                run.self_check_attempted = true;
+                run.failure =
+                    Some("自动自检启动失败，上一 Run 没有可恢复的 Agent 原生会话 ID。".into());
+            }
+            let _ = self.commit_run_records(runs);
+            return;
+        }
         let agent = match self
             .agents
             .iter()
@@ -346,6 +354,9 @@ impl HostKernel {
                 Some(kernel::run::PreviousRun {
                     id: previous.id.clone(),
                     native_session_id: previous.native_session_id.clone(),
+                    task_summary: Some(
+                        advance::self_check_summary(self.appearance.language).into(),
+                    ),
                     working_directory: previous.working_directory.clone(),
                     isolated: previous.isolated,
                     self_check: true,

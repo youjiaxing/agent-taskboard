@@ -227,10 +227,18 @@ pub trait AgentPort: Send + Sync {
     fn assemble_argv_for_resume(
         &self,
         executable: &Path,
-        values: &BTreeMap<String, String>,
-        _session_id: &str,
+        _values: &BTreeMap<String, String>,
+        session_id: &str,
     ) -> Vec<String> {
-        self.assemble_argv_for(executable, values)
+        vec![
+            executable.to_string_lossy().into_owned(),
+            "--resume".into(),
+            session_id.to_string(),
+        ]
+    }
+
+    fn resume_confirmation_supported(&self) -> bool {
+        true
     }
 
     fn append_opening_prompt(&self, _argv: &mut Vec<String>, _prompt: &str) -> bool {
@@ -274,6 +282,14 @@ pub trait AgentPort: Send + Sync {
         _project_dir: &Path,
     ) -> Result<CompletionHookPlan, String> {
         Err("completion hooks unsupported".into())
+    }
+
+    fn cleanup_completion_hooks(
+        &self,
+        _sink_dir: &Path,
+        _project_dir: &Path,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     fn read_completion_signals(&self, sink_dir: &Path) -> CompletionSignals {
@@ -473,13 +489,14 @@ impl AgentPort for MemoryAgent {
     fn assemble_argv_for_resume(
         &self,
         executable: &Path,
-        values: &BTreeMap<String, String>,
+        _values: &BTreeMap<String, String>,
         session_id: &str,
     ) -> Vec<String> {
-        let mut argv = grok::grok_argv(executable, values, false);
-        argv.push("--resume".into());
-        argv.push(session_id.to_string());
-        argv
+        vec![
+            executable.to_string_lossy().into_owned(),
+            "--resume".into(),
+            session_id.to_string(),
+        ]
     }
 
     fn native_isolation(&self) -> bool {

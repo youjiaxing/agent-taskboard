@@ -7,10 +7,11 @@ use crate::agent::{
     AgentField, AgentFieldKind, AgentPort, AgentSummary, PrefillSource, ProbeResult,
     RunLaunchConfig, RunLaunchForm,
 };
-use crate::{IssueRecord, Language, LaunchEnvPort};
+use crate::{ChangeNote, IssueRecord, Language, LaunchEnvPort};
 
 pub const INITIAL_INSTRUCTION: &str = "initial-instruction";
 pub const ISOLATION_FIELD: &str = "isolation";
+const MAX_TASK_SUMMARY_CHARS: usize = 120;
 
 pub fn is_ephemeral_field(id: &str) -> bool {
     id == INITIAL_INSTRUCTION || id == ISOLATION_FIELD
@@ -135,6 +136,44 @@ pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
         issue.url,
         issue.title
     )
+}
+
+pub fn task_summary_for_issue(issue: &IssueRecord) -> String {
+    bounded_task_summary(&format!("#{} {}", issue.number, issue.title))
+}
+
+pub fn task_summary_from_opening(opening: &str, notes: &[ChangeNote]) -> Option<String> {
+    let opening = opening_without_notes(opening, notes);
+    let first_line = opening
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!normalized.is_empty()).then(|| bounded_task_summary(&normalized))
+}
+
+fn opening_without_notes<'a>(opening: &'a str, notes: &[ChangeNote]) -> &'a str {
+    let formatted = crate::changes::format_notes(notes);
+    if formatted.is_empty() {
+        return opening;
+    }
+    let opening = opening.trim_end();
+    opening
+        .strip_suffix(&formatted)
+        .map(|without_notes| without_notes.trim_end())
+        .unwrap_or(opening)
+}
+
+fn bounded_task_summary(text: &str) -> String {
+    if text.chars().count() <= MAX_TASK_SUMMARY_CHARS {
+        return text.to_string();
+    }
+    let mut truncated = text
+        .chars()
+        .take(MAX_TASK_SUMMARY_CHARS - 3)
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 pub fn localize_fields(
@@ -366,10 +405,9 @@ pub fn side_effect_warnings(
 
 pub fn isolation_missing_tree_note(language: Language) -> String {
     match language {
-        Language::ZhCn => "上次的隔离执行目录已经不在，已回到 Project 主目录。".into(),
+        Language::ZhCn => "上次的隔离执行目录已经不在，无法继续恢复。".into(),
         Language::En => {
-            "The previous isolated work directory is gone. This Run uses the Project directory."
-                .into()
+            "The previous isolated work directory is gone; the session cannot be resumed.".into()
         }
     }
 }
@@ -389,6 +427,34 @@ pub fn git_worktrees(project_dir: &Path) -> Vec<PathBuf> {
         .lines()
         .filter_map(|line| line.strip_prefix("worktree ").map(PathBuf::from))
         .collect()
+}
+
+pub fn is_project_worktree(project_dir: &Path, candidate: &Path) -> bool {
+    if !candidate.is_dir()
+        || !git_worktrees(project_dir)
+            .iter()
+            .any(|path| same_path(path, candidate))
+    {
+        return false;
+    }
+    git_common_dir(project_dir).is_some_and(|project_git| {
+        git_common_dir(candidate)
+            .is_some_and(|candidate_git| same_path(&project_git, &candidate_git))
+    })
+}
+
+fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common_dir = String::from_utf8(output.stdout).ok()?;
+    let common_dir = PathBuf::from(common_dir.trim());
+    common_dir.is_dir().then_some(common_dir)
 }
 
 pub fn new_git_worktree(project_dir: &Path, before: &[PathBuf]) -> Option<PathBuf> {
@@ -491,8 +557,16 @@ pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) 
 
 #[cfg(test)]
 mod tests {
-    use super::localize_fields;
+    use super::{bounded_task_summary, localize_fields, MAX_TASK_SUMMARY_CHARS};
     use crate::{AgentPort, AntigravityAdapter, CodexAdapter, GrokAdapter, Language};
+
+    #[test]
+    fn task_summary_is_bounded_by_character_count() {
+        let text = "任".repeat(MAX_TASK_SUMMARY_CHARS + 1);
+        let summary = bounded_task_summary(&text);
+        assert_eq!(summary.chars().count(), MAX_TASK_SUMMARY_CHARS);
+        assert!(summary.ends_with("..."));
+    }
 
     #[test]
     fn localized_codex_fields_explain_sandbox_approval_and_profile() {

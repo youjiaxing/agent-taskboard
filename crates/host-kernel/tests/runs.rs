@@ -125,6 +125,10 @@ fn missing_grok_lists_command_path_and_known_locations() {
     assert!(run.issue_id.is_none());
     assert_eq!(run.status, RunStatus::Ended);
     assert_eq!(run.agent_name, "Grok Build");
+    assert_eq!(
+        run.task_summary.as_deref(),
+        Some("run lifecycle integration")
+    );
     let failure = run.failure.as_deref().unwrap();
     assert!(failure.contains("grok"), "{failure}");
     assert!(failure.contains("/opt/empty"), "{failure}");
@@ -139,6 +143,31 @@ fn missing_grok_lists_command_path_and_known_locations() {
         Some(host_kernel::RunStartResult::Failed { .. })
     ));
     assert_eq!(h.sessions.spawn_count(), 0);
+}
+
+#[test]
+fn run_task_summary_persists_and_legacy_records_load_unnamed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    let project_id = register(&mut h.host, &dir);
+
+    let started = start_unbound(&mut h.host, &project_id).unwrap();
+    assert_eq!(
+        started.snapshot.runs[0].task_summary.as_deref(),
+        Some("run lifecycle integration")
+    );
+    let runs_path = h.host.snapshot().data.host_dir.join("runs.json");
+    drop(h);
+
+    let mut legacy: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(&runs_path).unwrap()).unwrap();
+    legacy[0].as_object_mut().unwrap().remove("taskSummary");
+    std::fs::write(&runs_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+    let h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    assert!(h.host.snapshot().run_persistence_recovery.is_none());
+    assert_eq!(h.host.snapshot().runs[0].task_summary, None);
 }
 
 #[test]

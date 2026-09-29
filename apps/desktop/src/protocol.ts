@@ -511,6 +511,7 @@ export type IssueDetail = {
   executionStopped?: boolean;
   waitingForUser?: boolean;
   activeRunId?: string | null;
+  latestBoundRunId?: string | null;
 };
 
 export type IssueDocumentFailure = {
@@ -795,6 +796,7 @@ export type RunSummary = {
   agentId: string;
   agentName: string;
   issueId?: string | null;
+  taskSummary?: string | null;
   unbound: boolean;
   status: RunStatus;
   waitingForUser?: boolean;
