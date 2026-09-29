@@ -167,7 +167,7 @@ let activeSidebarMenu = await openSidebarRunMenu(activeSidebarRun);
 const activeSidebarActions = await activeSidebarMenu.locator("button").evaluateAll((nodes) =>
   nodes.map((node) => node.dataset.act),
 );
-if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run|set-run-pinned") {
+if (activeSidebarActions.join("|") !== "open-run-window|open-usage-run|stop-run") {
   throw new Error(`active sidebar Run actions are wrong: ${JSON.stringify(activeSidebarActions)}`);
 }
 const endedRunIds = (await hostSnapshot(page, url)).runs.filter((run) => run.status === "ended").map((run) => run.id);
@@ -177,9 +177,16 @@ for (const runId of endedRunIds) {
   const endedActions = await endedMenu.locator("button").evaluateAll((nodes) =>
     nodes.map((node) => node.dataset.act),
   );
-  if (endedActions.join("|") !== "open-usage-run|set-run-pinned|archive-run") {
+  if (endedActions.join("|") !== "open-usage-run") {
     throw new Error(`ended sidebar Run ${runId} exposes invalid actions: ${JSON.stringify(endedActions)}`);
   }
+}
+
+if (await activeSidebarRun.locator("[data-run-organization='set-run-pinned']").count() !== 1) {
+  throw new Error("active sidebar Run should expose a direct pin action");
+}
+if (await activeSidebarRun.locator("[data-run-organization='archive-run']").count() !== 0) {
+  throw new Error("active sidebar Run must not expose a direct archive action");
 }
 
 await activeSidebarRun.click({ button: "right" });
@@ -211,12 +218,16 @@ activeSidebarRun = page.locator(".side .run-row.waiting").first();
 await activeSidebarRun.locator(".run-main").focus();
 await page.keyboard.press("Tab");
 const keyboardAction = await page.evaluate(() => document.activeElement?.getAttribute("data-act"));
-if (keyboardAction !== "run-menu") {
-  throw new Error(`first keyboard-reachable Run action should open the Run menu, got ${keyboardAction}`);
+if (keyboardAction !== "set-run-pinned") {
+  throw new Error(`first keyboard-reachable Run action should be direct pin, got ${keyboardAction}`);
 }
-const beforeWindowFailure = await hostSnapshot(page, url);
 await page.keyboard.press("Enter");
+const keyboardRunId = await activeSidebarRun.getAttribute("data-run");
+await page.waitForSelector(`.side .run-row[data-run='${keyboardRunId}'][data-pinned='true']`);
+activeSidebarRun = page.locator(`.side .run-row[data-run='${keyboardRunId}']`);
+await activeSidebarRun.locator("button[data-act='run-menu']").click();
 await activeSidebarRun.locator(".run-row-menu").waitFor();
+const beforeWindowFailure = await hostSnapshot(page, url);
 await activeSidebarRun.locator("button[data-act='open-run-window']").focus();
 await page.keyboard.press("Enter");
 await page.waitForSelector(".run-window-error[role='alert']");

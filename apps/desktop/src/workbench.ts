@@ -164,7 +164,7 @@ export function fixedPanelResizeHandle(region: FixedPanelRegion): string {
 export function workbenchIssuePanel(copy: ShellCopy, board: BoardSnapshot): string {
   const runs = issueRuns(ui.snapshot!, board.selected?.id);
   const history = runs.length
-    ? `<section class="detail-block board-run-history"><h4>${escapeHtml(workspaceRailLabels().runs)}</h4>${workspaceRunHistory(copy, runs, { action: "view-issue-run" })}</section>`
+    ? `<section class="detail-block board-run-history"><h4>${escapeHtml(workspaceRailLabels().runs)}</h4>${workspaceRunHistory(copy, runs, { action: "view-issue-run", organizationSnapshot: ui.snapshot!, organizationMode: "icons" })}</section>`
     : "";
   return `<aside class="issue-detail fixed-right-rail" data-fixed-panel="right-rail">
     ${fixedPanelResizeHandle("right-rail")}

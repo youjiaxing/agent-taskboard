@@ -53,11 +53,14 @@ try {
   assert.deepEqual(pinnedRows.map((row) => row.run).sort(), [activeRunId, pendingRunId].sort(), "pinned Runs should remain visible in their owning Projects");
   assert.equal(new Set(pinnedRows.map((row) => row.project)).size, 2, "pinned Runs from different Projects must not share a Host-level group");
   await page.hover(`.run-row[data-run='${activeRunId}']`);
-  await page.click(`.run-row[data-run='${activeRunId}'] [data-act='run-menu']`);
+  assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] [data-run-organization='set-run-pinned']`).count(), 1, "active Run should expose direct pin action");
   assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] [data-act='archive-run']`).count(), 0, "active Run must not offer archive");
+  assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] .run-row-menu [data-act='set-run-pinned'], .run-row[data-run='${activeRunId}'] .run-row-menu [data-act='archive-run']`).count(), 0, "Run organization actions should not be duplicated in the sidebar menu");
   await page.hover(`.run-row[data-run='${pendingRunId}']`);
+  assert.equal(await page.locator(`.run-row[data-run='${pendingRunId}'] [data-run-organization='set-run-pinned']`).count(), 1, "ended Run should expose direct pin action");
+  assert.equal(await page.locator(`.run-row[data-run='${pendingRunId}'] [data-run-organization='archive-run']`).count(), 1, "ended Run should expose direct archive action");
   await page.click(`.run-row[data-run='${pendingRunId}'] [data-act='run-menu']`);
-  assert.equal(await page.locator(`.run-row[data-run='${pendingRunId}'] [data-act='archive-run']`).count(), 1, "ended Run should offer archive");
+  assert.equal(await page.locator(`.run-row[data-run='${pendingRunId}'] .run-row-menu [data-act='set-run-pinned'], .run-row[data-run='${pendingRunId}'] .run-row-menu [data-act='archive-run']`).count(), 0, "Run organization actions should not be duplicated in the ended sidebar menu");
   assert.equal(await page.locator(`.run-row[data-run='${activeRunId}'] .run-pin-marker`).count(), 1, "pinned Run should show a visible marker");
 
   await page.click(`.run-row[data-run='${pendingRunId}'] .run-main`);
@@ -259,8 +262,7 @@ try {
   await page.locator(".side button[data-act='focus-project']").first().click();
   await page.waitForSelector(".project-board");
   await page.hover(`.run-row[data-run='${activeRunId}']`);
-  await page.click(`.run-row[data-run='${activeRunId}'] [data-act='run-menu']`);
-  await page.click(`.run-row[data-run='${activeRunId}'] [data-act='set-run-pinned']`);
+  await page.click(`.run-row[data-run='${activeRunId}'] [data-run-organization='set-run-pinned']`);
   await page.waitForSelector("[data-run-persistence='write-error'] button[data-act='retry-run-organization']");
   await page.click("[data-run-persistence='write-error'] button[data-act='retry-run-organization']");
   await page.waitForFunction(() => !document.querySelector("[data-run-persistence='write-error']"));
