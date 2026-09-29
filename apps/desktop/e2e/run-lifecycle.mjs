@@ -126,6 +126,23 @@ for (const width of sidebarWidths) {
 await page.evaluate(() => {
   document.querySelector(".frame")?.style.removeProperty("--client-sidebar-width");
 });
+const hiddenActionLayout = await activeSidebarRun.evaluate((row) => {
+  row.classList.remove("active", "menu-open");
+  const main = row.querySelector(".run-main");
+  const actions = row.querySelector(".run-row-actions");
+  if (!(main instanceof HTMLElement) || !(actions instanceof HTMLElement)) {
+    throw new Error("waiting Run row should expose its main content and floating actions");
+  }
+  const style = getComputedStyle(main);
+  return {
+    paddingRight: style.paddingRight,
+    basePadding: style.getPropertyValue("--space-8").trim(),
+    actionsPosition: getComputedStyle(actions).position,
+  };
+});
+if (hiddenActionLayout.paddingRight !== hiddenActionLayout.basePadding || hiddenActionLayout.actionsPosition !== "absolute") {
+  throw new Error(`hidden Run actions must float without reserving row space: ${JSON.stringify(hiddenActionLayout)}`);
+}
 if (!(await activeSidebarRun.locator(".run-title").getAttribute("title"))) {
   throw new Error("Run title should expose its full value on hover");
 }
@@ -142,6 +159,8 @@ const englishActionLayout = await activeSidebarRun.evaluate((row) => {
   if (!(trigger instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) {
     throw new Error("active Run should expose its operation entry, title, and status");
   }
+  const wasActive = row.classList.contains("active");
+  row.classList.add("active");
   const originalLabel = trigger.textContent;
   trigger.textContent = "Actions";
   const layout = {
@@ -150,6 +169,7 @@ const englishActionLayout = await activeSidebarRun.evaluate((row) => {
     status: status.getBoundingClientRect().toJSON(),
   };
   trigger.textContent = originalLabel;
+  if (!wasActive) row.classList.remove("active");
   return layout;
 });
 if (englishActionLayout.title.right > englishActionLayout.label.left || englishActionLayout.status.right > englishActionLayout.label.left) {
