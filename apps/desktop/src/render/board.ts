@@ -470,7 +470,8 @@ function issueActions(copy: ShellCopy, board: BoardSnapshot, issue: IssueDetail,
   const inner = options.workspace
     ? `<div class="workspace-detail-statuses">${statusItems.join("")}</div>
        <div class="workspace-detail-actions">${actionItems.concat(issueMaintenanceActions, releaseClaim ? [releaseClaim] : []).join("")}</div>`
-    : `${statusItems.join("")}${actionItems.concat(releaseClaim ? [releaseClaim] : [], issueMaintenanceActions).join("")}`;
+    : `<div class="detail-statuses">${statusItems.join("")}</div>
+       <div class="detail-actions">${actionItems.concat(releaseClaim ? [releaseClaim] : [], issueMaintenanceActions).join("")}</div>`;
   return `<div class="detail-meta">
     ${inner}
   </div>${runStartError ? notice({ status: "danger", role: "alert", message: runStartError }) : ""}${canWrite ? formFeedback(openKey) : ""}`;
@@ -494,19 +495,31 @@ function issueBody(
   const showEditForm = editOpen && (canStartEdit || ui.issueEditDrafts.has(issueDraftKey(issue.id)));
   const relationSections = `<section class="${options.collapsibleRelations ? "detail-relation-group" : "detail-block"}">
       <h4>${escapeHtml(copy.family)}</h4>
-      <div class="tiny">${escapeHtml(copy.parent)}</div>
-      ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
-      <div class="tiny">${escapeHtml(copy.children)}</div>
-      ${issue.children.length ? issue.children.map((child) => issueLink(copy, child)).join("") : `<span class="muted">${escapeHtml(copy.noKids)}</span>`}
-      ${issue.children.length ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>` : ""}
+      <div class="detail-relation-items">
+        <div class="detail-relation-item">
+          <div class="tiny">${escapeHtml(copy.parent)}</div>
+          ${issue.parent ? issueLink(copy, issue.parent) : `<span class="muted">${escapeHtml(copy.noParent)}</span>`}
+        </div>
+        <div class="detail-relation-item">
+          <div class="tiny">${escapeHtml(copy.children)}</div>
+          ${issue.children.length ? issue.children.map((child) => issueLink(copy, child)).join("") : `<span class="muted">${escapeHtml(copy.noKids)}</span>`}
+          ${issue.children.length ? `<div><button type="button" data-act="filter-parent" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.onlyKids)}</button></div>` : ""}
+        </div>
+      </div>
     </section>
     <section class="${options.collapsibleRelations ? "detail-relation-group" : "detail-block"}">
       <h4>${escapeHtml(copy.deps)}</h4>
       ${showDependencyGraph ? `<button type="button" data-act="view-dependencies" data-id="${escapeHtml(issue.id)}">${escapeHtml(copy.viewDependencies)}</button>` : ""}
-      <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
-      ${issue.blockedBy.length ? issue.blockedBy.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`}
-      <div class="tiny">${escapeHtml(copy.blocking)}</div>
-      ${issue.blocking.length ? issue.blocking.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.none)}</span>`}
+      <div class="detail-relation-items">
+        <div class="detail-relation-item">
+          <div class="tiny">${escapeHtml(copy.blockedBy)}</div>
+          ${issue.blockedBy.length ? issue.blockedBy.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.noneBlock)}</span>`}
+        </div>
+        <div class="detail-relation-item">
+          <div class="tiny">${escapeHtml(copy.blocking)}</div>
+          ${issue.blocking.length ? issue.blocking.map((link) => issueLink(copy, link)).join("") : `<span class="muted">${escapeHtml(copy.none)}</span>`}
+        </div>
+      </div>
     </section>`;
   const relationBody = options.collapsibleRelations
     ? `<details class="detail-block detail-relations">
@@ -542,7 +555,10 @@ export function issueDetail(copy: ShellCopy, board: BoardSnapshot, options: Issu
   if (!issue) return `<div class="lane-empty">${escapeHtml(copy.pickIssue)}</div>`;
   return `<header class="detail-sticky">
       <div class="detail-title-row">
-        <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+        <div class="detail-hd">
+          <span class="detail-issue-number">#${issue.number}</span>
+          <span class="detail-issue-title">${escapeHtml(issue.title)}</span>
+        </div>
       </div>
       ${issueActions(copy, board, issue)}
     </header>
@@ -679,7 +695,10 @@ export function focusWorkspaceIssueRail(copy: ShellCopy, snap: Snapshot): string
     ${fixedPanelResizeHandle("right-rail")}
     <header class="workspace-rail-header">
       <div class="workspace-rail-kicker">${effectiveClientLanguage() === "zh-CN" ? "当前 Issue" : "Current Issue"}</div>
-      <div class="detail-hd">#${issue.number} ${escapeHtml(issue.title)}</div>
+      <div class="detail-hd">
+        <span class="detail-issue-number">#${issue.number}</span>
+        <span class="detail-issue-title">${escapeHtml(issue.title)}</span>
+      </div>
       ${issueActions(copy, board, issue, { workspace: true })}
     </header>
     ${section("issue", labels.issue, issueBody(copy, board, issue, true, { collapsibleRelations: true }), "detail-scroll")}
@@ -772,7 +791,6 @@ export function issueCommentForm(copy: ShellCopy, issue: IssueDetail): string {
   const pending = ui.formOperations.pending.has(key);
   return `<section class="detail-block issue-editor issue-comment-editor">
     <form data-act="issue-comment" data-form="issue-comment" data-id="${escapeHtml(issue.id)}" aria-busy="${pending ? "true" : "false"}">
-      <h4>${escapeHtml(copy.addComment)}</h4>
       ${formField({
         label: copy.addComment,
         required: true,
