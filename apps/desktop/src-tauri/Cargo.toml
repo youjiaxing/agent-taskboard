@@ -1,6 +1,6 @@
 [package]
 name = "agent-taskboard"
-version = "0.1.15"
+version = "0.1.16"
 description = "Agent Taskboard desktop shell"
 edition = "2021"
 
