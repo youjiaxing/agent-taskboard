@@ -15,16 +15,45 @@ impl HostKernel {
     }
 
     pub(crate) fn persist_run_records(&self, runs: &Vec<RunSummary>) -> Result<(), KernelError> {
-        write_json(&self.runs_path(), runs)
+        self.persist_run_records_with_private(runs, &self.native_sync_private)
+    }
+
+    pub(crate) fn persist_run_records_with_private(
+        &self,
+        runs: &Vec<RunSummary>,
+        private: &BTreeMap<String, native_sync::NativeSyncPrivate>,
+    ) -> Result<(), KernelError> {
+        let records = runs
+            .iter()
+            .cloned()
+            .map(|summary| {
+                let native_sync_private = private.get(&summary.id).cloned();
+                native_sync::StoredRunRecord {
+                    summary,
+                    native_sync_private,
+                }
+            })
+            .collect::<Vec<_>>();
+        write_json(&self.runs_path(), &records)
     }
 
     pub(crate) fn commit_run_records(&mut self, runs: Vec<RunSummary>) -> Result<(), KernelError> {
+        let private = self.native_sync_private.clone();
+        self.commit_run_records_with_private(runs, private)
+    }
+
+    pub(crate) fn commit_run_records_with_private(
+        &mut self,
+        runs: Vec<RunSummary>,
+        private: BTreeMap<String, native_sync::NativeSyncPrivate>,
+    ) -> Result<(), KernelError> {
         self.ensure_run_persistence_writable()?;
-        if let Err(err) = self.persist_run_records(&runs) {
+        if let Err(err) = self.persist_run_records_with_private(&runs, &private) {
             self.note_run_persistence_write_error(&err);
             return Err(err);
         }
         self.runs = runs;
+        self.native_sync_private = private;
         self.run_persistence_write_error = None;
         Ok(())
     }

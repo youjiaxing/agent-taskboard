@@ -47,6 +47,13 @@ export function runOrganizationLabels() {
         conflictRevisionChanged: "Project 墓碑已经变化，请关闭后重新发起恢复。",
         conflictActiveProject: "同一 Project ID 同时存在登记与墓碑，需要先修复 Host 设置。",
         persistenceRetryAction: "重试刚才的操作",
+        nativeSyncRetry: "重试原生会话同步",
+        nativeSyncFailed: "原生会话同步失败",
+        nativeSyncUnsupported: "当前 Agent 不支持原生会话同步",
+        nativeSyncMissingSession: "未捕获到原生会话 ID",
+        nativeSyncPending: "原生会话同步排队中",
+        nativeSyncSyncing: "正在同步原生会话",
+        nativeSyncSynced: "原生会话已同步",
         unknownProject: "Project",
         close: "关闭",
         cancel: "取消",
@@ -89,6 +96,13 @@ export function runOrganizationLabels() {
         conflictRevisionChanged: "The Project tombstone changed. Close this dialog and start the restore again.",
         conflictActiveProject: "The same Project ID has both an active registration and a tombstone. Repair the Host settings first.",
         persistenceRetryAction: "Retry the last action",
+        nativeSyncRetry: "Retry native session sync",
+        nativeSyncFailed: "Native session sync failed",
+        nativeSyncUnsupported: "This Agent does not support native session sync",
+        nativeSyncMissingSession: "The native session ID was not captured",
+        nativeSyncPending: "Native session sync is queued",
+        nativeSyncSyncing: "Syncing the native session",
+        nativeSyncSynced: "Native session synced",
         unknownProject: "Project",
         close: "Close",
         cancel: "Cancel",
@@ -122,6 +136,23 @@ export function runPersistenceWritesBlocked(snap: Snapshot): boolean {
 
 function actionKey(action: "pin" | "archive" | "restore", runId: string): string {
   return `${action}:${runId}`;
+}
+
+function nativeSyncActionKey(runId: string): string {
+  return `native-sync:${runId}`;
+}
+
+function nativeSyncLabel(run: RunSummary): string {
+  const labels = runOrganizationLabels();
+  switch (run.nativeSync?.state) {
+    case "failed": return labels.nativeSyncFailed;
+    case "unsupported": return labels.nativeSyncUnsupported;
+    case "missing-native-session": return labels.nativeSyncMissingSession;
+    case "pending": return labels.nativeSyncPending;
+    case "syncing": return labels.nativeSyncSyncing;
+    case "synced": return labels.nativeSyncSynced;
+    default: return "";
+  }
 }
 
 function runMenuLabel(snap: Snapshot, run: RunSummary): string {
@@ -297,6 +328,7 @@ export function runArchivePage(copy: ShellCopy, snap: Snapshot, mobile = false):
   const detail = selected
     ? `<section class="archive-run-detail" data-archive-detail="${escapeHtml(selected.id)}">
         <header><div><span>${escapeHtml(projectLabel(snap, selected.projectId))}</span><h2>${escapeHtml(selected.agentName)} · ${escapeHtml(selected.unbound || !selected.issueId ? copy.unboundIssue : selected.issueId)}</h2><small>${escapeHtml(labels.archivedAt)} ${escapeHtml(archivedAt(selected))}</small></div></header>
+        ${selected.nativeSync ? `<section class="archive-native-sync" data-native-sync="${escapeHtml(selected.id)}"><div><h3>${escapeHtml(nativeSyncLabel(selected))}</h3>${selected.nativeSync.lastError ? `<small>${escapeHtml(selected.nativeSync.lastError)}</small>` : ""}</div>${selected.nativeSync.state === "failed" || selected.nativeSync.state === "missing-native-session" ? button({ id: "retry-native-sync", label: labels.nativeSyncRetry, busy: ui.runOrganizationPending.has(nativeSyncActionKey(selected.id)), data: { id: selected.id } }, { variant: "secondary" }) : ""}</section>` : ""}
         <section><h3>${escapeHtml(labels.telemetry)}</h3>${archiveTelemetry(selected)}</section>
         <section class="archive-output"><h3>${escapeHtml(labels.recentOutput)}</h3><pre aria-readonly="true">${escapeHtml(selected.recentOutput ?? "")}</pre></section>
       </section>`

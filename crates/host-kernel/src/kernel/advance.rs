@@ -239,6 +239,29 @@ impl HostKernel {
         run.session_end = session_end;
         run.stop_failure = stop_failure;
         run.native_session_id = native_session_id;
+        if run.native_session_id.is_some()
+            && run
+                .native_sync
+                .as_ref()
+                .is_some_and(|sync| sync.state == NativeSyncState::MissingNativeSession)
+        {
+            let desired_state = run
+                .native_sync
+                .as_ref()
+                .map(|sync| sync.desired_state)
+                .unwrap_or(if run.is_archived() {
+                    NativeSyncDesiredState::Archived
+                } else {
+                    NativeSyncDesiredState::Active
+                });
+            run.native_sync = Some(NativeSyncSummary {
+                desired_state,
+                state: NativeSyncState::Pending,
+                attempts: 0,
+                next_retry_at_ms: Some(self.now_ms),
+                last_error: None,
+            });
+        }
         self.commit_run_records(runs)
     }
 
@@ -288,6 +311,20 @@ impl HostKernel {
         if previous.self_check {
             return;
         }
+        if previous
+            .native_session_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            let mut runs = self.runs.clone();
+            if let Some(run) = runs.iter_mut().find(|run| run.id == previous.id) {
+                run.self_check_attempted = true;
+                run.failure =
+                    Some("自动自检启动失败，上一 Run 没有可恢复的 Agent 原生会话 ID。".into());
+            }
+            let _ = self.commit_run_records(runs);
+            return;
+        }
         let agent = match self
             .agents
             .iter()
@@ -304,30 +341,29 @@ impl HostKernel {
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
         let opening = advance::self_check_text(self.appearance.language);
-        if let Err(error) = self.start_unbound_run(
-            &previous.project_id,
-            RunLaunchConfig {
-                agent_id: previous.agent_id.clone(),
-                values,
-                opening_text: opening,
-            },
-            Some(issue_id.to_string()),
-            false,
-            Some(kernel::run::PreviousRun {
-                id: previous.id.clone(),
-                native_session_id: previous.native_session_id.clone(),
-                task_summary: Some(advance::self_check_summary(self.appearance.language).into()),
-                working_directory: previous.working_directory.clone(),
-                isolated: previous.isolated,
-                self_check: true,
-            }),
-        ) {
-            let mut runs = self.runs.clone();
-            if let Some(run) = runs.iter_mut().find(|run| run.id == previous.id) {
-                run.self_check_attempted = true;
-                run.failure = Some(format!("自动自检启动失败，未开启新会话：{error}"));
-            }
-            let _ = self.commit_run_records(runs);
+        if self
+            .start_unbound_run(
+                &previous.project_id,
+                RunLaunchConfig {
+                    agent_id: previous.agent_id.clone(),
+                    values,
+                    opening_text: opening,
+                },
+                Some(issue_id.to_string()),
+                false,
+                Some(kernel::run::PreviousRun {
+                    id: previous.id.clone(),
+                    native_session_id: previous.native_session_id.clone(),
+                    task_summary: Some(
+                        advance::self_check_summary(self.appearance.language).into(),
+                    ),
+                    working_directory: previous.working_directory.clone(),
+                    isolated: previous.isolated,
+                    self_check: true,
+                }),
+            )
+            .is_err()
+        {
             return;
         }
     }

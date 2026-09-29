@@ -114,6 +114,7 @@ impl HostKernel {
             | "archiveRun"
             | "prepareRestoreRun"
             | "restoreRun"
+            | "retryNativeSync"
             | "retryRunPersistenceLoad"
             | "listArchivedRuns"
             | "injectRunInput"

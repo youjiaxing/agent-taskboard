@@ -391,6 +391,18 @@ impl HostKernel {
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
         let run = &self.runs[position];
         if run.is_archived() {
+            if run.native_sync.is_none() {
+                let mut runs = self.runs.clone();
+                let mut private = self.native_sync_private.clone();
+                let summary = self.prepare_native_sync_intent(
+                    &runs[position],
+                    &mut private,
+                    NativeSyncDesiredState::Archived,
+                    self.now_ms,
+                );
+                runs[position].native_sync = Some(summary);
+                self.commit_run_records_with_private(runs, private)?;
+            }
             return Ok(());
         }
         if run.status != RunStatus::Ended {
@@ -401,7 +413,15 @@ impl HostKernel {
         let mut runs = self.runs.clone();
         runs[position].pinned_at_ms = None;
         runs[position].archived_at_ms = Some(self.now_ms);
-        self.commit_run_records(runs)?;
+        let mut private = self.native_sync_private.clone();
+        let summary = self.prepare_native_sync_intent(
+            &runs[position],
+            &mut private,
+            NativeSyncDesiredState::Archived,
+            self.now_ms,
+        );
+        runs[position].native_sync = Some(summary);
+        self.commit_run_records_with_private(runs, private)?;
         self.clear_run_navigation(run_id);
         Ok(())
     }
@@ -556,7 +576,15 @@ impl HostKernel {
     fn unarchive_run(&mut self, position: usize) -> Result<(), KernelError> {
         let mut runs = self.runs.clone();
         runs[position].archived_at_ms = None;
-        self.commit_run_records(runs)
+        let mut private = self.native_sync_private.clone();
+        let summary = self.prepare_native_sync_intent(
+            &runs[position],
+            &mut private,
+            NativeSyncDesiredState::Active,
+            self.now_ms,
+        );
+        runs[position].native_sync = Some(summary);
+        self.commit_run_records_with_private(runs, private)
     }
 
     pub(crate) fn list_archived_runs(&self, project_id: Option<&str>) -> Vec<RunSummary> {
@@ -629,6 +657,7 @@ impl HostKernel {
     }
 
     pub(crate) fn observe_live_runs(&mut self) {
+        self.reconcile_native_sync();
         self.discover_isolated_directories();
         self.ingest_telemetry();
         self.harvest_live_signals();
@@ -673,6 +702,7 @@ impl HostKernel {
                 .push(HostEvent::Waiting { run_id: id.clone() });
             self.push_notification(NotificationKind::Waiting, &id);
         }
+        self.reconcile_native_sync();
     }
 
     pub(crate) fn push_notification(&mut self, kind: NotificationKind, run_id: &str) {
@@ -731,6 +761,18 @@ impl HostKernel {
     ) -> Result<(), KernelError> {
         self.ensure_run_persistence_writable()?;
         self.harvest_run_signals(run_id)?;
+        for _ in 0..5 {
+            let captured = self
+                .runs
+                .iter()
+                .find(|run| run.id == run_id)
+                .is_some_and(|run| run.native_session_id.is_some());
+            if captured {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            self.harvest_run_signals(run_id)?;
+        }
         let recent_output = self.live.get(run_id).map(|session| session.recent_output());
         let hook_cleanup = self
             .runs
@@ -945,6 +987,12 @@ impl HostKernel {
                 .as_deref()
                 .is_none_or(|id| id.is_empty())
         }) {
+            if let Some(previous) = previous.as_ref() {
+                self.persist_resume_failure(
+                    &previous.id,
+                    "上次 Run 没有可恢复的 Agent 原生会话 ID。",
+                )?;
+            }
             return Err(KernelError::Denied(
                 "上次 Run 没有可恢复的 Agent 原生会话 ID。".into(),
             ));
@@ -969,9 +1017,9 @@ impl HostKernel {
                     Path::new(&previous.working_directory),
                 )
             {
-                return Err(KernelError::Denied(
-                    super::isolation::missing_directory_note(language),
-                ));
+                let reason = super::isolation::missing_directory_note(language);
+                self.persist_resume_failure(&previous.id, &reason)?;
+                return Err(KernelError::Denied(reason));
             }
             config.values.remove(launch::ISOLATION_FIELD);
             if previous.isolated {
@@ -979,9 +1027,9 @@ impl HostKernel {
                 if !previous.working_directory.is_empty() && recorded.is_dir() {
                     cwd = recorded;
                 } else {
-                    return Err(KernelError::Denied(
-                        super::isolation::missing_directory_note(language),
-                    ));
+                    let reason = super::isolation::missing_directory_note(language);
+                    self.persist_resume_failure(&previous.id, &reason)?;
+                    return Err(KernelError::Denied(reason));
                 }
             }
         } else {
@@ -1037,7 +1085,11 @@ impl HostKernel {
                 return Err(KernelError::Protocol(err));
             }
         }
-        let pending = changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
+        if !from_form {
+            let pending =
+                changes::pending_notes(&self.change_notes, project_id, issue_id.as_deref());
+            config.opening_text = changes::append_notes(&config.opening_text, &pending);
+        }
         let task_summary = previous
             .as_ref()
             .and_then(|previous| previous.task_summary.clone())
@@ -1047,10 +1099,7 @@ impl HostKernel {
                     .and_then(|issue_id| self.issue_by_id(issue_id))
                     .map(|issue| launch::task_summary_for_issue(&issue))
             })
-            .or_else(|| launch::task_summary_from_opening(&config.opening_text, &pending));
-        if !from_form {
-            config.opening_text = changes::append_notes(&config.opening_text, &pending);
-        }
+            .or_else(|| launch::task_summary_from_opening(&config.opening_text, &[]));
         let (previous_run_id, resume_session_id) = match &previous {
             Some(previous) => (
                 Some(previous.id.clone()),
@@ -1108,7 +1157,7 @@ impl HostKernel {
                 .find(|run| run.id == previous.id)
                 .and_then(|run| run.hook_dir.clone())
         });
-        if issue_id.is_some() && agent.completion_hooks_supported() {
+        if agent.completion_hooks_supported() {
             let dir = hook_dir.clone().unwrap_or_else(|| {
                 self.data
                     .host_dir
@@ -1125,11 +1174,7 @@ impl HostKernel {
                 hook_plan = Some(plan);
             }
         }
-        if previous.is_some()
-            && issue_id.is_some()
-            && agent.completion_hooks_supported()
-            && hook_plan.is_none()
-        {
+        if previous.is_some() && agent.completion_hooks_supported() && hook_plan.is_none() {
             let reason = "无法为恢复后的 Run 重新挂载原生会话 recorder。";
             if let Some(previous_run_id) = previous_run_id.as_deref() {
                 self.persist_resume_failure(previous_run_id, reason)?;
@@ -1151,10 +1196,10 @@ impl HostKernel {
             hook_plan.as_ref(),
         );
         result.record.task_summary = task_summary;
-        result.record.hook_dir = hook_dir.clone();
+        result.record.hook_dir = hook_dir;
         result.record.hooks_attached = hook_plan.is_some();
         if result.session.is_none() {
-            if let (Some(agent), Some(hook_dir)) = (Some(agent.as_ref()), hook_dir.as_ref()) {
+            if let Some(hook_dir) = result.record.hook_dir.as_ref() {
                 if let Err(error) = agent.cleanup_completion_hooks(hook_dir, &project_dir) {
                     result.record.failure = Some(match result.record.failure.take() {
                         Some(previous) if !previous.is_empty() => {
@@ -1220,11 +1265,18 @@ impl HostKernel {
             return Err(KernelError::Denied(reason));
         }
         runs.push(result.record.clone());
-        if let Err(err) = self.persist_run_records(&runs) {
+        let mut private = self.native_sync_private.clone();
+        if let Some(context) = result.native_sync_context.take() {
+            private.insert(
+                result.record.id.clone(),
+                native_sync::NativeSyncPrivate {
+                    revision: 0,
+                    context,
+                },
+            );
+        }
+        if let Err(err) = self.persist_run_records_with_private(&runs, &private) {
             self.note_run_persistence_write_error(&err);
-            if let Some(hook_dir) = hook_dir.as_ref() {
-                let _ = agent.cleanup_completion_hooks(hook_dir, &project_dir);
-            }
             if let Some(session) = result.session.as_ref() {
                 session.stop();
             }
@@ -1239,6 +1291,7 @@ impl HostKernel {
             });
         }
         self.runs = runs;
+        self.native_sync_private = private;
         self.run_persistence_write_error = None;
         let run_id = result.record.id.clone();
         self.pending_events.push(HostEvent::RunStatusChanged {
@@ -1258,10 +1311,8 @@ impl HostKernel {
         if let Some(session) = result.session {
             self.live.insert(run_id, session);
             let mut warnings = Vec::new();
-            if previous.is_none() {
-                if let Err(err) = self.remember_launch(project_id, &config) {
-                    warnings.push(err.to_string());
-                }
+            if let Err(err) = self.remember_launch(project_id, &config) {
+                warnings.push(err.to_string());
             }
             self.launch_form = None;
             if let Err(err) = self.clear_pending_notes(project_id, issue_id.as_deref()) {
@@ -1323,49 +1374,32 @@ impl HostKernel {
         if !self.execution_stopped(issue_id) {
             return Err(KernelError::Denied("issue is not execution-stopped".into()));
         }
-        let last_id = self
+        let last_run_id = self
             .last_bound_run(issue_id)
             .map(|run| run.id.clone())
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
-        self.harvest_run_signals(&last_id)?;
+        self.harvest_run_signals(&last_run_id)?;
         let last = self
-            .runs
-            .iter()
-            .find(|run| run.id == last_id)
+            .last_bound_run(issue_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
-        if last
-            .native_session_id
-            .as_deref()
-            .is_none_or(|id| id.is_empty())
-        {
-            self.persist_resume_failure(&last.id, "上次 Run 没有可恢复的 Agent 原生会话 ID。")?;
-            return Err(KernelError::Denied(
-                "上次 Run 没有可恢复的 Agent 原生会话 ID。".into(),
-            ));
-        }
-        let project_dir = self
-            .projects
+        let agent = self
+            .agents
             .iter()
-            .find(|project| project.id == last.project_id)
-            .map(|project| project.local_path.as_path())
-            .ok_or_else(|| KernelError::Protocol("unknown project".into()))?;
-        if last.isolated
-            && !launch::is_project_worktree(project_dir, Path::new(&last.working_directory))
-        {
-            self.persist_resume_failure(
-                &last.id,
-                &super::isolation::missing_directory_note(self.appearance.language),
-            )?;
-            return Err(KernelError::Denied(
-                super::isolation::missing_directory_note(self.appearance.language),
-            ));
-        }
+            .find(|agent| agent.id() == last.agent_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
+        let values = self
+            .launch_defaults
+            .get(&last.project_id)
+            .and_then(|agents| agents.get(&last.agent_id))
+            .cloned()
+            .unwrap_or_else(|| agent.seed_config());
         self.start_unbound_run(
             &last.project_id,
             RunLaunchConfig {
                 agent_id: last.agent_id.clone(),
-                values: Default::default(),
+                values,
                 opening_text: String::new(),
             },
             Some(issue_id.to_string()),
@@ -1383,8 +1417,8 @@ impl HostKernel {
 
     pub(crate) fn load_persisted_runs(&mut self) -> Vec<String> {
         let was_recovering = self.run_persistence_recovery.is_some();
-        let mut runs = match self.read_persisted_runs() {
-            Ok(Some(runs)) => runs,
+        let (mut runs, mut private) = match self.read_persisted_runs() {
+            Ok(Some(records)) => records,
             Ok(None) if !was_recovering => {
                 self.run_persistence_recovery = None;
                 return Vec::new();
@@ -1414,6 +1448,13 @@ impl HostKernel {
                 crashed_ids.push(run.id.clone());
                 persisted_changes = true;
             }
+            if let Some(native_sync) = &mut run.native_sync {
+                if native_sync.state == NativeSyncState::Syncing {
+                    native_sync.state = NativeSyncState::Pending;
+                    native_sync.next_retry_at_ms = Some(self.now_ms);
+                    persisted_changes = true;
+                }
+            }
             if !run.is_archived()
                 && !self
                     .projects
@@ -1422,11 +1463,18 @@ impl HostKernel {
             {
                 run.pinned_at_ms = None;
                 run.archived_at_ms = Some(self.now_ms);
+                let snapshot = run.clone();
+                run.native_sync = Some(self.prepare_native_sync_intent(
+                    &snapshot,
+                    &mut private,
+                    NativeSyncDesiredState::Archived,
+                    self.now_ms,
+                ));
                 persisted_changes = true;
             }
         }
         if persisted_changes {
-            if let Err(err) = self.persist_run_records(&runs) {
+            if let Err(err) = self.persist_run_records_with_private(&runs, &private) {
                 self.set_run_persistence_recovery(
                     RunPersistenceFailureKind::WriteFailed,
                     err.to_string(),
@@ -1435,6 +1483,7 @@ impl HostKernel {
             }
         }
         self.runs = runs;
+        self.native_sync_private = std::mem::take(&mut private);
         self.run_persistence_recovery = None;
         self.run_persistence_write_error = None;
         for run_id in &crashed_ids {
@@ -1487,7 +1536,15 @@ impl HostKernel {
         self.load_persisted_runs()
     }
 
-    fn read_persisted_runs(&self) -> Result<Option<Vec<RunSummary>>, RunPersistenceRecovery> {
+    fn read_persisted_runs(
+        &self,
+    ) -> Result<
+        Option<(
+            Vec<RunSummary>,
+            BTreeMap<String, native_sync::NativeSyncPrivate>,
+        )>,
+        RunPersistenceRecovery,
+    > {
         let path = self.runs_path();
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -1502,10 +1559,24 @@ impl HostKernel {
         let value = serde_json::from_str::<serde_json::Value>(&raw).map_err(|err| {
             run_persistence_recovery(RunPersistenceFailureKind::InvalidJson, err.to_string())
         })?;
-        let runs = serde_json::from_value::<Vec<RunSummary>>(value).map_err(|err| {
-            run_persistence_recovery(RunPersistenceFailureKind::InvalidRunRecord, err.to_string())
-        })?;
-        Ok(Some(runs))
+        let records =
+            serde_json::from_value::<Vec<native_sync::StoredRunRecord>>(value).map_err(|err| {
+                run_persistence_recovery(
+                    RunPersistenceFailureKind::InvalidRunRecord,
+                    err.to_string(),
+                )
+            })?;
+        let mut private = BTreeMap::new();
+        let runs = records
+            .into_iter()
+            .map(|record| {
+                if let Some(native_sync_private) = record.native_sync_private {
+                    private.insert(record.summary.id.clone(), native_sync_private);
+                }
+                record.summary
+            })
+            .collect();
+        Ok(Some((runs, private)))
     }
 
     fn set_run_persistence_recovery(&mut self, kind: RunPersistenceFailureKind, detail: String) {

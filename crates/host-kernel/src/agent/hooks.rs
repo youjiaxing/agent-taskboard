@@ -32,6 +32,24 @@ if [ -z "$sink" ]; then
   exit 0
 fi
 mkdir -p "$sink" 2>/dev/null
+lock="$sink/hook-state.lock"
+lock_acquired=false
+for attempt in `seq 1 150`; do
+  if mkdir "$lock" 2>/dev/null; then
+    printf '%s\n' "$$" > "$lock/pid"
+    lock_acquired=true
+    break
+  fi
+  owner=`cat "$lock/pid" 2>/dev/null`
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    rm -rf "$lock" 2>/dev/null
+  fi
+  sleep 0.02
+done
+if [ "$lock_acquired" != true ]; then
+  exit 0
+fi
+trap 'rm -rf "$lock" 2>/dev/null' EXIT
 case "$event" in
   *StopFailure*|*stop_failure*) rm -f "$sink/waiting-for-user"; : > "$sink/stop-failure" ;;
   *PermissionRequest*|*permission_request*) : > "$sink/waiting-for-user" ;;
@@ -75,6 +93,28 @@ if ([string]::IsNullOrEmpty($Event)) {
   }
 }
 New-Item -ItemType Directory -Force -Path $sink | Out-Null
+$lock = Join-Path $sink 'hook-state.lock'
+$lockAcquired = $false
+for ($attempt = 0; $attempt -lt 150; $attempt++) {
+  try {
+    New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null
+    Set-Content -Path (Join-Path $lock 'pid') -Value $PID -Encoding ASCII
+    $lockAcquired = $true
+    break
+  } catch {
+    $ownerPath = Join-Path $lock 'pid'
+    if (Test-Path $ownerPath) {
+      $owner = 0
+      [int]::TryParse((Get-Content $ownerPath -Raw), [ref]$owner) | Out-Null
+      if ($owner -gt 0 -and $null -eq (Get-Process -Id $owner -ErrorAction SilentlyContinue)) {
+        Remove-Item -Force -Recurse $lock
+      }
+    }
+    Start-Sleep -Milliseconds 20
+  }
+}
+if (-not $lockAcquired) { exit 0 }
+try {
 switch -Regex ($Event) {
   'PermissionRequest|permission_request' {
     New-Item -ItemType File -Force -Path (Join-Path $sink 'waiting-for-user') | Out-Null
@@ -119,6 +159,9 @@ if ($Event -eq 'Stop' -or $Event -eq 'stop') {
   Write-Output '{"decision":"allow"}'
 } else {
   Write-Output '{}'
+}
+} finally {
+  Remove-Item -Force -Recurse $lock
 }
 exit 0
 "#;

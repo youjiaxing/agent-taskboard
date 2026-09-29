@@ -222,6 +222,7 @@ impl HostKernel {
 
     fn archive_project_ended_runs(&mut self, project_id: &str) -> Result<(), KernelError> {
         let mut runs = self.runs.clone();
+        let mut private = self.native_sync_private.clone();
         let mut archived_ids = Vec::new();
         for run in &mut runs {
             if run.project_id != project_id || run.is_archived() {
@@ -234,12 +235,18 @@ impl HostKernel {
             }
             run.pinned_at_ms = None;
             run.archived_at_ms = Some(self.now_ms);
+            run.native_sync = Some(self.prepare_native_sync_intent(
+                run,
+                &mut private,
+                NativeSyncDesiredState::Archived,
+                self.now_ms,
+            ));
             archived_ids.push(run.id.clone());
         }
         if archived_ids.is_empty() {
             return Ok(());
         }
-        self.commit_run_records(runs)?;
+        self.commit_run_records_with_private(runs, private)?;
         for run_id in archived_ids {
             self.clear_run_navigation(&run_id);
         }

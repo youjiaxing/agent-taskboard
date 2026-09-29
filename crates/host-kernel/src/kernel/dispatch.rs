@@ -355,6 +355,9 @@ impl HostKernel {
                 outcome.run_restore = Some(result);
                 return Ok(outcome);
             }
+            Command::RetryNativeSync { run_id } => {
+                self.retry_native_sync(&run_id)?;
+            }
             Command::RetryRunPersistenceLoad => {
                 let crashed_ids = self.retry_run_persistence_load();
                 self.note_crash_recovery(crashed_ids);

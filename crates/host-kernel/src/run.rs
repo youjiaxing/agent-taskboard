@@ -10,7 +10,7 @@ use crate::agent::{
 };
 use crate::pairing;
 use crate::session::{AgentSession, SessionFactory, SpawnRequest};
-use crate::{Language, LaunchEnvPort};
+use crate::{Language, LaunchEnvPort, NativeSyncLaunchContext};
 
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 24;
@@ -58,6 +58,37 @@ impl RunEndedReason {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeSyncDesiredState {
+    Archived,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeSyncState {
+    Pending,
+    Syncing,
+    Failed,
+    Synced,
+    Unsupported,
+    MissingNativeSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSyncSummary {
+    pub desired_state: NativeSyncDesiredState,
+    pub state: NativeSyncState,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_retry_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
@@ -93,6 +124,8 @@ pub struct RunSummary {
     pub previous_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_sync: Option<NativeSyncSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_reason: Option<RunEndedReason>,
     #[serde(default)]
@@ -159,6 +192,7 @@ pub struct UpdateInstallGate {
 pub struct StartResult {
     pub record: RunSummary,
     pub session: Option<Arc<dyn AgentSession>>,
+    pub native_sync_context: Option<NativeSyncLaunchContext>,
 }
 
 pub fn start_unbound(
@@ -194,6 +228,7 @@ pub fn start_unbound(
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned),
         native_session_id: None,
+        native_sync: None,
         ended_reason: None,
         working_directory: cwd.to_string_lossy().into_owned(),
         isolated: false,
@@ -219,6 +254,7 @@ pub fn start_unbound(
             return StartResult {
                 record,
                 session: None,
+                native_sync_context: None,
             };
         }
     };
@@ -240,6 +276,7 @@ pub fn start_unbound(
             StartResult {
                 record,
                 session: None,
+                native_sync_context: None,
             }
         }
         ProbeResult::Found { executable } => {
@@ -274,6 +311,7 @@ pub fn start_unbound(
                                 return StartResult {
                                     record,
                                     session: None,
+                                    native_sync_context: None,
                                 };
                             }
                         }
@@ -283,10 +321,11 @@ pub fn start_unbound(
             let opening_text = config.opening_text.trim();
             let opening_submitted_at_launch =
                 !opening_text.is_empty() && agent.append_opening_prompt(&mut argv, opening_text);
+            let native_sync_context = agent.native_sync_context(&executable, &env);
             let request = SpawnRequest {
                 argv,
                 cwd: cwd.to_path_buf(),
-                env: env.vars,
+                env: env.vars.clone(),
                 cols: DEFAULT_PTY_COLS,
                 rows: DEFAULT_PTY_ROWS,
             };
@@ -304,6 +343,7 @@ pub fn start_unbound(
                             return StartResult {
                                 record,
                                 session: None,
+                                native_sync_context: None,
                             };
                         }
                     }
@@ -317,6 +357,7 @@ pub fn start_unbound(
                             return StartResult {
                                 record,
                                 session: None,
+                                native_sync_context: None,
                             };
                         }
                     }
@@ -325,6 +366,7 @@ pub fn start_unbound(
                     StartResult {
                         record,
                         session: Some(session),
+                        native_sync_context,
                     }
                 }
                 Err(err) => {
@@ -334,6 +376,7 @@ pub fn start_unbound(
                     StartResult {
                         record,
                         session: None,
+                        native_sync_context: None,
                     }
                 }
             }

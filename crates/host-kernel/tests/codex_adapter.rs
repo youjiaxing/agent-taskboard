@@ -70,6 +70,37 @@ fn codex_adapter_declares_interactive_tui_contract() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn codex_adapter_captures_a_minimal_native_sync_invocation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let executable = make_codex_app_server(tmp.path(), "  exit 0");
+    let env = LaunchEnvironment::from_vars(
+        tmp.path().to_path_buf(),
+        BTreeMap::from([
+            ("PATH".into(), tmp.path().to_string_lossy().into_owned()),
+            ("CODEX_HOME".into(), "/safe/codex".into()),
+            ("OPENAI_API_KEY".into(), "must-not-persist".into()),
+        ]),
+    );
+    let context = CodexAdapter
+        .native_sync_context(&executable, &env)
+        .expect("Codex supports native sync");
+    assert_eq!(
+        context.program,
+        std::fs::canonicalize("/bin/sh").unwrap_or_else(|_| PathBuf::from("/bin/sh"))
+    );
+    assert_eq!(
+        context.argv_prefix,
+        vec![std::fs::canonicalize(&executable)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]
+    );
+    assert_eq!(context.environment["CODEX_HOME"], "/safe/codex");
+    assert!(!context.environment.contains_key("OPENAI_API_KEY"));
+}
+
 #[test]
 fn codex_adapter_declares_own_fields_not_permission_mode() {
     let fields = CodexAdapter.config_fields();
@@ -469,7 +500,7 @@ fn codex_resume_uses_only_the_native_session_id() {
         argv,
         vec![
             "/opt/fake/codex".to_string(),
-            "resume".to_string(),
+            "--resume".to_string(),
             "session-123".to_string()
         ]
     );

@@ -197,6 +197,7 @@ export const ui = {
     action:
       | { op: "setRunPinned"; runId: string; pinned: boolean }
       | { op: "archiveRun"; runId: string }
+      | { op: "retryNativeSync"; runId: string }
       | { op: "prepareRestoreRun"; runId: string }
       | {
           op: "restoreRun";
