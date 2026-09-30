@@ -443,6 +443,100 @@ fn stopping_a_run_ends_it() {
 }
 
 #[test]
+fn stopped_unbound_run_can_continue_by_run_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    h.agent
+        .set_native_session_id(Some("sess-unbound-stop".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = start_unbound(&mut h.host, &project_id)
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+
+    h.host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": first.id,
+        }))
+        .unwrap();
+
+    let continued = h
+        .host
+        .handle(serde_json::json!({
+            "op": "continueRun",
+            "runId": first.id,
+        }))
+        .unwrap();
+    let resumed = continued
+        .snapshot
+        .runs
+        .iter()
+        .find(|run| run.id != first.id)
+        .unwrap();
+    assert!(resumed.unbound);
+    assert_eq!(resumed.status, RunStatus::Running);
+    assert_eq!(resumed.previous_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(h.sessions.spawn_count(), 2);
+    assert!(h
+        .sessions
+        .last_spawn()
+        .unwrap()
+        .argv
+        .windows(2)
+        .any(|pair| pair == ["--resume", "sess-unbound-stop"]));
+}
+
+#[test]
+fn unbound_continue_is_available_only_on_the_latest_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path(), MemoryAgent::installed_grok(), "/mem/bin");
+    h.agent.set_native_session_id(Some("sess-unbound".into()));
+    let project_id = register(&mut h.host, &dir);
+    let first = start_unbound(&mut h.host, &project_id)
+        .unwrap()
+        .snapshot
+        .runs[0]
+        .clone();
+    let stopped = h
+        .host
+        .handle(serde_json::json!({"op": "stopRun", "runId": first.id}))
+        .unwrap();
+    assert!(stopped.snapshot.capabilities.continue_unbound_run);
+    assert_eq!(
+        stopped.snapshot.runs[0].ended_reason,
+        Some(host_kernel::RunEndedReason::Stopped)
+    );
+    let continued = h
+        .host
+        .handle(serde_json::json!({"op": "continueRun", "runId": first.id}))
+        .unwrap();
+    let resumed = continued.snapshot.runs.last().unwrap().clone();
+    let duplicate = h.host.handle(serde_json::json!({
+        "op": "continueRun",
+        "runId": first.id,
+    }));
+    assert!(duplicate.is_err());
+    assert_eq!(h.sessions.spawn_count(), 2);
+    h.host
+        .handle(serde_json::json!({"op": "stopRun", "runId": resumed.id}))
+        .unwrap();
+    h.host
+        .handle(serde_json::json!({"op": "archiveRun", "runId": resumed.id}))
+        .unwrap();
+    let snapshot = serde_json::to_value(h.host.snapshot()).unwrap();
+    assert_ne!(snapshot["runs"][0]["canContinueUnbound"], true);
+    assert!(h
+        .host
+        .handle(serde_json::json!({"op": "continueRun", "runId": first.id}))
+        .is_err());
+    assert_eq!(h.sessions.spawn_count(), 2);
+}
+
+#[test]
 fn unbound_runs_can_run_in_parallel() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

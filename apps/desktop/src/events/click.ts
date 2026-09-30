@@ -881,6 +881,17 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
     }
     return;
   }
+  if (act === "continue-run-by-id" && target.dataset.id) {
+    if (desktopRunWritesBlocked()) return;
+    const snapshotBeforeStart = ui.snapshot;
+    const result = await rpc("continueRun", { runId: target.dataset.id });
+    if (snapshotBeforeStart) {
+      await focusStartedRun(result, snapshotBeforeStart, { runId: target.dataset.id });
+    } else {
+      render();
+    }
+    return;
+  }
   if (act === "retry-focus-run" && target.dataset.id) {
     await retryRunFocus(target.dataset.id);
     return;

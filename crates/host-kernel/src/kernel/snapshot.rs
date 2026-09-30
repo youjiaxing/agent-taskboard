@@ -132,6 +132,7 @@ impl HostKernel {
             return HostCapabilities {
                 run_organization: true,
                 project_restore: true,
+                continue_unbound_run: true,
                 run_persistence_writes: self.run_persistence_recovery.is_none(),
                 run_persistence_recovery: true,
             };

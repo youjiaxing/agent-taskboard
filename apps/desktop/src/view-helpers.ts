@@ -366,6 +366,11 @@ export function activeRunForIssue(snap: Snapshot, issueId = snap.board?.selected
   );
 }
 
+export function canContinueUnboundRun(snap: Snapshot, run: RunSummary): boolean {
+  return snap.capabilities.continueUnboundRun === true
+    && run.canContinueUnbound === true;
+}
+
 export function issueRuns(snap: Snapshot, issueId = snap.board?.selected?.id): RunSummary[] {
   if (!issueId) return [];
   return (snap.runs ?? []).filter((run) => run.issueId === issueId && !run.archivedAtMs);

@@ -60,16 +60,18 @@ export async function focusRunInWorkspace(
 export async function focusStartedRun(
   result: RpcResult,
   snapshotBeforeStart: Snapshot,
-  options: { issueId?: string } = {},
+  options: { issueId?: string; runId?: string } = {},
 ): Promise<void> {
   const start = result.runStart;
   if (!start) return;
   if (start.status === "failed") {
     if (start.warning) {
-      const issueId = options.issueId ?? snapshotBeforeStart.board?.selected?.id;
-      const previousRun = issueId
-        ? [...(snapshotBeforeStart.runs ?? [])].reverse().find((run) => run.issueId === issueId)
-        : undefined;
+      const issueId = options.issueId ?? (options.runId ? undefined : snapshotBeforeStart.board?.selected?.id);
+      const previousRun = options.runId
+        ? (snapshotBeforeStart.runs ?? []).find((run) => run.id === options.runId)
+        : issueId
+          ? [...(snapshotBeforeStart.runs ?? [])].reverse().find((run) => run.issueId === issueId)
+          : undefined;
       if (options.issueId) {
         ui.runStartWarning = { issueId: options.issueId, message: start.warning };
       } else if (previousRun) {

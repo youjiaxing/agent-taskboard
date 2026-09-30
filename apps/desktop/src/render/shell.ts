@@ -2,7 +2,7 @@ import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Pro
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
 import { desktopShellAvailable } from "../launch-session";
-import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
+import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, canContinueUnboundRun, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
 import { ui } from "../ui";
@@ -130,6 +130,14 @@ function runRowActionDescriptors(copy: ShellCopy, run: RunSummary, snap: Snapsho
     label: copy.openHostUsage,
     data: { id: run.id },
   });
+  if (canContinueUnboundRun(snap, run)) {
+    actions.push({
+      id: "continue-run-by-id",
+      label: copy.continueRun,
+      disabled: runPersistenceWritesBlocked(snap),
+      data: { id: run.id },
+    });
+  }
   if (run.status !== "ended") {
     actions.push({
       id: "stop-run",
@@ -534,12 +542,16 @@ function focusWorkspaceLabels(): { recentOutput: string; emptyTitle: string; emp
 
 export function runControls(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
   const localCopy = startupCopy(effectiveClientLanguage());
+  const writesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const openWindow = desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
     ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.openRunWindow)}</button>`
     : "";
   return `<div class="actions">
     ${openWindow}
     <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
+    ${ui.snapshot && canContinueUnboundRun(ui.snapshot, run)
+      ? `<button type="button" data-act="continue-run-by-id" data-id="${escapeHtml(run.id)}" title="${escapeHtml(writesBlocked ? copy.runPersistenceWriteBlocked : copy.continueRun)}" ${writesBlocked ? "disabled" : ""}>${escapeHtml(copy.continueRun)}</button>`
+      : ""}
     <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" title="${escapeHtml(includeOrganization && runPersistenceWritesBlocked(ui.snapshot!) ? copy.runPersistenceWriteBlocked : copy.stopRun)}" ${run.status === "ended" || (includeOrganization && runPersistenceWritesBlocked(ui.snapshot!)) ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
     ${includeOrganization && ui.snapshot ? runOrganizationActions(ui.snapshot, run) : ""}
   </div>`;
