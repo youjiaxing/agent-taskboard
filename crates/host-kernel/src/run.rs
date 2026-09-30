@@ -128,6 +128,8 @@ pub struct RunSummary {
     pub native_sync: Option<NativeSyncSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_reason: Option<RunEndedReason>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub can_continue_unbound: bool,
     #[serde(default)]
     pub working_directory: String,
     #[serde(default)]
@@ -230,6 +232,7 @@ pub fn start_unbound(
         native_session_id: None,
         native_sync: None,
         ended_reason: None,
+        can_continue_unbound: false,
         working_directory: cwd.to_string_lossy().into_owned(),
         isolated: false,
         isolation_pending: None,

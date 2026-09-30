@@ -624,6 +624,7 @@ export type Snapshot = {
   capabilities: {
     runOrganization?: boolean;
     projectRestore?: boolean;
+    continueUnboundRun?: boolean;
     runPersistenceWrites?: boolean;
     runPersistenceRecovery?: boolean;
   };
@@ -808,6 +809,7 @@ export type RunSummary = {
   nativeSessionId?: string | null;
   nativeSync?: NativeSyncSummary | null;
   endedReason?: "exited" | "stopped" | "abnormal" | "crash" | null;
+  canContinueUnbound?: boolean;
   workingDirectory?: string;
   isolated?: boolean;
   isolationNote?: string | null;

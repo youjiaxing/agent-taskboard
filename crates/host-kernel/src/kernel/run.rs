@@ -1383,6 +1383,57 @@ impl HostKernel {
             .last_bound_run(issue_id)
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.continue_previous_run(last, Some(issue_id.to_string()))
+    }
+
+    pub(crate) fn continue_run_by_id(
+        &mut self,
+        run_id: &str,
+    ) -> Result<RunStartResult, KernelError> {
+        self.ensure_run_persistence_writable()?;
+        let last = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        if !last.unbound {
+            return Err(KernelError::Denied(
+                "bound Runs must be continued from their Issue".into(),
+            ));
+        }
+        if last.is_archived() {
+            return Err(KernelError::Denied("run is archived".into()));
+        }
+        if self
+            .runs
+            .iter()
+            .any(|run| run.previous_run_id.as_deref() == Some(run_id))
+        {
+            return Err(KernelError::Denied("run has already been continued".into()));
+        }
+        if last.status != RunStatus::Ended
+            || !last
+                .ended_reason
+                .is_some_and(RunEndedReason::execution_stopped)
+        {
+            return Err(KernelError::Denied("run is not execution-stopped".into()));
+        }
+        self.harvest_run_signals(run_id)?;
+        let last = self
+            .runs
+            .iter()
+            .find(|run| run.id == run_id)
+            .cloned()
+            .ok_or_else(|| KernelError::Protocol("unknown run".into()))?;
+        self.continue_previous_run(last, None)
+    }
+
+    fn continue_previous_run(
+        &mut self,
+        last: RunSummary,
+        issue_id: Option<String>,
+    ) -> Result<RunStartResult, KernelError> {
         let agent = self
             .agents
             .iter()
@@ -1402,7 +1453,7 @@ impl HostKernel {
                 values,
                 opening_text: String::new(),
             },
-            Some(issue_id.to_string()),
+            issue_id,
             false,
             Some(PreviousRun {
                 id: last.id.clone(),

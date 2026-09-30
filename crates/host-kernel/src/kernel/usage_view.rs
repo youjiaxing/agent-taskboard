@@ -87,6 +87,16 @@ impl HostKernel {
             .map(|run| {
                 let mut run = run.clone();
                 run.telemetry = usage::run_telemetry(&self.usage_samples, &run.id);
+                run.can_continue_unbound = run.unbound
+                    && run.status == RunStatus::Ended
+                    && run
+                        .ended_reason
+                        .is_some_and(RunEndedReason::execution_stopped)
+                    && !run.is_archived()
+                    && !self
+                        .runs
+                        .iter()
+                        .any(|candidate| candidate.previous_run_id.as_deref() == Some(&run.id));
                 if run.is_active() {
                     if let Some(session) = self.live.get(&run.id) {
                         let output = session.recent_output();

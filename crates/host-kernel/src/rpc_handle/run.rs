@@ -51,9 +51,15 @@ impl HostKernel {
                 if let Some(outcome) = self.forward_if_remote(&request)? {
                     return Ok(outcome);
                 }
-                self.dispatch(Command::ContinueRun {
-                    issue_id: required_string(&request, "issueId")?,
-                })
+                if let Some(run_id) = request.get("runId").and_then(|value| value.as_str()) {
+                    self.dispatch(Command::ContinueRunById {
+                        run_id: run_id.to_string(),
+                    })
+                } else {
+                    self.dispatch(Command::ContinueRun {
+                        issue_id: required_string(&request, "issueId")?,
+                    })
+                }
             }
             "prepareRunLaunch" => {
                 if let Some(outcome) = self.forward_if_remote(&request)? {

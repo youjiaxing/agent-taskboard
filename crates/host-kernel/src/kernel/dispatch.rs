@@ -259,6 +259,9 @@ impl HostKernel {
             Command::ContinueRun { issue_id } => {
                 run_start = Some(self.continue_run(&issue_id)?);
             }
+            Command::ContinueRunById { run_id } => {
+                run_start = Some(self.continue_run_by_id(&run_id)?);
+            }
             Command::PrepareRunLaunch {
                 project_id,
                 issue_id,

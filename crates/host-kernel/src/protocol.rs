@@ -202,6 +202,9 @@ pub enum Command {
     ContinueRun {
         issue_id: String,
     },
+    ContinueRunById {
+        run_id: String,
+    },
     StartUnboundRun {
         project_id: String,
     },
@@ -592,6 +595,8 @@ pub struct HostCapabilities {
     pub run_organization: bool,
     #[serde(default)]
     pub project_restore: bool,
+    #[serde(default)]
+    pub continue_unbound_run: bool,
     #[serde(default = "crate::persist::default_true")]
     pub run_persistence_writes: bool,
     #[serde(default)]

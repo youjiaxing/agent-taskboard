@@ -1,6 +1,6 @@
 import { connectionPanel, pendingBar } from "../main";
 import type { BoardSnapshot, DependencyGraph, FormKey, GraphNode, IssueCard, IssueDetail, IssueDocumentState, IssueLink, RunSummary, ShellCopy, Snapshot, TriageRole } from "../protocol";
-import { currentProject, effectiveClientLanguage, issueRuns, latestBoundRunForIssue, mobileClient, workspaceRun } from "../view-helpers";
+import { canContinueUnboundRun, currentProject, effectiveClientLanguage, issueRuns, latestBoundRunForIssue, mobileClient, workspaceRun } from "../view-helpers";
 import { issueDraftKey, editableIssueDraft, editableIssueRelations, formFeedback, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, issueOptionLabel, issueOptionList, issueParentFormKey, issueSearchFormKey } from "../form-keys";
 import { escapeHtml, formatCountdown, formatTime, renderMarkdown } from "../client-utils";
 import { loopbackNotice } from "./run";
@@ -625,11 +625,28 @@ export function workspaceRunHistory(
       && options.issueActions.executionStopped
       && options.issueActions.latestBoundRunId === run.id,
     );
+    const showUnboundContinue = Boolean(
+      options.organizationSnapshot && canContinueUnboundRun(options.organizationSnapshot, run),
+    );
     const showStop = Boolean(options.issueActions && run.status !== "ended");
     const directActions = [
       showContinue
         ? button(
             { id: "continue-run", label: copy.continueRun, disabled: writesBlocked, data: { id: options.issueActions?.issueId } },
+            {
+              variant: "primary",
+              className: "workspace-run-action",
+              attributes: {
+                id: `workspace-run-control-${run.id}`,
+                "data-stop": "true",
+                title: writesBlocked ? copy.runPersistenceWriteBlocked : copy.continueRun,
+              },
+            },
+          )
+        : "",
+      showUnboundContinue
+        ? button(
+            { id: "continue-run-by-id", label: copy.continueRun, disabled: writesBlocked, data: { id: run.id } },
             {
               variant: "primary",
               className: "workspace-run-action",
