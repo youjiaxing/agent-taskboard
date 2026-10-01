@@ -150,8 +150,8 @@ export async function executeRpc(
   return result;
 }
 
-export async function rpc(op: string, extra: Record<string, unknown> = {}): Promise<RpcResult> {
-  const request = rpcQueue.then(() => executeRpc(op, extra));
+export async function rpc(op: string, extra: Record<string, unknown> = {}, commit = true): Promise<RpcResult> {
+  const request = rpcQueue.then(() => executeRpc(op, extra, commit));
   rpcQueue = request.then(() => undefined, () => undefined);
   return request;
 }

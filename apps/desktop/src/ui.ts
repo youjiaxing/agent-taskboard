@@ -139,6 +139,7 @@ export const ui = {
   launchPickerAgentId: "",
   launchPreviewTimer: undefined as number | undefined,
   launchPreviewSequence: 0,
+  launchPreviewPending: false,
   changesScope: "this-round" as ChangeScope,
   changesView: null as ViewChanges | null,
   noteDraft: "",
