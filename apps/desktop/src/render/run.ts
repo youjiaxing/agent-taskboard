@@ -1,13 +1,17 @@
 import { effectiveClientLanguage, mobileClient } from "../view-helpers";
 import type { AgentField, LoopbackPage, Project, ShellCopy, Snapshot } from "../protocol";
 import { escapeHtml } from "../client-utils";
-import { focusedHostIsLocal, prefillHint } from "../launch-session";
+import { focusedHostIsLocal, launchWarningsForDraft, prefillHint } from "../launch-session";
 import { launchFormKey } from "../form-keys";
 import { startupCopy } from "../startup-copy";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, notice, textArea, textInput } from "../components/primitives";
 import { ui } from "../ui";
 import { runPersistenceWritesBlocked } from "./run-organization";
+
+export function launchWarningItems(warnings: string[]): string {
+  return warnings.map((message) => notice({ status: "warning", message })).join("");
+}
 
 export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const form = snap.launchForm;
@@ -76,6 +80,7 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
   const key = launchFormKey(form.projectId);
   const pending = ui.formOperations.pending.has(key);
   const discoveryPending = Boolean(form.optionDiscoveryPending);
+  const warnings = launchWarningsForDraft(form);
   const error = ui.formOperations.errors.get(key) || form.error || "";
   const body = `<fieldset class="launch-fields" ${pending || discoveryPending ? "disabled" : ""}>
     <div class="launch-agent">
@@ -113,7 +118,7 @@ export function launchForm(copy: ShellCopy, snap: Snapshot): string {
       ${folded.map((field) => launchField(field, draft.values[field.id] ?? "", draft.values, form.optionDiscoveryPending)).join("")}
       ${snap.showCommandPreview ? formField({ label: copy.commandPreview, control: `<pre class="payload launch-command-preview">${escapeHtml(form.commandPreview)}</pre>` }) : ""}
     </details>
-    ${notice({ status: "warning", className: "launch-warnings", message: (form.warnings ?? []).join(" "), attributes: { hidden: !form.warnings?.length } })}
+    <div class="launch-warnings" ${warnings.length ? "" : "hidden"}>${launchWarningItems(warnings)}</div>
     ${form.optionDiscoveryError ? notice({ message: form.optionDiscoveryError }) : ""}
     ${persistenceBlocked ? notice({ status: "danger", role: "alert", message: copy.runPersistenceWriteBlocked }) : ""}
     ${error ? notice({ status: "danger", role: "alert", className: "form-feedback", message: error }) : ""}

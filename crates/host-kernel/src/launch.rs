@@ -380,24 +380,28 @@ pub fn isolation_availability(
 
 pub fn side_effect_warnings(
     project_dir: &Path,
-    has_active_run: bool,
+    shares_working_directory: bool,
     language: Language,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
-    if has_active_run {
+    if shares_working_directory {
         warnings.push(match language {
             Language::ZhCn => {
-                "这个 Project 已有活跃 Run。端口和本地锁文件可能冲突，但不禁止启动。".into()
+                "将与其他运行中的 Run 共用工作目录，文件修改可能互相覆盖。".into()
             }
             Language::En => {
-                "This Project already has an active Run. Ports and local lock files may conflict, but launch is still allowed.".into()
+                "This Run will share its working directory with other active Runs. File edits may overwrite each other.".into()
             }
         });
     }
     if project_dir.join(".git").join("index.lock").exists() {
         warnings.push(match language {
-            Language::ZhCn => "检测到本地锁文件，仍可启动。".into(),
-            Language::En => "A local lock file was found. Launch is still allowed.".into(),
+            Language::ZhCn => {
+                "检测到 Git 锁文件 `.git/index.lock`，Git 写入操作可能失败。".into()
+            }
+            Language::En => {
+                "Git lock file `.git/index.lock` was found. Git write operations may fail.".into()
+            }
         });
     }
     warnings

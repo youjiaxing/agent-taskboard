@@ -186,6 +186,41 @@ fn browser_clients_resize_move_and_restore_workbench_panels_independently() {
 }
 
 #[test]
+fn browser_keeps_launch_warnings_separate_and_ignores_obsolete_previews() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = make_dir(tmp.path(), "work/garden");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::write(project.join(".git/index.lock"), "locked").unwrap();
+    let mut host = HostKernel::boot_with_ports(
+        boot_req(tmp.path()),
+        host_kernel::KernelPorts {
+            tracker: Arc::new(MemoryTracker::new()),
+            agents: vec![Arc::new(MemoryAgent::installed_grok()) as _],
+            launch_env: Arc::new(MemoryLaunchEnv::with_path("/mem/bin")) as _,
+            sessions: MemorySessionFactory::new(),
+        },
+    )
+    .unwrap();
+    let project_id = register(&mut host, "garden", &project, "you/garden");
+    host.handle(serde_json::json!({
+        "op": "startUnboundRun",
+        "projectId": project_id,
+        "agentId": "grok-build",
+        "values": {
+            "model": "grok-4.6",
+            "effort": "high",
+            "permission-mode": "default",
+            "always-approve": "false",
+            "sandbox": "off",
+            "isolation": "false",
+        },
+        "openingText": "",
+    }))
+    .unwrap();
+    run_browser_e2e(host, "launch-warnings.mjs", &[]);
+}
+
+#[test]
 fn browser_prevents_duplicate_run_launch_and_preserves_the_failed_draft_for_retry() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = make_dir(tmp.path(), "work/garden");

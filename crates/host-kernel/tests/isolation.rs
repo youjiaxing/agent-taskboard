@@ -647,10 +647,12 @@ fn lock_files_and_sibling_runs_warn_but_do_not_block_launch() {
         .snapshot
         .launch_form
         .unwrap();
-    let warnings = form.warnings.join(" ");
-    assert!(
-        warnings.contains("锁") || warnings.contains("端口"),
-        "{warnings}"
+    assert_eq!(
+        form.warnings,
+        vec![
+            "将与其他运行中的 Run 共用工作目录，文件修改可能互相覆盖。",
+            "检测到 Git 锁文件 `.git/index.lock`，Git 写入操作可能失败。",
+        ]
     );
 
     let out = start_unbound(&mut h.host, &project_id, false, "second run");
@@ -661,6 +663,147 @@ fn lock_files_and_sibling_runs_warn_but_do_not_block_launch() {
         .iter()
         .all(|run| run.status == RunStatus::Running));
     assert!(out.snapshot.launch_form.is_none());
+}
+
+#[test]
+fn launch_warnings_stay_quiet_for_isolated_or_unconfirmed_sibling_directories() {
+    for confirmed in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = make_dir(tmp.path(), "work/garden");
+        mark_git(&dir);
+        let mut h = harness(tmp.path());
+        if confirmed {
+            let tree = make_dir(tmp.path(), "work/garden-iso");
+            h.agent.set_isolation_tree(Some(tree));
+        }
+        let project_id = register(&mut h.host, &dir);
+        let out = start_unbound(&mut h.host, &project_id, true, "isolated sibling");
+        let run = &out.snapshot.runs[0];
+        assert!(run.isolated);
+        assert_eq!(run.isolation_pending.is_none(), confirmed);
+        let form = h
+            .host
+            .handle(serde_json::json!({
+                "op": "prepareRunLaunch",
+                "projectId": project_id,
+                "agentId": "grok-build",
+            }))
+            .unwrap()
+            .snapshot
+            .launch_form
+            .unwrap();
+        assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+    }
+}
+
+#[test]
+fn launch_warnings_follow_effective_isolation_without_hiding_git_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    mark_git(&dir);
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    start_unbound(&mut h.host, &project_id, false, "shared sibling");
+    h.host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap();
+    std::fs::write(dir.join(".git/index.lock"), "locked").unwrap();
+    for isolation in ["true", "false", "true"] {
+        let mut values = grok_values();
+        values["isolation"] = serde_json::json!(isolation);
+        let form = h
+            .host
+            .handle(serde_json::json!({
+                "op": "updateRunLaunch",
+                "projectId": project_id,
+                "agentId": "grok-build",
+                "values": values,
+                "language": "en",
+            }))
+            .unwrap()
+            .snapshot
+            .launch_form
+            .unwrap();
+        let mut expected = Vec::new();
+        if isolation == "false" {
+            expected.push("This Run will share its working directory with other active Runs. File edits may overwrite each other.");
+        }
+        expected.push("Git lock file `.git/index.lock` was found. Git write operations may fail.");
+        assert_eq!(form.warnings, expected);
+    }
+}
+
+#[test]
+fn launch_warnings_do_not_treat_unsupported_isolation_as_effective() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    start_unbound(&mut h.host, &project_id, false, "shared sibling");
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert!(!form.isolation_supported);
+    let mut values = grok_values();
+    values["isolation"] = serde_json::json!("true");
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "updateRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+            "values": values,
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert_eq!(
+        form.warnings,
+        vec!["将与其他运行中的 Run 共用工作目录，文件修改可能互相覆盖。"]
+    );
+}
+
+#[test]
+fn launch_warnings_disappear_after_the_shared_run_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = make_dir(tmp.path(), "work/garden");
+    let mut h = harness(tmp.path());
+    let project_id = register(&mut h.host, &dir);
+    let first = start_unbound(&mut h.host, &project_id, false, "shared sibling")
+        .snapshot
+        .runs[0]
+        .clone();
+    h.host
+        .handle(serde_json::json!({
+            "op": "stopRun",
+            "runId": first.id,
+        }))
+        .unwrap();
+    let form = h
+        .host
+        .handle(serde_json::json!({
+            "op": "prepareRunLaunch",
+            "projectId": project_id,
+            "agentId": "grok-build",
+        }))
+        .unwrap()
+        .snapshot
+        .launch_form
+        .unwrap();
+    assert!(form.warnings.is_empty());
 }
 
 #[test]

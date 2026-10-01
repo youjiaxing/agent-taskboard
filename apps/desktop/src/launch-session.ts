@@ -3,9 +3,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { startupCopy } from "./startup-copy";
 import type { LaunchDraft, RunLaunchForm, ShellCopy, Snapshot, UpdateInstallGate } from "./protocol";
 import { syncLaunchPicker } from "./launch-picker";
-import { launchFieldDefault, launchFieldOptions, launchSelectOptions, launchSelectState, CUSTOM_VALUE } from "./render/run";
+import { launchFieldDefault, launchFieldOptions, launchSelectOptions, launchSelectState, launchWarningItems, CUSTOM_VALUE } from "./render/run";
 import { render } from "./render/app";
-import { rpc } from "./rpc";
+import { commitRpcResult, rpc } from "./rpc";
 import { ui } from "./ui";
 import { check } from "@tauri-apps/plugin-updater";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -20,12 +20,14 @@ import { relaunch } from "@tauri-apps/plugin-process";
 export function syncLaunchDraft(snap: Snapshot): void {
   const form = snap.launchForm;
   if (!form) {
+    ui.launchPreviewPending = false;
     ui.launchDraft = null;
     ui.launchPickerProjectId = "";
     ui.launchPickerAgentId = "";
     return;
   }
   if (!form.skipAgentPicker) {
+    ui.launchPreviewPending = false;
     ui.launchDraft = null;
     const picker = syncLaunchPicker(
       { projectId: form.projectId, selectedAgentId: form.selectedAgentId },
@@ -42,6 +44,7 @@ export function syncLaunchDraft(snap: Snapshot): void {
     || ui.launchDraft.projectId !== form.projectId
     || ui.launchDraft.agentId !== form.selectedAgentId
   ) {
+    ui.launchPreviewPending = false;
     ui.launchDraft = {
       projectId: form.projectId,
       issueId: form.issueId,
@@ -119,20 +122,33 @@ export function launchValuesForHost(draft: LaunchDraft): Record<string, string> 
 
 export function scheduleLaunchPreview(): void {
   if (!ui.snapshot?.launchForm || !ui.launchDraft) return;
+  const draft = ui.launchDraft;
   const sequence = ++ui.launchPreviewSequence;
+  ui.launchPreviewPending = true;
+  refreshLaunchWarnings();
   if (ui.launchPreviewTimer != null) window.clearTimeout(ui.launchPreviewTimer);
   ui.launchPreviewTimer = window.setTimeout(() => {
     ui.launchPreviewTimer = undefined;
-    const draft = ui.launchDraft;
-    if (!draft) return;
+    if (ui.launchDraft !== draft) return;
     void rpc("updateRunLaunch", {
       projectId: draft.projectId,
       agentId: draft.agentId,
       values: launchValuesForHost(draft),
       openingText: draft.openingText,
       language: effectiveClientLanguage(),
-    }).then(() => {
-      if (sequence !== ui.launchPreviewSequence) return;
+    }, false).then((result) => {
+      const form = ui.snapshot?.launchForm;
+      const updated = result.snapshot.launchForm;
+      if (
+        sequence !== ui.launchPreviewSequence
+        || ui.launchDraft !== draft
+        || form?.projectId !== draft.projectId
+        || form.selectedAgentId !== draft.agentId
+        || updated?.projectId !== draft.projectId
+        || updated.selectedAgentId !== draft.agentId
+      ) return;
+      commitRpcResult(result);
+      ui.launchPreviewPending = false;
       const preview = ui.app?.querySelector<HTMLElement>(".launch-command-preview");
       if (preview && ui.snapshot?.launchForm) preview.textContent = ui.snapshot.launchForm.commandPreview;
       refreshLaunchWarnings();
@@ -140,11 +156,27 @@ export function scheduleLaunchPreview(): void {
   }, 120);
 }
 
+export function launchWarningsForDraft(form: RunLaunchForm): string[] {
+  const draft = ui.launchDraft;
+  if (
+    ui.launchPreviewPending
+    || !draft
+    || draft.projectId !== form.projectId
+    || draft.agentId !== form.selectedAgentId
+  ) return [];
+  const values = launchValuesForHost(draft);
+  if (
+    Object.keys(values).length !== Object.keys(form.values).length
+    || Object.entries(values).some(([id, value]) => form.values[id] !== value)
+  ) return [];
+  return form.warnings ?? [];
+}
+
 export function refreshLaunchWarnings(): void {
   const node = ui.app?.querySelector<HTMLElement>(".launch-warnings");
   if (!node || !ui.snapshot?.launchForm) return;
-  const warnings = ui.snapshot.launchForm.warnings ?? [];
-  node.textContent = warnings.join(" ");
+  const warnings = launchWarningsForDraft(ui.snapshot.launchForm);
+  node.innerHTML = launchWarningItems(warnings);
   node.hidden = warnings.length === 0;
 }
 

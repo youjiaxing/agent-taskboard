@@ -12,6 +12,25 @@ pub(crate) struct PreviousRun {
 }
 
 impl HostKernel {
+    fn launch_side_effect_warnings(
+        &self,
+        project_id: &str,
+        project_dir: &Path,
+        working_directory: &Path,
+        requests_isolation: bool,
+        language: Language,
+    ) -> Vec<String> {
+        let shares_working_directory = !requests_isolation
+            && self.runs.iter().any(|run| {
+                run.project_id == project_id
+                    && run.is_active()
+                    && !run.working_directory.is_empty()
+                    && !self.isolation_directory_unconfirmed(run)
+                    && launch::same_path(Path::new(&run.working_directory), working_directory)
+            });
+        launch::side_effect_warnings(project_dir, shares_working_directory, language)
+    }
+
     pub fn pty_session(&self, run_id: &str) -> Result<Arc<dyn AgentSession>, KernelError> {
         if self
             .runs
@@ -260,11 +279,11 @@ impl HostKernel {
         let preview = launch::command_preview(&launch::preview_argv(agent.as_ref(), &values));
         let skip_agent_picker = !pick_agent && (last.is_some() || agent_id.is_some());
         let mut warnings = launch::unknown_enum_warnings(&fields, &values, language);
-        warnings.extend(launch::side_effect_warnings(
+        warnings.extend(self.launch_side_effect_warnings(
+            project_id,
             &project.local_path,
-            self.runs
-                .iter()
-                .any(|run| run.project_id == project_id && run.is_active()),
+            &project.local_path,
+            false,
             language,
         ));
         self.launch_form = Some(RunLaunchForm {
@@ -941,11 +960,13 @@ impl HostKernel {
             .cloned()
             .ok_or_else(|| KernelError::Protocol("unknown Agent Adapter".into()))?;
         let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
-        warnings.extend(launch::side_effect_warnings(
+        let (isolation_supported, _) =
+            launch::isolation_availability(agent.as_ref(), &project_dir, language);
+        warnings.extend(self.launch_side_effect_warnings(
+            project_id,
             &project_dir,
-            self.runs
-                .iter()
-                .any(|run| run.project_id == project_id && run.is_active()),
+            &project_dir,
+            launch::isolation_requested(&config.values) && isolation_supported,
             language,
         ));
         let preview =
@@ -1062,16 +1083,17 @@ impl HostKernel {
             .unwrap_or_else(|| {
                 launch::localize_fields(agent.config_fields(), language, agent.as_ref())
             });
-        if let Some(form) = &mut self.launch_form {
-            launch::apply_submitted_form(form, &config);
+        if self.launch_form.is_some() {
             let mut warnings = launch::unknown_enum_warnings(&fields, &config.values, language);
-            warnings.extend(launch::side_effect_warnings(
+            warnings.extend(self.launch_side_effect_warnings(
+                project_id,
                 &project_dir,
-                self.runs
-                    .iter()
-                    .any(|run| run.project_id == project_id && run.is_active()),
+                &cwd,
+                isolate,
                 language,
             ));
+            let form = self.launch_form.as_mut().expect("checked launch form");
+            launch::apply_submitted_form(form, &config);
             form.warnings = warnings;
             form.command_preview =
                 launch::command_preview(&launch::preview_argv(agent.as_ref(), &config.values));
