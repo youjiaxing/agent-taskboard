@@ -390,6 +390,13 @@ fn browser_enforces_shared_dialog_geometry_focus_and_confirmation_contracts() {
     pin_board_test_time(&mut host);
     let project_id = register(&mut host, "dialog-project", &dir, "you/dialogs");
     start_bound_grok(&mut host, &project_id, "you/dialogs#1");
+    let idle_dir = make_dir(tmp.path(), "work/dialog-idle");
+    register(&mut host, "idle-dialog-project", &idle_dir, "you/idle-dialogs");
+    host.handle(serde_json::json!({
+        "op": "focusProject",
+        "projectId": project_id,
+    }))
+    .unwrap();
     let offer = host
         .handle(serde_json::json!({
             "op": "beginPairingOffer",
