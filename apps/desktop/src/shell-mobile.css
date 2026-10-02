@@ -109,6 +109,7 @@
   }
   .mobile-issue-panel .detail-scroll { overflow: visible; padding: 0; }
   .mobile-issue-panel .detail-sticky { position: static; padding: var(--space-8) 0; }
+  .mobile-issue-panel .issue-markdown { font-size: var(--font-size-lg); }
   .mobile-output-panel { display: flex; flex-direction: column; gap: var(--space-8); min-height: 0; }
   .mobile-run-output {
     min-height: 220px;

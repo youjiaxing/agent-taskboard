@@ -141,6 +141,16 @@
 
 .detail-meta .issue-state { margin-left: 0; }
 
+.detail-statuses > .tag,
+.workspace-detail-statuses > .tag,
+.detail-statuses .ui-tag,
+.workspace-detail-statuses .ui-tag {
+  margin-left: 0;
+  padding: var(--card-tag-padding);
+  border-width: var(--card-tag-border-width);
+  background: var(--color-card-tag);
+}
+
 .detail-statuses {
   display: flex;
   flex-wrap: wrap;
@@ -157,8 +167,6 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-6);
-  padding-top: var(--space-12);
-  border-top: 1px solid var(--color-border);
 }
 
 .detail-actions > button {
@@ -240,7 +248,6 @@
 
 .issue-markdown code {
   padding: var(--prose-code-padding);
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-xs);
   background: var(--color-surface-subtle);
   font: .92em/1.45 var(--font-family-mono);
@@ -270,6 +277,7 @@
 .issue-markdown table { border-collapse: collapse; min-width: 100%; font-size: var(--font-size-sm); }
 
 .issue-markdown th, .issue-markdown td {
+  min-width: 10em;
   padding: var(--space-6) var(--space-8);
   border: 1px solid var(--color-border);
   text-align: left;
@@ -281,7 +289,7 @@
 
 .issue-markdown .unsafe-link, .issue-markdown .unsafe-image { color: var(--color-text-secondary); }
 
-.issue-markdown a { color: var(--color-accent); text-underline-offset: var(--space-2); }
+.issue-markdown a { color: var(--color-info); text-underline-offset: var(--space-2); }
 
 .issue-markdown.is-stale { color: var(--color-text-secondary); }
 
@@ -308,11 +316,14 @@
 
 .detail-relation-item .name-btn {
   max-width: 100%;
-  margin: 0 var(--space-4) var(--space-4) 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--color-surface-subtle);
+  margin: 0;
+  padding: var(--space-6) var(--space-8);
+  border-color: transparent;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  line-height: 1.5;
+  background: transparent;
 }
 
 .detail-relation-item .muted {
@@ -354,6 +365,22 @@
   border-top: 0;
   padding-top: 0;
 }
+
+.detail-scroll .issue-editor { background: transparent; }
+
+.detail-scroll .issue-editor form { gap: var(--space-8); }
+
+.detail-scroll .issue-editor .label { font-size: var(--font-size-sm); }
+
+.detail-scroll .issue-editor input,
+.detail-scroll .issue-editor textarea,
+.detail-scroll .issue-editor select {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.detail-scroll .issue-editor textarea { line-height: 1.5; }
 
 .issue-comment-editor textarea { min-height: 112px; }
 
@@ -438,6 +465,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-8);
+  flex-wrap: wrap;
   cursor: pointer;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
@@ -454,7 +482,7 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
-  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .detail-relations-body {
