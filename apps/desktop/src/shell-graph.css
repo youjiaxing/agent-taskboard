@@ -1,4 +1,4 @@
-.dep-graph { display: flex; flex-direction: column; gap: var(--space-8); min-height: 0; flex: 1; }
+.dep-graph { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; min-height: 0; flex: 1; }
 
 .graph-toolbar,
 .graph-limit {
@@ -11,7 +11,7 @@
   color: var(--color-text-secondary);
 }
 
-.graph-toolbar { justify-content: flex-start; }
+.graph-toolbar { justify-content: flex-start; padding-inline: var(--space-12); }
 
 .graph-toolbar .actions { order: -1; flex: 0 0 auto; }
 
@@ -19,23 +19,21 @@
 
 .graph-limit {
   padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-block: 1px solid var(--color-border);
   background: var(--color-surface);
 }
 
 .graph-toolbar button,
 .graph-limit button,
-.graph-index button { padding: var(--space-4) var(--space-6); font-size: var(--font-size-xs); }
+.graph-index button { padding: var(--space-4) var(--space-8); font-size: var(--font-size-sm); }
 
 .graph-canvas {
   position: relative;
   overflow: auto;
   min-height: 0;
   flex: 1;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
+  background: var(--color-board);
+  overscroll-behavior: contain;
 }
 
 .graph-edges {
@@ -47,12 +45,12 @@
 
 .graph-edges path {
   fill: none;
-  stroke: var(--color-border-strong);
+  stroke: var(--color-text-muted);
   stroke-width: 1.5;
   marker-end: url(#graph-arrow);
 }
 
-.graph-edges marker path { fill: var(--color-border-strong); }
+.graph-edges marker path { fill: var(--color-text-muted); }
 
 .graph-flow {
   position: relative;
@@ -78,41 +76,51 @@
   display: flex;
   align-items: stretch;
   width: 100%;
-  background: var(--color-surface);
+  background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.graph-node.sel {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent);
-  background: var(--color-selection);
 }
 
 .graph-node.root { border-color: var(--color-border-strong); }
 
-.graph-node.closed { background: var(--color-surface-subtle); }
+.graph-node.closed { background: var(--color-card-completed); }
+
+.graph-node.closed .issue-title,
+.graph-index-row.closed .issue-title {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-completion-line);
+}
+
+.graph-node.sel {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 1px var(--color-focus);
+  background: var(--color-selection);
+}
+
+.graph-node .issue-title { font-weight: var(--font-weight-medium); line-height: 1.5; }
 
 .graph-node-main {
   flex: 1;
   min-width: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   background: transparent;
   padding: var(--space-8);
   text-align: left;
 }
 
+.graph-node-main:only-child { border-radius: var(--radius-md); }
+
 .graph-center-act {
   flex: 0 0 auto;
   border: 0;
   border-left: 1px solid var(--color-border);
-  border-radius: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: transparent;
   padding: var(--space-6) var(--space-8);
   color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
@@ -123,9 +131,8 @@
   /* The relation list must leave the graph usable in a short workspace. */
   max-height: min(220px, 40%);
   overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-canvas);
 }
 
 .graph-index summary {
@@ -149,11 +156,14 @@
   border-bottom: 1px solid var(--color-border);
 }
 
-.graph-index-row.closed { background: var(--color-surface-subtle); }
+.graph-index-row.closed { background: var(--color-card-completed); }
+
+.graph-index-row .graph-center-act { border-left: 0; border-radius: 0; }
 
 .graph-index-main {
   display: grid;
-  grid-template-columns: 58px 44px minmax(0, 1fr);
+  grid-template-columns: minmax(58px, max-content) 44px minmax(0, 1fr);
+  gap: var(--space-8);
   align-items: center;
   flex: 1;
   min-width: 0;
@@ -163,6 +173,6 @@
   text-align: left;
 }
 
-.graph-relation { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+.graph-relation { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 
 .graph-index-more { margin: var(--space-8) var(--space-10); }

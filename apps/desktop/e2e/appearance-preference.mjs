@@ -12,6 +12,8 @@ const cases = [
 ];
 try {
   await session.configurePage();
+  // Let first-launch defaults settle before seeding persisted restart cases.
+  await session.page.waitForSelector(".chrome");
   for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
     await session.page.setViewportSize(viewport);
     await session.page.emulateMedia({ colorScheme: "dark" });
