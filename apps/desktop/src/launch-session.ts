@@ -200,6 +200,12 @@ export function desktopShellAvailable(): boolean {
   return isTauri() || "__TAURI_INTERNALS__" in window;
 }
 
+export function desktopUpdatesAvailable(): boolean {
+  return desktopShellAvailable()
+    && !import.meta.env.DEV
+    && import.meta.env.TAURI_ENV_DEBUG !== "true";
+}
+
 export async function openRunWindow(
   runId: string,
   hostId: string,
@@ -351,6 +357,7 @@ export async function checkForUpdates(manual: boolean): Promise<void> {
     render();
     return;
   }
+  if (!desktopUpdatesAvailable()) return;
   if (ui.updateState.kind === "checking" || ui.updateState.kind === "installing") return;
   ui.updateState = { kind: "checking", manual };
   render();
@@ -385,6 +392,7 @@ export async function readUpdateInstallGate(op = "updateInstallGate"): Promise<U
 }
 
 export async function installPendingUpdate(): Promise<void> {
+  if (!desktopUpdatesAvailable()) return;
   if (!ui.pendingUpdate || ui.updateState.kind === "installing") return;
   let gate: UpdateInstallGate;
   try {

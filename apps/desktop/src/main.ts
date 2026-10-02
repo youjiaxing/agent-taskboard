@@ -48,6 +48,7 @@ import {
 } from "./workbench";
 import {
   desktopShellAvailable,
+  desktopUpdatesAvailable,
   checkForUpdates,
   requestDesktopNotificationPermission,
 } from "./launch-session";
@@ -926,7 +927,7 @@ rpc("snapshot")
     ensureTick();
     await reportClientView();
     render();
-    if (desktopShellAvailable() && !ui.startupUpdateChecked && ui.snapshot?.windowVisible) {
+    if (desktopUpdatesAvailable() && !ui.startupUpdateChecked && ui.snapshot?.windowVisible) {
       ui.startupUpdateChecked = true;
       window.setTimeout(() => {
         if (ui.updateState.kind === "idle") void checkForUpdates(false);

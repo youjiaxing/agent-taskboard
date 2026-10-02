@@ -1,7 +1,7 @@
 import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
 import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
-import { desktopShellAvailable } from "../launch-session";
+import { desktopShellAvailable, desktopUpdatesAvailable } from "../launch-session";
 import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, canContinueUnboundRun, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
 import { focusWorkspaceIssueRail, focusWorkspaceProjectRail } from "./board";
@@ -820,6 +820,7 @@ export function settingsPage(
   const autoFocusNewRun = browserClient()
     ? ensureBrowserClientSettings().autoFocusNewRun
     : autoFocusNewRunEnabled(snap);
+  const updates = updateSettings(copy);
   return `<section class="settings-page" data-primary-page="settings">
     <div class="content-toolbar" data-page-toolbar>
       <div class="board-head">
@@ -868,10 +869,10 @@ export function settingsPage(
           ${launchEnvironmentStatus(localCopy)}
         </div>
       </section>
-      <section class="settings-section" data-settings-section="updates">
+      ${updates ? `<section class="settings-section" data-settings-section="updates">
         <h2>${escapeHtml(copy.updates)}</h2>
-        ${updateSettings(copy)}
-      </section>
+        ${updates}
+      </section>` : ""}
       <section class="settings-section" data-settings-section="refresh">
         <h2>${escapeHtml(copy.refreshInterval)}</h2>
         ${formField({
@@ -937,6 +938,7 @@ export function startupSettings(copy: StartupCopy, snap: Snapshot): string {
 }
 
 export function updateSettings(copy: ShellCopy): string {
+  if (desktopShellAvailable() && !desktopUpdatesAvailable()) return "";
   const status = ui.updateState.kind === "checking"
     ? copy.updateChecking
     : ui.updateState.kind === "current"
@@ -957,6 +959,7 @@ export function updateSettings(copy: ShellCopy): string {
 }
 
 export function updateDialog(copy: ShellCopy): string {
+  if (!desktopUpdatesAvailable()) return "";
   const localCopy = startupCopy(effectiveClientLanguage());
   if (ui.updateState.kind === "available") {
     const body = `${notice({ message: copy.updateReady })}${ui.updateState.notes ? `<div class="field"><div class="label">${escapeHtml(copy.updateNotes)}</div><p class="update-notes">${escapeHtml(ui.updateState.notes)}</p></div>` : ""}`;
