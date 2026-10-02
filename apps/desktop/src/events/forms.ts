@@ -1,7 +1,7 @@
 import { applyLaunchDependentDefaults, applyLocalPath, launchValuesForHost, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
 import { issueDraftKey, changeNoteFormKey, clearFormOperation, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey, usageQueryFormKey } from "../form-keys";
 import { CUSTOM_VALUE, launchFieldOptions } from "../render/run";
-import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
+import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached, rpcForHost } from "../rpc";
 import { render } from "../render/app";
 import { restoreDialogTrigger } from "../components/dialog-controller";
 import { toLocalInput } from "../client-utils";
@@ -561,10 +561,11 @@ ui.app.addEventListener("submit", async (event) => {
     if (Number.isNaN(from) || Number.isNaN(to)) return;
     ui.usageCustomDraft = draft;
     const key = usageCustomFormKey(ui.snapshot?.focusedHostId ?? "");
+    let applied = false;
     const success = await runFormOperation(key, async () => {
-      await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
+      applied = await rpcForHost(draft.hostId, "setUsageRange", { range: "custom", fromMs: from, toMs: to }) !== null;
     });
-    if (success) {
+    if (success && applied) {
       clearFormOperation(queryKey);
       if (ui.usageQueryRetry?.hostId === draft.hostId) ui.usageQueryRetry = null;
       ui.usageCustomDraft = null;

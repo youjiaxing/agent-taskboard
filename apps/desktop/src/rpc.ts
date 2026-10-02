@@ -157,6 +157,13 @@ export async function rpc(op: string, extra: Record<string, unknown> = {}, commi
   return request;
 }
 
+export async function rpcForHost(hostId: string, op: string, extra: Record<string, unknown>): Promise<RpcResult | null> {
+  const request = rpcQueue.then(() =>
+    ui.snapshot?.focusedHostId === hostId ? executeRpc(op, extra) : null);
+  rpcQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
 export function rpcDetached(
   op: string,
   extra: Record<string, unknown> = {},

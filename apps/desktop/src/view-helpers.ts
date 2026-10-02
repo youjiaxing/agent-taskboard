@@ -267,7 +267,7 @@ export function restoreGraphAnchor(canvas: HTMLElement, anchor: GraphViewportAnc
 export function captureReturnPoint(snap: Snapshot): ReturnPoint {
   const projectId = snap.focusedProjectId || null;
   const lanesNode = ui.app.querySelector<HTMLElement>(".lanes");
-  if (projectId && lanesNode) {
+  if (projectId && lanesNode?.getClientRects().length) {
     const lanes: Record<string, { scrollTop: number; scrollLeft: number }> = {};
     for (const lane of lanesNode.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
       if (lane.dataset.lane) {
