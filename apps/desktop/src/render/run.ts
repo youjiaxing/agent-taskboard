@@ -333,12 +333,13 @@ export function removeDialog(copy: ShellCopy, project: Project): string {
   const localCopy = startupCopy(effectiveClientLanguage());
   const activeRunCount = project.activeRunCount;
   const count = localCopy.activeRunCount.replace("{count}", String(activeRunCount));
-  const body = `${notice({ status: project.hasActiveRun ? "danger" : "warning", message: project.hasActiveRun ? localCopy.removeProjectBlocked : copy.removeConfirmBody })}
+  const body = `<p class="confirmation-target">${escapeHtml(project.name)}<small>${escapeHtml(project.localPath)}</small></p>
+    ${notice({ status: project.hasActiveRun ? "danger" : "warning", message: project.hasActiveRun ? localCopy.removeProjectBlocked : copy.removeConfirmBody })}
     <p class="hint">${escapeHtml(count)}</p>
     ${project.hasExecutionStopped ? notice({ message: copy.removeKeepClaimsBody }) : ""}`;
   return confirmationDialog({
     id: "remove-project",
-    title: project.hasActiveRun ? `${copy.cannotRemoveActiveRun} ${project.name}` : copy.removeConfirmTitle,
+    title: project.hasActiveRun ? copy.cannotRemoveActiveRun : copy.removeConfirmTitle,
     body,
     closeLabel: localCopy.close,
     cancelLabel: project.hasActiveRun ? copy.gotIt : copy.cancel,

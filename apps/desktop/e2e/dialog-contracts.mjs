@@ -79,7 +79,7 @@ try {
   assert.equal(await pairing.root.locator("[data-paired-clients], button[data-act='revoke']").count(), 0, "pairing dialog must not contain paired Clients");
   await pairing.panel.locator(".dialog-close").click();
 
-  const activeProject = page.locator(".side .project-row", { hasText: "dialog-project" });
+  const activeProject = page.locator(".side .project-row", { has: page.getByText("dialog-project", { exact: true }) });
   await activeProject.locator("button[data-act='project-menu']").click();
   await activeProject.locator("button[data-act='remove-project']").click();
   const remove = await assertDialogSemantics("remove-project");
@@ -93,6 +93,15 @@ try {
   await remove.root.click({ position: { x: 2, y: 2 } });
   assert.equal(await dialogRoot("remove-project").count(), 1, "backdrop must not dismiss a confirmation");
   await remove.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
+
+  const idleProject = page.locator(".side .project-row", { has: page.getByText("idle-dialog-project", { exact: true }) });
+  await idleProject.locator("button[data-act='project-menu']").click();
+  await idleProject.locator("button[data-act='remove-project']").click();
+  const idleRemove = await assertDialogSemantics("remove-project");
+  assert.ok((await idleRemove.panel.textContent()).includes("idle-dialog-project"), "removal must identify the selected Project even when it has no active Run");
+  assert.match((await idleRemove.panel.textContent()) ?? "", /活跃 Run：0|Active Runs .*: 0/);
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-act")), "dismiss-dialog", "idle removal should also default to cancel");
+  await idleRemove.panel.locator(".dialog-actions button[data-act='dismiss-dialog']").click();
 
   await page.click("button[data-act='settings']");
   const settingsClients = page.locator("[data-settings-section='host'] [data-paired-clients]");

@@ -981,21 +981,80 @@ button.danger.primary {
 
 .settings-content {
   width: min(840px, 100%);
+  min-width: 0;
   min-height: 0;
   margin: 0 auto;
   padding: var(--space-20) var(--space-24) var(--space-32);
   overflow: auto;
+  container-type: inline-size;
 }
 
 .settings-section {
-  padding: var(--space-16) 0;
+  padding: var(--space-24) 0;
   border-bottom: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
 }
 
 .settings-section:first-child { padding-top: 0; }
 .settings-section:last-child { border-bottom: 0; }
-.settings-section h2 { margin: 0 0 var(--space-12); font-size: var(--font-size-lg); }
+.settings-section h2 {
+  margin: 0 0 var(--space-16);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-xl);
+}
+.settings-section .field { margin-bottom: var(--space-16); }
 .settings-section .field:last-child { margin-bottom: 0; }
+.settings-section .ui-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: var(--density-control-height);
+  margin: var(--space-4) 0;
+  line-height: var(--line-height-md);
+}
+.settings-section .ui-checkbox input { flex: 0 0 auto; margin: 0; accent-color: var(--color-accent); }
+.settings-section > .ui-checkbox + .hint { padding-left: var(--space-24); }
+.settings-section input[type="number"] { width: 104px; max-width: 100%; }
+.settings-section .choices {
+  width: fit-content;
+  max-width: 100%;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.settings-section .choices button { border-color: transparent; }
+.settings-section .choices button:not(.active) { background: transparent; }
+.settings-section .choices button:not(.active):hover { background: var(--color-surface-hover); }
+.settings-section .client-row {
+  gap: var(--space-16);
+  padding: var(--space-10) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.settings-section .client-row:last-child { border-bottom: 0; }
+.settings-section .client-row > span { min-width: 0; overflow-wrap: anywhere; }
+.settings-section .client-row > button { flex: 0 0 auto; }
+.settings-section .paired-clients > .nested { padding: var(--space-8) 0; }
+
+@container (min-width: 520px) {
+  .settings-section[data-settings-section="appearance"] > .field {
+    display: grid;
+    grid-template-columns: 144px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-16);
+  }
+  .settings-section[data-settings-section="appearance"] .label { margin: 0; }
+  .settings-section[data-settings-section="refresh"] .ui-form-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 104px;
+    gap: var(--space-4) var(--space-24);
+    align-items: start;
+  }
+  .settings-section[data-settings-section="refresh"] .label { align-self: center; margin: 0; }
+  .settings-section[data-settings-section="refresh"] .ui-input { grid-column: 2; grid-row: 1 / 3; margin: 0; }
+  .settings-section[data-settings-section="refresh"] .hint { margin: 0; }
+}
 
 .usage-page {
   align-self: stretch;

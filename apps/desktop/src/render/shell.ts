@@ -934,10 +934,9 @@ export function settingsPage(
 
 export function startupSettings(copy: StartupCopy, snap: Snapshot): string {
   if (!desktopShellAvailable()) {
-    return `<div class="field startup-settings"><div class="label">${escapeHtml(copy.hostStartup)}</div><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
+    return `<div class="field startup-settings"><p class="hint">${escapeHtml(copy.desktopStartupBrowser)}</p></div>`;
   }
   return `<div class="field startup-settings">
-    <div class="label">${escapeHtml(copy.hostStartup)}</div>
     ${optionGroup({
       label: copy.hostStartup,
       actions: [
@@ -965,7 +964,6 @@ export function updateSettings(copy: ShellCopy): string {
           : "";
   const checking = ui.updateState.kind === "checking" || ui.updateState.kind === "installing";
   return `<div class="field update-settings">
-    <div class="label">${escapeHtml(copy.updates)}</div>
     ${desktopShellAvailable()
       ? button({ id: "check-updates", label: ui.updateState.kind === "checking" ? copy.updateChecking : copy.checkForUpdates, disabled: checking })
       : `<p class="hint">${escapeHtml(copy.updateUnavailableBrowser)}</p>`}
