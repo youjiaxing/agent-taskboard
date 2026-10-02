@@ -185,6 +185,7 @@ Agent CLI 的账号、API key 和登录状态由各 Agent 自己管理，Agent T
 
 桌面应用通过 GitHub Releases 的 `latest.json` 使用 Tauri updater 检查更新，并使用更新器公钥验签：
 
+- `npm run dev` 和 `npm --prefix apps/desktop run dev:app` 开发模式不检查更新、不提供下载安装入口；Rust 调试构建不加载更新插件。
 - 发现更新后只提示，不会后台静默替换。
 - 只有用户确认后才会下载并安装。
 - 有活跃 Run 时禁止安装更新，避免中断 Agent 执行。
