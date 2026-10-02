@@ -179,7 +179,7 @@ export function runRow(copy: ShellCopy, run: RunSummary, snap: Snapshot): string
       ${runOrganizationActions(snap, run, "icons")}
       <div class="run-row-menu-wrap">
         ${button(
-          { id: "run-menu", label: organizationLabels.runActions, ariaLabel: runMenuLabel, data: { id: run.id } },
+          { id: "run-menu", label: organizationLabels.runActions, iconName: "ellipsis", ariaLabel: runMenuLabel, data: { id: run.id } },
           { variant: "ghost", className: "run-row-action run-row-menu-trigger", attributes: { title: runMenuLabel, "aria-haspopup": "menu", "aria-expanded": menuOpen } },
         )}
         ${menuOpen ? menu({ label: runMenuLabel, className: "run-row-menu", actions: runRowActionDescriptors(copy, run, snap) }) : ""}
@@ -545,23 +545,37 @@ export function runControls(copy: ShellCopy, run: RunSummary, includeOrganizatio
   const localCopy = startupCopy(effectiveClientLanguage());
   const writesBlocked = ui.snapshot ? runPersistenceWritesBlocked(ui.snapshot) : false;
   const openWindow = desktopShellAvailable() && !ui.nativeRunWindowRunId && run.status !== "ended"
-    ? `<button type="button" data-act="open-run-window" data-id="${escapeHtml(run.id)}">${escapeHtml(localCopy.openRunWindow)}</button>`
+    ? button({ id: "open-run-window", label: localCopy.openRunWindow, data: { id: run.id } }, { variant: "ghost" })
     : "";
   return `<div class="actions">
     ${openWindow}
-    <button type="button" data-act="open-usage-run" data-id="${escapeHtml(run.id)}">${escapeHtml(copy.openHostUsage)}</button>
+    ${button({ id: "open-usage-run", label: copy.openHostUsage, data: { id: run.id } }, { variant: "ghost" })}
     ${ui.snapshot && canContinueUnboundRun(ui.snapshot, run)
       ? `<button type="button" data-act="continue-run-by-id" data-id="${escapeHtml(run.id)}" title="${escapeHtml(writesBlocked ? copy.runPersistenceWriteBlocked : copy.continueRun)}" ${writesBlocked ? "disabled" : ""}>${escapeHtml(copy.continueRun)}</button>`
       : ""}
-    <button type="button" data-act="stop-run" data-id="${escapeHtml(run.id)}" title="${escapeHtml(includeOrganization && runPersistenceWritesBlocked(ui.snapshot!) ? copy.runPersistenceWriteBlocked : copy.stopRun)}" ${run.status === "ended" || (includeOrganization && runPersistenceWritesBlocked(ui.snapshot!)) ? "disabled" : ""}>${escapeHtml(copy.stopRun)}</button>
+    ${button({
+      id: "stop-run",
+      label: copy.stopRun,
+      destructive: true,
+      disabled: run.status === "ended" || (includeOrganization && runPersistenceWritesBlocked(ui.snapshot!)),
+      data: { id: run.id },
+    }, { attributes: { title: includeOrganization && runPersistenceWritesBlocked(ui.snapshot!) ? copy.runPersistenceWriteBlocked : copy.stopRun } })}
     ${includeOrganization && ui.snapshot ? runOrganizationActions(ui.snapshot, run) : ""}
   </div>`;
 }
 
 /** Run identity and actions, shared by every terminal surface. */
 export function runHeader(copy: ShellCopy, run: RunSummary, includeOrganization = false): string {
+  const status = runStatus(copy, run);
   return `<header class="run-dock-hd">
-      <div><b>${escapeHtml(run.agentName)}</b><span>${escapeHtml(runIdentity(copy, run))}</span></div>
+      <div class="run-heading">
+        <b class="run-heading-title">${escapeHtml(runTitle(run))}</b>
+        <div class="run-heading-meta">
+          <span>${escapeHtml(run.agentName)}</span>
+          <span class="run-heading-target">${escapeHtml(runIdentity(copy, run))}</span>
+          <span class="run-heading-status ${escapeHtml(status.className)}"><i class="run-status ${escapeHtml(status.className)}" aria-hidden="true"></i>${escapeHtml(status.label)}</span>
+        </div>
+      </div>
       ${runControls(copy, run, includeOrganization)}
     </header>`;
 }
