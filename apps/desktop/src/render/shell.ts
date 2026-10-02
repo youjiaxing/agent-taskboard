@@ -11,6 +11,7 @@ import { SHELL_SHORTCUTS, shortcutKeyLabels } from "../shortcuts";
 import { confirmationDialog, dialog, dialogActionButton, dialogDismissButton } from "../components/dialog";
 import { button, checkbox, formField, menu, notice, optionGroup, progressFeedback, selectControl, textInput, type ActionDescriptor, type SelectOption } from "../components/primitives";
 import { orderRunsForDisplay, runOrganizationActions, runOrganizationLabels, runPersistenceWritesBlocked } from "./run-organization";
+import { icon } from "../components/icons";
 
 export function projectBlock(copy: ShellCopy, snap: Snapshot, project: Project, focusedId: string): string {
   const runs = orderRunsForDisplay((snap.runs ?? []).filter((run) => run.projectId === project.id));
@@ -36,8 +37,8 @@ export function projectRow(copy: ShellCopy, project: Project, focusedId: string)
       <span>${escapeHtml(projectTrackerIdentity(project, startupCopy(effectiveClientLanguage()).localMarkdownTracker))}</span>
     </button>
     ${degraded ? `<span class="dot warn" title="${escapeHtml(project.connection.status === "unreachable" ? copy.connectionUnavailable : copy.authFailed)}"></span>` : ""}
-    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}" title="${escapeHtml(runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.newRun)}" ${runWritesBlocked ? "disabled" : ""}>＋</button>
-    <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}">…</button>
+    <button type="button" class="title-icon" data-act="new-run" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.newRun)}" title="${escapeHtml(runWritesBlocked ? copy.runPersistenceWriteBlocked : copy.newRun)}" ${runWritesBlocked ? "disabled" : ""}>${icon("plus")}</button>
+    <button type="button" class="more" data-act="project-menu" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(copy.projectMenu)} ${escapeHtml(project.name)}" title="${escapeHtml(copy.projectMenu)}">${icon("ellipsis")}</button>
     ${
       ui.projectMenuId === project.id
         ? menu({
