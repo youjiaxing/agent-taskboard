@@ -60,7 +60,6 @@ pub enum AppearancePreference {
     System,
     Light,
     Dark,
-    Warm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -769,7 +768,6 @@ impl AppearanceState {
                 AppearancePreference::System,
                 AppearancePreference::Light,
                 AppearancePreference::Dark,
-                AppearancePreference::Warm,
             ],
         }
     }

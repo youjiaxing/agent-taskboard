@@ -8,7 +8,6 @@ export type StartupCopy = {
   appearanceSystem: string;
   appearanceLight: string;
   appearanceDark: string;
-  appearanceWarm: string;
   hostStartup: string;
   hostAndClient: string;
   clientOnly: string;
@@ -54,9 +53,8 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     more: "更多",
     appearance: "外观",
     appearanceSystem: "跟随系统",
-    appearanceLight: "素纸",
-    appearanceDark: "素纸夜间",
-    appearanceWarm: "暖纸",
+    appearanceLight: "浅色",
+    appearanceDark: "深色",
     hostStartup: "Host 启动",
     hostAndClient: "Host 与 Client",
     clientOnly: "仅作为 Client",
@@ -107,9 +105,8 @@ const catalog: Record<"zh-CN" | "en", StartupCopy> = {
     more: "More",
     appearance: "Appearance",
     appearanceSystem: "Follow system",
-    appearanceLight: "Plain paper",
-    appearanceDark: "Plain paper night",
-    appearanceWarm: "Warm paper",
+    appearanceLight: "Light",
+    appearanceDark: "Dark",
     hostStartup: "Host startup",
     hostAndClient: "Host and Client",
     clientOnly: "Client only",
@@ -167,6 +164,5 @@ export function appearancePreferenceLabel(
 ): string {
   if (preference === "system") return copy.appearanceSystem;
   if (preference === "light") return copy.appearanceLight;
-  if (preference === "dark") return copy.appearanceDark;
-  return copy.appearanceWarm;
+  return copy.appearanceDark;
 }

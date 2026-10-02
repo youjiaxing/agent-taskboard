@@ -160,7 +160,7 @@ pub(crate) fn load_paired_clients(path: &Path) -> Result<Vec<pairing::IssuedClie
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ClientSettingsFile {
     pub(crate) language: Language,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_stored_appearance")]
     pub(crate) appearance_preference: AppearancePreference,
     #[serde(default = "local_host_id")]
     pub(crate) focused_host_id: String,
@@ -178,6 +178,18 @@ pub(crate) struct ClientSettingsFile {
     pub(crate) notify_sound: bool,
     #[serde(default = "default_true")]
     pub(crate) auto_focus_new_run: bool,
+}
+
+fn deserialize_stored_appearance<'de, D>(deserializer: D) -> Result<AppearancePreference, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        Some("system") => AppearancePreference::System,
+        Some("dark") => AppearancePreference::Dark,
+        _ => AppearancePreference::Light,
+    })
 }
 
 pub(crate) fn default_true() -> bool {

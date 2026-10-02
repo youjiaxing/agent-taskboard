@@ -1,6 +1,6 @@
 export type Language = "zh-CN" | "en";
-export type AppearancePreference = "system" | "light" | "dark" | "warm";
-export type ResolvedTheme = "light" | "dark" | "warm";
+export type AppearancePreference = "system" | "light" | "dark";
+export type ResolvedTheme = "light" | "dark";
 export type SystemAppearance = "light" | "dark";
 export type AppearanceState = {
   language: Language;
