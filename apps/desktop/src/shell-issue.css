@@ -16,13 +16,14 @@
   width: 100%;
   font: inherit;
   color: inherit;
-  background: var(--color-surface);
+  background: var(--color-control);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-6) var(--space-8);
 }
 
 .issue-editor textarea { min-height: 72px; resize: vertical; }
+.issue-create-editor { flex: 0 1 auto; min-height: 0; overflow: auto; padding: var(--space-16) var(--space-24); }
 
 .issue-editor select[multiple] { min-height: 72px; }
 
@@ -40,7 +41,7 @@
   overflow-wrap: anywhere;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--color-control);
   font: inherit;
 }
 
@@ -63,7 +64,7 @@
 .issue-search input, .issue-search select {
   font: inherit;
   color: inherit;
-  background: var(--color-surface);
+  background: var(--color-control);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-6) var(--space-8);

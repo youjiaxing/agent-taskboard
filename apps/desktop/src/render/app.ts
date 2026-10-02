@@ -26,6 +26,7 @@ import { formFeedback } from "../form-keys";
 import { scheduleEditMenuContextSync } from "../edit-menu";
 import { dialog, dialogDismissButton } from "../components/dialog";
 import { button, emptyState, formField, iconButton, menu, notice, textArea, textInput } from "../components/primitives";
+import { icon } from "../components/icons";
 import { syncDialogFocus } from "../components/dialog-controller";
 
 function pairingDialog(copy: import("../protocol").ShellCopy, localCopy: ReturnType<typeof startupCopy>, snap: import("../protocol").Snapshot): string {
@@ -182,8 +183,8 @@ export function render(): void {
       <header class="chrome ${showSidebar ? "with-side" : "side-hidden"}">
         <div class="chrome-lead">
           ${isMobile
-            ? `<button type="button" class="chrome-icon" data-act="mobile-drawer" aria-label="${escapeHtml(copy.mobileSwitchScope)}" aria-haspopup="dialog" aria-expanded="${ui.mobileDrawerOpen}">☰</button>`
-            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">☰</button>`}
+            ? `<button type="button" class="chrome-icon" data-act="mobile-drawer" aria-label="${escapeHtml(copy.mobileSwitchScope)}" title="${escapeHtml(copy.mobileSwitchScope)}" aria-haspopup="dialog" aria-expanded="${ui.mobileDrawerOpen}">${icon("menu")}</button>`
+            : `<button type="button" class="chrome-icon" data-act="toggle-sidebar" aria-label="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}" title="${escapeHtml(showSidebar ? copy.hideSidebar : copy.showSidebar)}">${icon("panel-left")}</button>`}
         </div>
         <div class="chrome-main">
           <div class="chrome-primary">
@@ -198,7 +199,7 @@ export function render(): void {
               ? `<button type="button" class="chrome-button ${ui.clientView.panels.rightSide === "changes" ? "active" : ""}" data-act="view-changes" data-id="${escapeHtml(focusRun.id)}" data-global-action="changes">${escapeHtml(copy.viewChanges)}</button>`
               : ""}
             <div class="appearance-menu-wrap">
-              <button type="button" class="chrome-button" data-act="appearance-menu" data-global-action="appearance" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${escapeHtml(localCopy.appearance)}</button>
+              <button type="button" class="chrome-icon" data-act="appearance-menu" data-global-action="appearance" aria-label="${escapeHtml(localCopy.appearance)}" title="${escapeHtml(localCopy.appearance)}" aria-haspopup="menu" aria-expanded="${ui.appearanceMenuOpen}">${icon("sun-moon")}</button>
               ${ui.appearanceMenuOpen
                 ? menu({
                     className: "appearance-menu",
@@ -212,9 +213,9 @@ export function render(): void {
                   })
                 : ""}
             </div>
-            <button type="button" class="chrome-button ${ui.clientView.page === "settings" ? "active" : ""}" data-act="settings" data-global-action="settings">${escapeHtml(copy.settings)}</button>
+            <button type="button" class="chrome-icon ${ui.clientView.page === "settings" ? "active" : ""}" data-act="settings" data-global-action="settings" aria-label="${escapeHtml(copy.settings)}" title="${escapeHtml(copy.settings)}">${icon("settings")}</button>
             <div class="more-menu-wrap">
-              <button type="button" class="chrome-icon" data-act="more-menu" data-global-action="more" aria-haspopup="menu" aria-expanded="${ui.moreMenuOpen}" aria-label="${escapeHtml(localCopy.more)}">•••</button>
+              <button type="button" class="chrome-icon" data-act="more-menu" data-global-action="more" aria-haspopup="menu" aria-expanded="${ui.moreMenuOpen}" aria-label="${escapeHtml(localCopy.more)}" title="${escapeHtml(localCopy.more)}">${icon("ellipsis")}</button>
               ${ui.moreMenuOpen
                 ? menu({
                     className: "more-menu",
@@ -255,7 +256,7 @@ export function render(): void {
           <div>
             <div class="group-head">
               <div class="group-name">${escapeHtml(copy.projects)}</div>
-              <button type="button" class="title-icon" data-act="register" aria-label="${escapeHtml(copy.addProject)}">＋</button>
+              <button type="button" class="title-icon" data-act="register" aria-label="${escapeHtml(copy.addProject)}" title="${escapeHtml(copy.addProject)}">${icon("plus")}</button>
             </div>
             ${
               projects.length

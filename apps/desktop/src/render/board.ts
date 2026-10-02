@@ -959,6 +959,6 @@ export function refreshBar(copy: ShellCopy, board: BoardSnapshot | null): string
   return refreshStatus({
     kind: ui.refreshing ? "refreshing" : status.kind,
     message: parts.filter(Boolean).join(" · "),
-    actions: [{ id: "refresh", label: copy.refreshNow }],
+    actions: [{ id: "refresh", label: copy.refreshNow, iconName: "refresh-cw" }],
   });
 }

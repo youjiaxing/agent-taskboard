@@ -56,6 +56,8 @@
   .mobile-board-view .lane { min-height: 0; overflow: visible; }
   .mobile-board-view .lane-hd { font-size: var(--font-size-md); }
   .mobile-board-view .issue-card-main { min-height: var(--touch-target-min); }
+  .mobile-board-view .issue-title { font-size: var(--font-size-lg); }
+  .mobile-board-view .lanes { background: var(--color-board); }
 
   /* workspace: one panel at a time, with the Run input as a real bottom row */
   .mobile-workspace-view {
@@ -222,7 +224,8 @@
     color: var(--color-text);
     text-align: left;
   }
-  .mobile-row.active { background: var(--color-selection); }
+  .mobile-row.active { background: var(--color-selection); color: var(--color-selection-text); }
+  .mobile-row-label > b { overflow-wrap: anywhere; }
   .mobile-row-label { display: grid; gap: var(--space-2); min-width: 0; flex: 1; }
   .mobile-row-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
   .mobile-project-row {

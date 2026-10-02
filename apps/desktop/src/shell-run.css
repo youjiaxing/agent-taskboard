@@ -219,7 +219,7 @@
   height: 20px;
   border: 1px solid currentColor;
   border-radius: var(--radius-xs);
-  background: color-mix(in srgb, currentColor 14%, transparent);
+  background: var(--color-control);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
   line-height: 1;
@@ -229,7 +229,7 @@
 .run-agent-mark.grok { color: var(--color-success); }
 .run-agent-mark.gemini { color: var(--color-warning); }
 .run-agent-mark.claude { color: var(--color-accent); }
-.run-agent-mark.antigravity { color: var(--color-focus); }
+.run-agent-mark.antigravity { color: var(--color-info); }
 .run-agent-mark.other { color: var(--color-text-secondary); }
 
 .run-pin-marker { margin-left: calc(var(--space-6) * -1); }

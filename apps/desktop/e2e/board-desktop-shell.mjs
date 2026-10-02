@@ -289,12 +289,19 @@ const boardRoundTripBefore = await session.page.evaluate(() => {
   };
 });
 if (boardRoundTripBefore.scrollTop <= 0) throw new Error("board round trip fixture needs a scrollable filtered lane");
-await session.clickCard(session.page.locator('[data-lane="frontier"] .issue-card .issue-card-main').first());
-await session.page.waitForSelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']");
+// Trigger selection without scrolling the offscreen card into view, so the
+// assertion below measures inspector state restoration rather than click setup.
+const roundTripIssue = "child ready";
+await session.page.locator('[data-lane="frontier"] .issue-card:has-text("child ready") .issue-card-main')
+  .evaluate((node) => node.click());
+await session.page.waitForFunction((title) =>
+  document.querySelector(".issue-card.sel .issue-title")?.textContent?.trim() === title
+  && document.querySelector(".board-shell > .issue-detail .detail-hd")?.textContent?.includes(title)
+  && document.querySelector(".board-shell > .issue-detail .issue-document[data-document-state='ready']"),
+roundTripIssue);
 if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
   throw new Error("a filtered Issue without an active Run should stay on the Board");
 }
-const roundTripIssue = await session.page.$eval(".issue-card.sel .issue-title", (node) => node.textContent?.trim());
 const boardRoundTripAfter = await session.page.evaluate(() => ({
   title: document.querySelector("#issue-title-search")?.value ?? "",
   triageRole: document.querySelector(".issue-search select[name='triageRole']")?.value ?? "",
@@ -394,7 +401,7 @@ const recentHierarchy = await session.page.$eval('[data-lane="recentlyCompleted"
     actionable: Boolean(node.querySelector("button:not([disabled])")),
   };
 });
-if (recentHierarchy.opacity !== 1 || recentHierarchy.titleColor !== "rgb(86, 87, 91)" || recentHierarchy.secondaryColor !== "#56575b" || !recentHierarchy.decoration.includes("line-through") || !recentHierarchy.actionable) {
+if (recentHierarchy.opacity !== 1 || recentHierarchy.titleColor !== "rgb(65, 69, 76)" || recentHierarchy.secondaryColor !== "#41454c" || !recentHierarchy.decoration.includes("line-through") || !recentHierarchy.actionable) {
   throw new Error(`recently completed Issues should stay readable, visibly subdued and actionable: ${JSON.stringify(recentHierarchy)}`);
 }
 
@@ -516,7 +523,7 @@ const commonTokens = {
   "--font-size-xl": "16px", "--font-size-2xl": "20px", "--font-size-3xl": "24px",
   "--line-height-xs": "16px", "--line-height-sm": "18px", "--line-height-md": "20px", "--line-height-lg": "20px",
   "--line-height-xl": "24px", "--line-height-2xl": "28px", "--line-height-3xl": "32px",
-  "--letter-spacing-heading": "-.01em", "--letter-spacing-body": "0",
+  "--letter-spacing-heading": "0", "--letter-spacing-body": "0",
   "--space-0": "0", "--space-2": "2px", "--space-4": "4px", "--space-6": "6px", "--space-8": "8px",
   "--space-10": "10px", "--space-12": "12px", "--space-16": "16px", "--space-20": "20px", "--space-24": "24px",
   "--space-32": "32px", "--space-40": "40px", "--space-48": "48px",
@@ -527,7 +534,7 @@ const commonTokens = {
   "--right-rail-width-min": "280px", "--right-rail-width-default": "320px", "--right-rail-width-max": "420px",
   "--changes-panel-width-min": "420px", "--changes-panel-width-default": "520px", "--changes-panel-width-max": "640px",
   "--dialog-width-confirm": "420px", "--dialog-width-form": "560px", "--dialog-width-wide": "880px",
-  "--shadow-focus": "0 0 0 3px color-mix(in srgb, #2563eb 22%, transparent)",
+  "--shadow-focus": "0 0 0 3px color-mix(in srgb, #3979df 22%, transparent)",
   "--shadow-raised-light": "0 1px 2px rgb(0 0 0 / 7%), 0 8px 24px rgb(0 0 0 / 8%)",
   "--shadow-dialog-light": "0 2px 8px rgb(0 0 0 / 12%), 0 18px 60px rgb(0 0 0 / 18%)",
   "--shadow-raised-dark": "0 1px 2px rgb(0 0 0 / 28%), 0 10px 30px rgb(0 0 0 / 28%)",
@@ -540,8 +547,8 @@ const commonTokens = {
   "--density-gutter-inline": "12px", "--density-panel-gap": "8px", "--density-bottom-gap": "0",
 };
 const themeColorTokens = {
-  light: ["#f7f7f5", "#ffffff", "#f3f3f1", "#ffffff", "#eeeeeb", "#e6e6e2", "#202123", "#56575b", "#75767a", "#ffffff", "#e2e2de", "#c6c7c3", "#2563eb", "#202123", "#0f1012", "#ffffff", "#dce7f9", "#237a43", "#eaf6ee", "#8a6100", "#fff4d6", "#b42318", "#ffece9", "#1d5db8", "#eaf2ff", "rgb(0 0 0 / 48%)"],
-  dark: ["#171717", "#1f1f1f", "#262626", "#2b2b2b", "#303030", "#3a3a3a", "#f3f3f3", "#c8c8c8", "#a0a0a0", "#171717", "#373737", "#555555", "#60a5fa", "#f3f3f3", "#ffffff", "#171717", "#23456b", "#6bcb8b", "#173725", "#f2c15c", "#3e3217", "#ff8075", "#421d1a", "#7cb7ff", "#173052", "rgb(0 0 0 / 64%)"],
+  light: ["#ffffff", "#ffffff", "#fbfbfb", "#ffffff", "#f5f5f5", "#eef5ff", "#15171a", "#41454c", "#626871", "#ffffff", "#ebebeb", "#dadada", "#3979df", "#292929", "#0f1012", "#ffffff", "#eef5ff", "#26774d", "#edf6f0", "#936414", "#fcf4e5", "#b74141", "#fcf0f0", "#326bc2", "#eff4fc", "rgb(0 0 0 / 48%)"],
+  dark: ["#191919", "#242424", "#282828", "#303030", "#323232", "#363636", "#ededed", "#bdbdbd", "#a6a6a6", "#242424", "#383838", "#505050", "#8db5ff", "#e7e7e7", "#ffffff", "#242424", "#363636", "#83c69b", "#29392f", "#e6bb70", "#403628", "#f09b9b", "#412c2f", "#a1bfff", "#2b3549", "rgb(0 0 0 / 64%)"],
 };
 const themeColorNames = ["--color-canvas", "--color-surface", "--color-surface-subtle", "--color-surface-raised", "--color-surface-hover", "--color-surface-active", "--color-text", "--color-text-secondary", "--color-text-muted", "--color-text-inverse", "--color-border", "--color-border-strong", "--color-focus", "--color-accent", "--color-accent-hover", "--color-on-accent", "--color-selection", "--color-success", "--color-success-surface", "--color-warning", "--color-warning-surface", "--color-danger", "--color-danger-surface", "--color-info", "--color-info-surface", "--color-overlay"];
 const relativeLuminance = (hex) => {
@@ -658,14 +665,14 @@ await session.page.fill("#issue-title-search", "ready");
 await submitIssueSearch();
 await session.page.waitForFunction(() => document.querySelectorAll(".issue-card").length >= 2);
 const settingsReturnStyle = await session.page.addStyleTag({ content: '[data-lane="frontier"] { max-height: 70px; }' });
+await session.page.locator(".issue-card:has-text('child ready') .issue-card-main").click();
+await waitForBoardIssueInspector("child ready");
 const boardStateBeforeSettings = await session.page.evaluate(() => {
   const lane = document.querySelector('[data-lane="frontier"]');
   if (lane) lane.scrollTop = lane.scrollHeight;
   return { title: document.querySelector("#issue-title-search")?.value, scrollTop: lane?.scrollTop ?? 0 };
 });
 if (boardStateBeforeSettings.scrollTop <= 0) throw new Error("settings return fixture needs non-zero board scroll");
-await session.clickCard(session.page.locator(".issue-card:has-text('child ready') .issue-card-main"));
-await waitForBoardIssueInspector("child ready");
 if (await session.page.$(".focus-workspace-layout") || await session.page.$("[data-terminal-surface]")) {
   throw new Error("the settings return fixture Issue should stay on the Board");
 }
