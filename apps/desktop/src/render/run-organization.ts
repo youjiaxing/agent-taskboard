@@ -2,7 +2,7 @@ import { escapeHtml } from "../client-utils";
 import { confirmationDialog } from "../components/dialog";
 import { button, iconButton, menu, notice, selectControl, type ActionDescriptor, type SelectOption } from "../components/primitives";
 import type { RunRestoreResult, RunSummary, ShellCopy, Snapshot } from "../protocol";
-import { effectiveClientLanguage } from "../view-helpers";
+import { clientCopy, effectiveClientLanguage } from "../view-helpers";
 import { ui } from "../ui";
 
 type OrganizationActionMode = "icons" | "text" | "menu";
@@ -156,7 +156,9 @@ function nativeSyncLabel(run: RunSummary): string {
 }
 
 function runMenuLabel(snap: Snapshot, run: RunSummary): string {
-  const identity = run.unbound || !run.issueId ? snap.copy.unboundIssue : run.issueId;
+  const identity = run.unbound || !run.issueId
+    ? clientCopy(effectiveClientLanguage(), snap.copy).unboundIssue
+    : run.issueId;
   return `${runOrganizationLabels().runMenu} · ${run.agentName} · ${identity}`;
 }
 

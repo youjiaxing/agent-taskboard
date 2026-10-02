@@ -17,14 +17,21 @@ const mobileActiveRunId = process.env.MOBILE_ACTIVE_RUN_ID;
 const mobileEndedRunId = process.env.MOBILE_ENDED_RUN_ID;
 const mobileRemovedProjectId = process.env.MOBILE_REMOVED_PROJECT_ID;
 const mobileRemovedRunId = process.env.MOBILE_REMOVED_RUN_ID;
+const language = process.env.RUN_ORGANIZATION_LANGUAGE ?? "zh-CN";
+const theme = process.env.RUN_ORGANIZATION_THEME ?? "light";
+assert.ok(["zh-CN", "en"].includes(language), "unsupported Run organization fixture language");
+assert.ok(["light", "dark"].includes(theme), "unsupported Run organization fixture theme");
 if (!url || !pendingRunId || !activeRunId || !archivedRunId || !removedRunId || !removedProjectId || !remoteHostId || !remoteRunId
   || !mobileProjectId || !mobileBoundRunId || !mobileActiveRunId || !mobileEndedRunId || !mobileRemovedProjectId || !mobileRemovedRunId) {
   throw new Error("missing Run organization browser fixture environment");
 }
 
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 840 } });
+const context = await browser.newContext({ locale: language, viewport: { width: 1280, height: 840 } });
 const page = await context.newPage();
+await page.addInitScript(({ language, theme }) => {
+  localStorage.setItem("agent-taskboard-browser-appearance", JSON.stringify({ language, appearancePreference: theme }));
+}, { language, theme });
 page.on("pageerror", (error) => console.error("pageerror", error));
 page.on("console", (message) => {
   if (message.type() === "error") console.error("console", message.text());
@@ -34,6 +41,7 @@ await page.goto(url, { waitUntil: "domcontentloaded" });
 
 try {
   await page.waitForSelector(".side");
+  assert.equal(await page.evaluate(() => document.documentElement.lang), language);
   const localHostId = await page.$eval(".host-picker, .host-line", () => "");
   await page.click("button[data-act='toggle-hosts']");
   const hosts = await page.$$eval(".host-picker button[data-act='focus-host']", (nodes) => nodes.map((node) => ({
@@ -86,7 +94,7 @@ try {
   const renderedArchived = await page.$$eval(".archive-run-row", (nodes) => nodes.map((node) => node.dataset.archivedRun));
   assert.deepEqual(renderedArchived, hostArchived, "archive page must preserve Host archivedAt ordering");
   const filterOptions = await page.$$eval("select[data-archive-filter='project'] option", (nodes) => nodes.map((node) => ({ value: node.value, text: node.textContent })));
-  assert.equal(filterOptions.some((option) => option.value === removedProjectId && option.text.includes("已移除 Project")), true, "removed Projects must remain filterable");
+  assert.equal(filterOptions.some((option) => option.value === removedProjectId && option.text.includes(language === "zh-CN" ? "已移除 Project" : "Removed Project")), true, "removed Projects must remain filterable");
   await page.selectOption("select[data-archive-filter='project']", removedProjectId);
   assert.deepEqual(await page.$$eval(".archive-run-row", (nodes) => nodes.map((node) => node.dataset.archivedRun)), [removedRunId]);
   await page.click(`.archive-run-row[data-archived-run='${removedRunId}'] .archive-run-main`);
@@ -135,7 +143,7 @@ try {
   });
   await page.click("[data-dialog-id='restore-run'] button[data-act='confirm-restore-run']");
   await page.waitForSelector("[data-dialog-id='restore-run'] [role='alert']");
-  assert.match((await restoreDialog.textContent()) ?? "", /墓碑已经变化/);
+  assert.match((await restoreDialog.textContent()) ?? "", language === "zh-CN" ? /墓碑已经变化/ : /tombstone changed/);
   await page.click("[data-dialog-id='restore-run'] button[data-act='dismiss-dialog']");
   await page.waitForFunction(() => !document.querySelector("[data-dialog-id='restore-run']"));
   assert.equal(await restoreTrigger.evaluate((node) => node === document.activeElement), true, "closing restore confirmation should return focus to its trigger");

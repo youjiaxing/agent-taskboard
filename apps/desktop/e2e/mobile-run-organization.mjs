@@ -128,6 +128,12 @@ export async function runMobileRunOrganizationJourney(page, options) {
   assert.equal(await menu.locator("[data-act='set-run-pinned']").count(), 1);
   const activeMenuTrigger = page.locator(`.mobile-project-history .workspace-run-history-item[data-id='${mobileActiveRunId}'] [data-act='mobile-run-menu']`);
   assert.match((await activeMenuTrigger.getAttribute("aria-label")) ?? "", /Run/);
+  const clientLanguage = await page.evaluate(() => document.documentElement.lang);
+  assert.equal(
+    await activeMenuTrigger.getAttribute("aria-label"),
+    clientLanguage === "zh-CN" ? "管理 Run · Grok Build · 未绑定 Issue" : "Manage Run · Grok Build · Unbound Issue",
+    "the complete unbound Run menu name must use the Client language",
+  );
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => !document.querySelector(".run-organization-menu"));
   assert.equal(await activeMenuTrigger.evaluate((node) => node === document.activeElement), true, "Escape should close the Run menu and restore trigger focus");
@@ -139,7 +145,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   await page.waitForSelector(`[data-terminal-surface='readable'][data-run='${mobileActiveRunId}']`);
   await page.waitForFunction(() => document.querySelector(".mobile-run-output")?.textContent?.includes("mobile active output"));
   assert.match((await page.textContent(".mobile-run-output")) ?? "", /mobile active output/);
-  assert.match((await page.textContent(".mobile-output-panel")) ?? "", /等待操作/);
+  assert.match((await page.textContent(".mobile-output-panel")) ?? "", clientLanguage === "zh-CN" ? /等待操作/ : /Waiting/);
   await page.fill("[data-mobile-run-input] input[name='text']", "mobile draft survives organization navigation");
   await page.click("button[data-act='mobile-project-history-return']");
   await page.waitForSelector(".mobile-project-history");
@@ -212,7 +218,7 @@ export async function runMobileRunOrganizationJourney(page, options) {
   });
   await page.click("[data-dialog-id='restore-run'] [data-act='confirm-restore-run']");
   await page.waitForSelector("[data-dialog-id='restore-run'] [role='alert']");
-  assert.match((await restoreDialog.textContent()) ?? "", /墓碑已经变化/);
+  assert.match((await restoreDialog.textContent()) ?? "", clientLanguage === "zh-CN" ? /墓碑已经变化/ : /tombstone changed/);
   await page.click("[data-dialog-id='restore-run'] [data-act='dismiss-dialog']");
   await page.unroute("**/rpc");
   menu = await openRunMenu(page, mobileRemovedRunId, `[data-archived-run='${mobileRemovedRunId}']`);
