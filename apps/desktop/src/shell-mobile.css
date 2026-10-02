@@ -187,11 +187,11 @@
   .mobile-run-archive-page { flex: 1; min-height: 0; }
   .mobile-run-archive-page .content-toolbar { padding: var(--space-12) var(--density-gutter-inline) 0; }
   .mobile-run-archive-page .archive-controls { padding: var(--space-10) var(--density-gutter-inline); }
-  .mobile-run-archive-page .archive-restored { margin-inline: var(--density-gutter-inline); }
+  .mobile-run-archive-page .archive-restored { margin-inline: var(--density-gutter-inline); align-items: flex-start; flex-direction: column; }
   .mobile-run-archive-page .run-archive-layout { display: block; min-height: 0; overflow: auto; }
   .mobile-run-archive-page .archive-run-list {
     max-height: none;
-    padding: var(--space-12) var(--density-gutter-inline);
+    padding: var(--space-8) var(--density-gutter-inline);
     overflow: visible;
     border: 0;
     border-bottom: 1px solid var(--color-border);
@@ -200,6 +200,7 @@
     position: relative;
     grid-template-columns: minmax(0, 1fr) var(--touch-target-min);
   }
+  .mobile-run-archive-page .archive-run-main > b { font-size: var(--font-size-lg); }
   .mobile-run-archive-page .archive-run-detail { padding: var(--space-16) var(--density-gutter-inline) calc(var(--space-16) + var(--density-bottom-gap)); }
   .mobile-run-archive-page .archive-run-detail h2 { overflow-wrap: anywhere; }
   .mobile-run-archive-page .archive-telemetry > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -207,7 +208,7 @@
   .mobile-run-archive-page .archive-run-main > span,
   .mobile-run-archive-page .archive-run-main > b,
   .mobile-run-archive-page .archive-run-main > small { white-space: normal; overflow-wrap: anywhere; }
-  .mobile-run-organization-view .restore-project-details > div { grid-template-columns: minmax(0, 1fr); }
+  .restore-project-details > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 
   /* bottom navigation: view switching only */
   .mobile-nav {
