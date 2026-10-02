@@ -36,6 +36,7 @@ export function commitRpcResult(result: RpcResult): void {
     ui.archiveSelectedRunId = "";
     ui.recentlyRestoredRunId = "";
     ui.runOrganizationRetry = null;
+    ui.usageQueryRetry = null;
     ui.restoreRunDialog = null;
     ui.mobileRunMenuId = "";
   }

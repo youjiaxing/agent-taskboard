@@ -435,6 +435,7 @@ export type FormKey =
   | `inject-run:${string}`
   | `change-note:${string}`
   | `usage-custom:${string}`
+  | `usage-query:${string}`
   | `launch:${string}`
   | `revoke-client:${string}`;
 
@@ -901,6 +902,10 @@ export type RunTelemetryLane = {
 };
 
 export type UsageRange = "today" | "24-hours" | "7-days" | "30-days" | "custom";
+
+export type UsageQueryRequest =
+  | { op: "setUsageRange"; extra: { range: UsageRange } }
+  | { op: "setUsageFilter"; extra: { projectId: string; agentId: string; model: string } };
 
 export type UsageFilter = {
   projectId?: string | null;

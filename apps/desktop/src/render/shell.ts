@@ -1,6 +1,6 @@
 import type { AppearanceState, ChangeFile, ChangeLine, ChangeRepo, Language, Project, ProjectIssueCounts, RunSummary, RunTelemetryLane, ShellCopy, Snapshot, TelemetryLaneKind, TelemetryPoint, TokenCounts, UsageBucket, UsageOption, UsagePage, UsageRange, ViewChanges } from "../protocol";
 import { addOpt, escapeHtml, toLocalInput } from "../client-utils";
-import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey } from "../form-keys";
+import { changeNoteFormKey, formFeedback, injectFormKey, revokeClientFormKey, usageCustomFormKey, usageQueryFormKey } from "../form-keys";
 import { desktopShellAvailable, desktopUpdatesAvailable } from "../launch-session";
 import { APPEARANCE_DISPLAY_ORDER, autoFocusNewRunEnabled, browserClient, canContinueUnboundRun, effectiveClientLanguage, ensureBrowserClientSettings, mobileClient, workspaceRun } from "../view-helpers";
 import { fixedPanelResizeHandle } from "../workbench";
@@ -258,6 +258,8 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
   const range = usage.range;
   const customKey = usageCustomFormKey(snap.focusedHostId);
   const customPending = ui.formOperations.pending.has(customKey);
+  const queryKey = usageQueryFormKey(snap.focusedHostId);
+  const queryPending = ui.formOperations.pending.has(queryKey);
   const customDraft = ui.usageCustomDraft?.hostId === snap.focusedHostId ? ui.usageCustomDraft : {
     hostId: snap.focusedHostId,
     from: toLocalInput(usage.fromMs),
@@ -267,6 +269,7 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
     id: "usage-range",
     label,
     pressed: range === id,
+    disabled: queryPending || customPending,
     data: { id },
   });
   const filterOptions = (items: UsageOption[], selected: string | null | undefined): SelectOption[] => [
@@ -307,6 +310,7 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
         </div>
       </div>
     </div>
+    <div class="usage-query-controls" aria-busy="${queryPending ? "true" : "false"}">
     ${optionGroup({
       label: copy.usage,
       className: "usage-ranges",
@@ -318,22 +322,28 @@ export function usagePage(copy: ShellCopy, snap: Snapshot): string {
         rangeAction("custom", copy.rangeCustom),
       ],
     })}
+    <div class="usage-filters">
+      <label>${escapeHtml(copy.filterProject)}${selectControl({ id: "usage-project", disabled: queryPending || customPending, options: filterOptions(usage.projects, usage.filter.projectId), attributes: { "data-usage-filter": "projectId" } })}</label>
+      <label>${escapeHtml(copy.filterAgent)}${selectControl({ id: "usage-agent", disabled: queryPending || customPending, options: filterOptions(usage.agents, usage.filter.agentId), attributes: { "data-usage-filter": "agentId" } })}</label>
+      <label>${escapeHtml(copy.filterModel)}${selectControl({ id: "usage-model", disabled: queryPending || customPending, options: modelOptions, attributes: { "data-usage-filter": "model" } })}</label>
+    </div>
+    </div>
+    ${queryPending ? `<p class="usage-query-status" role="status">${escapeHtml(copy.operationPending)}</p>` : ""}
+    ${formFeedback(queryKey)}
+    ${ui.formOperations.errors.has(queryKey) && ui.usageQueryRetry?.hostId === snap.focusedHostId
+      ? button({ id: "retry-usage-query", label: copy.refreshRetry, iconName: "refresh-cw", disabled: queryPending || customPending }, { className: "usage-query-retry" })
+      : ""}
     ${
       range === "custom"
         ? `<form class="usage-custom" data-act="usage-custom" aria-busy="${customPending ? "true" : "false"}">
-            ${textInput({ name: "from", type: "datetime-local", required: true, value: customDraft.from, disabled: customPending })}
-            ${textInput({ name: "to", type: "datetime-local", required: true, value: customDraft.to, disabled: customPending })}
-            ${button({ id: "apply-usage-custom", label: customPending ? copy.operationPending : copy.rangeCustom, disabled: customPending, busy: customPending }, { type: "submit", variant: "primary" })}
+            ${textInput({ name: "from", type: "datetime-local", required: true, value: customDraft.from, disabled: customPending || queryPending })}
+            ${textInput({ name: "to", type: "datetime-local", required: true, value: customDraft.to, disabled: customPending || queryPending })}
+            ${button({ id: "apply-usage-custom", label: customPending ? copy.operationPending : copy.rangeCustom, disabled: customPending || queryPending, busy: customPending }, { type: "submit", variant: "primary" })}
           </form>${formFeedback(customKey)}`
         : ""
     }
-    <div class="usage-filters">
-      <label>${escapeHtml(copy.filterProject)}${selectControl({ options: filterOptions(usage.projects, usage.filter.projectId), attributes: { "data-usage-filter": "projectId" } })}</label>
-      <label>${escapeHtml(copy.filterAgent)}${selectControl({ options: filterOptions(usage.agents, usage.filter.agentId), attributes: { "data-usage-filter": "agentId" } })}</label>
-      <label>${escapeHtml(copy.filterModel)}${selectControl({ options: modelOptions, attributes: { "data-usage-filter": "model" } })}</label>
-    </div>
     <div class="token-row totals">${tokenCells(copy, usage.totals)}<span class="token-cell"><i>${escapeHtml(copy.cacheHit)}</i>${hit}</span></div>
-    ${trend}
+    <div class="usage-trends">${trend}</div>
     <p class="tiny">${escapeHtml(copy.proxyDisclaimer)}</p>
     <div class="usage-list usage-full">${rows}</div>
     <div class="usage-list usage-compact">${usageCompact(copy, usage)}</div>
@@ -446,7 +456,7 @@ export function overviewProjectCard(copy: ShellCopy, project: Project): string {
       ? copy.connectionUnavailable
       : copy.authFailed;
   return `<button type="button" class="overview-project" data-act="focus-project" data-id="${escapeHtml(project.id)}">
-    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em>${escapeHtml(connection)}</em></span>
+    <span class="overview-project-head"><span><b>${escapeHtml(project.name)}</b><small>${escapeHtml(project.repository)}</small></span><em data-connection="${escapeHtml(project.connection.status)}">${escapeHtml(connection)}</em></span>
     <span class="overview-project-metrics">
       ${metric("Open", counts.open)}
       ${metric(copy.colBlocked, counts.blocked)}

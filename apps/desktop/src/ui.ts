@@ -28,6 +28,7 @@ import type {
   RunSummary,
   UpdateState,
   UsageCustomDraft,
+  UsageQueryRequest,
   ViewChanges,
 } from "./protocol";
 
@@ -153,6 +154,7 @@ export const ui = {
   terminalInputDrafts: new Map<string, string>(),
   issueSearchDraft: null as IssueSearchDraft | null,
   usageCustomDraft: null as UsageCustomDraft | null,
+  usageQueryRetry: null as { hostId: string; request: UsageQueryRequest; focusSelector: string } | null,
   issueRelationDrafts: new Map<string, IssueRelationDraft>(),
   issueMaintenanceOpen: new Set<string>(),
   formOperations: {

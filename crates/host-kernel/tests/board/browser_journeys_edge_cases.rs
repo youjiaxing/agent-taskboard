@@ -251,7 +251,10 @@ fn browser_preserves_the_custom_usage_range_when_submission_fails() {
     tracker.add_issue(IssueRecord::open("you/garden", 100, "core user journey"));
     let mut host = boot(tmp.path(), tracker);
     pin_board_test_time(&mut host);
-    register(&mut host, "garden", &dir, "you/garden");
+    let project_id = register(&mut host, "garden", &dir, "you/garden");
+    start_bound_grok(&mut host, &project_id, "you/garden#100");
+    host.handle(serde_json::json!({ "op": "focusProject", "projectId": project_id }))
+        .unwrap();
     run_browser_e2e(host, "usage-form-resilience.mjs", &[]);
 }
 
