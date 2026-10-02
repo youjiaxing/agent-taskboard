@@ -120,7 +120,7 @@ export function render(): void {
     });
   }
   const previousLanes = ui.app.querySelector<HTMLElement>(".lanes");
-  if (previousLanes && ui.renderedBoardProjectId) {
+  if (previousLanes?.getClientRects().length && ui.renderedBoardProjectId) {
     const laneScrolls: Record<string, ScrollPosition> = {};
     for (const lane of previousLanes.querySelectorAll<HTMLElement>(".lane[data-lane]")) {
       const key = lane.dataset.lane;

@@ -1,6 +1,6 @@
 import { runFormOperation, usageCustomFormKey, usageQueryFormKey } from "../form-keys";
 import type { UsageQueryRequest } from "../protocol";
-import { rpc } from "../rpc";
+import { rpcForHost } from "../rpc";
 import { ui } from "../ui";
 
 export async function runUsageQuery(request: UsageQueryRequest, trigger?: HTMLElement): Promise<void> {
@@ -16,7 +16,7 @@ export async function runUsageQuery(request: UsageQueryRequest, trigger?: HTMLEl
       : ui.usageQueryRetry?.focusSelector ?? "";
   ui.usageQueryRetry = { hostId, request, focusSelector };
   await runFormOperation(key, async () => {
-    await rpc(request.op, request.extra);
+    await rpcForHost(hostId, request.op, request.extra);
     if (ui.usageQueryRetry?.hostId === hostId) ui.usageQueryRetry = null;
   });
   if (ui.snapshot?.focusedHostId === hostId && ui.clientView.page === "usage" && document.activeElement === document.body) {

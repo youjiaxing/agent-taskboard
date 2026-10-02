@@ -1,4 +1,5 @@
 import { assertShellRegionsDoNotOverlap } from "./board-harness.mjs";
+import { verifyUsageHostIsolation } from "./usage-host-isolation.mjs";
 
 export async function runDesktopBoardShell(session) {
 try {
@@ -8,6 +9,7 @@ try {
   console.error("page html", html.slice(0, 4000));
   throw error;
 }
+await verifyUsageHostIsolation(session);
 const originalHostName = await session.page.$eval(".host-line .host-name", (node) => node.textContent?.trim() ?? "");
 await session.page.click("button[data-act='toggle-hosts']");
 const visibleHosts = await session.page.$$eval(".host-picker button[data-act='focus-host']", (nodes) =>
@@ -797,6 +799,18 @@ await session.page.waitForFunction(() => document.querySelector('[data-lane="fro
 const compactBoardAfter = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
 if (compactBoardAfter <= 0) {
   throw new Error(`compact board lane should respond to a real mouse wheel: ${compactBoardBefore.clientHeight}/${compactBoardBefore.scrollHeight} -> ${compactBoardAfter}`);
+}
+await compactIssueToggle.click();
+await session.page.waitForSelector(".board-shell > .issue-detail", { state: "visible" });
+await session.page.click("button[data-act='settings']");
+await session.page.waitForSelector(".settings-page");
+await session.page.click("button[data-act='return-page']");
+await session.page.waitForSelector(".board-shell > .issue-detail", { state: "visible" });
+await compactIssueToggle.click();
+await session.page.waitForSelector(".lanes", { state: "visible" });
+const compactBoardRestored = await session.page.$eval('[data-lane="frontier"]', (node) => node.scrollTop);
+if (Math.abs(compactBoardRestored - compactBoardAfter) > 1) {
+  throw new Error(`compact inspector/settings round trip must retain hidden Board scroll: ${compactBoardAfter} -> ${compactBoardRestored}`);
 }
 await compactBoardStyle.evaluate((node) => node.remove());
 await session.page.setViewportSize({ width: 1440, height: 900 });
