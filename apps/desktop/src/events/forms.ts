@@ -1,5 +1,5 @@
 import { applyLaunchDependentDefaults, applyLocalPath, launchValuesForHost, refreshLaunchFieldOptions, refreshLaunchWarnings, requestDesktopNotificationPermission, scheduleLaunchPreview, setStartAtLogin, supersedeProjectInference } from "../launch-session";
-import { issueDraftKey, changeNoteFormKey, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
+import { issueDraftKey, changeNoteFormKey, clearFormOperation, editableIssueDraft, editableIssueRelations, editableIssueSearchDraft, injectFormKey, issueBlockersFormKey, issueCommentFormKey, issueCreateFormKey, issueEditFormKey, issueParentFormKey, issueSearchFormKey, launchFormKey, runFormOperation, usageCustomFormKey, usageQueryFormKey } from "../form-keys";
 import { CUSTOM_VALUE, launchFieldOptions } from "../render/run";
 import { loadSelectedIssueDocument, loadViewChanges, rpc, rpcDetached } from "../rpc";
 import { render } from "../render/app";
@@ -9,6 +9,7 @@ import { ui } from "../ui";
 import { browserClient, ensureBrowserClientSettings, mobileClient, saveBrowserClientSettings } from "../view-helpers";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
 import { focusStartedRun } from "./run-navigation";
+import { runUsageQuery } from "./usage-query";
 
 export function bindFormEvents(): void {
 ui.app.addEventListener("submit", async (event) => {
@@ -540,14 +541,15 @@ ui.app.addEventListener("change", async (event) => {
   if (filter === "projectId") next.projectId = target.value;
   if (filter === "agentId") next.agentId = target.value;
   if (filter === "model") next.model = target.value;
-  await rpc("setUsageFilter", next);
-  render();
+  await runUsageQuery({ op: "setUsageFilter", extra: next }, target);
 });
 
 ui.app.addEventListener("submit", async (event) => {
   const custom = (event.target as HTMLElement | null)?.closest<HTMLFormElement>("[data-act='usage-custom']");
   if (custom) {
     event.preventDefault();
+    const queryKey = usageQueryFormKey(ui.snapshot?.focusedHostId ?? "");
+    if (ui.formOperations.pending.has(queryKey)) return;
     const data = new FormData(custom);
     const draft = {
       hostId: ui.snapshot?.focusedHostId ?? "",
@@ -563,6 +565,8 @@ ui.app.addEventListener("submit", async (event) => {
       await rpc("setUsageRange", { range: "custom", fromMs: from, toMs: to });
     });
     if (success) {
+      clearFormOperation(queryKey);
+      if (ui.usageQueryRetry?.hostId === draft.hostId) ui.usageQueryRetry = null;
       ui.usageCustomDraft = null;
       render();
     }

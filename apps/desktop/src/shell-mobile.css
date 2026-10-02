@@ -26,6 +26,14 @@
   .workspace { display: block; overflow: auto; }
   .workspace.focus-workspace-open { overflow: hidden; }
   .usage-page { width: 100%; height: auto; max-width: none; flex: 1; border: 0; overflow: auto; }
+  .overview-page, .usage-page { padding: var(--space-16); gap: var(--space-16); }
+  .overview-stats { gap: var(--space-8); }
+  .overview-controls { align-items: stretch; gap: var(--space-8); }
+  .overview-controls > label:first-child, .overview-controls select { width: 100%; }
+  .overview-project-head { flex-wrap: wrap; }
+  .overview-project-head > span { flex: 1 1 200px; }
+  .overview-group .run-thumbnail { align-items: start; }
+  .overview-group .run-thumbnail-main b, .usage-row header b { font-size: var(--font-size-lg); }
   .settings-content { padding: var(--space-16); }
 
   /* every touch target in the mobile product shell reaches the 44px minimum */
@@ -272,7 +280,7 @@
   .launch-agent-picker .dialog-actions .ui-button { width: 100%; }
 
   /* usage and telemetry keep their existing compact mobile density */
-  .usage-ranges, .usage-custom, .usage-full, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
+  .usage-query-controls, .usage-ranges, .usage-custom, .usage-full, .usage-trends, .usage-trend, .usage-trend-block, .usage-filters, .spark, .telemetry-cards, .telemetry-desktop { display: none; }
   .usage-compact { display: grid; gap: var(--space-8); }
 }
 @media (min-width: 640px) {

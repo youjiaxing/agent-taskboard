@@ -1,6 +1,6 @@
 import { eventsNeedFullRender, paintGraphEdges, renderStatusBarsOnly, reportClientView } from "../main";
 import { activeRunForIssue, captureGraphAnchor, effectiveClientLanguage, enterPrimaryPage, mobileOutputKey, primaryPageFromSnapshot, resetGraphUiState, restoreGraphAnchor, restoreReturnPointMemory } from "../view-helpers";
-import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot } from "../protocol";
+import type { AppearancePreference, CenterView, FormKey, Language, MobileWorkspaceSection, RpcResult, RunRestoreResult, SetAppearancePreferenceRequest, Snapshot, UsageRange } from "../protocol";
 import { checkForUpdates, chooseProjectDirectory, coerceLaunchFieldValues, desktopShellAvailable, inferFromLocalPath, installPendingUpdate, loadStartupSettings, openExternalUrl, openRunWindow, setHostMode, supersedeProjectInference, syncLaunchDraft } from "../launch-session";
 import { issueDraftKey, clearFormOperation, editableIssueBody, editableIssueRelations, injectFormKey, issueBlockersFormKey, issueCreateFormKey, issueEditFormKey, issueOpenFormKey, revokeClientFormKey, runFormOperation, usageCustomFormKey } from "../form-keys";
 import { APPEARANCE_PREFERENCES, browserClient, ensureBrowserAppearance, mobileClient, saveBrowserAppearance, workspaceRun } from "../view-helpers";
@@ -13,6 +13,7 @@ import { rememberDialogTrigger, restoreDialogTrigger } from "../components/dialo
 import { startupCopy } from "../startup-copy";
 import { runPersistenceWritesBlocked } from "../render/run-organization";
 import { focusRunInWorkspace, focusStartedRun, retryRunFocus } from "./run-navigation";
+import { runUsageQuery } from "./usage-query";
 
 function leaveSettingsPage(): void {
   if (!ui.snapshot || ui.clientView.page !== "settings") return;
@@ -1014,8 +1015,13 @@ export async function handleAppClick(event: MouseEvent): Promise<void> {
   if (act === "usage-range" && target.dataset.id) {
     ui.usageCustomDraft = null;
     clearFormOperation(usageCustomFormKey(ui.snapshot.focusedHostId));
-    await rpc("setUsageRange", { range: target.dataset.id });
-    render();
+    await runUsageQuery({ op: "setUsageRange", extra: { range: target.dataset.id as UsageRange } });
+    return;
+  }
+  if (act === "retry-usage-query") {
+    if (ui.usageQueryRetry?.hostId === ui.snapshot.focusedHostId) {
+      await runUsageQuery(ui.usageQueryRetry.request);
+    }
     return;
   }
   if (act === "open-usage-run" && target.dataset.id) {

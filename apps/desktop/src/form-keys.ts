@@ -63,6 +63,10 @@ export function usageCustomFormKey(hostId: string): FormKey {
   return `usage-custom:${hostId}`;
 }
 
+export function usageQueryFormKey(hostId: string): FormKey {
+  return `usage-query:${hostId}`;
+}
+
 export function revokeClientFormKey(clientId: string): FormKey {
   return `revoke-client:${clientId}`;
 }
