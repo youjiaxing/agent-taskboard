@@ -527,15 +527,6 @@
 
 .workspace-run-history { display: grid; gap: var(--space-6); }
 
-.workspace-run-history-item {
-  display: grid;
-  gap: var(--space-4);
-  width: 100%;
-  padding: var(--space-8);
-  text-align: left;
-  background: var(--color-surface-subtle);
-}
-
 .workspace-run-history-main > span:first-child {
   display: flex;
   align-items: center;

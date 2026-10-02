@@ -92,6 +92,16 @@
   }
   .mobile-input-row .inject-row { padding: var(--space-8) 0; }
   .mobile-input-row .inject-row input { min-height: var(--touch-target-min); }
+  .mobile-input-row .inject-row input { background: var(--color-control); border-color: var(--color-border-strong); }
+  .mobile-input-row .inject-row > button { background: var(--color-accent); color: var(--color-on-accent); border-color: var(--color-accent); }
+  .mobile-workspace-view .run-dock-hd { padding: var(--space-10) 0; border-bottom: 0; }
+  .mobile-workspace-view .run-heading { flex-basis: 100%; }
+  .mobile-workspace-view .run-dock-hd .actions { width: 100%; }
+  .mobile-workspace-view .workspace-run-history-item { padding-inline: var(--space-10); }
+  .mobile-workspace-view .workspace-run-history-main { gap: var(--space-6); }
+  .mobile-workspace-view .telemetry-bar { max-height: none; overflow: visible; padding-inline: 0; }
+  .mobile-input-row .telemetry-bar { max-height: 24vh; padding-inline: 0; }
+  .telemetry-simple { padding-left: var(--space-20); line-height: 1.55; overflow-wrap: anywhere; }
   .mobile-issue-panel {
     position: relative;
     display: flex;
