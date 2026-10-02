@@ -43,14 +43,14 @@ impl HostKernel {
                 self.dispatch(Command::SetLanguage(language))
             }
             "setAppearancePreference" => {
-                let appearance_preference = serde_json::from_value(
-                    request
-                        .get("appearancePreference")
-                        .cloned()
-                        .ok_or_else(|| {
-                            KernelError::Protocol("missing appearancePreference".into())
-                        })?,
-                )?;
+                let value = request
+                    .get("appearancePreference")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        KernelError::Protocol("appearancePreference must be a string".into())
+                    })?;
+                let appearance_preference =
+                    serde_json::from_value(serde_json::Value::String(value.to_string()))?;
                 self.dispatch(Command::SetAppearancePreference(appearance_preference))
             }
             "beginPairingOffer" => {

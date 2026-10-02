@@ -18,8 +18,8 @@ import type {
 
 export const MOBILE_BREAKPOINT = 640;
 export const FULL_DESKTOP_BREAKPOINT = 900;
-export const APPEARANCE_PREFERENCES: AppearancePreference[] = ["system", "light", "dark", "warm"];
-export const APPEARANCE_DISPLAY_ORDER: AppearancePreference[] = ["warm", "light", "dark", "system"];
+export const APPEARANCE_PREFERENCES: AppearancePreference[] = ["system", "light", "dark"];
+export const APPEARANCE_DISPLAY_ORDER: AppearancePreference[] = ["system", "light", "dark"];
 
 export function viewportClass(): "mobile" | "compact-desktop" | "full-desktop" {
   if (window.innerWidth < MOBILE_BREAKPOINT) return "mobile";
@@ -55,11 +55,15 @@ export function loadBrowserAppearance(): BrowserAppearance | null {
     const value = JSON.parse(raw) as Partial<BrowserAppearance>;
     if (
       (value.language === "zh-CN" || value.language === "en")
-      && APPEARANCE_PREFERENCES.includes(value.appearancePreference as AppearancePreference)
     ) {
+      const appearancePreference = !Object.prototype.hasOwnProperty.call(value, "appearancePreference")
+        ? "system"
+        : APPEARANCE_PREFERENCES.includes(value.appearancePreference as AppearancePreference)
+          ? value.appearancePreference as AppearancePreference
+          : "light";
       return {
         language: value.language,
-        appearancePreference: value.appearancePreference as AppearancePreference,
+        appearancePreference,
       };
     }
   } catch {

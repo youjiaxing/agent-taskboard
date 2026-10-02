@@ -1,6 +1,6 @@
 # 设置与数据分 Host 数据与 Client 设置，落在 Tauri Local，秘密用 JSON 文件
 
-桌面壳是 Tauri 2，Host 与本机窗口同一进程。持久数据走 Tauri `appLocalDataDir`（macOS：`~/Library/Application Support/<identifier>`；Windows：`%LOCALAPPDATA%\<identifier>`，不进漫游盘），其下固定两棵树：`host/` 是 **Host 数据**，`desktop-client/` 是本机窗口与托盘共用的 **Client 设置**。日志走 `appLogDir`（macOS：`~/Library/Logs/<identifier>`；Windows：实现为 Local 树下的 `logs`）。以后 Tracker 缓存若落盘，走 `appCacheDir`。目录按官方 path 解析，应用自己创建；桌面应用第一次启动就建好两棵树和日志目录，「本机不起 Host」只是开关，不改文件夹形状。外观设置只保存 `AppearancePreference`；旧具体主题值按跟随系统的默认偏好重置，不增加迁移或兼容路径。
+桌面壳是 Tauri 2，Host 与本机窗口同一进程。持久数据走 Tauri `appLocalDataDir`（macOS：`~/Library/Application Support/<identifier>`；Windows：`%LOCALAPPDATA%\<identifier>`，不进漫游盘），其下固定两棵树：`host/` 是 **Host 数据**，`desktop-client/` 是本机窗口与托盘共用的 **Client 设置**。日志走 `appLogDir`（macOS：`~/Library/Logs/<identifier>`；Windows：实现为 Local 树下的 `logs`）。以后 Tracker 缓存若落盘，走 `appCacheDir`。目录按官方 path 解析，应用自己创建；桌面应用第一次启动就建好两棵树和日志目录，「本机不起 Host」只是开关，不改文件夹形状。外观设置只保存 `AppearancePreference`；缺失字段默认跟随系统，存在但未知或类型错误的主题通用回落浅色且保全其他有效设置，见 ADR 0011。不增加旧主题专属迁移或兼容路径。
 
 具体 identifier 跟 `tauri.conf`，本 ADR 不钉字符串。改 identifier 等于换一套空目录，不自动迁移。
 

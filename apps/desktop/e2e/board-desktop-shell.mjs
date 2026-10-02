@@ -542,7 +542,6 @@ const commonTokens = {
 const themeColorTokens = {
   light: ["#f7f7f5", "#ffffff", "#f3f3f1", "#ffffff", "#eeeeeb", "#e6e6e2", "#202123", "#56575b", "#75767a", "#ffffff", "#e2e2de", "#c6c7c3", "#2563eb", "#202123", "#0f1012", "#ffffff", "#dce7f9", "#237a43", "#eaf6ee", "#8a6100", "#fff4d6", "#b42318", "#ffece9", "#1d5db8", "#eaf2ff", "rgb(0 0 0 / 48%)"],
   dark: ["#171717", "#1f1f1f", "#262626", "#2b2b2b", "#303030", "#3a3a3a", "#f3f3f3", "#c8c8c8", "#a0a0a0", "#171717", "#373737", "#555555", "#60a5fa", "#f3f3f3", "#ffffff", "#171717", "#23456b", "#6bcb8b", "#173725", "#f2c15c", "#3e3217", "#ff8075", "#421d1a", "#7cb7ff", "#173052", "rgb(0 0 0 / 64%)"],
-  warm: ["#f5efe7", "#fffaf3", "#faf2e8", "#fffdf9", "#f3e7d9", "#ead9c5", "#2a231c", "#62584e", "#7b7065", "#fffaf3", "#e4d6c5", "#cbb9a3", "#a64b25", "#a94722", "#873817", "#ffffff", "#f3d7c1", "#237a43", "#eaf6ee", "#8a6100", "#fff4d6", "#b42318", "#ffece9", "#1d5db8", "#eaf2ff", "rgb(42 35 28 / 45%)"],
 };
 const themeColorNames = ["--color-canvas", "--color-surface", "--color-surface-subtle", "--color-surface-raised", "--color-surface-hover", "--color-surface-active", "--color-text", "--color-text-secondary", "--color-text-muted", "--color-text-inverse", "--color-border", "--color-border-strong", "--color-focus", "--color-accent", "--color-accent-hover", "--color-on-accent", "--color-selection", "--color-success", "--color-success-surface", "--color-warning", "--color-warning-surface", "--color-danger", "--color-danger-surface", "--color-info", "--color-info-surface", "--color-overlay"];
 const relativeLuminance = (hex) => {
@@ -578,10 +577,10 @@ await session.page.click("button[data-act='appearance-menu']");
 const appearanceLabels = await session.page.$$eval(".appearance-menu [role='menuitemradio']", (nodes) =>
   nodes.map((node) => node.textContent?.trim()),
 );
-if (appearanceLabels.join("|") !== "暖纸|素纸|素纸夜间|跟随系统") {
-  throw new Error(`appearance menu should expose the four agreed choices, got ${JSON.stringify(appearanceLabels)}`);
+if (appearanceLabels.join("|") !== "跟随系统|浅色|深色") {
+  throw new Error(`appearance menu should expose the three agreed choices, got ${JSON.stringify(appearanceLabels)}`);
 }
-if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "warm") {
+if ((await session.page.evaluate(() => document.activeElement?.getAttribute("data-id"))) !== "system") {
   throw new Error("opening the appearance menu should focus its first choice");
 }
 await session.assertVisual("appearance-menu.png");
@@ -596,16 +595,16 @@ if (!focusRing || focusRing === "none" || !/0px 0px 0px 3px/.test(focusRing)) {
 await session.page.keyboard.press("Escape");
 if (await session.page.$(".appearance-menu")) throw new Error("Escape should close the appearance menu");
 await session.page.click("button[data-act='appearance-menu']");
-await session.page.click(".appearance-menu button[data-act='appearance'][data-id='warm']");
-await session.page.waitForFunction(() => document.documentElement.dataset.theme === "warm");
-await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.warm[index]])), "warm theme");
+await session.page.click(".appearance-menu button[data-act='appearance'][data-id='dark']");
+await session.page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+await assertCssTokens(Object.fromEntries(themeColorNames.map((name, index) => [name, themeColorTokens.dark[index]])), "dark theme");
 await session.page.emulateMedia({ colorScheme: "light" });
 await session.page.waitForTimeout(50);
-if ((await session.page.getAttribute("html", "data-theme")) !== "warm") {
+if ((await session.page.getAttribute("html", "data-theme")) !== "dark") {
   throw new Error("a manual appearance preference must stop following system changes");
 }
 const storedBrowserAppearance = await session.page.evaluate(() => localStorage.getItem("agent-taskboard-browser-appearance"));
-if (!storedBrowserAppearance?.includes('"appearancePreference":"warm"')) {
+if (!storedBrowserAppearance?.includes('"appearancePreference":"dark"')) {
   throw new Error(`desktop browser appearance should persist in this origin, got ${storedBrowserAppearance}`);
 }
 const hostAppearanceAfterBrowserChoice = await session.page.evaluate(async (protocol) => {
@@ -620,7 +619,7 @@ if (hostAppearanceAfterBrowserChoice.appearancePreference !== "system") {
   throw new Error(`desktop browser appearance must not overwrite desktop-client settings, got ${JSON.stringify(hostAppearanceAfterBrowserChoice)}`);
 }
 const stableAddress = session.page.url();
-for (const appearancePreference of ["light", "dark", "warm", "system"]) {
+for (const appearancePreference of ["light", "dark", "system"]) {
   await session.page.click("button[data-act='settings']");
   await session.page.waitForSelector('.settings-page[data-primary-page="settings"]');
   if (appearancePreference === "light") {

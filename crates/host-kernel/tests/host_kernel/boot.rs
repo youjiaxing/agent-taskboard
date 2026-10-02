@@ -209,7 +209,6 @@ fn appearance_state_exposes_the_preference_catalog_without_legacy_fields() {
             AppearancePreference::System,
             AppearancePreference::Light,
             AppearancePreference::Dark,
-            AppearancePreference::Warm,
         ]
     );
 
@@ -217,7 +216,7 @@ fn appearance_state_exposes_the_preference_catalog_without_legacy_fields() {
     assert_eq!(appearance["appearancePreference"], "system");
     assert_eq!(
         appearance["appearancePreferences"],
-        serde_json::json!(["system", "light", "dark", "warm"])
+        serde_json::json!(["system", "light", "dark"])
     );
     for legacy in ["theme", "lastLightTheme", "themes", "languages"] {
         assert!(
@@ -277,13 +276,13 @@ fn window_and_tray_share_the_client_language_and_appearance_preference() {
     let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
 
     host.dispatch(Command::SetLanguage(Language::En)).unwrap();
-    host.dispatch(Command::SetAppearancePreference(AppearancePreference::Warm))
+    host.dispatch(Command::SetAppearancePreference(AppearancePreference::Dark))
         .unwrap();
     let snap = host.snapshot();
     assert_eq!(snap.appearance.language, Language::En);
     assert_eq!(
         snap.appearance.appearance_preference,
-        AppearancePreference::Warm
+        AppearancePreference::Dark
     );
     assert_eq!(snap.copy.quit_host, "Quit Host");
     assert_eq!(snap.copy.show_window, "Open window");
@@ -299,7 +298,7 @@ fn window_and_tray_share_the_client_language_and_appearance_preference() {
     assert_eq!(snap.appearance.language, Language::En);
     assert_eq!(
         snap.appearance.appearance_preference,
-        AppearancePreference::Warm
+        AppearancePreference::Dark
     );
     assert_eq!(snap.copy.quit_host, "Quit Host");
 }
@@ -415,15 +414,165 @@ fn set_appearance_preference_op_replaces_set_theme() {
     let out = host
         .handle(serde_json::json!({
             "op": "setAppearancePreference",
-            "appearancePreference": "warm",
+            "appearancePreference": "dark",
         }))
         .unwrap();
     assert_eq!(
         out.snapshot.appearance.appearance_preference,
-        AppearancePreference::Warm
+        AppearancePreference::Dark
     );
 
     assert!(host
         .handle(serde_json::json!({ "op": "setTheme", "theme": "plain-paper" }))
         .is_err());
+}
+
+#[test]
+fn stored_appearance_normalizes_only_the_theme_and_survives_restart_and_save() {
+    let cases = [
+        (None, AppearancePreference::System),
+        (
+            Some(serde_json::json!("system")),
+            AppearancePreference::System,
+        ),
+        (
+            Some(serde_json::json!("light")),
+            AppearancePreference::Light,
+        ),
+        (Some(serde_json::json!("dark")), AppearancePreference::Dark),
+        (Some(serde_json::json!("warm")), AppearancePreference::Light),
+        (
+            Some(serde_json::json!("future-theme")),
+            AppearancePreference::Light,
+        ),
+        (Some(serde_json::json!(null)), AppearancePreference::Light),
+        (Some(serde_json::json!(42)), AppearancePreference::Light),
+        (Some(serde_json::json!(true)), AppearancePreference::Light),
+        (
+            Some(serde_json::json!(["dark"])),
+            AppearancePreference::Light,
+        ),
+        (
+            Some(serde_json::json!({"dark": null})),
+            AppearancePreference::Light,
+        ),
+    ];
+    for (value, expected) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let req = boot_req(tmp.path());
+        let host = HostKernel::boot(req.clone()).unwrap();
+        let data = host.snapshot().data;
+        drop(host);
+        let mut settings = serde_json::json!({
+            "language": "en",
+            "focused_host_id": "local",
+            "remote_hosts": [{"id":"remote-fixture","display_name":"Saved Host","address":"http://127.0.0.1:9"}],
+            "recent_completed_limit": 9,
+            "center_view": "graph",
+            "show_command_preview": false,
+            "notify_desktop": false,
+            "notify_sound": false,
+            "auto_focus_new_run": false
+        });
+        if let Some(value) = value {
+            settings["appearance_preference"] = value;
+        }
+        let secrets_path = data.desktop_client_dir.join("secrets.json");
+        let secrets = r#"{"tokens":{"remote-fixture":"preserved-token"}}"#;
+        std::fs::write(&secrets_path, secrets).unwrap();
+        let original = serde_json::to_vec(&settings).unwrap();
+        std::fs::write(&data.desktop_client_settings_path, &original).unwrap();
+        for _ in 0..2 {
+            let host = HostKernel::boot(req.clone()).unwrap();
+            assert_eq!(host.snapshot().appearance.language, Language::En);
+            assert_eq!(
+                host.snapshot().appearance.appearance_preference,
+                expected,
+                "{settings}"
+            );
+            assert_eq!(
+                std::fs::read(&data.desktop_client_settings_path).unwrap(),
+                original
+            );
+            assert_eq!(std::fs::read_to_string(&secrets_path).unwrap(), secrets);
+        }
+        let mut host = HostKernel::boot(req.clone()).unwrap();
+        // Saving a different valid preference must retain every unrelated setting.
+        let next = if expected == AppearancePreference::Dark {
+            AppearancePreference::Light
+        } else {
+            AppearancePreference::Dark
+        };
+        host.dispatch(Command::SetAppearancePreference(next))
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&data.desktop_client_settings_path).unwrap())
+                .unwrap();
+        settings
+            .as_object_mut()
+            .unwrap()
+            .remove("appearance_preference");
+        let mut other_saved = saved.clone();
+        other_saved
+            .as_object_mut()
+            .unwrap()
+            .remove("appearance_preference");
+        assert_eq!(other_saved, settings);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&secrets_path).unwrap()
+            )
+            .unwrap(),
+            serde_json::from_str::<serde_json::Value>(secrets).unwrap()
+        );
+        drop(host);
+        let host = HostKernel::boot(req).unwrap();
+        assert_eq!(host.snapshot().appearance.appearance_preference, next);
+    }
+}
+
+#[test]
+fn appearance_rpc_rejects_non_string_and_unknown_inputs_without_writing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut host = HostKernel::boot(boot_req(tmp.path())).unwrap();
+    let path = host.snapshot().data.desktop_client_settings_path;
+    let original = std::fs::read(&path).unwrap();
+    for value in [
+        serde_json::json!({"dark": null}),
+        serde_json::json!("warm"),
+        serde_json::json!("future-theme"),
+        serde_json::json!(null),
+        serde_json::json!(42),
+        serde_json::json!(true),
+        serde_json::json!(["dark"]),
+    ] {
+        assert!(
+            host.handle(serde_json::json!({
+                "op": "setAppearancePreference", "appearancePreference": value
+            }))
+            .is_err(),
+            "accepted {value}"
+        );
+        assert_eq!(
+            host.snapshot().appearance.appearance_preference,
+            AppearancePreference::System
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+    assert!(host
+        .handle(serde_json::json!({"op":"setAppearancePreference"}))
+        .is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    for value in ["system", "light", "dark"] {
+        let request =
+            serde_json::json!({"op":"setAppearancePreference","appearancePreference":value});
+        host.handle(request.clone()).unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        host.handle(request).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+        assert_eq!(
+            serde_json::to_value(host.snapshot().appearance).unwrap()["appearancePreference"],
+            value
+        );
+    }
 }

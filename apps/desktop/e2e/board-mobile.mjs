@@ -294,8 +294,8 @@ await session.page.waitForSelector("[data-dialog-id='mobile-drawer']");
 
 await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='mobile-appearance-entry']");
 const appearanceChoices = await session.page.$$eval("[data-dialog-id='mobile-drawer'] [data-act='appearance']", (nodes) => nodes.map((node) => node.dataset.id));
-if (appearanceChoices.join("|") !== "warm|light|dark|system") {
-  throw new Error(`mobile appearance should offer the four agreed preferences, got ${JSON.stringify(appearanceChoices)}`);
+if (appearanceChoices.join("|") !== "system|light|dark") {
+  throw new Error(`mobile appearance should offer the three agreed preferences, got ${JSON.stringify(appearanceChoices)}`);
 }
 await session.page.click("[data-dialog-id='mobile-drawer'] [data-act='appearance'][data-id='dark']");
 if ((await session.page.getAttribute("html", "data-theme")) !== "dark") {

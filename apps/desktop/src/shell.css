@@ -4,7 +4,7 @@
  * Single source of truth for semantic colors, typography, spacing, radii,
  * sizes, elevation, layers, motion and cross-client density aliases.
  * `html` defaults to `light`; `data-theme` only ever receives
- * `light` | `dark` | `warm` (never `system`).
+ * `light` | `dark` (never `system`).
  */
 :root {
   color-scheme: light;
@@ -185,36 +185,6 @@ html[data-theme="dark"] {
   --color-overlay: rgb(0 0 0 / 64%);
   --shadow-raised: var(--shadow-raised-dark);
   --shadow-dialog: var(--shadow-dialog-dark);
-}
-
-html[data-theme="warm"] {
-  color-scheme: light;
-  --color-canvas: #f5efe7;
-  --color-surface: #fffaf3;
-  --color-surface-subtle: #faf2e8;
-  --color-surface-raised: #fffdf9;
-  --color-surface-hover: #f3e7d9;
-  --color-surface-active: #ead9c5;
-  --color-text: #2a231c;
-  --color-text-secondary: #62584e;
-  --color-text-muted: #7b7065;
-  --color-text-inverse: #fffaf3;
-  --color-border: #e4d6c5;
-  --color-border-strong: #cbb9a3;
-  --color-focus: #a64b25;
-  --color-accent: #a94722;
-  --color-accent-hover: #873817;
-  --color-on-accent: #ffffff;
-  --color-selection: #f3d7c1;
-  --color-success: #237a43;
-  --color-success-surface: #eaf6ee;
-  --color-warning: #8a6100;
-  --color-warning-surface: #fff4d6;
-  --color-danger: #b42318;
-  --color-danger-surface: #ffece9;
-  --color-info: #1d5db8;
-  --color-info-surface: #eaf2ff;
-  --color-overlay: rgb(42 35 28 / 45%);
 }
 
 * { box-sizing: border-box; }

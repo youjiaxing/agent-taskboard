@@ -67,7 +67,7 @@ if (focusedRunGlobalActions.join("|") !== expectedFocusedRunActions.join("|")) {
   throw new Error(`focused Run global action order is wrong: ${JSON.stringify(focusedRunGlobalActions)}`);
 }
 const terminalPalettes = [];
-for (const appearancePreference of ["light", "dark", "warm"]) {
+for (const appearancePreference of ["light", "dark"]) {
   await session.page.click("button[data-act='appearance-menu']");
   await session.page.click(`.appearance-menu button[data-act='appearance'][data-id='${appearancePreference}']`);
   terminalPalettes.push(await session.page.evaluate(() => {
