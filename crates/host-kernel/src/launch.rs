@@ -124,18 +124,28 @@ pub fn other_project_memory<'a>(
     })
 }
 
-pub fn bound_opening(issue: &IssueRecord, agent: &dyn AgentPort) -> String {
+pub fn bound_opening(
+    issue: &IssueRecord,
+    agent: &dyn AgentPort,
+    working_directory: &Path,
+) -> String {
     let skill = if issue.wayfinder_type().is_some() {
         "wayfinder"
     } else {
         "implement"
     };
-    format!(
-        "{} {}\nIssue Title: {}",
-        agent.skill_invocation(skill),
-        issue.url,
-        issue.title
-    )
+    let reference = issue
+        .url
+        .strip_prefix("file://")
+        .map(Path::new)
+        .map(|path| {
+            path.strip_prefix(working_directory)
+                .unwrap_or(path)
+                .display()
+                .to_string()
+        })
+        .unwrap_or_else(|| issue.url.clone());
+    format!("{} {reference}", agent.skill_invocation(skill))
 }
 
 pub fn task_summary_for_issue(issue: &IssueRecord) -> String {
@@ -561,8 +571,27 @@ pub fn apply_submitted_form(form: &mut RunLaunchForm, config: &RunLaunchConfig) 
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_task_summary, localize_fields, MAX_TASK_SUMMARY_CHARS};
-    use crate::{AgentPort, AntigravityAdapter, CodexAdapter, GrokAdapter, Language};
+    use super::{bound_opening, bounded_task_summary, localize_fields, MAX_TASK_SUMMARY_CHARS};
+    use crate::{
+        AgentPort, AntigravityAdapter, CodexAdapter, GrokAdapter, IssueRecord, Language,
+        MemoryAgent, CODEX_BIN, CODEX_ID, CODEX_NAME,
+    };
+
+    #[test]
+    fn local_markdown_bound_opening_uses_relative_path_without_file_scheme() {
+        let root = tempfile::tempdir().unwrap();
+        let issue_path = root
+            .path()
+            .join(".scratch/20261005-local-markdown-demo/issues/01-read-local-spec.md");
+        let mut issue = IssueRecord::open("local", 1, "Read local spec");
+        issue.url = format!("file://{}", issue_path.display());
+        let agent = MemoryAgent::installed(CODEX_ID, CODEX_NAME, CODEX_BIN);
+
+        assert_eq!(
+            bound_opening(&issue, &agent, root.path()),
+            "$implement .scratch/20261005-local-markdown-demo/issues/01-read-local-spec.md"
+        );
+    }
 
     #[test]
     fn task_summary_is_bounded_by_character_count() {
