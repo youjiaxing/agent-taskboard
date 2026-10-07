@@ -10,6 +10,12 @@ impl HostKernel {
         let issue = self
             .issue_by_id(issue_id)
             .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
+        let working_directory = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.local_path.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown Project".into()))?;
         let agent = self
             .agents
             .iter()
@@ -22,7 +28,7 @@ impl HostKernel {
             .and_then(|agents| agents.get(agent.id()))
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
-        let opening = launch::bound_opening(&issue, agent.as_ref());
+        let opening = launch::bound_opening(&issue, agent.as_ref(), &working_directory);
         values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
         self.start_unbound_run(
             &project_id,

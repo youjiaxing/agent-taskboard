@@ -263,7 +263,8 @@ impl HostKernel {
         let mut opening_text = String::new();
         if let Some(issue_id) = issue_id.as_deref() {
             if let Some(issue) = self.issue_by_id(issue_id) {
-                let instruction = launch::bound_opening(&issue, agent.as_ref());
+                let instruction =
+                    launch::bound_opening(&issue, agent.as_ref(), &project.local_path);
                 values.insert(launch::INITIAL_INSTRUCTION.into(), instruction.clone());
                 opening_text = instruction;
             }
@@ -1369,6 +1370,12 @@ impl HostKernel {
         let issue = self
             .issue_by_id(issue_id)
             .ok_or_else(|| KernelError::Protocol("unknown issue".into()))?;
+        let working_directory = self
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.local_path.clone())
+            .ok_or_else(|| KernelError::Protocol("unknown Project".into()))?;
         let agent = self.default_agent_for_project(&project_id)?;
         let mut values = self
             .launch_defaults
@@ -1376,7 +1383,7 @@ impl HostKernel {
             .and_then(|agents| agents.get(agent.id()))
             .cloned()
             .unwrap_or_else(|| agent.seed_config());
-        let opening = launch::bound_opening(&issue, agent.as_ref());
+        let opening = launch::bound_opening(&issue, agent.as_ref(), &working_directory);
         values.insert(launch::INITIAL_INSTRUCTION.into(), opening.clone());
         self.start_unbound_run(
             &project_id,

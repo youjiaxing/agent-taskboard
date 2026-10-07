@@ -191,7 +191,8 @@ fn start_bound_run_command_does_not_choose_an_agent_implicitly() {
 }
 
 fn bound_opening(skill: &str, url: &str, title: &str) -> String {
-    format!("{skill} {url}\nIssue Title: {title}")
+    let _ = title;
+    format!("{skill} {url}")
 }
 
 fn prepare_opening(
